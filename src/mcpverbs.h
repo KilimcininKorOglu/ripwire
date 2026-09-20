@@ -3721,14 +3721,17 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
     rw::quality::BaselineSelection baseSel = rw::quality::selectBaseline( root, sidecar, /*removeStaleFile=*/false );
     if( !baseSel.isSidecarHonored() )
     {
-        auto [ headSnap, headOk ] = rw::quality::computeHeadSnapshot( root );
-        if( !headOk )
+        // #228 part 1 — the IDENTITY BASIS, through the SAME seam the CLI takes (quality::computeHeadBasis).
+        // This verb and the CLI must answer one tree one way in the same second; a per-caller copy of the
+        // basis is precisely how they drifted apart before (the R3 divergence this arm's comment records).
+        rw::quality::HeadBasis basis = rw::quality::computeHeadBasis( root, ing, g, root );
+        if( !basis.ok )
         {
             oc.ok     = false;
             oc.errMsg = mcpNoBaselineMessage( baseSel );
             return oc;
         }
-        baseSel.snapshot = std::move( headSnap );
+        baseSel.snapshot = std::move( basis.snapshot );
     }
 
     // R1 IDENTITY: the SAME healing pre-pass the CLI runs, through the one entry point, and BEFORE

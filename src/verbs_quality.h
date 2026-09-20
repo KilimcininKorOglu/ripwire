@@ -247,8 +247,11 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
     out.baseSel   = quality::selectBaseline( root, baselineFile, /*removeStaleFile=*/true );
     if( !out.baseSel.isSidecarHonored() )
     {
-        auto [ headSnap, ok ] = computeHeadSnapshot( root, nullptr, cfg.maxFileBytes, cfg.excludes );
-        if( !ok )
+        // #228 part 1 — the IDENTITY BASIS (quality.h): when the tracked tree already IS HEAD, the baseline is
+        // this tree's own snapshot, so a no-op diff is empty by construction instead of by luck. Falls back to
+        // the archived HEAD snapshot on any modified tree, unchanged.
+        quality::HeadBasis basis = quality::computeHeadBasis( root, d.ing, d.g, cfg.rootPath, cfg.maxFileBytes, cfg.excludes );
+        if( !basis.ok )
         {
             // w1 MED: this used to say "no <file>" in BOTH cases — factually false when the file is a STALE
             // sidecar that was just dropped, and doubly so when the self-heal unlink FAILED and the thing is
@@ -257,7 +260,15 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
             std::fputs( noBaselineFatalMessage( baselineFile, out.baseSel ).c_str(), stderr );
             return 1;
         }
-        out.baseSel.snapshot = std::move( headSnap );
+        out.baseSel.snapshot = std::move( basis.snapshot );
+        if( basis.notAtHead != 0 )
+        {
+            // The basis is stated where it is not the obvious one: these files are in the tree and in the graph,
+            // so they shape every verdict, but HEAD does not hold them and the baseline therefore does not
+            // either — their own symbols read as new, exactly as they do against an archived HEAD.
+            rw::emitTo( stderr, "ripwire: {} indexed file(s) are not tracked at HEAD — their symbols are judged as NEW; tracked symbols are compared "
+                                  "with HEAD's own content in this same tree\n", basis.notAtHead );
+        }
         if( out.baseSel.sidecarUnreadable )
         {
             // 2026-09-06 stranger audit: this used to print "no <file>" about a file sitting on disk.
@@ -931,15 +942,19 @@ DirtyPinVerdict inspectDirtyBaselinePin( const MainDispatch& d, const std::strin
     const std::string& root = d.root;
 
     DirtyPinVerdict verdict;
-    auto [ headSnap, ok ] = computeHeadSnapshot( root, nullptr, cfg.maxFileBytes, cfg.excludes );
-    if( !ok )
+    // The SAME basis the delta arm takes (quality::computeHeadBasis) — the refusal this verdict feeds is a
+    // statement about the delta, so computing it another way is how the two would come to disagree. #228: on a
+    // tree whose tracked files are HEAD this now absorbs nothing, which is what unblocks --quality-baseline on
+    // exactly the repositories that needed the escape hatch.
+    quality::HeadBasis basis = quality::computeHeadBasis( root, d.ing, d.g, cfg.rootPath, cfg.maxFileBytes, cfg.excludes );
+    if( !basis.ok )
     {
         return verdict;   // no HEAD tree to compare against — nothing can be absorbed, so nothing is claimed
     }
     gtl::btree_map<std::string, quality::AckRecord> acks = quality::readAckRecords( acksFile );
-    quality::healIdentity( headSnap, acks, d.ing, d.g, std::string( cfg.rootPath ), root, /*wantContentIds=*/false );
+    quality::healIdentity( basis.snapshot, acks, d.ing, d.g, std::string( cfg.rootPath ), root, /*wantContentIds=*/false );
     std::vector<quality::Regression> regs =
-        quality::computeDelta( d.ing, d.g, headSnap, cfg.rootPath, cfg.excludes, cfg.maxFileBytes );
+        quality::computeDelta( d.ing, d.g, basis.snapshot, cfg.rootPath, cfg.excludes, cfg.maxFileBytes );
     quality::applyAckRatchet( regs, acks );
 
     for( const quality::Regression& r : regs )

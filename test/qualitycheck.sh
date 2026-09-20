@@ -422,5 +422,156 @@ else
     no "Python inherited self/cls hooks were classified dead or the orphan was hidden"
 fi
 
+# ── (U) THE UNCHANGED-TREE INVARIANT — a no-op diff must never gate (issue #228, part 1) ──────────────────
+#
+# THE CONTRACT: a working tree whose TRACKED files are identical to HEAD reports regressions="0" gating="0"
+# and exit 0, whatever shape the checkout has. The reporter's tree was exactly that — `git status` clean of
+# modifications, untracked directories present, a shallow clone — and it gated 58 dead-code rows, all
+# `preexisting-worse`, exit 2. A pre-commit hook that fires on an unchanged tree is unusable, and the escape
+# hatch is blocked with it: --quality-baseline refuses to pin over a tree that "already holds N gating
+# finding(s) against HEAD".
+#
+# WHY THE SHAPES. Before the identity basis (src/quality.h) the HEAD side was `git archive HEAD` re-ingested
+# in a temp dir, which is a DIFFERENT POPULATION from the working tree, and a dead-code verdict is a property
+# of the whole population. Measured on the binary before the fix, each row's tree `git status`-clean of
+# modifications unless marked (+dirty): untracked file 1 gating row, untracked nested repo 2, export-ignore 1,
+# sparse checkout 2, skip-worktree 1 — every one of them exit 2. A shallow clone on its own read ZERO, which
+# is why the reporter's `+shallow` is a bystander and is pinned here as one.
+#
+# EVERY ARM HAS A SENSITIVITY CONTROL, because a delta that reports nothing would pass a zero-assertion for
+# the wrong reason (CONTRIBUTING §2, "empty equals agreement"): U7 makes a REAL edit in the hardest shape and
+# requires exactly one gating dead-code row, and U1 requires the untracked file's own new-symbol debt to still
+# be reported. TMPDIR is set explicitly in every arm and the fixture directories are neutrally named, so
+# neither this gate's own location nor the temp dir's can decide a verdict through isFixturePath.
+UROOT="$WORK/unchanged"; mkdir -p "$UROOT"
+UTMP="$UROOT/scratch"; mkdir -p "$UTMP"
+ug(){ git -c user.name=qc -c user.email=qc@x -c core.hooksPath=/dev/null "$@"; }
+umk(){   # $1 = dir — a tree with a symbol whose verdict MOVES when the population changes
+    mkdir -p "$1/lib" "$1/app"
+    printf 'def zeta_helper(v):\n    return v + 1\n'                                  > "$1/lib/core.py"
+    printf 'def driver():\n    return zeta_helper(1)\n'                               > "$1/app/main.py"
+    printf 'void omicron_helper(int v);\nvoid omicron_helper(int v) { (void)v; }\n'    > "$1/lib/core.c"
+    printf 'void omicron_helper(int v);\nvoid runner(void) { omicron_helper(2); }\n'   > "$1/app/main.c"
+    ( cd "$1" && ug init -q . && ug add -A && ug commit -qm init ) >/dev/null 2>&1
+}
+UOUT=""; UATTR(){ printf '%s' "$UOUT" | grep -o "<quality-delta [^>]*>" | head -1 | sed -n "s/.*[^-]$1=\"\([^\"]*\)\".*/\1/p"; }
+urun(){  # $1 = dir, rest = extra flags — fills UOUT / URC
+    local d="$1"; shift
+    UOUT="$( cd "$d" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-delta --legend=compact "$@" 2>/dev/null )"; URC=$?
+}
+# `uzero` asserts the WHOLE contract, and asserts the document exists FIRST: a crashed run also prints no rows.
+# The contract is NOT "no rows at all" — a file the tree holds and HEAD does not track is new code, and its own
+# debt is reported as it always was. It is "nothing pre-existing got worse": exit 0, gating="0",
+# preexisting-worse="0", and every row counted in regressions= accounted for by new-symbol=.
+uzero(){  # $1 = label, rest = urun args
+    local label="$1"; shift
+    urun "$@"
+    local reg gat pre new
+    reg="$( UATTR regressions )"; gat="$( UATTR gating )"; pre="$( UATTR preexisting-worse )"; new="$( UATTR new-symbol )"
+    if ! printf '%s' "$UOUT" | grep -q '<quality-delta '; then
+        no "(U) $label: no quality-delta document at all (exit $URC) — the run did not produce a report"
+    elif [ "$URC" -eq 0 ] && [ "$gat" = "0" ] && [ "$pre" = "0" ] && [ "$reg" = "$new" ]; then
+        ok "(U) $label: gating=0 preexisting-worse=0 exit 0 (regressions=$reg, all new-symbol)"
+    else
+        no "(U) $label: exit $URC regressions=$reg gating=$gat preexisting-worse=$pre new-symbol=$new — a no-op diff gated"
+    fi
+}
+
+umk "$UROOT/plain";  uzero "clean tree"                    "$UROOT/plain"
+umk "$UROOT/tmpfix"; mkdir -p "$UROOT/fixtures/tmp"
+( UTMP="$UROOT/fixtures/tmp"; uzero "TMPDIR under a fixtures/ directory" "$UROOT/tmpfix" )
+
+# U1 untracked content — the reporter's own shape — and the control that its debt is still REPORTED.
+umk "$UROOT/untracked"
+mkdir -p "$UROOT/untracked/scratchdir"
+printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/untracked/scratchdir/dup.py"
+uzero "untracked directory with a same-named definition" "$UROOT/untracked"
+urun "$UROOT/untracked"
+[ "$( UATTR new-symbol )" != "0" ] && [ -n "$( UATTR new-symbol )" ] \
+    && ok "(U1) control: the untracked file's own debt is still reported as new-symbol=$( UATTR new-symbol ) (never gating)" \
+    || no "(U1) control: the untracked file contributed NO new-symbol row — the zero above could be a silenced tree"
+case "$( UATTR at )" in *+dirty*) ok "(U1) the stamp still says +dirty — the untracked content is disclosed, not hidden";;
+                        *) no "(U1) at=$( UATTR at ) does not carry +dirty although untracked content is present";; esac
+
+umk "$UROOT/nestedrepo"; umk "$UROOT/nestedrepo/vendored"
+uzero "untracked nested git repository" "$UROOT/nestedrepo"
+
+# U2 a shallow clone, with and without untracked content: `+shallow` is a bystander, pinned as one.
+umk "$UROOT/shallowsrc"
+ug clone -q --depth=1 "file://$UROOT/shallowsrc" "$UROOT/shallow" >/dev/null 2>&1
+if [ -d "$UROOT/shallow/.git" ]; then
+    uzero "shallow clone" "$UROOT/shallow"
+    case "$( UATTR at )" in *+shallow*) ok "(U2) the stamp says +shallow — the shape is disclosed";;
+                            *) no "(U2) at=$( UATTR at ) does not carry +shallow in a --depth=1 clone";; esac
+    mkdir -p "$UROOT/shallow/scratchdir"
+    printf 'def zeta_helper(v):\n    return v * 7\n' > "$UROOT/shallow/scratchdir/dup.py"
+    uzero "shallow clone WITH an untracked directory (the reported shape)" "$UROOT/shallow"
+else
+    no "(U2) could not make a shallow clone of a local path — the shallow arms would be vacuous"
+fi
+
+# U3 export-ignore: `git archive` drops the file, the working tree keeps it. git status: clean.
+umk "$UROOT/exportignore"
+printf 'def zeta_helper(v):\n    return v * 9\n' > "$UROOT/exportignore/lib/other.py"
+printf 'lib/other.py export-ignore\n'            > "$UROOT/exportignore/.gitattributes"
+( cd "$UROOT/exportignore" && ug add -A && ug commit -qm attrs ) >/dev/null 2>&1
+uzero "a tracked file marked export-ignore" "$UROOT/exportignore"
+
+# U4 sparse checkout hiding a tracked caller. git status: clean.
+umk "$UROOT/sparsesrc"
+ug clone -q "$UROOT/sparsesrc" "$UROOT/sparse" >/dev/null 2>&1
+if ( cd "$UROOT/sparse" && ug sparse-checkout init --cone && ug sparse-checkout set lib ) >/dev/null 2>&1; then
+    uzero "sparse checkout hiding a tracked caller" "$UROOT/sparse"
+else
+    no "(U4) sparse-checkout is unavailable here — the arm would be vacuous"
+fi
+
+# U5 skip-worktree over an edited caller: the index says clean, the bytes are not.
+umk "$UROOT/skipworktree"
+printf 'def driver():\n    return 0\n' > "$UROOT/skipworktree/app/main.py"
+( cd "$UROOT/skipworktree" && ug update-index --skip-worktree app/main.py ) >/dev/null 2>&1
+uzero "skip-worktree over an edited caller" "$UROOT/skipworktree"
+
+# U6 crawl flags that reached ONE side of the delta only.
+umk "$UROOT/noignore"
+printf 'generated/\n' > "$UROOT/noignore/.gitignore"; mkdir -p "$UROOT/noignore/generated"
+printf 'def zeta_helper(v):\n    return v * 3\n' > "$UROOT/noignore/generated/gen.py"
+( cd "$UROOT/noignore" && ug add -A && ug commit -qm ignore ) >/dev/null 2>&1
+uzero "--no-ignore over a gitignored same-named definition" "$UROOT/noignore" --no-ignore
+umk "$UROOT/ignoretests"; mkdir -p "$UROOT/ignoretests/tests"
+printf 'def test_it():\n    return zeta_helper(1)\n' > "$UROOT/ignoretests/tests/test_core.py"
+( cd "$UROOT/ignoretests" && ug add -A && ug commit -qm tests ) >/dev/null 2>&1
+uzero "--ignore-tests with a helper called only from tests/" "$UROOT/ignoretests" --ignore-tests
+
+# U7 THE SENSITIVITY CONTROL: a real edit in the hardest shape must still produce exactly one gating row.
+umk "$UROOT/control"
+printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/control/scratchdir_dup.py"
+printf 'def driver():\n    return 0\n'           > "$UROOT/control/app/main.py"
+urun "$UROOT/control"
+UDEAD="$( printf '%s' "$UOUT" | grep -c 'kind="dead-code" sym="zeta_helper"' )"
+{ [ "$URC" -eq 2 ] && [ "$( UATTR gating )" = "1" ] && [ "$UDEAD" -eq 1 ]; } \
+    && ok "(U7) control: deleting the only caller still gates exactly one dead-code row (exit 2) with untracked content present" \
+    || no "(U7) control did not fire — exit $URC gating=$( UATTR gating ) dead-code rows on zeta_helper=$UDEAD; every zero above is suspect"
+
+# U8 DETERMINISM: cold (a temp dir that never held a blob), warm, cold again — byte for byte.
+umk "$UROOT/determinism"
+printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/determinism/scratchdir_dup.py"
+urun "$UROOT/determinism"; UD1="$UOUT"
+urun "$UROOT/determinism"; UD2="$UOUT"
+mkdir -p "$UROOT/scratch2"
+( UTMP="$UROOT/scratch2"; urun "$UROOT/determinism"; printf '%s' "$UOUT" > "$UROOT/d3.txt" )
+{ [ "$UD1" = "$UD2" ] && [ "$UD2" = "$( cat "$UROOT/d3.txt" )" ]; } \
+    && ok "(U8) cold / warm / cold-with-a-fresh-TMPDIR are byte-identical" \
+    || no "(U8) the unchanged-tree answer moved between cold, warm and a fresh TMPDIR"
+
+# U9 THE ESCAPE HATCH: --quality-baseline refused to pin over the phantom debt. It must pin now.
+umk "$UROOT/pin"
+printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/pin/scratchdir_dup.py"
+if ( cd "$UROOT/pin" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-baseline >/dev/null 2>&1 ); then
+    ok "(U9) --quality-baseline pins on an unchanged tree that holds untracked content"
+else
+    no "(U9) --quality-baseline still refuses to pin over an unchanged tree's phantom debt"
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

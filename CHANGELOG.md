@@ -47,6 +47,34 @@ answer on the CLI and once per session on the agent surfaces. `CLAUDE.md` and `C
 wording and name the gates that hold it — `legendcoveragecheck` (G) and `compactlegendcheck` (UG) for the
 default posture, `legendrefcheck` for the ref posture.
 
+### Fixed — `--quality-delta` on a tree that is already HEAD reports nothing, whatever shape the checkout has
+
+`--quality-delta` built its HEAD side by archiving the commit into a temp directory and re-ingesting it. That
+tree is a different **population** from the working tree, and a dead-code verdict is a property of the whole
+population — so a file present on only one side moved the verdict of a symbol in a file both sides shared. On a
+working tree identical to HEAD, with untracked directories present, a reporter saw 58 gating `preexisting-worse`
+dead-code rows and exit 2 (#228), and `--quality-baseline` then refused to pin a floor over that same phantom
+debt, so the documented escape hatch was unavailable exactly where it was needed.
+
+When the tracked tree already **is** HEAD, ripwire now stops materializing a second tree: the baseline is this
+tree's own snapshot, so the comparison is a snapshot against itself and no regression can exist in it. Files the
+tree holds that HEAD does not track — untracked files, an untracked nested repository, a checked-out submodule —
+stay in the crawl and in the graph, but not in the baseline, so their own debt is still reported as `new-symbol`
+exactly as before, and the count is stated on stderr. The CLI delta, the CLI `--quality-baseline` pin and the MCP
+`quality_delta` verb all take the same basis, through one function.
+
+Measured on a nine-file fixture whose working tree is identical to HEAD, gating rows before → after: an untracked
+directory 1 → 0, an untracked nested repository 2 → 0, a tracked file marked `export-ignore` 1 → 0, a sparse
+checkout hiding a caller 2 → 0, `git update-index --skip-worktree` over an edited caller 1 → 0, `--no-ignore` over
+a gitignored same-named definition 1 → 0 — exit 2 → 0 in every row. A shallow clone read zero both before and
+after; it was a bystander in the report. A real edit that deletes a function's only caller still gates exactly one
+dead-code row in the hardest of those shapes. Nine new arms in `test/qualitycheck.sh` pin the invariant, its
+sensitivity controls and its determinism across cold, warm and a fresh temp directory.
+
+A tree that carries tracked **modifications** still takes the archived-HEAD path, so a population difference can
+still move a verdict there; `prompts/help-wanted/quality-delta-unchanged-tree-zero.md` is where that follow-on
+lives.
+
 ### Fixed — the MCP `for` bundle defines `at=`, `ccx=` and `next=`, which it was already emitting
 
 `for`'s bundle writes its own legend rather than going through the compact composer, and three attributes it
