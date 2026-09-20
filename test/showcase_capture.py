@@ -674,6 +674,7 @@ add(S4B, f"{BIN} . --naming-consistency --limit=8", "The corpus's OWN case-conve
 add(S4B, f"{BIN} . --naming-calibration", "Score the naming-* rules against this repo's own rename history: proxy=old/(old+new) per rule, 0.50 = chance; read pairs= (sample size) first.", timeout=600)
 add(S4B, f"{BIN} . --lint --naming-locals", "The opt-in --lint modifier: naming predicates over LOCAL variable names too, C/C++ only, only inside functions already past a size/complexity gate.")
 add(S4B, f"{BIN} . --lint-catalog", "The built-in rule registry — one row per rule with sev=/category=/rationale/lang=/since=; no corpus needed.")
+add(S4B, f"{BIN} . --legend-dict", "The session legend dictionary the MCP server serves as ripwire://legend-dict/full — one definition per line, headed by its dictv= version; no corpus needed. =roster lists the completeness attributes it defines.")
 add(S4B, f"{BIN} . --lint --lint-select=cache-", "Run ONLY one rule family; the root carries selected=\"K of N\" so a filtered zero is never confusable with an unfiltered one.")
 add(S4B, f"{BIN} . --lint --lint-ignore=naming-,cache-", "DROP two families, applied after selection; the raw select=/ignore= you passed rides on the root.")
 add(S4B, f"{BIN} . --lint --lint-select=cach-", "An unresolvable PREFIX refuses (exit 1) with a did-you-mean from a real edit distance (one character off cache-).")

@@ -314,6 +314,32 @@ inline constexpr std::string_view kForIdRouteLegend =
 inline constexpr std::string_view kForRouteCodeLegend =
     "; route= name-exact(X)|subtoken+body[:broad|:declined]";
 
+// ---- the MCP `for` dialect's fixed clauses, NAMED (lane r2-LO, 2026-09-19) ----------------------------------
+// mcpverbs.h forTaskText used to spell these inline. They are named so the session dictionary (legenddict.h) holds
+// the SAME bytes the header appends: a ref-posture answer takes a clause out of a legend only where it finds these
+// bytes verbatim AND the session was already served them, so a clause spelled twice would silently stop being
+// dropped (the answer stays honest — it just keeps the clause inline). Byte-identical to the inline spellings.
+// No "--" in any of them: they ride inside an XML comment (G4).
+inline constexpr std::string_view kMcpForBuildingBlocksLegend =
+    ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing";
+inline constexpr std::string_view kMcpForBundleSigsLegend =
+    "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb";
+inline constexpr std::string_view kMcpForLensColumnsLegend =
+    "; lens=\"churn,amp,tested\": the three per-row quality columns the CLI for lens carries and this dialect"
+    " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
+    " means NOT MEASURED, never measured-and-zero; est_tokens= prices this bundle in tokens";
+// budget_bytes='s reading, spliced before the header's close on a bundle the default ceiling trimmed — both --for
+// dialects (verbs_for.h, mcpverbs.h) spell the same sentence.
+inline constexpr std::string_view kForBudgetBytesNote =
+    " [budget_bytes= is the default BYTE ceiling this ranked payload was shaped against; it bounds that payload, not the whole document est_tokens prices]";
+// The prose of the two root-relative comments above, as the dictionary quotes it. Asserted to sit inside them, so the
+// wrapper constants and these cannot drift apart.
+inline constexpr std::string_view kForRootRelProse =
+    "root= is the crawl root; p= below is RELATIVE to it (single-root only; absent => p= is ingest's own path, unchanged)";
+inline constexpr std::string_view kForAtStampProse = "; at=this commit(+dirty)";
+static_assert( std::string_view( kForRootRelPathsLegendShort ).find( kForRootRelProse ) == 5 && std::string_view( kForRootRelAtLegendShort ).find( kForRootRelProse ) == 5 && std::string_view( kForRootRelAtLegendShort ).find( kForAtStampProse ) == 5 + kForRootRelProse.size(),
+               "the root-relative --for comments and the prose the session dictionary quotes from them drifted apart" );
+
 // ONE decision about what these two readings ARE for a given answer. Two surfaces APPEND them (the CLI lens's
 // forLensHeaderText, the MCP `for` twin) and both must then EXEMPT exactly those bytes from the signature-trim
 // charge — four sites mirroring one rule by hand, which is the shape that ships a ledger 64 B short and

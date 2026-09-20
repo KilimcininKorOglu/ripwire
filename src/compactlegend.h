@@ -33,8 +33,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "infra/Diagnostics.h"   // EXPECTS/ENSURES — the reprice's contract
 
@@ -1522,19 +1524,11 @@ inline constexpr std::string_view kCompactWithheldMapPurpose =
     return spec.rootTag == "r" && headHasAttr( head, "withheld_est_tokens" );
 }
 
-// The compact legend for one document: schema id, purpose, paging window, sub-caps, and every present term.
-inline std::string compactLegendText( const CompactLegendSpec& spec, std::string_view head, std::string_view doc )
+// The paging-window clause of one compact legend — " window: shown= … (capped=1 cut)." — or empty when the payload
+// carries none of the window names. Split out of compactLegendText (lane r2-LO) so the ref posture (legenddict.h) can
+// name the exact bytes the compact legend spends on it; the composition below is unchanged byte for byte.
+inline std::string compactWindowClause( std::string_view head, std::string_view doc )
 {
-    std::string out;
-    out.reserve( 400 );
-    out += "<!-- ripwire ";
-    out.append( spec.key );
-    out += " schema=ripwire.";
-    out.append( spec.key );
-    out += "/v1: ";
-    out.append( isWithheldMapRecord( spec, head ) ? kCompactWithheldMapPurpose : spec.purpose );
-    out += '.';
-    // the paging window, one clause, present names only
     std::string window;
     for( std::string_view a : kCompactPagingAttrs )
     {
@@ -1554,34 +1548,170 @@ inline std::string compactLegendText( const CompactLegendSpec& spec, std::string
             window += '=';
         }
     }
-    if( !window.empty() )
+    if( window.empty() )
     {
-        out += " window: ";
-        out += window;
-        out += payloadHasAnyAttr( doc, "next_offset" ) ? " (capped=1 cut; next_offset= pastes as offset=)." : " (capped=1 cut).";
+        return {};
     }
-    const std::string subcaps = payloadSubCapAttrs( doc );
-    if( !subcaps.empty() )
+    return " window: " + window + ( payloadHasAnyAttr( doc, "next_offset" ) ? " (capped=1 cut; next_offset= pastes as offset=)." : " (capped=1 cut)." );
+}
+
+// The sub-cap clause — " importers_capped=/…: 1 = cut." — or empty when no payload attribute ends in _capped.
+inline std::string compactSubcapClause( std::string_view doc )
+{
+    std::string clause = payloadSubCapAttrs( doc );
+    if( !clause.empty() )
     {
-        out += ' ';
-        out += subcaps;
-        out += ": 1 = cut.";
+        clause.insert( clause.begin(), ' ' );
+        clause += ": 1 = cut.";
     }
+    return clause;
+}
+
+// THE TWO READING TABLES, ONE INDEX SPACE (merge of L1's second table with lane r2-LO's split-out helpers).
+// compactLegendText reads the tool-wide completeness vocabulary first, then L1's key-qualified per-verb readings, so an
+// index below kCompactTermCount names kCompactCompletenessTerms and any higher one names kCompactAttributeReadings.
+// legenddict.h's entry ids ride this same order, which is why the concatenation lives here rather than in the composer.
+inline constexpr std::size_t kCompactTermCount    = std::size( kCompactCompletenessTerms );
+inline constexpr std::size_t kCompactReadingCount = kCompactTermCount + std::size( kCompactAttributeReadings );
+
+[[nodiscard]] inline const CompactCompletenessTerm& compactReading( std::size_t i ) noexcept
+{
+    EXPECTS( i < kCompactReadingCount );
+    return i < kCompactTermCount ? kCompactCompletenessTerms[ i ] : kCompactAttributeReadings[ i - kCompactTermCount ];
+}
+
+// The readings this document carries, as indices into that joint space, in table order. `key` is the answer's schema key:
+// a key-qualified reading (L1's onKey) belongs to that verb alone, so passing the key gives EXACTLY the legend's own set.
+// An EMPTY key applies no key filter and so returns a superset — which is all the `for` dialect's substring strip needs.
+inline std::vector<std::uint16_t> compactPresentTerms( std::string_view head, std::string_view doc, std::string_view key = {} )
+{
+    static_assert( kCompactReadingCount < 0xFFFFu, "reading indices are 16-bit" );
+    std::vector<std::uint16_t> present;
     const std::string_view mapHeader = compactMapHeader( doc );
-    const auto appendPresent = [ & ]( const CompactCompletenessTerm& t )
+    for( std::size_t i = 0; i < kCompactReadingCount; ++i )
     {
-        const bool keyMatches = t.onKey.empty() || t.onKey == spec.key;   // a key-qualified reading belongs to that verb alone
+        const CompactCompletenessTerm& t = compactReading( i );
+        const bool keyMatches = t.onKey.empty() || key.empty() || t.onKey == key;
         if( keyMatches && isCompletenessTermPresent( t, head, doc, mapHeader ) )
         {
-            out += ' ';
-            out.append( t.reading );
-            out += '.';
+            present.push_back( static_cast<std::uint16_t>( i ) );
         }
-    };
-    std::ranges::for_each( kCompactCompletenessTerms, appendPresent );
-    std::ranges::for_each( kCompactAttributeReadings, appendPresent );
+    }
+    return present;
+}
+
+// The opener every compact legend starts with: "<!-- ripwire KEY schema=ripwire.KEY/v1: ".
+inline std::string compactLegendOpener( const CompactLegendSpec& spec )
+{
+    std::string out = "<!-- ripwire ";
+    out.append( spec.key );
+    out += " schema=ripwire.";
+    out.append( spec.key );
+    out += "/v1: ";
+    return out;
+}
+
+// The compact legend for one document: schema id, purpose, paging window, sub-caps, and every present reading.
+inline std::string compactLegendText( const CompactLegendSpec& spec, std::string_view head, std::string_view doc )
+{
+    std::string out;
+    out.reserve( 400 );
+    out += compactLegendOpener( spec );
+    out.append( isWithheldMapRecord( spec, head ) ? kCompactWithheldMapPurpose : spec.purpose );
+    out += '.';
+    // the paging window, one clause, present names only
+    out += compactWindowClause( head, doc );
+    out += compactSubcapClause( doc );
+    for( const std::uint16_t i : compactPresentTerms( head, doc, spec.key ) )
+    {
+        out += ' ';
+        out.append( compactReading( i ).reading );
+        out += '.';
+    }
     out += " -->";
     return out;
+}
+
+// ── the roster closure (lane r2-LO) ──────────────────────────────────────────────────────────────────────────
+// Does any comment of `doc` outside CDATA spell `attr=` (the definitional form every legend here uses)?
+inline bool commentsSpellAttr( std::string_view doc, std::string_view attr )
+{
+    std::string needle( attr );
+    needle += '=';
+    std::size_t i = 0;
+    while( i < doc.size() )
+    {
+        const std::size_t cdata   = doc.find( "<![CDATA[", i );
+        const std::size_t comment = doc.find( "<!--", i );
+        if( comment == std::string_view::npos )
+        {
+            return false;
+        }
+        if( cdata != std::string_view::npos && cdata < comment )
+        {
+            const std::size_t j = doc.find( "]]>", cdata );
+            i = j == std::string_view::npos ? doc.size() : j + 3;
+            continue;
+        }
+        const std::size_t close = doc.find( "-->", comment );
+        const std::string_view text = doc.substr( comment, close == std::string_view::npos ? doc.size() - comment : close - comment );
+        for( std::size_t at = text.find( needle ); at != std::string_view::npos; at = text.find( needle, at + 1 ) )
+        {
+            const char before = at == 0 ? ' ' : text[ at - 1 ];
+            if( !std::isalnum( static_cast<unsigned char>( before ) ) && before != '_' )
+            {
+                return true;
+            }
+        }
+        i = close == std::string_view::npos ? doc.size() : close + 3;
+    }
+    return false;
+}
+
+// A NATIVE-legend answer (one this layer does not rewrite: the MCP `for` bundle) that carries a completeness attribute
+// its own legend never spells gets that attribute's compact reading, in ONE comment after the comments that open the
+// root. The class it closes, generally: a completeness attribute riding an answer undefined — found on MCP `for` as
+// at= (stamped on the root, defined nowhere), ccx= (cx= alone was read) and next= (on the r=1 row). On a compact answer
+// it is a no-op by construction: compactLegendText reads every present term. Returns whether anything was added.
+inline bool closeRosterGaps( std::string& doc )
+{
+    const CompactRootInfo root = findCompactRoot( doc );
+    if( root.tag.empty() )
+    {
+        return false;
+    }
+    const std::string_view view = doc;
+    std::string add;
+    for( const std::uint16_t i : compactPresentTerms( compactDocHead( view, root ), view ) )
+    {
+        // compactPresentTerms returns a JOINT index over both reading tables, so it is resolved by compactReading and
+        // never by subscripting the first table — which is only 92 long and would be read past for every key-qualified
+        // reading the second table holds.
+        const CompactCompletenessTerm& t = compactReading( i );
+        if( !commentsSpellAttr( view, t.attr ) && add.find( std::string( t.attr ) + "=" ) == std::string::npos )
+        {
+            add += ' ';
+            add.append( t.reading );
+            add += '.';
+        }
+    }
+    if( add.empty() )
+    {
+        return false;
+    }
+    // After the comments that follow the root's open tag (the legend a reader meets first), before the first row.
+    std::size_t at = root.openEnd;
+    while( view.substr( at ).starts_with( "<!--" ) )
+    {
+        const std::size_t close = view.find( "-->", at );
+        if( close == std::string_view::npos )
+        {
+            break;
+        }
+        at = close + 3;
+    }
+    doc.insert( at, "<!--" + add + " -->" );
+    return true;
 }
 
 // ── the root finder + the rewrite ─────────────────────────────────────────────────────────────────────────

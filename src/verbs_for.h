@@ -2971,7 +2971,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             ? " budget_bytes=\"" + std::to_string( rw::kForPayloadBudgetBytes ) + "\""
             : std::string();
         const std::string sigsCeilingNote   = forDefaultCeiling
-            ? std::string( " [budget_bytes= is the default BYTE ceiling this ranked payload was shaped against; it bounds that payload, not the whole document est_tokens prices]" )
+            ? std::string( rw::kForBudgetBytesNote )
             : std::string();
         // ── the INDEXING-cap disclosure (mention.h CapDisclosure), at the same splice point and for the
         // same reason: a --for header is charged against the payload ceiling, so a disclosure folded into
