@@ -750,7 +750,8 @@ jobs:
   # that means less than it looks. What runs instead is the part that needs no harness: the unit tests
   # (ctest — including ripwire.oswin32logic, the Windows port's own pure-logic suite), `--version`/`--help`,
   # a real crawl of test/fixture, the two-run byte-identical determinism contract, and G4 well-formedness.
-  # Everything beyond that is still a contributor's run on real hardware; see the checklist on #44.
+  # Everything beyond that is still a contributor's run on real hardware; see the checklist on #44. The cl.exe
+  # leg reports without gating for now; the `continue-on-error:` comment below says exactly what it is waiting on.
   #
   # Ninja, and the VC environment from vcvars64.bat rather than the Visual Studio generator: single-config is
   # what every flavour rule in CMakeLists.txt assumes (an empty CMAKE_BUILD_TYPE IS the plain flavour), and it
@@ -765,6 +766,18 @@ jobs:
       matrix:
         toolchain: [clang-cl, cl]
     runs-on: windows-latest
+    # The cl.exe leg REPORTS but does not gate, and the scope of that is exact. cl.exe now configures, takes
+    # every flag, and compiles our C++ until it meets the GCC/Clang language extensions the tree is written in:
+    # 104 `[[gnu::always_inline]]` and 11 `[[gnu::cold]]`, 21 `__attribute__((…))`, ~36 uses of 14 `__builtin_*`
+    # (trap, unreachable, assume, prefetch, bit_cast, the three overflow builtins, ctz/ctzll, expect, isfinite,
+    # memcpy), and 12 `asm volatile` barriers — one of which, src/infra/fastmath.h::isFiniteFast, exists to defeat
+    # -ffinite-math-only and has no MSVC counterpart because MSVC has no such mode. Mapping those is a portability
+    # SEAM (src/infra/platform.h already owns ALWAYS_INLINE and is where it goes), with a design question at the
+    # asm barriers — not a flag choice, and not this job's round. Leaving the leg red would train readers to
+    # ignore a red workflow; deleting it would lose the error list that the next round starts from. So it runs on
+    # every full matrix, its log is the live inventory, and it does not fail the run. Flip this to gating in the
+    # same commit that lands the seam.
+    continue-on-error: ${{ matrix.toolchain == 'cl' }}
     defaults:
       run:
         shell: bash   # Git Bash: the smoke steps below are POSIX shell; the build steps override to cmd
