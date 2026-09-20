@@ -778,7 +778,7 @@ void normalize_path_arg( char* text );
 }
 [[gnu::always_inline]] inline bool path_is_root( const std::string& path )
 {
-    return path == "/" || ( path.size() == 3 && oswin::isAsciiLetter( path[ 0 ] ) && path[ 1 ] == ':' && path[ 2 ] == '/' );
+    return path == "/" || ( path.size() == 3 && oswin::isDriveLetter( path[ 0 ] ) && path[ 1 ] == ':' && path[ 2 ] == '/' );
 }
 template<class FsPath>
 [[gnu::always_inline]] inline std::string program_path( const FsPath& path ) { return path.generic_string(); }

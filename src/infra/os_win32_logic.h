@@ -390,20 +390,26 @@ constexpr void encodeUtf8( std::u16string_view utf16, char* out ) noexcept
     }
 }
 
-constexpr bool isAsciiLetter( char c ) noexcept
-{
-    return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' );
-}
-
 constexpr char asciiUpper( char c ) noexcept
 {
     return c >= 'a' && c <= 'z' ? static_cast<char>( c - ( 'a' - 'A' ) ) : c;
 }
 
+// A Windows DRIVE letter, which is what all eight call sites below actually ask — "C:", "/c/", the
+// extended-length prefix, the MSYS rewrite, path_is_root. Spelled through asciiUpper because that IS the
+// rule: a drive letter is case-insensitive, `C:` and `c:` name the same volume, and every caller here
+// then compares or rewrites the spelling rather than the case. It replaces an `isAsciiLetter` whose name
+// promised more than any caller wanted and whose body repeated a range pair this file already folds.
+constexpr bool isDriveLetter( char c ) noexcept
+{
+    const char upper = asciiUpper( c );
+    return upper >= 'A' && upper <= 'Z';
+}
+
 // Git Bash's drive spelling: "/c" or "/c/..." (one ASCII letter). Length-preserving: the rewrite is "C:" + rest.
 constexpr bool isMsysDrivePrefix( std::string_view path ) noexcept
 {
-    return path.size() >= 2 && path[ 0 ] == '/' && isAsciiLetter( path[ 1 ] ) && ( path.size() == 2 || path[ 2 ] == '/' || path[ 2 ] == '\\' );
+    return path.size() >= 2 && path[ 0 ] == '/' && isDriveLetter( path[ 1 ] ) && ( path.size() == 2 || path[ 2 ] == '/' || path[ 2 ] == '\\' );
 }
 
 // WidePath: the NUL-terminated UTF-16 spelling a -W Win32 call takes, for one UTF-8 program path. The storage is on
@@ -534,7 +540,7 @@ constexpr std::ptrdiff_t programPathFromNative( std::u16string_view native, char
             out[ i ] = '/';
         }
     }
-    if( !isUnc && total >= 2 && isAsciiLetter( out[ 0 ] ) && out[ 1 ] == ':' )
+    if( !isUnc && total >= 2 && isDriveLetter( out[ 0 ] ) && out[ 1 ] == ':' )
     {
         out[ 0 ] = asciiUpper( out[ 0 ] );
     }
@@ -563,12 +569,12 @@ constexpr void normalizePathArgInPlace( char* text ) noexcept
     for( char* p = text; *p != '\0'; ++p )
     {
         const bool atBoundary = p == text || p[ -1 ] == ',';
-        if( atBoundary && p[ 0 ] == '/' && isAsciiLetter( p[ 1 ] ) && ( p[ 2 ] == '/' || p[ 2 ] == '\0' || p[ 2 ] == ',' ) )
+        if( atBoundary && p[ 0 ] == '/' && isDriveLetter( p[ 1 ] ) && ( p[ 2 ] == '/' || p[ 2 ] == '\0' || p[ 2 ] == ',' ) )
         {
             p[ 0 ] = asciiUpper( p[ 1 ] );
             p[ 1 ] = ':';
         }
-        else if( atBoundary && isAsciiLetter( p[ 0 ] ) && p[ 1 ] == ':' )
+        else if( atBoundary && isDriveLetter( p[ 0 ] ) && p[ 1 ] == ':' )
         {
             p[ 0 ] = asciiUpper( p[ 0 ] );   // "c:/repo" and "C:/repo" are one directory; the program spells the drive upper-case
         }
@@ -618,7 +624,7 @@ inline std::string rebaseMsysTmp( std::string_view path, std::string_view native
             c = '/';
         }
     }
-    if( out.size() >= 2 && isAsciiLetter( out[ 0 ] ) && out[ 1 ] == ':' )
+    if( out.size() >= 2 && isDriveLetter( out[ 0 ] ) && out[ 1 ] == ':' )
     {
         out[ 0 ] = asciiUpper( out[ 0 ] );
     }
@@ -639,7 +645,7 @@ inline std::u16string extendedLengthPath( std::u16string_view native ) noexcept
         out.assign( native );
         return out;
     }
-    const bool drive = native.size() >= 3 && native[ 0 ] < 0x80 && isAsciiLetter( static_cast<char>( native[ 0 ] ) ) && native[ 1 ] == u':' && isSep( native[ 2 ] );
+    const bool drive = native.size() >= 3 && native[ 0 ] < 0x80 && isDriveLetter( static_cast<char>( native[ 0 ] ) ) && native[ 1 ] == u':' && isSep( native[ 2 ] );
     const bool unc   = native.size() >= 3 && isSep( native[ 0 ] ) && isSep( native[ 1 ] ) && !isSep( native[ 2 ] ) && native[ 2 ] != u'?' && native[ 2 ] != u'.';
     if( !drive && !unc )
     {
@@ -1029,7 +1035,7 @@ constexpr bool endsWithAsciiCaseless( std::string_view text, std::string_view su
 constexpr bool isAbsoluteNativePath( std::string_view path ) noexcept
 {
     const auto isSep = []( char c ) { return c == '/' || c == '\\'; };
-    return ( path.size() >= 3 && isAsciiLetter( path[ 0 ] ) && path[ 1 ] == ':' && isSep( path[ 2 ] ) )
+    return ( path.size() >= 3 && isDriveLetter( path[ 0 ] ) && path[ 1 ] == ':' && isSep( path[ 2 ] ) )
         || ( path.size() >= 3 && isSep( path[ 0 ] ) && isSep( path[ 1 ] ) && !isSep( path[ 2 ] ) );
 }
 
