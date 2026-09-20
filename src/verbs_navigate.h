@@ -16,6 +16,48 @@
 namespace
 {
 
+// #60: does THIS page of rows hold a module-scope owner? The condition graphlegend.h modScopeLegend( bool )
+// takes, shared by --callers/--callees and --impact so the two cannot disagree about when the kind's reading
+// is owed — and so neither verb's handler carries the loop (the same reason printJsonSymbolRows below was
+// extracted). Always the emitter's OWN shown rows, never a re-derivation over the whole corpus: a definition
+// that names an attribute the document did not emit is this header's mirror-image false claim.
+inline bool anyModuleScopeRow( const rw::IngestResult& ing, std::span<const rw::NodeId> rows ) noexcept
+{
+    for( const rw::NodeId id : rows )
+    {
+        if( id < ing.symbols.size() && ing.symbols[ id ].kind == rw::SymKind::ModuleScope )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// …and the clause itself, so a call site spends one expression rather than a named bool plus a splice. Takes
+// a page of rows, never the corpus: the reading is owed by the document that SHOWS an owner, nothing else.
+inline const char* modScopeRowsLegend( const rw::IngestResult& ing, std::span<const rw::NodeId> rows ) noexcept
+{
+    return rw::modScopeLegend( anyModuleScopeRow( ing, rows ) );
+}
+
+// --graph-query's own legend, hoisted out of runGraphQuery for the reason emitSafeDeleteLegend was hoisted
+// out of runSafeDelete: it is a paragraph, not control flow, and the dispatcher it sat in was already at its
+// verbosity bar.
+//
+// §H4 §3.4 / V3 M-1: --graph-query is the SIXTH surface that counts off this same call graph — its
+// `callers(name("X"),1)` reports the identical number --callers does — and it shipped the marker on neither.
+// That is the §B4 echo-site shape src/graphlegend.h's own header indicts, so the shared constants land here
+// too rather than a sixth wording. #60's clause rides the SHOWN rows, so a page without an owner pays 0 B.
+inline void emitGraphQueryLegend( const rw::IngestResult& ing, const rw::Graph& g, const rw::RankDisclosure& prD,
+                                  std::span<const rw::NodeId> shownRows )
+{
+    rw::emitTo( stdout, "<!-- ripwire graph-query: a fixed-operator node-set query over the call graph (sources "
+                 "name/all; filters kind/cx/fanin/file/layer; bounded closure callers/callees; joins and/or/not), "
+                 "ranked by importance + capped at the top-k limit (default 200); narrow the query or raise top-k for more. NOT Datalog. "
+                 "{}{}{}-->", modScopeRowsLegend( ing, shownRows ),
+                 rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+}
+
 // L2: the `[{"t":..,"n":..,"p":"file:line"},...]` JSON row array shared by --callers/--callees/--impact's
 // --json branches (identical shape, different surrounding header fields — see each call site). Avoids
 // carrying two copies of the same per-row loop (--quality-delta flagged the pre-extraction duplicate).
@@ -150,11 +192,18 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         {
             // M12: under multi-root this verb carries no root= at all (correctly — no single root exists)
             // and, before this, disclosed nothing about the `<label>/` prefix every p= below carries.
-            rw::emitTo( stdout, "{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
+            // #60: exactly when a module-scope owner is on THIS page — the emitter's own condition, so a
+            // page without one pays 0 bytes for the clause.
+            // …or when the SELECTOR itself resolved to one: `--callees=path:<file-scope>` spells the name in
+            // of= and answers with ordinary rows, so the kind still needs its reading in that document.
+            const bool chHasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( result ).subspan( pw.begin, pw.end - pw.begin ) )
+                                    || anyModuleScopeRow( ing, matches );
+            rw::emitTo( stdout, "{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
                          rw::declinedCallsLegend( chRows.declinedCalls > 0 ),   // exactly when the root carries declined_calls=
                          rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ),     // H1: likewise, exactly when unproven_defs= is there
+                         rw::modScopeLegend( chHasModScope ),                   // #60: likewise, exactly when a t="modscope" row is
                          rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         }
@@ -301,14 +350,7 @@ std::optional<int> runGraphQuery( const MainDispatch& d )
 
         std::vector<char> esc;
         const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
-        // §H4 §3.4 / V3 M-1: --graph-query is the SIXTH surface that counts off this same call graph — its
-        // `callers(name("X"),1)` reports the identical number --callers does — and it shipped the marker on
-        // neither. That is the §B4 echo-site shape src/graphlegend.h's own header indicts, so the shared
-        // constants land here too rather than a sixth wording.
-        rw::emitTo( stdout, "<!-- ripwire graph-query: a fixed-operator node-set query over the call graph (sources "
-                     "name/all; filters kind/cx/fanin/file/layer; bounded closure callers/callees; joins and/or/not), "
-                     "ranked by importance + capped at the top-k limit (default 200); narrow the query or raise top-k for more. NOT Datalog. "
-                     "{}{}-->", rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+        emitGraphQueryLegend( ing, g, prD, std::span<const NodeId>( result ).subspan( gqPw.begin, keep ) );
         // §P8 vocabulary (see src/pageview.h, THE TRUNCATION VOCABULARY): count= is the true total and
         // shown= the --top-k slice, but capped= was missing — so a caller reading a 200-row answer had to
         // know the default top-k to tell a complete result from a truncated one. Rule 3: the bit is always
@@ -744,7 +786,7 @@ std::optional<int> runUses( const MainDispatch& d )
 // H1's residue: `unprovenDefs` is the count resolveAllByNameQualified dropped for this selector. Its clause
 // (graphlegend.h kUnprovenDefsSafeDeleteLegend) follows the risk= sentence directly, because it is the sentence
 // that says what risk= did NOT read; emitted exactly when the root carries unproven_defs=, nothing otherwise.
-inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs, std::size_t ambiguousCallers, std::string_view risk, bool singleRoot, bool hasUnindexed )
+inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs, std::size_t ambiguousCallers, std::string_view risk, bool singleRoot, bool hasUnindexed, bool hasModScope )
 {
     rw::emitTo( stdout, "<!-- ripwire safe-delete: composes signals the tool already computes into one \"can I delete this?\" READ "
                 "— never a verdict. defs= is resolveAllByNameQualified's match count, exactly as the impact/uses/callers "
@@ -762,7 +804,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                 "hold here — run the dead-code verb for the full-corpus scan. ambiguous_callers= counts callers whose OWN "
                 "outgoing calls include at least one that resolved to more than one candidate definition (g.ambOut, the "
                 "same counter a ranked row's amb= reads). {}{}risk= NAMES what was found, never a go/no-go verdict, and "
-                "this run reports {}{}{}-->{}",
+                "this run reports {}{}{}{}-->{}",
                 // The union caveat, only when there is a union to caveat.
                 defCount > 1
                     ? "defs= is above 1 here, so EVERY count in this element UNIONS more than one physical definition "
@@ -784,6 +826,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                       : "uses-exist: callers or uses exist, and at least part of the radius is test-covered. ",
                 // H1: what risk= did not read, straight after the sentence for the value it qualifies.
                 rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::SafeDelete, unprovenDefs > 0 ).c_str(),
+                rw::modScopeLegend( hasModScope ),   // #60: exactly when a <c n="<file-scope>"> row is on this page
                 rw::graphCountDisclosure( hasUnindexed ).c_str(), rw::rootRelPathsLegend( singleRoot ) );
 }
 
@@ -951,7 +994,11 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // shared graphCountDisclosure() tail is untouched, byte for byte: test/floormarkcheck.sh pins it across
     // seven other verbs and a private shorter copy here would be exactly the dialect divergence it exists
     // to catch.
-    emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk, sdSingleRoot, g.unindexedFiles > 0 );
+    // #60: exactly when an owner is one of the <c> rows this page prints. pageWindow is pure, so recomputing
+    // it here (the legend streams BEFORE the rows) cannot disagree with the window the rows below take.
+    const PageWindow sdLw = pageWindow( callerIds.size(), effectiveRowCap( cfg.pageLimit, 40 ), cfg.pageOffset );
+    emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk, sdSingleRoot, g.unindexedFiles > 0,
+                          anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ) );
 
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
                                                         // lowest, same convention --impact/--uses/--callers's of=/defs=
@@ -2312,12 +2359,15 @@ std::optional<int> runImpact( const MainDispatch& d )
             // twin cannot drift from this wording (the §B4 echo-site class).
             // LB-H: the import-tier clause is the columnar variant under --format=columnar, because that
             // form carries the count without the rows and a reader must be told which shape they hold.
-            rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
+            // #60: exactly when a module-scope owner is one of the rows this answer prints.
+            const bool imHasModScope = anyModuleScopeRow( ing, show );
+            rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
                          cfg.columnar ? rw::kImpactImportTierColumnarLegend : rw::kImpactImportTierLegend,
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
                          rw::kTestedLensBlindSpotLegend,                           // F-02: rides with the partition
                          rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
                          rw::declinedCallsLegend( imDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
+                         rw::modScopeLegend( imHasModScope ),                      // #60: likewise, exactly when a t="modscope" row is
                          rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         }
         // P2.1 + §P8 G1: the rank-ordered listing's 40 is a DEFAULT now, not a ceiling — see the §P10.3 note

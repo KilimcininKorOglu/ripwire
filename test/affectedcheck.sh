@@ -300,6 +300,224 @@ printf '%s' "$A" | grep -qE '<test p="test/test_leaf\.cpp" hops="1"|<g hops="1" 
     && ok "(7g) core.cpp's direct test row carries hops=\"1\"" \
     || no "(7g) core.cpp rows lack hops="
 
+# ── 8) issue #60: a call with no enclosing NAMED function is still a call ─────────────────────────────
+# @thavlik's reproduction, verbatim in shape: a node:test arrow callback calls the changed function, and
+# the test file's name does not share the source file's stem, so the filename-partner fallback cannot fire.
+# The CONTROL is the same assertion moved into a named function — the contrast that isolated the defect.
+# Before ingest_model.h mintModuleScopeOwners the callback arm read tests="0" and the named arm tests="1";
+# both must now read 1, and they must agree, because the two source shapes mean the same thing.
+echo "=== (8) #60: an arrow-callback call and a named-function call give the SAME tests ==="
+T60="$TMP/issue60"; mkdir -p "$T60/arrow/src" "$T60/arrow/test" "$T60/named/src" "$T60/named/test"
+for v in arrow named; do
+    printf 'export function bounded(text: string): string {\n  return text.replace(/x/g, "");\n}\n' > "$T60/$v/src/bounded.ts"
+done
+printf 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { bounded } from "../src/bounded.ts";\ntest("bounded removes x", () => { assert.equal(bounded("x value"), " value"); });\n' > "$T60/arrow/test/behavior.test.ts"
+printf 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { bounded } from "../src/bounded.ts";\nfunction checkBounded() { assert.equal(bounded("x value"), " value"); }\ntest("bounded removes x", checkBounded);\n' > "$T60/named/test/behavior.test.ts"
+AR="$( "$BIN" "$T60/arrow" --no-cache --affected=src/bounded.ts 2>/dev/null )"
+NA="$( "$BIN" "$T60/named" --no-cache --affected=src/bounded.ts 2>/dev/null )"
+arrowTests="$( attr tests "$AR" )"; namedTests="$( attr tests "$NA" )"
+[ "$namedTests" = 1 ] && ok "(8) the named-function control still reports tests=\"1\"" \
+    || no "(8) the named-function control reports tests=\"${namedTests:-absent}\" — the contrast proves nothing"
+[ "$arrowTests" = 1 ] && ok "(8) the arrow-callback arm reports tests=\"1\" (the pre-#60 binary reports 0)" \
+    || no "(8) the arrow-callback arm reports tests=\"${arrowTests:-absent}\", expected 1"
+[ "$arrowTests" = "$namedTests" ] && ok "(8) both source shapes give the SAME tests= ($arrowTests)" \
+    || no "(8) arrow=$arrowTests named=$namedTests — the two shapes still disagree"
+printf '%s' "$AR" | grep -q 'p="test/behavior\.test\.ts"' \
+    && ok "(8) the arrow arm NAMES test/behavior.test.ts, whose stem never matches bounded.ts" \
+    || no "(8) the arrow arm reports a count but not the file: $AR"
+# --test-gate must FAIL (exit 4) while that test is not in the run set — the verb an agent acts on.
+"$BIN" "$T60/arrow" --no-cache --test-gate=src/bounded.ts >"$TMP/tg60.xml" 2>/dev/null
+tgrc=$?
+[ "$tgrc" = 4 ] && ok "(8) --test-gate exits 4 on the arrow arm: the test to run is named, not silently zero" \
+    || no "(8) --test-gate exited $tgrc on the arrow arm, expected 4"
+grep -q 'behavior\.test\.ts' "$TMP/tg60.xml" \
+    && ok "(8) --test-gate names test/behavior.test.ts as the test to run" \
+    || no "(8) --test-gate exits non-zero but never names the test: $( head -c 400 "$TMP/tg60.xml" )"
+
+# ── 8b) issue #60, @alex-michaud's arm: the same root cause in ORDINARY PRODUCTION code ───────────────
+# No test file, no test framework: a module top-level call is framework registration / DI wiring / route
+# setup, and --callers and --impact both used to be one short. The named-function call in the same file is
+# the control: it was always counted, and it must still be.
+echo "=== (8b) #60: a module top-level call is a caller ==="
+P60="$TMP/issue60prod/src"; mkdir -p "$P60"
+printf 'export function setPhase(phase: string): void {\n  console.log(phase)\n}\n' > "$P60/lifecycle.ts"
+printf "import { setPhase } from './lifecycle'\n\nexport function boot(): void {\n  setPhase('booting')\n}\n\nsetPhase('starting')\n" > "$P60/index.ts"
+CA="$( "$BIN" "$TMP/issue60prod" --no-cache --callers=setPhase 2>/dev/null )"
+IM="$( "$BIN" "$TMP/issue60prod" --no-cache --impact=setPhase 2>/dev/null )"
+[ "$( attr count "$CA" )" = 2 ] && ok "(8b) --callers=setPhase count=\"2\" (the pre-#60 binary reports 1)" \
+    || no "(8b) --callers=setPhase count=\"$( attr count "$CA" )\", expected 2"
+[ "$( attr reaches "$IM" )" = 2 ] && ok "(8b) --impact=setPhase reaches=\"2\" (the pre-#60 binary reports 1)" \
+    || no "(8b) --impact=setPhase reaches=\"$( attr reaches "$IM" )\", expected 2"
+printf '%s' "$CA" | grep -q '<s t="fn" n="boot" p="src/index.ts:3"/>' \
+    && ok "(8b) the named-function caller row is unchanged — no existing edge moved" \
+    || no "(8b) the boot row changed shape: $CA"
+printf '%s' "$CA" | grep -q '<s t="modscope" n="&lt;file-scope&gt;" p="src/index.ts:1"/>' \
+    && ok "(8b) the module-scope caller is a LABELLED t=\"modscope\" row, not a fabricated function" \
+    || no "(8b) --callers=setPhase has no modscope row: $CA"
+# HONESTY, IN EVERY POSTURE. The default CLI legend is compact and the clause is a present-only term
+# (compactlegend.h, keyed on the t= VALUE); --legend=full takes the conditional clause in graphlegend.h.
+# Both must define the kind, and the two must be asserted separately — a reader holds one or the other.
+printf '%s' "$CA" | grep -q '(t=modscope)' \
+    && ok "(8b) the compact callers legend defines t=\"modscope\" in the document that emits it" \
+    || no "(8b) --callers emits t=\"modscope\" and its compact legend never defines it"
+printf '%s' "$IM" | grep -q '(t=modscope)' \
+    && ok "(8b) the compact impact legend defines t=\"modscope\" too" \
+    || no "(8b) --impact emits t=\"modscope\" and its compact legend never defines it"
+for v in callers impact; do
+    F="$( "$BIN" "$TMP/issue60prod" --no-cache --$v=setPhase --legend=full 2>/dev/null )"
+    printf '%s' "$F" | grep -q 'modscope" is a row for a file' \
+        && ok "(8b) --$v --legend=full defines t=\"modscope\" as well" \
+        || no "(8b) --$v --legend=full emits t=\"modscope\" with no definition"
+done
+# …and the clause costs 0 bytes where no such row exists (the "0 bytes when inert" placement rule).
+NM="$( "$BIN" "$T60/named" --no-cache --callers=bounded 2>/dev/null )"
+printf '%s' "$NM" | grep -q 'modscope' \
+    && no "(8b) a callers answer with no modscope row still pays for the clause" \
+    || ok "(8b) no modscope row ⇒ no clause: the definition costs 0 bytes when inert"
+# BLAST RADIUS: an unrelated symbol's counts must not move. lonely() in the ORIGINAL corpus is reached by
+# no test and called by nobody; leaf() is called from one named function and one test.
+LON="$( "$BIN" "$R" --no-cache --callers=lonely 2>/dev/null )"
+[ "$( attr count "$LON" )" = 0 ] && ok "(8b) control: --callers=lonely is still count=\"0\" — no count moved that should not" \
+    || no "(8b) control: --callers=lonely is now count=\"$( attr count "$LON" )\""
+MIDC="$( "$BIN" "$R" --no-cache --callers=leaf 2>/dev/null )"
+[ "$( attr count "$MIDC" )" = 2 ] && ok "(8b) control: --callers=leaf still count=\"2\" (mid + test_leaf)" \
+    || no "(8b) control: --callers=leaf is now count=\"$( attr count "$MIDC" )\", expected 2"
+
+# ── 8c) #60 honesty: the kind is defined in every POSTURE and SURFACE that shows it ────────────────────
+# The first round defined t="modscope" only on the default <s> rows of --callers/--impact. The kind reaches
+# a reader through a dozen spellings — a columnar <kind> array item, <h n=>, <edge caller=>, <u sym=>,
+# <c n=> — and "a definition where the reader meets it" is the whole contract. The compact dialect now keys
+# the reading on the NAME (compactlegend.h kModScopeEscapedName), which every surface escapes identically;
+# the full dialect takes graphlegend.h modScopeLegend( bool ) at each verb, on that verb's own row set.
+echo "=== (8c) #60: t=\"modscope\" defined in every posture that shows it ==="
+sawmod(){ printf '%s' "$2" | grep -q '&lt;file-scope&gt;'; }                       # does this document SHOW one?
+defmod(){ printf '%s' "$2" | grep -qE 't=modscope|modscope" is a row'; }           # …and define it?
+for POSTURE in default compact full columnar; do
+    case "$POSTURE" in
+        default)  EXTRA="" ;;
+        compact)  EXTRA="--legend=compact" ;;
+        full)     EXTRA="--legend=full" ;;
+        columnar) EXTRA="--format=columnar" ;;
+    esac
+    for V in "--callers=setPhase" "--impact=setPhase"; do
+        O="$( "$BIN" "$TMP/issue60prod" --no-cache $V $EXTRA 2>/dev/null )"
+        if sawmod "$V" "$O"; then
+            defmod "$V" "$O" && ok "(8c) $V $POSTURE: row shown AND kind defined" \
+                || no "(8c) $V $POSTURE: shows <file-scope> with NO definition anywhere in the document"
+        else
+            no "(8c) $V $POSTURE: no <file-scope> row at all — the posture arm proves nothing"
+        fi
+    done
+done
+# the surfaces beyond <s> rows: a graph-query row, a safe-delete caller row, a callees selector
+for PAIR in "--graph-query=all()|full" "--graph-query=all()|compact" "--safe-delete=setPhase|full" "--safe-delete=setPhase|compact"; do
+    V="${PAIR%|*}"; L="${PAIR#*|}"
+    O="$( "$BIN" "$TMP/issue60prod" --no-cache "$V" --legend=$L 2>/dev/null )"
+    if sawmod "$V" "$O"; then
+        defmod "$V" "$O" && ok "(8c) $V --legend=$L: row shown AND kind defined" \
+            || no "(8c) $V --legend=$L: shows <file-scope> with NO definition"
+    else
+        no "(8c) $V --legend=$L: no <file-scope> row — the arm proves nothing"
+    fi
+done
+# …and 0 bytes on a corpus with NO file-scope call at all, in every one of those postures (the placement
+# rule). The control corpus has to be built for it: every other fixture in this gate holds a top-level shell
+# command or a node:test call, which is exactly the shape that mints an owner.
+NOMS="$TMP/noms/src"; mkdir -p "$NOMS"
+printf 'int leafy() { return 1; }\nint stalk() { return leafy(); }\n' > "$NOMS/tree.cpp"
+for L in compact full; do
+    for V in "--callers=leafy" "--graph-query=all()"; do
+        O="$( "$BIN" "$TMP/noms" --no-cache "$V" --legend=$L 2>/dev/null )"
+        printf '%s' "$O" | grep -q 'modscope' \
+            && no "(8c) $V --legend=$L pays for the clause with no modscope row in the document" \
+            || ok "(8c) $V --legend=$L: no row ⇒ no clause (0 bytes when inert)"
+    done
+done
+
+# ── 8e) #60 MED-3 residual: --for and the full dialect on the verbs the first sweep missed ────────────
+# The name-keyed compact rule covers everything that goes through compactLegendText. Two families do not:
+# --for builds its own two legend strips (verbs_for.h, present-only bits), and the full dialect is per-verb.
+echo "=== (8e) #60: --for, and --legend=full on the verbs that were bare ==="
+for L in compact full; do
+    O="$( "$BIN" "$TMP/issue60prod" --no-cache --for='module scope of a file' --legend=$L 2>/dev/null )"
+    if printf '%s' "$O" | grep -q '&lt;file-scope&gt;'; then
+        printf '%s' "$O" | grep -q 'modscope' \
+            && ok "(8e) --for --legend=$L: row shown AND kind defined" \
+            || no "(8e) --for --legend=$L: shows <file-scope> with NO definition (the entry verb, bare)"
+    else
+        no "(8e) --for --legend=$L: no <file-scope> row — the arm proves nothing"
+    fi
+done
+for V in "--edit-check=setPhase" "--tree" "--path=<file-scope>,setPhase" "--connect=<file-scope>,setPhase" "--pack-task=<file-scope> setPhase"; do
+    O="$( "$BIN" "$TMP/issue60prod" --no-cache "$V" --legend=full 2>/dev/null )"
+    if printf '%s' "$O" | grep -q '&lt;file-scope&gt;'; then
+        printf '%s' "$O" | grep -q 'modscope' \
+            && ok "(8e) $V --legend=full: row shown AND kind defined" \
+            || no "(8e) $V --legend=full: shows <file-scope> with NO definition"
+    else
+        no "(8e) $V --legend=full: no <file-scope> row — the arm proves nothing"
+    fi
+done
+# inert again, in both --for dialects: the clause is a present-only bit, not a constant
+for L in compact full; do
+    "$BIN" "$TMP/noms" --no-cache --for='a leafy stalk' --legend=$L 2>/dev/null | grep -q 'modscope' \
+        && no "(8e) --for --legend=$L pays for the clause on a corpus with no owner" \
+        || ok "(8e) --for --legend=$L: no owner ⇒ no clause (0 bytes when inert)"
+done
+
+# ── 8f) #60 LOW-2: --for's clause rides on the ROW SET, not on the corpus ─────────────────────────────
+# The first cut of this bit tested the whole symbol table, so a corpus holding ONE top-level call paid the
+# clause on every --for answer — ~154 B compact / ~250 B full on the most-used verb, in front of the rows.
+# It now reads the head of the rank-ordered surface the <d> and <hops> rows are drawn from, so it rides
+# when an owner can actually be in the answer and costs nothing when it cannot. The corpus below has an
+# owner (index.ts's top-level call) AND a query that ranks nowhere near it: that combination is the arm.
+echo "=== (8f) #60: --for pays for the clause only when an owner row can be in the answer ==="
+for L in compact full; do
+    OWNED="$( "$BIN" "$TMP/issue60prod" --no-cache --for='module scope of a file' --legend=$L 2>/dev/null )"
+    printf '%s' "$OWNED" | grep -q 'modscope\|MODULE SCOPE' \
+        && ok "(8f) --for --legend=$L on a query that reaches the owner: the clause is present" \
+        || no "(8f) --for --legend=$L: an owner row is reachable and the clause is missing"
+done
+# THE NEGATIVE HALF NEEDS A REAL CORPUS: on a two-file fixture every symbol ranks, so an owner is always in
+# the head and the corpus-wide bug would hide. This repository has owners (704 shell files hold top-level
+# calls) and enough symbols that a technical query's ranked head reaches none of them — which is exactly
+# the shape that paid ~154 B on every answer before this fix.
+for L in compact full; do
+    for Q in "rank the graph with pagerank" "crawl the directory tree" "emit xml attributes"; do
+        AWAY="$( "$BIN" "$ROOT" --no-cache --for="$Q" --legend=$L 2>/dev/null )"
+        if printf '%s' "$AWAY" | grep -q '&lt;file-scope&gt;'; then
+            printf '%s' "$AWAY" | grep -q 'modscope\|MODULE SCOPE' \
+                && ok "(8f) --for --legend=$L '$Q': shows an owner row and defines it" \
+                || no "(8f) --for --legend=$L '$Q': shows an owner row with no definition"
+        else
+            printf '%s' "$AWAY" | grep -q 'modscope\|MODULE SCOPE' \
+                && no "(8f) --for --legend=$L '$Q': NO owner row in the answer, yet the clause still rides — the bit is corpus-wide again" \
+                || ok "(8f) --for --legend=$L '$Q': no owner row ⇒ no clause, on a corpus that HAS owners"
+        fi
+    done
+done
+
+# ── 8d) #60 MED-2: the legend says the owner has no body, and --expand agrees ──────────────────────────
+# Every clause naming this kind says "no body to expand". --expand used to answer either the WHOLE FILE
+# (the whole-file serving always undercuts an empty bundle) or shown="0" capped="1" — a cap over a body
+# that does not exist, and "a false _capped is a wrong answer". Both now answer bodyless, capped="0", with
+# the count named and defined.
+echo "=== (8d) #60: --expand on a module-scope owner is bodyless, not capped, not the file ==="
+EX="$( "$BIN" "$TMP/issue60prod" --no-cache --expand='<file-scope>' 2>/dev/null )"
+printf '%s' "$EX" | grep -q 'capped="0"' && printf '%s' "$EX" | grep -q 'bodyless="1"' \
+    && ok '(8d) --expand=<file-scope> answers capped="0" bodyless="1"' \
+    || no "(8d) --expand=<file-scope>: $( printf '%s' "$EX" | grep -oE '<bodies [^>]*>' )"
+printf '%s' "$EX" | grep -q 'mode="whole-file"' \
+    && no "(8d) --expand=<file-scope> served the WHOLE FILE — the legend says it has no body" \
+    || ok "(8d) --expand=<file-scope> did not fall back to serving the file"
+printf '%s' "$EX" | grep -q 'bodyless=N' \
+    && ok "(8d) bodyless= is defined in the document that emits it" \
+    || no "(8d) --expand emits bodyless= and never defines it"
+EXN="$( "$BIN" "$T60/named" --no-cache --expand=bounded 2>/dev/null )"
+printf '%s' "$EXN" | grep -q 'bodyless=' \
+    && no "(8d) an ordinary body's answer carries bodyless= (absent-at-zero broken)" \
+    || ok "(8d) control: an ordinary --expand carries no bodyless= and no clause"
+
 # ── 6) xml well-formed ───────────────────────────────────────────────────────────────────────────────
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$A" | xmllint --noout - 2>/dev/null; then ok "--affected xml well-formed"; else no "--affected xml malformed"; fi

@@ -2099,6 +2099,15 @@ inline void appendBodyFidelityAttrs( std::string& children, bool bodyScrubbed, b
     }
 }
 
+// #60: the reading of <bodies bodyless=N>, written only into a document that carries the attribute — the
+// same "a legend that defines an attribute the document did not emit is the mirror-image false claim" rule
+// kExtentSuspectRowLegend follows. It exists so the reader is never told a body was CUT when there was no
+// body: capped="1" means "cut", and a module-scope owner has no span to cut.
+inline constexpr const char* kBodylessBodiesLegend =
+    "<!-- bodyless=N of total= are requested symbols that have NO BODY BY CONSTRUCTION, not a body this "
+    "answer dropped: today that is t=\"modscope\" (a file's module scope, n=<file-scope>). They are counted "
+    "in total=, never in shown=, and they do NOT raise capped= — absent when 0. -->";
+
 inline constexpr const char* kBodiesLegend =
     "<!-- a body's sibs=\"a,b,...\" sibs_total=N are the file's OTHER indexed symbols (this body's own name "
     "excluded), source order, capped at 8 (sibs_capped=\"1\" when the cap fired); inc=\"x.h,...\" inc_total=N "
@@ -2110,6 +2119,15 @@ inline constexpr const char* kBodiesLegend =
     "redacted=\"1\" = a credential shape was rewritten to a [REDACTED:kind] marker (the no-redact flag serves the "
     "bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already "
     "do, so source that spells one round-trips). Absent = paste-back is byte-exact. -->";
+
+// MODULE-SCOPE OWNERS (issue #60, ingest_model.h mintModuleScopeOwners) — the reading of the t="modscope" kind,
+// written only into a map whose corpus HAS one, by the same rule the extent clause below follows: a corpus with
+// no file-scope call stays byte-identical. Its own comment node rather than a widening of the t= list in the
+// opener, because that list is unconditional and this kind is not.
+inline constexpr std::string_view kModScopeMapLegend =
+    "<!-- t=modscope=a-file's-MODULE-SCOPE(n=<file-scope>):the-statements-outside-every-named-definition,where-a-top-level-call"
+    "-and-an-anonymous-callback-body's-calls-live;a-CALLER-never-a-callee(nothing-in-the-source-can-name-it)-with-no-body-to-expand;"
+    "a-file-with-no-such-call-has-no-such-row -->";
 
 // EXTENT HONESTY (src/extentsuspect.h, gate test/extentcheck.sh) — the ONE reading of extent_suspect= on every ROW
 // surface: the map's <s>, a bundle's <d> and <b>. Written only into a document that carries the attribute, right
@@ -2481,6 +2499,20 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     // EXTENT HONESTY (src/extentsuspect.h): how many definitions carry extent_suspect= corpus-wide — the header's
     // extent_suspect_syms= — and the row + header readings, appended ONLY when that is non-zero, so a corpus with
     // nothing flagged keeps every byte of this legend.
+    // MODULE-SCOPE OWNERS (issue #60): the t="modscope" kind's reading, appended ONLY when the corpus
+    // actually has one, under the same byte-identity rule as the two clauses below — a corpus with no
+    // file-scope call keeps every byte of this legend, which is what kept test/printf_parity.manifest's
+    // --pack-signatures and --around hashes and every est_tokens ceiling where they were.
+    bool hasModuleScope = false;
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( sym.kind == SymKind::ModuleScope ) { hasModuleScope = true; break; }
+    }
+    if( hasModuleScope )
+    {
+        legend += kModScopeMapLegend;
+    }
+
     std::size_t extentSuspectTotal = 0;
     for( const Symbol& sym : ing.symbols )
     {
@@ -5407,6 +5439,11 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     HashMap<std::uint32_t, std::vector<NodeId>> byFile;
     std::vector<std::uint32_t>                             fileOrder;
     std::size_t                                            requestedCount = 0;
+    // #60: a module-scope owner is BODYLESS BY CONSTRUCTION — its Symbol extent is empty, which is what
+    // every legend naming the kind promises. It is not a body the budget cut, so it must not raise
+    // capped="1" ("1 = cut" is that attribute's whole definition, and a false _capped is a wrong answer).
+    // It is counted and named instead, the same shape --callees' bodyless_defs= already uses.
+    std::size_t                                            bodylessCount  = 0;
     for( NodeId id : nodes )
     {
         if( id >= ing.symbols.size() )
@@ -5414,6 +5451,11 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
             continue;
         }
         ++requestedCount;
+        if( ing.symbols[id].kind == SymKind::ModuleScope )
+        {
+            ++bodylessCount;
+            continue;   // never reaches a file read: there is no span to slice
+        }
         const std::uint32_t f = ing.symbols[id].fileId;
         if( byFile.find( f ) == byFile.end() )
         {
@@ -5619,10 +5661,15 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     // compressBody pass — a MODE fact, so it rides the flag on every emitter (shown="0" included), and its
     // absence is the flagless byte-identity contract (test/forcompresscheck.sh arm 6). The two hand-formatted
     // <bodies> wrappers in packtask.h restate it for the same reason they restate shown=/total=.
-    char open[ 112 ];
-    rw::formatTo( open, sizeof( open ), "<bodies shown=\"{}\" total=\"{}\" capped=\"{}\"{}>",
-                   shownCount, requestedCount, shownCount < requestedCount ? 1 : 0,
-                   compress ? " compress=\"1\"" : "" );
+    char open[ 160 ];
+    char bodylessAttr[ 32 ] = { 0 };
+    if( bodylessCount > 0 )
+    {
+        rw::formatTo( bodylessAttr, sizeof( bodylessAttr ), " bodyless=\"{}\"", bodylessCount );   // #60, absent at zero
+    }
+    rw::formatTo( open, sizeof( open ), "<bodies shown=\"{}\" total=\"{}\" capped=\"{}\"{}{}>",
+                   shownCount, requestedCount, shownCount + bodylessCount < requestedCount ? 1 : 0,
+                   rw::cstr( bodylessAttr ), compress ? " compress=\"1\"" : "" );
     // §L10: sibs=/inc=/<calls> are only ever emitted when withFileContext is on (--expand's own call sites),
     // so the legend that defines them rides the SAME gate — every other packBodies caller (--for auto-body,
     // --pack-task, --detail, --around, MCP exemplar) stays byte-identical, as withFileContext's own contract
@@ -5631,6 +5678,10 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     if( withFileContext )
     {
         w.write( kBodiesLegend );
+    }
+    if( bodylessCount > 0 )
+    {
+        w.write( kBodylessBodiesLegend );   // #60: exactly when the attribute is emitted, on every caller
     }
     // extent honesty: the row reading rides whenever a requested body is flagged — a superset of the rows written
     // (defining an absent attribute costs bytes, never truth) — and is priced by the caller's one chargeSection.

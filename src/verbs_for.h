@@ -525,6 +525,9 @@ struct ForLensHeaderParts
                                             // the section is rendered (the header is priced, and re-priced, from here).
     bool             layerPresent = false;   // TRAIN 9: does any ranked row's file sit under a built-in arch layer
                                             // directory, so its <d> row carries layer=? Same over-approximation again.
+    bool             modScopePresent = false;   // #60: does any ranked row name a file's MODULE SCOPE (t="modscope",
+                                            // n=<file-scope>)? It reaches this bundle as a <d> row and, more often,
+                                            // as a <h n="<file-scope>"> hop row. Same over-approximation, same reason.
 
     // ── THE DROPPABLE LEGEND, as ONE bit ──────────────────────────────────────────────────────────────
     // confidenceNote / tailLegend / idRouteLegend moved in lock step at every read and every write, and the
@@ -851,6 +854,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
         { p.tailLegend, kForCompactLegendTail },         { p.hdrLegend, kForCompactLegendHdr },
         { p.composePresent, kForCompactLegendCompose },  { p.legoPresent, kForCompactLegendLego },
         { p.layerPresent, kForCompactLegendLayer },
+        { p.modScopePresent, rw::kForCompactModScopeClause },   // #60
     };
     for( const auto& [ on, clause ] : kPresentOnly )
     {
@@ -995,6 +999,10 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     if( p.hdrLegend )
     {
         h.append( rw::kForHdrLegend );   // R2-AF (round 2, S4): present-only, never ceiling-dropped
+    }
+    if( p.modScopePresent )
+    {
+        h.append( rw::kForModScopeClause );   // #60: present-only, on the same bit the compact strip reads
     }
     if( p.legendDropped )
     {
@@ -2527,13 +2535,38 @@ std::optional<int> runForLens( const MainDispatch& d )
                 forLayerPresent = true;
             }
         }
+        // #60: the same shape again, and READ FROM THE RANKED SET like its three siblings above. The first
+        // draft tested the whole symbol table on the theory that a <h> hop's owner need not be ranked; that
+        // was simply wrong — the compact bundle's hop candidates ARE the positive-score head of the ranked
+        // surface (buildForCompactHops), so an owner reaches this document as a <d> row or as a <h> row of
+        // one, and both are ranked. Corpus-wide cost ~40 tokens of clause on EVERY --for answer from any
+        // tree holding one top-level call (this repo; 72% of vue-core's files), which is the mirror-image
+        // waste of the rule this header states: a legend that defines something the document did not emit.
+        // #60: THE ROW SET, not the ranked set — and this one is deliberately NOT its siblings' shape.
+        // `scPresent`/`legoPresent`/`layerPresent` test rank>0 corpus-wide and let the over-approximation
+        // fall the safe way, which costs a clause nobody needed. This clause is ~154 B (compact) / ~250 B
+        // (full) on the tool's most-used verb, and rank>0 is true for a module-scope owner on any tree
+        // holding one top-level call — every --for answer on THIS repository paid it, with no owner row in
+        // any of them (measured over six queries). So it reads the rows the document can actually carry:
+        // `lensSurfaceIds` is the rank-ordered surface, `<d>` rows are its top-forTopN head (the adaptive
+        // cut has already narrowed forTopN here, "so the emitted set is exactly the kept head") and the
+        // compact `<hops>` rows are its rank>0 head capped at kPackTaskBodyCandidates — so the union is one
+        // head walk. What is left over-approximating is only the H1 BYTE ladder trimming inside that head,
+        // which is the residual a header built before its payload cannot avoid.
+        const std::size_t forRowHead = std::max( std::size_t( forTopN > 0 ? forTopN : 0 ), rw::kPackTaskBodyCandidates );
+        bool              forModScopePresent = false;
+        for( std::size_t i = 0; i < lensSurfaceIds.size() && i < forRowHead && !forModScopePresent; ++i )
+        {
+            const rw::NodeId sid = lensSurfaceIds[i];
+            forModScopePresent = lensRank[sid] > 0.0f && ing.symbols[sid].kind == rw::SymKind::ModuleScope;
+        }
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,
                                         cfg.anchor, plan.autoBodies, plan.compact, cfg.legend == "compact",
                                         /*tailLegend=*/true, /*idRouteLegend=*/true, /*legendDropped=*/false, flRootArg,
                                         /*hdrLegend=*/!forHdrRows.empty(), forScPresent, forComposePresent,
-                                        forLegoPresent, forLayerPresent };
+                                        forLegoPresent, forLayerPresent, forModScopePresent };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );

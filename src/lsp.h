@@ -357,6 +357,7 @@ inline int lspKindOf( rw::SymKind k ) noexcept
         case rw::SymKind::Section:   return 2;    // Module — a doc-heading section has no LSP home
         case rw::SymKind::Macro:     return 14;   // Constant
         case rw::SymKind::Field:     return 8;    // Field
+        case rw::SymKind::ModuleScope: return 2;  // Module — LSP's own word for a file's top-level scope
         case rw::SymKind::Other:     break;
     }
     return 13;   // Variable — the neutral bucket
@@ -375,6 +376,7 @@ inline const char* lspKindWord( rw::SymKind k ) noexcept
         case rw::SymKind::Section:   return "section";
         case rw::SymKind::Macro:     return "macro";
         case rw::SymKind::Field:     return "field";
+        case rw::SymKind::ModuleScope: return "module scope";
         case rw::SymKind::Other:     break;
     }
     return "symbol";

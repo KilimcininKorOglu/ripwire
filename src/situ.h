@@ -1367,9 +1367,14 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     const bool        tgHasRows  = ( testRows > 0 || !r.untested.empty() );
     const std::string tgRootAttr = ( root.empty() || !tgHasRows ) ? std::string() : ( " root=\"" + ex( root ) + "\"" );
     // H2H-Graft F1: the evidence clause (testmap.h's ONE wording) rides the rows-gated half, like the run= rule.
-    rw::emitTo( out, "<!-- {}{}{}{}{}-->{}", kTestGateLegend,
+    // #60: exactly when a module-scope owner is one of the untested rows this report prints (it can never
+    // be a <t> test row — a test file's module scope is a caller, and the test rows are files).
+    const bool tgHasModScope = std::any_of( r.untested.begin(), r.untested.end(),
+                                            [ & ]( NodeId n ) { return n < ing.symbols.size() && ing.symbols[ n ].kind == SymKind::ModuleScope; } );
+    rw::emitTo( out, "<!-- {}{}{}{}{}{}-->{}", kTestGateLegend,
                   tgHasRows ? kTestGateRowLegend : "", std::string_view( kTestRowEvidenceLegend.data(), tgHasRows ? int( kTestRowEvidenceLegend.size() ) : 0 ),
                   runHintClauseIfRows( testRows, runsAreRootRelative( ing, root ) ),   // the ONE gate: this clause is about <t> rows, so an untested-only report pays nothing
+                  rw::modScopeLegend( tgHasModScope ),                // #60: exactly when a t="modscope" row is
                   rw::graphUnindexedLegend( g.unindexedFiles > 0 ),   // #66: exactly when the root carries the attribute
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where

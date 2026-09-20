@@ -43,6 +43,7 @@ inline void dedupRawDefs( std::vector<RawDef>& rawDefs )
             case SymKind::Macro:     return 0;   // Macro and Section were folded into "Other" by a default; named now, same value:
             case SymKind::Section:   return 0;   // each comes from its own single capture (a #define, a heading or data key), so
             case SymKind::Other:     return 0;   // neither collides with a code kind on one name byte
+            case SymKind::ModuleScope: return 0; // minted after this pass runs; it can never reach the dedup
         }
         return 0;
     };
@@ -214,6 +215,173 @@ inline void assignFields( IngestResult& result, std::vector<RawDef>& fieldDefs )
     }
 }
 
+// The spelling of the module-scope owner's name. Angle brackets are not a legal identifier in any indexed
+// language, so this name can neither collide with real source nor be mistaken for a function to open.
+inline constexpr const char* kModuleScopeName = "<file-scope>";
+
+// 3a-quater) MODULE-SCOPE OWNERS — issue #60.
+//
+// A reference is attributed to the innermost @definition span that contains it (DefSweep, below). A call
+// written OUTSIDE every definition therefore has no owner: `fromSymbol == kNoNode`, buildGraph buckets it
+// `CallDisposition::FileScope`, and no edge is minted. Two ordinary source shapes land there — a module
+// top-level statement (`setPhase('starting')`: framework registration, DI wiring, singleton init, route
+// setup) and a call inside an ANONYMOUS callback body (`test("…", () => { assert.equal(bounded(…)) })`),
+// since an arrow function is no tags.scm definition and so mints no span. Measured with --pin-census at
+// 41def4c5d: 72.8% of vue-core's call sites, 54.8% of this repo's, 1.0% of llvm's.
+//
+// The fix is a missing NODE, not a missing analysis: mint ONE synthetic owner per file that has such a
+// call, spanning the whole file. It sorts first in buildDefSpanIndex (startByte 0, widest endByte), so the
+// sweep opens it first and every real definition still wins `activeSpanIndices.back()` — no reference that
+// has an owner today can change owner. This is language-NEUTRAL by construction: it sits below every
+// grammar, and twelve indexed languages were measured to carry the defect (sh, py, js, cpp, ts, rb, lua,
+// java, php, kt, gd, c). Config/doc lanes emit no call edges, so the role/lang filter mints nothing there.
+//
+// TWO LANGUAGES ARE STATED RATHER THAN FIXED, because the gap is upstream of this pass and a silent scope
+// would be indistinguishable from an oversight. A Ruby bare-word call written without parentheses
+// (`rb_fn` on its own line) and a C# top-level-statements call (`CsFn();` in a file with no type
+// declaration) produce NO Call reference at all — before this change and after — so there is nothing for
+// the mint to own. Both are extraction gaps in the tags queries, not ownership gaps: a Ruby call WITH
+// parentheses and a C# call inside a method are both minted normally. Go, Rust, Java and Swift have no
+// executable top level to speak of (Go's `var x = f()` is owned by the var; a Rust item-level `m!()` IS
+// minted, role macro), so their zero counts are the language, not a refusal.
+//
+// It owns REFERENCES only. Bindings and route uses keep the non-module answer (DefSweep::findOwnedDef),
+// because `Binding::fromSymbol == kNoNode` is load-bearing for the file-scope var→fn table and the A5
+// address-of escape guard in graph.h buildFnPtrTables.
+inline void mintModuleScopeOwners( IngestResult& result, std::vector<RawDef>& rawDefs, const std::vector<RawRef>& rawRefs )
+{
+    PROFILE_SCOPE_DESCRIBE( "ingest/build-model: module-scope owners" );
+
+    // Runs between assignFields and assignSymbols: rawDefs is the post-dedup, post-field-partition set and
+    // no Symbol exists yet, which is why this pass rebuilds the containment test from RawDefs instead of
+    // reading the DefSpanIndex (that index needs the ids this pass changes).
+    EXPECTS( result.symbols.empty(), "the symbol table is assigned after this pass, from the defs it appends to" );
+
+    const std::size_t fileCount = result.files.size();
+    if( fileCount == 0 || rawRefs.empty() )
+    {
+        return;
+    }
+
+    // Per-file definition intervals, start-sorted, with a running max of `end`. A position is covered by
+    // some definition iff, among the intervals whose start <= pos, one reaches past pos — which the prefix
+    // maximum answers in one comparison after the binary search.
+    std::vector<std::size_t> fileDefStart( fileCount + 1, 0 );
+    for( const RawDef& d : rawDefs )
+    {
+        if( d.fileId < fileCount )
+        {
+            ++fileDefStart[ d.fileId + 1 ];
+        }
+    }
+    for( std::size_t fileId = 1; fileId <= fileCount; ++fileId )
+    {
+        fileDefStart[ fileId ] += fileDefStart[ fileId - 1 ];
+    }
+
+    struct DefIv
+    {
+        std::uint32_t startByte;
+        std::uint32_t maxEnd;     // after the fold below: the furthest end among this file's spans up to here
+    };
+    std::vector<DefIv> ivs( fileDefStart[ fileCount ] );
+    {
+        std::vector<std::size_t> writeAt = fileDefStart;
+        for( const RawDef& d : rawDefs )
+        {
+            if( d.fileId >= fileCount )
+            {
+                continue;
+            }
+            ivs[ writeAt[ d.fileId ]++ ] = { d.startByte, d.endByte };
+        }
+    }
+    for( std::size_t fileId = 0; fileId < fileCount; ++fileId )
+    {
+        const auto begin = ivs.begin() + std::ptrdiff_t( fileDefStart[ fileId ] );
+        const auto end   = ivs.begin() + std::ptrdiff_t( fileDefStart[ fileId + 1 ] );
+        std::sort( begin, end,
+                   []( const DefIv& a, const DefIv& b ) noexcept
+                   {
+                       if( a.startByte != b.startByte ) { return a.startByte < b.startByte; }
+                       return a.maxEnd > b.maxEnd;
+                   } );
+        std::uint32_t running = 0;
+        for( auto it = begin; it != end; ++it )
+        {
+            running    = ( it->maxEnd > running ) ? it->maxEnd : running;
+            it->maxEnd = running;
+        }
+    }
+
+    // Which files carry at least one file-scope reference that the CALL GRAPH could have used. The owner's
+    // language is the MINIMUM Lang value among those references, not the first one seen: raw reference order
+    // is a parallel-merge artifact, and the minimum is a property of the set.
+    std::vector<std::uint8_t> needsOwner( fileCount, 0 );
+    std::vector<std::uint8_t> ownerLang( fileCount, static_cast<std::uint8_t>( Lang::Unknown ) );
+    for( const RawRef& r : rawRefs )
+    {
+        // The population is pincensus.h isResolvableCallReference's — the same predicate buildGraph's resolve
+        // loop filters on — so every site it would bucket CallDisposition::FileScope gets an owner here, and
+        // the two cannot drift apart into a call the graph counts but nothing owns. RefRole::Macro is in it
+        // deliberately: a registration macro invoked at namespace scope is the same shape as a top-level call.
+        if( r.fileId >= fileCount || r.isInherit || r.isDocLink || r.isCompose )
+        {
+            continue;
+        }
+        if( r.role != RefRole::Call && r.role != RefRole::Macro )
+        {
+            continue;
+        }
+        if( !isCodeLang( r.lang ) )
+        {
+            continue;   // JSON/TOML/YAML/markdown emit no call or macro references at all, so this guard is
+                        // inert today; it is here so a future data lane cannot mint a synthetic node in a
+                        // file that has no executable scope to own.
+        }
+        const auto begin = ivs.begin() + std::ptrdiff_t( fileDefStart[ r.fileId ] );
+        const auto end   = ivs.begin() + std::ptrdiff_t( fileDefStart[ r.fileId + 1 ] );
+        const auto upper = std::upper_bound( begin, end, r.startByte,
+                                             []( std::uint32_t pos, const DefIv& iv ) noexcept { return pos < iv.startByte; } );
+        if( upper != begin && ( upper - 1 )->maxEnd > r.startByte )
+        {
+            continue;   // some definition contains this reference — it already has an owner
+        }
+        ASSUME( upper == begin || ( upper - 1 ) >= begin, "upper_bound stays inside this file's own interval range" );
+        const std::uint8_t lang = static_cast<std::uint8_t>( r.lang );
+        if( needsOwner[ r.fileId ] == 0 || lang < ownerLang[ r.fileId ] )
+        {
+            ownerLang[ r.fileId ] = lang;
+        }
+        needsOwner[ r.fileId ] = 1;
+    }
+
+    // Append in ascending fileId — a total order that does not depend on reference order.
+    const std::size_t defCountBefore = rawDefs.size();
+    std::size_t       minted         = 0;
+    for( std::uint32_t fileId = 0; fileId < fileCount; ++fileId )
+    {
+        if( needsOwner[ fileId ] == 0 )
+        {
+            continue;
+        }
+        RawDef d;
+        d.fileId    = fileId;
+        d.line      = 1;
+        d.startByte = 0;
+        // The span is only ever read by buildDefSpanIndex; the emitted Symbol extent is zeroed in
+        // assignSymbols. An end past any real offset means the sweep never closes it before the file does,
+        // which is what "the module scope runs to the end of the file" means without reading the file size.
+        d.endByte   = std::numeric_limits<std::uint32_t>::max();
+        d.kind      = SymKind::ModuleScope;
+        d.lang      = static_cast<Lang>( ownerLang[ fileId ] );
+        d.name      = kModuleScopeName;
+        rawDefs.push_back( std::move( d ) );
+        ++minted;
+    }
+    ENSURES( rawDefs.size() == defCountBefore + minted, "this pass only APPENDS: it never drops or rewrites a real definition" );
+}
+
 inline void assignSymbols( IngestResult& result, std::vector<RawDef>& rawDefs, bool captureValueUses )
 {
     PROFILE_SCOPE_DESCRIBE( "ingest/build-model: assign symbols" );
@@ -269,6 +437,18 @@ inline void assignSymbols( IngestResult& result, std::vector<RawDef>& rawDefs, b
         s.evWhy        = d.evWhy;   // per-tag contributing-jump counts (model.h kEvWhyTagTable order)
         s.name   = d.name;
         s.scope  = d.scope;
+        // A module-scope owner's SPAN belongs to the attribution index, not to the document. The RawDef
+        // runs to the end of the file so the sweep can own every top-level statement; the Symbol's own
+        // extent is EMPTY, so `--expand` on it returns no body (there is nothing to open — the honest
+        // answer, and the one that keeps an agent from reading it as a function), the lexical index has no
+        // document for it, and every body-shaped metric (LOC, complexity, dead code) reads zero. The two
+        // are separate reads — buildDefSpanIndex reads RawDefs, every display surface reads the Symbol.
+        if( d.kind == SymKind::ModuleScope )
+        {
+            s.sigStartByte = 0;
+            s.sigEndByte   = 0;
+            s.endByte      = 0;
+        }
         result.symbols.push_back( std::move( s ) );
     }
 
@@ -324,6 +504,7 @@ struct DefSpan
     std::uint32_t startByte;
     std::uint32_t endByte;
     NodeId        id;
+    std::uint8_t  moduleScope;   // 1 ⇒ the file's synthetic module-scope owner, which only REFERENCES may take
 };
 
 // group def spans by fileId in one flat array (rawDefs aligned 1:1 with result.symbols after the
@@ -355,7 +536,8 @@ inline DefSpanIndex buildDefSpanIndex( const IngestResult& result, const std::ve
     for( std::uint32_t i = 0; i < rawDefs.size(); ++i )
     {
         const std::size_t spanIndex = fileSpanWrite[ rawDefs[ i ].fileId ]++;
-        index.spans[ spanIndex ] = { rawDefs[ i ].startByte, rawDefs[ i ].endByte, result.symbols[ i ].id };
+        index.spans[ spanIndex ] = { rawDefs[ i ].startByte, rawDefs[ i ].endByte, result.symbols[ i ].id,
+                                     static_cast<std::uint8_t>( rawDefs[ i ].kind == SymKind::ModuleScope ? 1 : 0 ) };
     }
 
     for( std::size_t fileId = 0; fileId < result.files.size(); ++fileId )
@@ -394,6 +576,7 @@ inline void markExtentSuspects( IngestResult& result, const std::vector<RawDef>&
     PROFILE_SCOPE_DESCRIBE( "ingest/build-model: extent honesty (containment check)" );
 
     std::vector<extent::ExtentDef> fileDefs;
+    std::vector<std::size_t>       spanOfDef;   // fileDefs index → its span index, module-scope owners skipped
     std::vector<std::uint8_t>      fileBits;
     extent::ExtentScratch          scratch;
     for( std::size_t fileId = 0; fileId < result.files.size(); ++fileId )
@@ -405,19 +588,33 @@ inline void markExtentSuspects( IngestResult& result, const std::vector<RawDef>&
             continue;
         }
 
+        // A module-scope owner is not a parsed definition, so it is not classified and cannot perturb the
+        // classification of the real ones: it is left out of fileDefs entirely, and spanOfDef carries the
+        // mapping back. Its own extentSuspect bit stays 0 — there is no extent to be suspicious of.
         fileDefs.clear();
+        spanOfDef.clear();
         for( std::size_t spanIndex = begin; spanIndex < end; ++spanIndex )
         {
+            if( index.spans[ spanIndex ].moduleScope != 0 )
+            {
+                continue;
+            }
             const NodeId  id = index.spans[ spanIndex ].id;
             const Symbol& s  = result.symbols[ id ];
             const RawDef& d  = rawDefs[ id ];   // aligned 1:1 with result.symbols after assignSymbols' sort
             fileDefs.push_back( { s.sigStartByte, s.sigEndByte, s.endByte, d.nameByte, s.kind, s.lang, d.recovered, s.name, s.scope } );
+            spanOfDef.push_back( spanIndex );
+        }
+        if( fileDefs.empty() )
+        {
+            continue;
         }
         fileBits.assign( fileDefs.size(), 0 );
         extent::classifyFileExtents( fileDefs, fileBits, scratch );
-        for( std::size_t spanIndex = begin; spanIndex < end; ++spanIndex )
+        ENSURES( spanOfDef.size() == fileBits.size(), "one classified bit per def we handed the classifier" );
+        for( std::size_t defIndex = 0; defIndex < spanOfDef.size(); ++defIndex )
         {
-            result.symbols[ index.spans[ spanIndex ].id ].extentSuspect = fileBits[ spanIndex - begin ];
+            result.symbols[ index.spans[ spanOfDef[ defIndex ] ].id ].extentSuspect = fileBits[ defIndex ];
         }
     }
 }
@@ -455,6 +652,21 @@ struct DefSweep
         }
 
         return activeSpanIndices.empty() ? kNoNode : spans[ activeSpanIndices.back() ].id;
+    }
+
+    // The same sweep, refusing the synthetic module-scope owner. A module owner starts at byte 0 and never
+    // closes, so it is the BOTTOM of the active stack: if it is `back()`, nothing else is open and the
+    // honest answer for this caller is "no enclosing definition". Bindings and route uses read this one,
+    // because graph.h's file-scope var→fn table and the A5 address-of escape guard both key on
+    // `Binding::fromSymbol == kNoNode` — giving those records an owner would silently delete both.
+    NodeId findOwnedDef( std::uint32_t fileId, std::uint32_t pos )
+    {
+        const NodeId id = find( fileId, pos );
+        if( id != kNoNode && spans[ activeSpanIndices.back() ].moduleScope != 0 )
+        {
+            return kNoNode;
+        }
+        return id;
     }
 };
 
@@ -700,7 +912,16 @@ inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, 
         ref.fieldName   = std::move( r.fieldName );   // S5-E: the member variable name (e.g. "m_pool")
         ref.composeRel  = std::move( r.composeRel );  // S5-E: "creates" or "uses"
         ref.startByte   = r.startByte;                // shadow fix round: for the block-span containment test
-        ref.fromSymbol  = refSweep.find( r.fileId, r.startByte );
+        // #60: the module-scope owner owns EXACTLY the references it was minted for — the call/macro
+        // population of pincensus.h isResolvableCallReference. A module-level `import`/`read`/`type`
+        // reference keeps fromSymbol == kNoNode, as it always had. Without this split the same import row
+        // would carry in_id="<file-scope>" in a file that happens to hold a top-level call and no in_id in
+        // one that does not, so one reference's spelling would depend on an unrelated fact about its file;
+        // and --affected's import tier and graph.h's Binding tables both already read that kNoNode.
+        const bool refTakesModuleScope = !r.isInherit && !r.isDocLink && !r.isCompose
+                                      && ( r.role == RefRole::Call || r.role == RefRole::Macro );
+        ref.fromSymbol  = refTakesModuleScope ? refSweep.find( r.fileId, r.startByte )
+                                              : refSweep.findOwnedDef( r.fileId, r.startByte );
     }
     expandElixirImplementationReferences( result );
 }
@@ -774,7 +995,8 @@ inline void emitBindings( IngestResult& result, std::vector<RawBind>& rawBinds, 
         b.var        = std::move( rb.var );
         b.typeName   = std::move( rb.typeName );
         b.importedName = std::move( rb.importedName );
-        b.fromSymbol = bindSweep.find( rb.fileId, rb.startByte );
+        // findOwnedDef, not find: a file-scope binding must keep fromSymbol == kNoNode (see DefSweep).
+        b.fromSymbol = bindSweep.findOwnedDef( rb.fileId, rb.startByte );
     }
 }
 
@@ -860,7 +1082,9 @@ inline void emitRouteUses( IngestResult& result, std::vector<RawRouteUse>& rawRo
         out.line       = ru.line;
         out.method     = ru.method;
         out.path       = std::move( ru.path );
-        out.fromSymbol = routeSweep.find( ru.fileId, ru.startByte );
+        // findOwnedDef: a route registered at module scope keeps its existing empty from-name. Handing
+        // route uses a module-scope owner is a separate behaviour change, not this fix's, so it is not taken.
+        out.fromSymbol = routeSweep.findOwnedDef( ru.fileId, ru.startByte );
     }
 }
 

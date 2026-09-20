@@ -15,6 +15,37 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a call written outside every named function now has a caller, so `callers`, `impact`, `affected` and `test-gate` stop answering one short (#60)
+
+A reference was attributed to the innermost definition whose span contains it, so a call written where no
+definition reaches — a module top-level statement, or a call inside an anonymous callback body — had no
+caller at all. No edge was minted, and the four verbs that walk those edges each answered short: `--affected`
+could report `tests="0"` for a source file a passing test genuinely exercises, and `--callers` could report
+`count="0"` for a function that framework registration, DI wiring or route setup calls at module scope.
+
+Measured before the change with `--pin-census`, as the share of call sites with no caller node: **72.8% of
+vue-core**, 54.8% of this repository, 1.6% of django, 1.0% of llvm-project. On a TypeScript corpus this was
+the majority of the call graph.
+
+Ingest now mints one **module-scope owner** per file that holds such a call, over exactly the population the
+resolver counts as a call, so the two cannot disagree about what a call is. It is labelled rather than
+disguised — `t="modscope"`, named `<file-scope>`, a caller that nothing can name and so never a callee, with
+no body: `--expand` on one answers `bodyless="1" capped="0"` rather than serving the file. Every legend that
+can show the kind defines it, in the full and compact dialects alike, and only when a row is actually
+present. The fix is language-neutral: twelve indexed languages were measured to carry the defect, and all
+twelve take the same path. Two gaps are stated rather than fixed, because they are upstream: a Ruby bare-word
+call without parentheses and a C# top-level-statements call produce no call reference to own.
+
+What a reader will notice: `--callers`/`--impact`/`--affected` counts rise where such calls exist; a
+`--uses` row for a file-scope call gains `in_id=<file-scope>`; the call graph gains edges (+14% on this
+repository); and the map header's `unresolved=` rises — on shell-heavy trees substantially (5,370 → 12,232
+here) — because calls that used to vanish into an ungauged bucket are now counted by the resolver gauges
+they always belonged to. Node count grows 0.3–4.3% depending on corpus, so every `k=` rank shifts slightly.
+
+Reported by @thavlik (the `node:test` arrow-callback arm) and @alex-michaud, whose second arm — that
+module-scope side-effect calls are ordinary production code and not a test-shaped corner — is what made a
+callback-only fix insufficient.
+
 ### Added — the legend once per session, so an agent stops paying for the same definitions on every call
 
 Every XML answer carried its own legend, so an agent making repeated calls in one session bought the same

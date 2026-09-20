@@ -199,9 +199,9 @@ struct Snapshot
 inline bool isPublicApi( const IngestResult& ing, NodeId i ) noexcept
 {
     const Symbol& s = ing.symbols[i];
-    if( s.kind == SymKind::Section )
+    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
     {
-        return false; // markdown heading — not a code contract
+        return false; // markdown heading / a file's module scope — neither is a code contract
     }
     const std::string& p = ing.files[ s.fileId ];
     const auto ends = [ & ]( std::string_view e )
@@ -557,12 +557,28 @@ inline bool startsWithRegisteredMacro( std::string_view region, const std::vecto
 // mark a symbol live) with only the fromSymbol test inverted. NAME-level matching, not per-target resolution
 // — the same heuristic level as the resolver's bare-name spray, and a collision errs in the safe direction
 // (false-live, never false-dead). Sorted + deduped for binary_search; deterministic (reference order is).
+//
+// ISSUE #60 — "FILE SCOPE" IS NOW A SYMBOL, AND THIS SET MUST STILL SEE IT. ingest_model.h
+// mintModuleScopeOwners gives a top-level call an owner, so `fromSymbol == kNoNode` alone stopped selecting
+// anything on a code corpus and this evidence source silently went EMPTY. What that costs is not
+// hypothetical: a file-scope call the resolver DECLINES (tier 3 — several same-named defs, none in the
+// caller's file or directory) mints no in-edge either, so its callee had no evidence left at all and
+// --quality-delta gated dead-code on an untouched, genuinely-called function (measured: +154 dead keys on
+// vue-core, +98 on django, +64 here). The mint only ever ADDS a caller, so this predicate widens to match:
+// a reference owned BY a module-scope owner is exactly the file-scope reference it used to be. kNoNode is
+// kept beside it — a non-call reference outside every definition still has no owner (emitReferences takes
+// findOwnedDef for those roles), and a corpus the mint never ran over must read the same as before.
 inline std::vector<std::uint64_t> topLevelCalleeNameHashes( const IngestResult& ing )
 {
+    const auto atFileScope = [ & ]( const Reference& r ) noexcept
+    {
+        return r.fromSymbol == kNoNode
+            || ( r.fromSymbol < ing.symbols.size() && ing.symbols[ r.fromSymbol ].kind == SymKind::ModuleScope );
+    };
     std::vector<std::uint64_t> hashes;
     for( const Reference& r : ing.references )
     {
-        if( r.fromSymbol != kNoNode || r.isInherit || r.isDocLink || r.isCompose
+        if( !atFileScope( r ) || r.isInherit || r.isDocLink || r.isCompose
             || ( r.role != RefRole::Call && r.role != RefRole::Macro ) )
         {
             continue;
@@ -656,9 +672,9 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
         *exemptedByRegisterMacro = false;
     }
     const Symbol& s = ing.symbols[i];
-    if( s.kind == SymKind::Section )
+    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
     {
-        return false; // markdown heading
+        return false; // markdown heading / a file's module scope (no body of its own)
     }
     if( s.sigEndByte >= s.endByte )
     {
@@ -1162,7 +1178,7 @@ inline std::vector<std::uint32_t> codeLocByNode( const IngestResult& ing )
     }
     forEachSymbolBody( ing, [ & ]( NodeId i, const Symbol& s, std::string_view body )
     {
-        if( s.kind == SymKind::Section )
+        if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
         {
             return;   // a markdown SECTION is prose: there is no code/comment line to separate, and counting
                       // its non-blank lines as "code" makes an in-place doc rewrite that swaps 5 blank lines
@@ -7250,9 +7266,9 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                         continue;
                     }
                     const Symbol& s = ing.symbols[i];
-                    if( s.kind == SymKind::Section )
+                    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
                     {
-                        continue; // doc sections churn by design (exempt)
+                        continue; // doc sections churn by design; a module scope has no body to churn (exempt)
                     }
                     if( s.fileId >= commitCounts.size() || commitCounts[s.fileId] < kShortHorizonMinCommits )
                     {
