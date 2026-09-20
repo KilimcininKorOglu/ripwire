@@ -175,12 +175,13 @@ sections your question needs.
    and any row carries `gating="1"`, exit 0 clean or `dialect="0"`, exit 1 only when FILE could not be read.
 
 2. **Dead code** — `ripwire <dir> --dead-code[=DIR] --legend=compact`
-   `<dead-code count="N" confidence="high" evidence="internal-linkage+zero-callers"><d n="orphan" …/>` —
-   source-defined free functions with explicit internal linkage and **in-degree 0** in the indexed call
-   graph. `--dead-code=DIR` scopes to a sub-tree. Methods, declarations, headers, and external-linkage entry
-   points are excluded, so `count="0"` means "no high-confidence candidates," not "no dead code." Name-based
-   and tree-local — **verify before deleting**: confirm against the compiler's unused-symbol diagnostics or a
-   linker map; ripwire narrows the field, the toolchain proves it.
+   `<dead-code count="N" evidence="internal-linkage+zero-callers"><d n="orphan" …/>` — no `confidence=`
+   attribute (removed 2026-09-20: it was a fixed literal, not a derived signal) — source-defined free
+   functions with explicit internal linkage and **in-degree 0** in the indexed call graph.
+   `--dead-code=DIR` scopes to a sub-tree. Methods, declarations, headers, and external-linkage entry
+   points are excluded, so `count="0"` means "no candidates met the evidence rule," not "no dead code."
+   Name-based and tree-local — **verify before deleting**: confirm against the compiler's unused-symbol
+   diagnostics or a linker map; ripwire narrows the field, the toolchain proves it.
 
 3. **Duplicate bodies** — `ripwire <dir> --clones --legend=compact`
    `<clones groups="N" type3="M"><group type="2" tokens="161" n="2"><f n="line" p="…:31"/><f n="line"
@@ -460,8 +461,8 @@ CI-enforcing the boundary you extract → **ripwire-layers**.
 
 A one-page health snapshot:
 - **Hotspots** — top 3 files by `score`, each with its worst function.
-- **Cleanup wins** — count of high-confidence dead-code candidates (all still marked *verify*) + the largest
-  clone group (biggest dedup payoff).
+- **Cleanup wins** — count of dead-code candidates meeting the evidence rule (all still marked *verify*) +
+  the largest clone group (biggest dedup payoff).
 - **Dominant smell** — the highest-count lint rule and where it clusters.
 - **Knowledge risk** — `bf="1"` files, flagging any that are also hotspots.
 - **Hidden coupling** — top surprising co-change pairs + any that overlap a clone group.

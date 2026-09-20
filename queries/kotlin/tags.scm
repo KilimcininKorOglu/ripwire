@@ -15,9 +15,13 @@
 ;     split into function/method, since the grammar gives no structural way to tell them apart
 ;     without a scope walk (that walk is ingest_sidecap.h's job, not the tags pass's).
 ;   - call expressions (bare and via navigation) → the call references (edges).
-;   - imports → reference edges to the imported name's final segment, mirroring Java's import rule
-;     exactly (including its capture kind: @reference.call, not @reference.import — matched for
-;     consistency with the one other JVM-family query in this tree).
+;   - imports → IMPORT reference edges (role="import", @reference.import) to the imported name's
+;     final segment — a dependency edge, not a call. T13/fix3 (2026-09-20): this used to spell
+;     @reference.call "for consistency with the one other JVM-family query in this tree" — that
+;     consistency was with a defect, not a virtue: an import is not a call in either language, and
+;     with #60's <file-scope> owner an import line got a real caller edge, double-counting
+;     --callers=/--impact= fan-in by one phantom "caller" per importing file. Both queries now agree
+;     on @reference.import instead.
 ;
 ; Deliberately NOT captured (first cut, disclosed floor, not an oversight):
 ;   - property_declaration (`val`/`var`, class or top-level): Kotlin's constant-vs-mutable
@@ -84,4 +88,4 @@
 ; test/kotlincheck.sh §1a pins it so it cannot go silent.
 (import_header
   (identifier
-    (simple_identifier) @name .)) @reference.call
+    (simple_identifier) @name .)) @reference.import

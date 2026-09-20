@@ -3058,7 +3058,8 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
             "(-=none) per reach=cfg (flow-sensitive; C-family, Python) | linear (source order; JS/TS, Go, Java, Rust). Inventory "
             "<v n l t [seed]>, vars=count. "
             "bindings=shadow count; preproc_rows=lines dropped under #if 0; seed/var_from/seed_vars/seed=1 = line-seed disclosure. "
-            "Flow rows add v=variable d=depth f=from-line; steps=flow rows, depth=bound, flow_truncated=1 bounded not complete. "
+            "Flow rows add v=variable d=depth f=from-line; steps=flow rows, depth=bound, flow_truncated=1 bounded not complete, "
+            "flow_redundant=1 (both=, unseeded only) reaches no line the flat inventory does not — seed via --at=FILE:LINE for real reach. "
             "Limits: a write hidden behind a call (receiver mutation, by-ref/out-param, macro) rows as a use; no alias analysis; "
             "the statement is the unit (nested bodies/?:/short-circuit fold, goto untracked); no control dependence; block "
             "scopes separated; C-family #if 0 dropped, other #if kept+flagged. Full legend: omit "
@@ -3134,7 +3135,8 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
                 "cause is limit (2): receiver mutation leaves no def to anchor on — read the rows, not just the count. EXTRA LIMITS: "
                 "rows are line-granular (a multi-statement line merges and may over-connect) while chaining is statement-anchored (a "
                 "statement spanning lines chains as ONE unit keyed on its first line); data dependence only — no control dependence: "
-                "the guard (if/loop) deciding whether a def executes is never a row. -->";
+                "the guard (if/loop) deciding whether a def executes is never a row. "
+                "flow_redundant=\"1\" (unseeded both=): adds no line beyond the flat inventory; seed --at= for real gain. -->";
         }
     }
     // H1: the residue clause, in BOTH dialects and as its own comment — opened `<!-- ripwire slice: ` so the compact layer
@@ -3407,6 +3409,18 @@ inline std::string sliceBundleText( const IngestResult& ing, const std::string& 
             if( flow->truncated )
             {
                 out += " flow_truncated=\"1\"";
+            }
+            // T13/fix4 (research/arise): unseeded, dir="both" is PROVABLY redundant — every depth>=1 hop
+            // lands on an occurrence of SOME other sliceable local, which is by construction already a row
+            // of THAT local's own flat slice (bare --slice=SYM lists the inventory). Measured on a real
+            // corpus (docs/research, ARISE rung 2): unioned over a function's whole inventory, both's reach
+            // equals the flat union exactly. Seeded (--at=FILE:LINE) is the case flow earns its keep
+            // (+8.6pp Recall@3 there), so this disclosure fires ONLY when unseeded — never on the case that
+            // works. Not a refusal: the answer is still correct, just no more informative than the flat
+            // inventory would have been.
+            if( flowSpec->dir == SliceFlowDir::Both && seedInfo == nullptr )
+            {
+                out += " flow_redundant=\"1\"";
             }
         }
     }
