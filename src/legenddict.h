@@ -416,11 +416,26 @@ inline std::string stripTaskEcho( std::string_view comment, std::string_view roo
 }
 
 // The row element a <g> group stands for, by the answer's schema (testmap.h: TestRowShape's tag at each emitter).
+// A TABLE, not a chain of comparisons: the mapping is the fact, one row per emitter, and the lookup is the same
+// ranges::find the schema tables here already use. Written as an if-chain it was also a token-for-token clone of
+// mention.h's forHeaderPartnerKind — a duplication finding neither this lane nor main carries alone, emergent on
+// the merge, and structural rather than cosmetic: the chain encoded a table in control flow.
+struct GroupRowTag
+{
+    std::string_view key;
+    std::string_view tag;
+};
+
+inline constexpr GroupRowTag kGroupRowTags[] =
+{
+    { "pack-task", "test" }, { "affected", "test" }, { "pr-context", "test" },
+    { "test-gate", "t" },    { "handoff", "t" },     { "exercises", "t" },    { "flip", "t" },
+};
+
 inline std::string_view groupRowTag( std::string_view key ) noexcept
 {
-    if( key == "pack-task" || key == "affected" || key == "pr-context" )                     { return "test"; }
-    if( key == "test-gate" || key == "handoff" || key == "exercises" || key == "flip" )      { return "t"; }
-    return {};
+    const auto at = std::ranges::find( kGroupRowTags, key, &GroupRowTag::key );
+    return at != std::end( kGroupRowTags ) ? at->tag : std::string_view{};
 }
 
 // `<g ATTRS n="N" p="a,b" run_unknown="1"/>` → N single rows `<TAG p="a"ATTRS run_unknown="1"/>`, or empty when the
