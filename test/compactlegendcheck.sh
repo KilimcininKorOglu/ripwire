@@ -447,6 +447,13 @@ probeFor()
 # RE-PINNED 2026-09-19 (fix round 2, rv-r1-L1-2): (G)/(UG) now check EVERY instance of every attribute a default answer
 # carries, over the verbs and states a clean detached checkout reaches (doctor, quality-panel, naming-calibration, dmm,
 # comment-coherence, plan-lint, the doc-drift/deps/pr-context/handoff/quality-delta row vocabularies). Same rule as above:
+# RE-PINNED 2026-09-19 (TRAIN 9, L1 x lane/t9-mergescout-empty): ripwire.merge-scout/v1 470 -> 570 (measured 558,
+# the --merge-scout=HEAD~1,HEAD~2 probe). lane/t9-mergescout-empty defined both ok= postures and both reason= values
+# in the FULL prose legend, which was the default when that lane was written; L1 makes compact the default, so the
+# same two facts now read in this dialect (compactlegend.h, +93 B on this probe — the ok= row; reason= is present-only
+# and does not ride an ok="1" answer). The bytes are attributed here, in the commit that adds them, per the rule above.
+# The ok="1" half is the whole point of that lane: a LEGALLY EMPTY comparison is a real run with changed="0", not a
+# refusal, and a reader of the default answer could not tell those apart without it.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -508,7 +515,7 @@ ripwire.safe-delete/v1           720   708
 ripwire.at/v1                    180   161
 ripwire.from-trace/v1            1300  1281
 ripwire.plan-lint/v1              570   551
-ripwire.merge-scout/v1            470   459
+ripwire.merge-scout/v1            570   558
 ripwire.whereis/v1                630   611
 ripwire.community/v1             730   719
 ripwire.layout/v1                1220  1203
