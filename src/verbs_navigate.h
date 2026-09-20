@@ -40,6 +40,24 @@ inline const char* modScopeRowsLegend( const rw::IngestResult& ing, std::span<co
     return rw::modScopeLegend( anyModuleScopeRow( ing, rows ) );
 }
 
+// --graph-query's own legend, hoisted out of runGraphQuery for the reason emitSafeDeleteLegend was hoisted
+// out of runSafeDelete: it is a paragraph, not control flow, and the dispatcher it sat in was already at its
+// verbosity bar.
+//
+// §H4 §3.4 / V3 M-1: --graph-query is the SIXTH surface that counts off this same call graph — its
+// `callers(name("X"),1)` reports the identical number --callers does — and it shipped the marker on neither.
+// That is the §B4 echo-site shape src/graphlegend.h's own header indicts, so the shared constants land here
+// too rather than a sixth wording. #60's clause rides the SHOWN rows, so a page without an owner pays 0 B.
+inline void emitGraphQueryLegend( const rw::IngestResult& ing, const rw::Graph& g, const rw::RankDisclosure& prD,
+                                  std::span<const rw::NodeId> shownRows )
+{
+    rw::emitTo( stdout, "<!-- ripwire graph-query: a fixed-operator node-set query over the call graph (sources "
+                 "name/all; filters kind/cx/fanin/file/layer; bounded closure callers/callees; joins and/or/not), "
+                 "ranked by importance + capped at the top-k limit (default 200); narrow the query or raise top-k for more. NOT Datalog. "
+                 "{}{}{}-->", modScopeRowsLegend( ing, shownRows ),
+                 rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+}
+
 // L2: the `[{"t":..,"n":..,"p":"file:line"},...]` JSON row array shared by --callers/--callees/--impact's
 // --json branches (identical shape, different surrounding header fields — see each call site). Avoids
 // carrying two copies of the same per-row loop (--quality-delta flagged the pre-extraction duplicate).
@@ -332,15 +350,7 @@ std::optional<int> runGraphQuery( const MainDispatch& d )
 
         std::vector<char> esc;
         const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
-        // §H4 §3.4 / V3 M-1: --graph-query is the SIXTH surface that counts off this same call graph — its
-        // `callers(name("X"),1)` reports the identical number --callers does — and it shipped the marker on
-        // neither. That is the §B4 echo-site shape src/graphlegend.h's own header indicts, so the shared
-        // constants land here too rather than a sixth wording.
-        rw::emitTo( stdout, "<!-- ripwire graph-query: a fixed-operator node-set query over the call graph (sources "
-                     "name/all; filters kind/cx/fanin/file/layer; bounded closure callers/callees; joins and/or/not), "
-                     "ranked by importance + capped at the top-k limit (default 200); narrow the query or raise top-k for more. NOT Datalog. "
-                     "{}{}{}-->", modScopeRowsLegend( ing, std::span<const NodeId>( result ).subspan( gqPw.begin, keep ) ),   // #60: only when shown
-                     rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+        emitGraphQueryLegend( ing, g, prD, std::span<const NodeId>( result ).subspan( gqPw.begin, keep ) );
         // §P8 vocabulary (see src/pageview.h, THE TRUNCATION VOCABULARY): count= is the true total and
         // shown= the --top-k slice, but capped= was missing — so a caller reading a 200-row answer had to
         // know the default top-k to tell a complete result from a truncated one. Rule 3: the bit is always
