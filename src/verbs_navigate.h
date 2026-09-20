@@ -33,6 +33,13 @@ inline bool anyModuleScopeRow( const rw::IngestResult& ing, std::span<const rw::
     return false;
 }
 
+// …and the clause itself, so a call site spends one expression rather than a named bool plus a splice. Takes
+// a page of rows, never the corpus: the reading is owed by the document that SHOWS an owner, nothing else.
+inline const char* modScopeRowsLegend( const rw::IngestResult& ing, std::span<const rw::NodeId> rows ) noexcept
+{
+    return rw::modScopeLegend( anyModuleScopeRow( ing, rows ) );
+}
+
 // L2: the `[{"t":..,"n":..,"p":"file:line"},...]` JSON row array shared by --callers/--callees/--impact's
 // --json branches (identical shape, different surrounding header fields — see each call site). Avoids
 // carrying two copies of the same per-row loop (--quality-delta flagged the pre-extraction duplicate).
@@ -332,9 +339,7 @@ std::optional<int> runGraphQuery( const MainDispatch& d )
         rw::emitTo( stdout, "<!-- ripwire graph-query: a fixed-operator node-set query over the call graph (sources "
                      "name/all; filters kind/cx/fanin/file/layer; bounded closure callers/callees; joins and/or/not), "
                      "ranked by importance + capped at the top-k limit (default 200); narrow the query or raise top-k for more. NOT Datalog. "
-                     "{}{}{}-->",
-                     // #60: exactly when a module-scope owner is one of the rows this page prints.
-                     rw::modScopeLegend( anyModuleScopeRow( ing, std::span<const NodeId>( result ).subspan( gqPw.begin, keep ) ) ),
+                     "{}{}{}-->", modScopeRowsLegend( ing, std::span<const NodeId>( result ).subspan( gqPw.begin, keep ) ),   // #60: only when shown
                      rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         // §P8 vocabulary (see src/pageview.h, THE TRUNCATION VOCABULARY): count= is the true total and
         // shown= the --top-k slice, but capped= was missing — so a caller reading a 200-row answer had to
@@ -979,12 +984,11 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // shared graphCountDisclosure() tail is untouched, byte for byte: test/floormarkcheck.sh pins it across
     // seven other verbs and a private shorter copy here would be exactly the dialect divergence it exists
     // to catch.
-    // #60: exactly when a module-scope owner is one of the <c> caller rows this page prints. The window is
-    // recomputed here rather than moved up: the legend is streamed before the rows, and pageWindow is pure.
-    const PageWindow sdLegendWindow = pageWindow( callerIds.size(), effectiveRowCap( cfg.pageLimit, 40 ), cfg.pageOffset );
+    // #60: exactly when an owner is one of the <c> rows this page prints. pageWindow is pure, so recomputing
+    // it here (the legend streams BEFORE the rows) cannot disagree with the window the rows below take.
+    const PageWindow sdLw = pageWindow( callerIds.size(), effectiveRowCap( cfg.pageLimit, 40 ), cfg.pageOffset );
     emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk, sdSingleRoot, g.unindexedFiles > 0,
-                          anyModuleScopeRow( ing, std::span<const NodeId>( callerIds )
-                                                      .subspan( sdLegendWindow.begin, sdLegendWindow.end - sdLegendWindow.begin ) ) );
+                          anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ) );
 
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
                                                         // lowest, same convention --impact/--uses/--callers's of=/defs=
