@@ -89,9 +89,13 @@ inline constexpr McpFieldSpec kMcpRequiredFields[] = {
       FieldRule::Optional, "or this tree has no git history (owners is mined from git)" },
     { "for",                     "task",      "the task in plain words",                                           "task=\"add a since filter\"" },
     { "lego",                    "type",      "an interface or base-type name (file:name disambiguates; @FILE:LINE line-seeds resolve)", "type=\"Shape\"" },
-    // lane/t10-mcp-coverage: rank_by is OPTIONAL (an absent value defaults to pagerank, byte-identical to
-    // `analyze`) — the verb-specific override exists only so the schema description matches this tool's own
-    // default sentence rather than the generic kMcpValueFields one.
+    // lane/t10-mcp-coverage: rank_by is OPTIONAL — an OMITTED value defaults to pagerank, which is the CLI's
+    // own unbiased `--rank-by=pagerank` and NOT necessarily `analyze`'s map (train 10, CodeRabbit 4056211645:
+    // `analyze` serves the warm index's working-set-PERSONALIZED rank, so on a tree with uncommitted changes
+    // the two rankings legitimately differ — that divergence is the whole reason rankByText computes a fresh
+    // unbiased rankGraph). A PRESENT-BUT-EMPTY value is not the default and is refused; see mcp.h's
+    // rankByIsPresent. The verb-specific override exists only so the schema description matches this tool's
+    // own default sentence rather than the generic kMcpValueFields one.
     { "rank_by",                 "rank_by",   "OPTIONAL — pagerank|authority|hub|rrf|churn|churn-decay (default pagerank when omitted; churn/churn-decay refuse)", "rank_by=\"authority\"",
       FieldRule::Optional },
     { "fetch_body",              "handle",    "a `handle` string taken from a read verb's result (@FILE:LINE line-seeds resolve too)",   "handle=\"src/cli.h::rw::parseArgs\"" },

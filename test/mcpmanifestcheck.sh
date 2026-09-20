@@ -270,6 +270,12 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # zero headroom rather than the 68 B this block claimed (the arm asserts <=, so it passed on the number, not
 # on the margin), and the delta this train lands is 2,871 B rather than 2,939. The per-tool attribution above
 # is unaffected — it was measured tool by tool, not as a difference of two totals.
+# TRAIN 10 FIX ROUND (CodeRabbit 4056211645): 46,371 -> 46,493 B, the ceiling UNMOVED at 46,600. The rank_by
+# description claimed its default was "byte-identical to 'analyze'", which is false on a tree with uncommitted
+# changes — `analyze` serves the warm index's working-set-PERSONALIZED rank and rankByText deliberately does
+# not, which is the divergence that lane fixed. +122 B of description to say what is true instead; no schema
+# byte moved and no tool was added. Spent from the 229 B this block already held, not from a raise: correcting
+# a claim the manifest itself makes is what headroom is for. Headroom after this line: 107 B.
 CEILING = 46600
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )

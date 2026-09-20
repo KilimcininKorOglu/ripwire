@@ -345,6 +345,18 @@ for mode in ( "churn", "churn-decay" ):
 badRb = mcp( "rank_by", { "path": ROOT, "rank_by": "nonsense" } )
 check( badRb.startswith( "__ERROR__" ) and "unknown value" in badRb and "nonsense" in badRb,
        "rank_by=nonsense: refused as an unknown value, not silently read as pagerank (%s)" % badRb[ :140 ] )
+# TRAIN 10 (CodeRabbit 4056211646): ABSENT and PRESENT-BUT-EMPTY are two different requests. `rank_by:""` read
+# as "omitted" and answered pagerank at exit 0 (RED, measured: a 19,552 B map where a refusal belongs), while
+# the CLI's own `--rank-by=` refuses. Both halves are asserted, and the OMITTED case beside them — a fix that
+# took the default down with the empty value would pass a one-sided arm.
+emptyRb = mcp( "rank_by", { "path": ROOT, "rank_by": "" } )
+check( emptyRb.startswith( "__ERROR__" ) and "unknown value" in emptyRb,
+       "rank_by='' (present but empty): refused as an unknown value, not read as the omitted default (%s)" % emptyRb[ :140 ] )
+emptyCli = subprocess.run( [ BIN, ROOT, "--rank-by=" ], capture_output = True, text = True )
+check( emptyCli.returncode != 0 and "unknown value" in emptyCli.stderr,
+       "--rank-by= (CLI, empty value): refuses with the same reading its MCP twin now gives (%s)" % emptyCli.stderr.strip()[ :110 ] )
+check( mcp( "rank_by", { "path": ROOT } ) == mcp( "rank_by", { "path": ROOT, "rank_by": "pagerank" } ) != "__ERROR__",
+       "rank_by OMITTED still answers, byte-identically to rank_by='pagerank' — the empty-value refusal did not take the default with it" )
 # affected: an item matching neither an indexed path nor a symbol refuses with the same two-reading fact
 # the CLI's stderr states (verbs_change.h::runAffected) — echoed on both surfaces, never silently dropped.
 cliBad = subprocess.run( [ BIN, ROOT, "--affected=__definitely_not_indexed__" ], capture_output = True, text = True ).stderr

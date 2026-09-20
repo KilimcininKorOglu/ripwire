@@ -690,6 +690,56 @@ else
   fi
 fi
 
+# ── ARM 9e — A DEDUPED DUPLICATE ROOT IS ONE ROOT, AND THE DOCUMENT MUST SAY SO ─────────────────────────
+# TRAIN 10 (CodeRabbit 4056211650). ARM 9c pins the GENUINE multi-root case. The gap it left is the case
+# where the roots as TYPED and the roots that SURVIVE differ: `ripwire DIR DIR` drops the duplicate (the
+# crawl discloses it on stderr) and indexes ONE root, so ing.realPaths stays empty. --affected's single-root
+# test read `realPaths.empty() && cfg.roots.size() == 1` — the size() term still said multi-root — while
+# TestRunnerIndex is governed by realPaths ALONE (runsAreRootRelative). The document therefore omitted root=
+# and spelled run= relative to it anyway: ARM 9c's exact defect, reached through the other door.
+#
+# RED, MEASURED, on a pre-fix binary: `root= : ABSENT` beside `run="python3 test/test_geo.py"`.
+# The assertion is the strongest available one — the deduped answer is BYTE-IDENTICAL to the one-root
+# answer, because after dedupe it is describing the very same corpus with the very same anchor.
+A9E1="$TMP/dupe"; rm -rf "$A9E1"; mkdir -p "$A9E1"; cp -R "$A9/." "$A9E1/"; rm -rf "$A9E1/.git"; seed_git "$A9E1"
+DUP1="$( "$BIN" "$A9E1" --affected=distance 2>/dev/null )"
+DUP2="$( "$BIN" "$A9E1" "$A9E1" --affected=distance 2>/dev/null )"
+if [ -z "$DUP1" ] || [ -z "$DUP2" ]; then
+  printf '  SKIP  ARM9e --affected emitted nothing on the duplicate-root fixture\n'
+else
+  DUPROOT=no; case "$DUP2" in *' root="'*) DUPROOT=yes ;; esac
+  DUPRUN="$( printf '%s' "$DUP2" | tr '<' '\n' | sed -n 's/.* run="\([^"]*\)".*/\1/p' | head -1 )"
+  DUPCLAUSE=no; case "$DUP2" in *"relative to root="*) DUPCLAUSE=yes ;; esac
+  # (i) the spelling and the disclosure agree — a relative run= REQUIRES a declared root=
+  DUPPATH="${DUPRUN##* }"
+  case "$DUPRUN" in
+    "") printf '  SKIP  ARM9e the duplicate-root run derived no run= (root= present: %s)\n' "$DUPROOT" ;;
+    *)  case "$DUPPATH" in
+          /*) [ "$DUPROOT" = no ] && ok "ARM9e duplicate root: absolute run=\"$DUPRUN\" in a document that declares no root=" \
+                                  || ok "ARM9e duplicate root: root= declared and run= absolute — consistent" ;;
+          *)  [ "$DUPROOT" = yes ] && ok "ARM9e duplicate root: relative run=\"$DUPRUN\" in a document that DOES declare root= — the spelling and the disclosure agree" \
+                                   || no "ARM9e duplicate root printed a RELATIVE run=\"$DUPRUN\" in a document with NO root= — a command relative to an anchor the reader is never given" ;;
+        esac ;;
+  esac
+  # (ii) …and the legend cannot claim an anchor the document withholds. kRunRootRelSentence is PROSE, so it
+  # survives only in the full dialect (the compact default restates the vocabulary instead) — this half is
+  # therefore read at --legend=full, where the sentence actually lives, or it would assert nothing.
+  DUP2F="$( "$BIN" "$A9E1" "$A9E1" --affected=distance --legend=full 2>/dev/null )"
+  DUPCLAUSE=no; case "$DUP2F" in *"relative to root="*) DUPCLAUSE=yes ;; esac
+  DUPROOT=no;   case "$DUP2F" in *' root="'*) DUPROOT=yes ;; esac
+  if [ "$DUPCLAUSE" = yes ] && [ "$DUPROOT" = no ]; then
+    no "ARM9e duplicate root says \"relative to root=\" in a document that declares no root= — a false claim"
+  else
+    ok "ARM9e duplicate root does not claim its command is relative to a root it never declares"
+  fi
+  # (iii) the whole point: dedupe means the SAME corpus, so it must be the SAME answer, byte for byte
+  if [ "$DUP1" = "$DUP2" ]; then
+    ok "ARM9e DIR DIR answers byte-identically to DIR ($( printf '%s' "$DUP1" | wc -c | tr -d ' ' ) B) — a duplicate root changes the argv, never the corpus"
+  else
+    no "ARM9e DIR DIR ($( printf '%s' "$DUP2" | wc -c | tr -d ' ' ) B) differs from DIR ($( printf '%s' "$DUP1" | wc -c | tr -d ' ' ) B) — the same corpus answered two ways"
+  fi
+fi
+
 # ── ARM 9d — --flags --flip: a document full of root-relative paths that declared no root ───────────────
 # Review of #219: writeFlip spells every p= through relForHash( …, root ) — root-relative — and its <t> rows
 # now carry a root-relative run= as well, but <flip> itself declared no root= at all. A consumer holding that

@@ -1216,6 +1216,7 @@ struct AffectedReportResult
 inline AffectedReportResult writeAffectedReport( std::FILE* out, const IngestResult& ing, const Graph& g,
                                                   const std::string& root, std::string_view spec, bool singleRoot )
 {
+    EXPECTS( out != nullptr, "writeAffectedReport: the answer needs a stream to write to; the failure returns below write nothing, so a null sink would be silent" );
     // §P11.2a: the map was file-granular, so "which tests cover the function I am about to change?" had
     // to be widened to its whole FILE first, over-reporting the obligation. Only the SEED SET changes
     // here: everything below (transitiveCallers → isTestPath → path-sorted rows) is the same traversal
@@ -1251,7 +1252,12 @@ inline AffectedReportResult writeAffectedReport( std::FILE* out, const IngestRes
     // §P11.4 / E1: the rows are rendered FIRST (the run=/run_unknown= rule and the <g> group row) so the
     // legend below can splice that clause only when there are rows for it to be a rule about — a tests="0"
     // answer, the common clean case, pays nothing for it.
-    const TestRunnerIndex   runners( ing, root );
+    // TRAIN 10 (CodeRabbit 4056211650): the index is handed a root ONLY when this document declares one, so
+    // the command spelling cannot contradict the root= disclosure whatever a caller passes for singleRoot.
+    // With no root the ctor keeps the absolute spelling, which is what an unanchored document owes its reader
+    // (see TestRunnerIndex's own ctor comment). The caller-side half of this — counting the roots that SURVIVED
+    // dedupe rather than the roots as typed — is in verbs_change.h::runChangeViews.
+    const TestRunnerIndex   runners( ing, singleRoot ? std::string_view( root ) : std::string_view() );
     std::vector<TestRowOut> afRows;
     afRows.reserve( answer.rows.size() );
     for( TestRow row : answer.rows )   // by value: a matched test file's changed= is spelled seed_kind="test" on this verb
@@ -1273,7 +1279,9 @@ inline AffectedReportResult writeAffectedReport( std::FILE* out, const IngestRes
                  "{}"     // H2H-Graft F1: the evidence-order clause, testmap.h's ONE wording (changed= is spelled seed_kind="test" here: the argument matched it)
                  "order=evidence says so on the root; partners= counts the partner rows. "
                  "{}"     // M21(b)/E1: the run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
-                 "{}{}-->{}", kTestRowEvidenceLegend, runHintClauseIfRows( afRowsXml.files, runsAreRootRelative( ing, root ) ),
+                 // TRAIN 10: read off the index rather than re-derived here (testmap.h's own rule for this fact),
+                 // so the sentence is decided by the very object that spelled the commands it describes.
+                 "{}{}-->{}", kTestRowEvidenceLegend, runHintClauseIfRows( afRowsXml.files, runners.rootRelative() ),
                  // H1: the decl→def residue resolveAffectedSeeds summed over the symbol items. A file:name item whose
                  // definitions were dropped seeded the walk with declarations alone, which reached the reader as a bare
                  // tests="0" — on the verb whose answer is the list of tests to run. Exactly when the root carries it.

@@ -81,7 +81,17 @@ std::optional<int> runAffected( const MainDispatch& d )
         // path ("./test/…" on a relative root), unlike --situ/--test-gate/--pr-context/--handoff, whose
         // tests_to_run rows are all root-relative — the L1 finding: "same three tests, same file, two
         // spellings — the four tests_to_run lists cannot be diffed with sort | uniq".
-        const bool afSingleRoot = ing.realPaths.empty() && cfg.roots.size() == 1;
+        // TRAIN 10 (CodeRabbit 4056211650): this read `ing.realPaths.empty() && cfg.roots.size() == 1`, which
+        // counts the roots as TYPED rather than the roots that SURVIVED dedupe. `ripwire DIR DIR --affected=…`
+        // drops the duplicate (the crawl says so on stderr: "duplicate root '…' ignored"), so one root remains
+        // and realPaths stays empty — but the size() term still said multi-root, and the report then omitted
+        // root= while TestRunnerIndex, which is governed by realPaths alone (testmap.h runsAreRootRelative),
+        // went on spelling run= relative to it. A relative command in a document that declares no anchor.
+        // `realPaths.empty()` IS the post-dedupe single-root fact (model.h: populated ONLY when 2+ roots
+        // survive), it is the predicate --situ and the MCP `affected` twin already use, and it makes the
+        // duplicate-root answer byte-identical to the single-root one. A genuine multi-root run is unaffected:
+        // there realPaths is non-empty and both spellings were, and remain, false.
+        const bool afSingleRoot = ing.realPaths.empty();
         // lane/t10-mcp-coverage: the resolve-and-render body moved verbatim into testmap.h::writeAffectedReport
         // — the ONE renderer this CLI arm and the MCP `affected` verb both call, so the two surfaces can never
         // hand-copy-drift apart (see that function's own header comment). Only the two refusals stay here,

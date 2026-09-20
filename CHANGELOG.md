@@ -47,6 +47,25 @@ Measured on this repository with two tracked files edited and uncommitted: the p
 (`analyze` converges in 27 power iterations against the CLI map's 37), and all four `rank_by` modes are
 byte-identical to their CLI twins in every posture on that same tree.
 
+### Fixed — `--affected` declares its root when a repeated root argument leaves only one
+
+`ripwire DIR DIR --affected=…` drops the duplicate and indexes one root — the crawl says so on stderr — but
+`--affected`'s single-root test counted the roots as *typed* rather than the roots that survived. The report
+then omitted `root=` while the runner index, which reads the deduplicated corpus, went on spelling `run=`
+relative to that root: a relative command in a document giving the reader no anchor for it. The test now
+reads the deduplicated corpus, which is the predicate `--situ` and the MCP twin already used, and the answer
+to `DIR DIR` is byte-identical to the answer to `DIR`. A genuinely multi-root run is unchanged: it still
+keeps absolute commands and declares no root. The runner index is now also given a root only when the
+document declares one, so the two cannot disagree whatever a caller asks for.
+
+### Fixed — an MCP `rank_by` sent as an empty string is refused instead of read as the default
+
+`rank_by:""` was treated as an omitted field and answered `pagerank`, where the CLI's own `--rank-by=`
+refuses with `unknown value ''`. A schema default applies to a field that is absent, not to one that is
+present and outside the closed set. The two are now told apart by the same presence reader `sections` and
+`legend` use, and a present-but-empty value gets the closed-set refusal with the CLI's wording. Omitting
+`rank_by` still answers `pagerank`, byte for byte.
+
 ### Fixed — an MCP call that omits a required `files` argument is told which argument is missing
 
 The generic missing-required-field composer had no case for `files`, so it could not tell the field was absent

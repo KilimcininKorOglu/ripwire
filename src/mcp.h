@@ -736,7 +736,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    + mcprefuse::toolMetadataFor( "analyze", pathIsRequired ) + "},"
                    // lane/t10-mcp-coverage: the MCP twin of --rank-by=pagerank|authority|hub|rrf|churn|churn-decay.
                    // Same map `analyze` serves (same MEMBERSHIP/ORDER split), a different ranking SIGNAL.
-                   "{\"name\":\"rank_by\",\"description\":\"The SAME architecture map 'analyze' serves, ranked by a different signal instead of plain PageRank. rank_by = pagerank (default, omit it — byte-identical to 'analyze'), authority (called by many good hubs — core APIs/utilities), hub (calls many good authorities — entrypoints/orchestrators), or rrf (fuses all three, Reciprocal Rank Fusion). churn and churn-decay are valid CLI --rank-by= values this tool REFUSES for now — they mine git history through a path this server does not build yet; use the CLI (ripwire <dir> --rank-by=churn) until then. The MEMBERSHIP/ORDER split and every other attribute follow the same rule as 'analyze'.\","
+                   "{\"name\":\"rank_by\",\"description\":\"The SAME architecture map 'analyze' serves, ranked by a different signal instead of plain PageRank. rank_by = pagerank (default, omit it — the CLI's own unbiased --rank-by=pagerank; 'analyze' can rank differently on a tree with uncommitted changes, where it biases toward your working set), authority (called by many good hubs — core APIs/utilities), hub (calls many good authorities — entrypoints/orchestrators), or rrf (fuses all three, Reciprocal Rank Fusion). churn and churn-decay are valid CLI --rank-by= values this tool REFUSES for now — they mine git history through a path this server does not build yet; use the CLI (ripwire <dir> --rank-by=churn) until then. The MEMBERSHIP/ORDER split and every other attribute follow the same rule as 'analyze'.\","
                    + mcprefuse::toolMetadataFor( "rank_by", pathIsRequired ) + "},"
                    "{\"name\":\"find_symbol\",\"description\":\"A symbol's 1-hop neighborhood: the symbol (with a fetch_body handle) plus direct callers (calledBy) and callees (calls). Full transitive reach: 'impact'. Read/write/import sites, not just calls: 'uses'. JSON {symbol, calledBy, calls, defs, count, hop_tested, hop_untested, declined_calls, counts_floor}; both arrays are FLOORS and the payload says why. limit/offset page them. symbol = final name segment (add scope to disambiguate); " + std::string( kAtSeedDocClause ) + "\","
                    + mcprefuse::toolMetadataFor( "find_symbol", pathIsRequired ) + "},"
@@ -892,6 +892,13 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             const std::string task    = strArg( "task" );
             const std::string type    = strArg( "type" );     // lego verb: the interface/base name
             const std::string rankByArg = strArg( "rank_by" ); // lane/t10-mcp-coverage: rank_by verb's ranking-signal selector
+            // F9/F11 (train 10, CodeRabbit 4056211646) — the defect `sections` and `legend` below already carry
+            // the fix for, one field over. ABSENT and PRESENT-BUT-EMPTY are two different requests, and
+            // `rankByArg.empty()` alone collapses them: `rank_by:""` read as "omitted" and answered pagerank at
+            // exit 0, where the CLI's own `--rank-by=` refuses ("--rank-by: unknown value ''"). A schema default
+            // applies to an OMITTED field, never to one that is present and outside the closed set. Same raw
+            // reader every other MCP argument's shape check uses.
+            const bool rankByIsPresent = mcpdetail::findRawValue( args, "rank_by" ).isPresent;
             const std::string sections = strArg( "sections" ); // L2: `for`'s <lego>/<compose> stub opt-back-in (CLI --sections= twin)
             // F9/F11 (V2, mirrored from `legend` below): ABSENT and PRESENT-BUT-EMPTY are two different
             // requests — `sections.empty()` alone collapses them, so `sections:""` was silently read as the
@@ -1467,7 +1474,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     // refused with the CLI's own wording (cli.h's --rank-by= arm); churn/churn-decay are refused
                     // by NAME rather than silently downgraded — see rankByText's own comment for why they are not
                     // reachable here yet.
-                    const std::string rbMode = rankByArg.empty() ? std::string( "pagerank" ) : rankByArg;
+                    // F9/F11: the default is for an OMITTED field only. A present `rank_by:""` keeps its empty
+                    // value and falls through to the closed-set refusal below, which names it the way the CLI does.
+                    const std::string rbMode = ( !rankByIsPresent && rankByArg.empty() ) ? std::string( "pagerank" ) : rankByArg;
                     if( rbMode != "pagerank" && rbMode != "authority" && rbMode != "hub" && rbMode != "rrf"
                         && rbMode != "churn" && rbMode != "churn-decay" )
                     {
