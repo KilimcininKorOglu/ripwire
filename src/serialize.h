@@ -5662,7 +5662,11 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     // absence is the flagless byte-identity contract (test/forcompresscheck.sh arm 6). The two hand-formatted
     // <bodies> wrappers in packtask.h restate it for the same reason they restate shown=/total=.
     char open[ 160 ];
-    char bodylessAttr[ 32 ] = { 0 };
+    // 40, not 32: ' bodyless="' + '"' is 12 B and bodylessCount is a std::size_t, 20 digits at absolute most,
+    // so 32 B of text needs 33 with the NUL. formatTo truncates rather than overruns, but a cut here drops
+    // the closing quote and the document stops being well-formed — 39 usable leaves 7 B of margin and no
+    // arithmetic to re-check (test/fixedbufsweep.sh's TABLE states it, for this site and its packtask.h twin).
+    char bodylessAttr[ 40 ] = { 0 };
     if( bodylessCount > 0 )
     {
         rw::formatTo( bodylessAttr, sizeof( bodylessAttr ), " bodyless=\"{}\"", bodylessCount );   // #60, absent at zero

@@ -1237,7 +1237,11 @@ inline std::string restatePackTaskBodiesWrapper( const IngestResult& ing, const 
     // per-bundle compression disclosure (serialize.h packBodies) must survive the rewrite or the restated
     // bundle would silently claim uncompressed bodies (test/forcompresscheck.sh arm 5). Everything BEFORE
     // the tag — packBodies' legend comments, including the bodyless clause — is kept verbatim.
-    char bodylessAttr[ 32 ] = { 0 };
+    // 40, not 32: ' bodyless="' + '"' is 12 B and bodylessOwners is a std::size_t, 20 digits at absolute
+    // most, so 32 B of text needs 33 with the NUL. formatTo truncates rather than overruns, but a cut here
+    // drops the closing quote and the document stops being well-formed — 39 usable leaves 7 B of margin
+    // and no arithmetic to re-check (test/fixedbufsweep.sh's TABLE states it).
+    char bodylessAttr[ 40 ] = { 0 };
     if( bodylessOwners > 0 )
     {
         rw::formatTo( bodylessAttr, sizeof( bodylessAttr ), " bodyless=\"{}\"", bodylessOwners );   // #60, absent at zero
