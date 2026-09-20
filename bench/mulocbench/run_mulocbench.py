@@ -61,23 +61,12 @@ WITHHELD_LOC_FIELD = "ass_file_loc"
 EXCLUDED_LOC_FIELD = "other_rep_loc"
 LOCTYPE_CATEGORIES = ( "code", "test", "config", "doc", "asset" )   # paper's own taxonomy, §0
 
-# lb.parse_candidates deliberately does not capture the `k=` (kind: fn/method/cls/struct/sec/var)
-# attribute — no existing harness needed it. class_ranks() below does, so this is a THIN local
-# extension, not a fork: same ElementTree walk, one more field read off the same <cand> element.
-import xml.etree.ElementTree as ET   # noqa: E402
-def parse_candidates_with_kind( xml, repo_path ):
-    root = ET.fromstring( xml )
-    if root.tag != "candidates": raise ValueError( f"unexpected root <{root.tag}>" )
-    base = os.path.realpath( repo_path )
-    out = []
-    for c in root.findall( "cand" ):
-        raw = c.attrib.get( "p", "" )
-        real = os.path.realpath( raw if os.path.isabs( raw ) else os.path.join( base, raw ) )
-        path = os.path.relpath( real, base ).replace( os.sep, "/" )
-        if path == ".." or path.startswith( "../" ): path = raw.replace( os.sep, "/" )
-        out.append( dict( path=path, name=c.attrib.get( "n", "" ), canon=c.attrib.get( "id", "" ),
-                          kind=c.attrib.get( "k", "" ), rank=int( c.attrib.get( "r", len( out ) + 1 ) ) ) )
-    return out
+# class_ranks() below needs the `k=` (kind: fn/method/cls/struct/sec/var) attribute off each <cand>
+# row, which no existing harness had ever needed — added directly to the shared
+# bench/locbench/run_locbench.py::parse_candidates (one more dict key, `kind=`) rather than forked
+# here: quality-delta flagged the fork as a new-clone-of-reused-helper on the first pass (gating), and
+# the fix is to extend the one place every harness already imports, not add a second one. Callers use
+# lb.parse_candidates(...) directly; there is no local wrapper.
 
 def _location_records( row, field ):
     # SCHEMA-UNVERIFIED: assumes `row[field]` is a list of dicts, each carrying at least a file path
@@ -126,7 +115,7 @@ def eligible( row ):
     return gold, "kept"
 
 # ── NEW: class-level ranking (neither run_locbench nor run_multiswe has ever scored this granularity).
-#    Takes candidates from parse_candidates_with_kind() above, NOT lb.parse_candidates() — it needs `k=`.
+#    Takes candidates from lb.parse_candidates(...) — its `kind=` field is what makes this possible.
 def class_ranks( candidates, gold_classes ):
     # First candidate that IS the class itself (kind="cls"/"struct", name == class), else the
     # best-ranked member whose canonical id scope names the class (id contains "::<Class>::"). Flat

@@ -105,10 +105,16 @@ $ ./build/ripwire . --for="ci workflow matrix python version config" --format=ca
 **Markdown headings are indexed and ranked as ordinary candidate rows** (`k="sec"`, per
 `CLAUDE.md`'s language table: "Markdown — headings are section symbols with spans"), and **YAML/JSON/
 TOML config keys are indexed the same way** (`queries/{yaml,json,toml}/tags.scm` all exist). Both
-already flow through `lb.parse_candidates`/`lb.file_ranks` **completely unchanged** — those two
-functions read `p=`/`n=`/`id=`/`r=` off any `<cand>` row and don't care what `k=` says. This means
-**file-level scoring for doc and config gold needs zero new retrieval code**, only new gold
-extraction and the F1/class additions above. The one thing this test does *not* establish: whether
+already flow through `lb.parse_candidates`/`lb.file_ranks` at the file level **with no change to
+either function's behavior for any existing caller** — both already read `p=`/`n=`/`id=`/`r=` off any
+`<cand>` row and don't care what `k=` says. This means **file-level scoring for doc and config gold
+needs zero new retrieval code**, only new gold extraction and the F1/class additions below.
+`lb.parse_candidates` did gain one additive field in this same commit — `kind=` (the `k=` attribute,
+previously read by nothing) — because `class_ranks()` (§2.1) needs it and a first pass forked a
+second copy of the function to get it; `./build/ripwire . --quality-delta` caught that fork as a
+gating `new-clone-of-reused-helper` finding before this branch was pushed, and the fix was to extend
+the one shared function every harness already imports instead of shipping a duplicate — exactly the
+gate doing its job. The one thing this test does *not* establish: whether
 `RIPWIRE_NO_DOC_MENTION=1` (the R5 doc-mention-boost kill switch, `src/mention.h::applyDocMentionBoost`)
 changes `--format=candidates` ranking specifically, as opposed to just the human-readable bundle — a
 probe query that already lexically named the target symbol produced byte-identical candidate output
