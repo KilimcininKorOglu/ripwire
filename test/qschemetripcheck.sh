@@ -34,6 +34,16 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-20, lane/t12-qd-noop-diff (issue #228 part 1, on main 755f9026): computeSnapshot gained an OPTIONAL
+#   per-fileId membership filter (`fileInBaseline`) for the new IDENTITY BASIS (computeHeadBasis, same file).
+#   NO kQSnapCacheScheme BUMP, and the reason is that the filter never reaches a cached blob: computeHeadSnapshot
+#   — the only function that writes or reads a qsnap/qheadsnap Snapshot — still calls computeSnapshot with the
+#   parameter defaulted to nullptr, in which case every branch the filter guards is the branch that ran before
+#   (membership always true, no key erasure, every clone group kept). The identity basis itself never probes and
+#   never writes those caches (it has no archived tree to key them to), so a blob written by ANY binary still
+#   means exactly what it meant. What a cached Snapshot represents is therefore unchanged: the manifest text
+#   moved, the semantics did not. kParserVer and its mirror stay 118, kCacheVersion stays 24,
+#   kQSnapCacheScheme stays 14, kHeadSnapCacheScheme stays 1.
 # 2026-09-19, TRAIN 10 (integration/train-10 on main 59b241d7: lane/t10-mcp-coverage 12970e48):
 #   RE-DERIVED ON THE FINAL MERGED TREE with UPDATE_GOLDEN=1 — the hash is UNCHANGED at a8b6c050….
 #   The member adds two MCP tools (src/mcpverbs.h, src/mcp.h, src/mcprefusal.h) and lifts --affected's

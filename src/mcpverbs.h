@@ -3619,6 +3619,10 @@ struct QualityDeltaOutcome
     std::size_t                       ackedByContent   = 0;
     std::size_t                       registerMacroExcluded = 0;   // P2.2: the CLI's disclosed dead-code exemption count — see quality.h
     std::size_t                       apiNewSurface         = 0;   // Q-DIAL-4: the CLI's api-new-surface= count — see quality.h
+    // #228: the CLI root's head_basis= twin — see quality::HeadBasis for the value vocabulary. Present-only in
+    // the JSON, under the same absent-means-the-ordinary-archived-tree rule as the CLI, so mcpclidiffcheck's
+    // key-set lens stays satisfied.
+    const char*                       headBasis             = nullptr;
 };
 
 // §B6 M10 — a CORRUPT sidecar used to read as "no sidecar". readBaseline reports a file that yields no header,
@@ -3721,14 +3725,18 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
     rw::quality::BaselineSelection baseSel = rw::quality::selectBaseline( root, sidecar, /*removeStaleFile=*/false );
     if( !baseSel.isSidecarHonored() )
     {
-        auto [ headSnap, headOk ] = rw::quality::computeHeadSnapshot( root );
-        if( !headOk )
+        // #228 part 1 — the IDENTITY BASIS, through the SAME seam the CLI takes (quality::computeHeadBasis).
+        // This verb and the CLI must answer one tree one way in the same second; a per-caller copy of the
+        // basis is precisely how they drifted apart before (the R3 divergence this arm's comment records).
+        rw::quality::HeadBasis basis = rw::quality::computeHeadBasis( root, ing, g, root );
+        if( !basis.ok )
         {
             oc.ok     = false;
             oc.errMsg = mcpNoBaselineMessage( baseSel );
             return oc;
         }
-        baseSel.snapshot = std::move( headSnap );
+        baseSel.snapshot       = std::move( basis.snapshot );
+        oc.headBasis           = basis.basis;
     }
 
     // R1 IDENTITY: the SAME healing pre-pass the CLI runs, through the one entry point, and BEFORE
@@ -3819,6 +3827,8 @@ inline std::pair<std::string, std::string> qualityDeltaJson( const std::string& 
                     // R1 IDENTITY — the CLI root's identity disclosure, spelled in JSON. Present only when
                     // git could be read at all, exactly like the CLI arm (absent ≠ zero — see the legend).
                     + oc.identityJson
+                    // #228 — the CLI root's head_basis= twin, present-only: absent means the archived HEAD tree.
+                    + ( oc.headBasis == nullptr ? std::string() : std::string( ",\"head_basis\":\"" ) + mcpdetail::jsonEscape( oc.headBasis ) + "\"" )
                     + ",\"at\":" + atJson + ",\"r\":[";
     bool first = true;
     for( const rw::quality::Regression& r : oc.regs )

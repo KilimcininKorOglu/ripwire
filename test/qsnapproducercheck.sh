@@ -298,8 +298,15 @@ int main() { return 1; }
 EOF
 git -C "$REPO" commit -qam "drop the call"
 SCRATCHSHA="$( git -C "$REPO" rev-parse HEAD )"
+# #228 part 1: the run that WARMS this scratch blob has to take the ARCHIVED-HEAD path, and that path is only
+# taken on a tree that DIFFERS from HEAD — a tree that already is HEAD is compared with itself (the identity
+# basis, src/quality.h) and never materializes, or caches, a HEAD snapshot. The marker below is a
+# working-tree-only edit, and the archived HEAD side never reads the working tree, so the blob it warms for
+# SCRATCHSHA is byte-for-byte the one this arm goes on to forge. It is removed again immediately.
+echo "// warm" >> "$REPO/src/use.cpp"
 run >/dev/null 2>&1
 SF="$( blob_for "$SCRATCHSHA" )"
+git -C "$REPO" checkout -q -- src/use.cpp                    # drop the marker; the index still holds the deletion
 git -C "$REPO" reset -q --soft HEAD~1                        # HEAD back to init; the working tree keeps the deletion
 rm -f "$QF"; run >/dev/null 2>&1; QF="$( blob_for "$HEADSHA" )"   # a fresh, valid HEAD blob to forge from
 NEWKEYS=""

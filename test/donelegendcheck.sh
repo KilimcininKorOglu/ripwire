@@ -154,7 +154,17 @@ EOF
     printf '%s' "$total $legend $payload" >"$WORK/$name.split"
 }
 
-run_budget qd_clean       2300  8574  "$FX"  --quality-delta
+# qd_clean 2300 -> 2600 (2026-09-20, issue #228 part 1): the CLEAN form gained ONE conditional sentence, and
+# it is the one form that always earns it. head_basis="identity" says WHICH git-HEAD floor answered — this
+# tree's own snapshot (the tracked files already were HEAD) or the archived commit — and a clean tree is
+# exactly when the first is taken. The two are different claims about the same zero, which a review proved is
+# not academic: a skip-worktree path made an archived comparison and a self-comparison print byte-identical
+# roots while one had seen a real regression and the other could not. METHODOLOGY §9.4 puts the honesty in the
+# attribute (24 B on the root); this is the price of the law that no emitted name is undefined. Measured on
+# this fixture against the pre-change binary: clean 2282 -> 2542, and the other three forms do not move (the
+# attribute rides only the auto-HEAD basis, and dirty/scope/refpair here do not take it). The pin is the next
+# multiple of 100 over the measured total, as every anchor in this file is.
+run_budget qd_clean       2600  8574  "$FX"  --quality-delta
 printf '%s' "$DIRT" >> "$FX/src/base.cpp"
 # qd_dirty 3800 -> 3900 (2026-09-10, the string/perf round): the --quality-delta legend gained two facts a reader
 # needs to act on a row — the api-new-surface= count (one sentence, +105 B in every form, "printed even at zero"
