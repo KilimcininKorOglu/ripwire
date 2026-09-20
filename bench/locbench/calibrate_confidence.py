@@ -145,7 +145,31 @@ def newcombe( h1, n1, h2, n2 ):
 
 
 # ── run ──────────────────────────────────────────────────────────────────────
-def scored_instances( assets, split, binary, cache_dir, query_chars, limit, verbose ):
+# Gold in one of these is gold ripwire's parser could in principle have emitted. A gold file outside
+# the set is not a ranking failure and is counted apart rather than folded into the denominator.
+RIPWIRE_EXTENSIONS = frozenset( ( ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".cpp", ".cc",
+                                  ".h", ".hpp", ".swift", ".m", ".mm", ".java", ".rb", ".sh",
+                                  ".bash", ".md" ) )
+
+
+class RunConfig:
+    """The five knobs every per-instance step needs, carried as one object. Split out of a seven-
+    parameter function signature: the three measuring functions below each need a different subset,
+    and threading five positionals through all of them is how the cache dir and the asset dir end up
+    swapped at one call site and nowhere else."""
+
+    def __init__( self, binary, cache_dir, query_chars, limit, verbose ):
+        self.binary, self.cache_dir = binary, cache_dir
+        self.query_chars, self.limit, self.verbose = query_chars, limit, verbose
+
+    def run( self, repo_dir, flags, timeout = 1800 ):
+        return subprocess.run( [ self.binary, str( repo_dir ) ] + flags,
+                               capture_output=True, text=True, timeout=timeout )
+
+
+def load_rows( assets ):
+    """The frozen 560-row slice, hash-verified. Refuses rather than fetches: a harness that quietly
+    downloads a dataset is a harness whose corpus can change between two runs of the same command."""
     rows_path = assets / "datasets" / FROZEN_ROWS
     if not rows_path.is_file():
         raise SystemExit( "calibrate_confidence: no %s under %s/datasets — point --assets at a "
@@ -155,99 +179,126 @@ def scored_instances( assets, split, binary, cache_dir, query_chars, limit, verb
     if actual != FROZEN_SHA:
         raise SystemExit( "calibrate_confidence: frozen LocBench rows hash mismatch: expected %s, got %s"
                           % ( FROZEN_SHA, actual ) )
-    rows = json.loads( rows_path.read_text() )
+    return json.loads( rows_path.read_text() )
 
+
+def eligibility( inst, assets, split ):
+    """(repo_dir, gold) when this instance can be scored, else (None, the skip bucket it belongs in).
+    Every reason an instance is not scored is decided HERE, in one place, and is named — the caller
+    only counts. That is what makes the skip table a disclosure rather than a residual."""
+    if LB.frozen_partition( inst["repo"] ) != split:
+        return None, "wrong_split"
+    repo_dir = assets / "repos" / inst["repo"].replace( "/", "__" )
+    # run_locbench.py writes this marker only after a successful checkout OF THIS SHA, and one
+    # directory serves a repository, so the marker is the only honest proof that the tree on disk is
+    # the tree this instance is about. A bare directory is NOT evidence.
+    if not ( repo_dir / ( ".ripwire_at_" + inst["base_commit"] ) ).is_file():
+        return None, "no_snapshot"
+    gold_files, gold_funcs, _added = LB.gold_for_instance( inst, "locbench" )
+    if not gold_files:
+        return None, "no_gold"
+    if not ( { os.path.splitext( f )[1] for f in gold_files } & RIPWIRE_EXTENSIONS ):
+        return None, "non_ripwire_language"
+    return repo_dir, ( gold_files, gold_funcs )
+
+
+def instance_index( inst, repo_dir, cfg ):
+    """The per-instance index, built once into cfg.cache_dir. None on failure (the caller buckets it).
+    Built rather than reused from the asset tree on purpose: an index there may predate the current
+    cache format, and letting the binary rewrite it would mutate the evidence this run is scored on."""
+    base = cfg.cache_dir / inst["instance_id"].replace( "/", "__" )
+    rich = pathlib.Path( str( base ) + ".rich.ripwirecache" )
+    if rich.exists():
+        return rich
+    r = cfg.run( repo_dir, [ "--index-out=%s" % base, "--top-k=1", "--no-cache" ], timeout=3600 )
+    if r.returncode != 0 or not rich.exists():
+        print( "# INDEX FAIL %s rc=%d" % ( inst["instance_id"], r.returncode ), file=sys.stderr )
+        return None
+    return rich
+
+
+def universe( repo_dir, query, rich, cfg ):
+    """(indexable_gold_predicate_input, candidates): the flat, globally-ranked candidate list over the
+    WHOLE index. It answers a question the served head cannot — was the gold indexed at all — because
+    a miss on a gold symbol the parser never emitted is a parser limit, and folding the two together
+    would let a parse gap masquerade as a calibration gap."""
+    uni = cfg.run( repo_dir, [ "--query=%s" % query, "--format=candidates", "--top-k=1000000000",
+                               "--cache=%s" % rich ] )
+    try:
+        return LB.parse_candidates( uni.stdout, str( repo_dir ) )
+    except Exception:                                            # noqa: BLE001 — an empty universe is
+        return []                                                # reported as 0 coverage, never as a hit
+
+
+def grade( gold, head, tail, hops ):
+    """The four grains, kept as four. They disagree, which is the point: one signal cannot be
+    calibrated without first fixing which grain of "correct" it is a claim about."""
+    gold_files, gold_funcs = gold
+    gold_norm = { LB.norm_path( g ) for g in gold_files }
+    head_files = { LB.norm_path( p ) for p, _n, _r in head }
+    bundle_files = head_files | { LB.norm_path( p ) for p in tail } | { LB.norm_path( p ) for p, _n in hops }
+    head_syms = { ( LB.norm_path( p ), n ) for p, n, _r in head }
+    gold_ranks = [ r for p, _n, r in head if r is not None and LB.norm_path( p ) in gold_norm ]
+    return dict( gold_files=sorted( gold_norm ), n_gold_funcs=len( gold_funcs ),
+                 served_syms=len( head ), served_files=len( head_files ), bundle_files=len( bundle_files ),
+                 first_gold_rank=min( gold_ranks ) if gold_ranks else None,
+                 file_hit=bool( gold_norm & head_files ),
+                 all_file_hit=bool( gold_norm ) and gold_norm <= head_files,
+                 func_hit=any( ( LB.norm_path( f ), n ) in head_syms for f, _s, n in gold_funcs ),
+                 bundle_file_hit=bool( gold_norm & bundle_files ) )
+
+
+def measure_instance( inst, repo_dir, gold, cfg ):
+    """(row, None) or (None, skip bucket). THE measured invocation is the default `--for` and nothing
+    else: no --top-k, no --adaptive, no budget — the bundle an agent is actually handed."""
+    rich = instance_index( inst, repo_dir, cfg )
+    if rich is None:
+        return None, "index_fail"
+    query = " ".join( inst.get( "problem_statement", "" ).split() )[:cfg.query_chars]
+    t0 = time.perf_counter()
+    r = cfg.run( repo_dir, [ "--for=%s" % query, "--cache=%s" % rich ] )
+    wall = time.perf_counter() - t0
+    if r.returncode != 0:
+        print( "# FOR FAIL %s rc=%d" % ( inst["instance_id"], r.returncode ), file=sys.stderr )
+        return None, "for_fail"
+    try:
+        attrs = root_attrs( r.stdout )
+        head, tail, hops = served_head( r.stdout )
+    except Exception as e:                                       # noqa: BLE001 — bucketed, never silent
+        print( "# PARSE FAIL %s: %s" % ( inst["instance_id"], e ), file=sys.stderr )
+        return None, "parse_fail"
+
+    uni_cands = universe( repo_dir, query, rich, cfg )
+    universe_files = sorted( { c["path"] for c in uni_cands } )
+    row = dict( instance_id=inst["instance_id"], repo=inst["repo"], wall=round( wall, 3 ),
+                indexable_gold_file=any( LB.norm_path( g ) in universe_files for g in gold[0] ),
+                covered_gold_funcs=len( LB.covered( uni_cands, gold[1], universe_files ) if uni_cands else [] ),
+                **grade( gold, head, tail, hops ), **attrs )
+    row["score"] = arb_score( attrs["confidence"], attrs["margin_pct"] )
+    return row, None
+
+
+def scored_instances( assets, split, cfg ):
+    """The scored rows and the named skip buckets. Every instance in the dataset lands in exactly one
+    of the two."""
     skips = dict( wrong_split=0, no_snapshot=0, non_ripwire_language=0, index_fail=0, for_fail=0,
                   parse_fail=0, no_gold=0 )
     out = []
-    for idx, inst in enumerate( rows ):
-        if LB.frozen_partition( inst["repo"] ) != split:
-            skips["wrong_split"] += 1
+    for inst in load_rows( assets ):
+        repo_dir, verdict = eligibility( inst, assets, split )
+        if repo_dir is None:
+            skips[verdict] += 1
             continue
-        repo_dir = assets / "repos" / inst["repo"].replace( "/", "__" )
-        # run_locbench.py writes this marker only after a successful checkout OF THIS SHA, and one
-        # directory serves a repository, so the marker is the only honest proof that the tree on disk
-        # is the tree this instance is about. A bare directory is NOT evidence.
-        if not ( repo_dir / ( ".ripwire_at_" + inst["base_commit"] ) ).is_file():
-            skips["no_snapshot"] += 1
+        row, reason = measure_instance( inst, repo_dir, verdict, cfg )
+        if row is None:
+            skips[reason] += 1
             continue
-        gold_files, gold_funcs, _added = LB.gold_for_instance( inst, "locbench" )
-        if not gold_files:
-            skips["no_gold"] += 1
-            continue
-        exts = { os.path.splitext( f )[1] for f in gold_files }
-        if not ( exts & { ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".cpp", ".cc", ".h",
-                          ".hpp", ".swift", ".m", ".mm", ".java", ".rb", ".sh", ".bash", ".md" } ):
-            skips["non_ripwire_language"] += 1
-            continue
-
-        query = " ".join( inst.get( "problem_statement", "" ).split() )[:query_chars]
-        base = cache_dir / inst["instance_id"].replace( "/", "__" )
-        rich = pathlib.Path( str( base ) + ".rich.ripwirecache" )
-        if not rich.exists():
-            r = subprocess.run( [ binary, str( repo_dir ), "--index-out=%s" % base, "--top-k=1", "--no-cache" ],
-                                capture_output=True, text=True, timeout=3600 )
-            if r.returncode != 0 or not rich.exists():
-                skips["index_fail"] += 1
-                print( "# INDEX FAIL %s rc=%d" % ( inst["instance_id"], r.returncode ), file=sys.stderr )
-                continue
-
-        # THE measured invocation: default `--for`, nothing else. No --top-k (it moves the adaptive
-        # cut's ceiling, and therefore moves the very signal under test), no --adaptive, no budget.
-        t0 = time.perf_counter()
-        r = subprocess.run( [ binary, str( repo_dir ), "--for=%s" % query, "--cache=%s" % rich ],
-                            capture_output=True, text=True, timeout=1800 )
-        wall = time.perf_counter() - t0
-        if r.returncode != 0:
-            skips["for_fail"] += 1
-            print( "# FOR FAIL %s rc=%d" % ( inst["instance_id"], r.returncode ), file=sys.stderr )
-            continue
-        try:
-            attrs = root_attrs( r.stdout )
-            head, tail, hops = served_head( r.stdout )
-        except Exception as e:                                   # noqa: BLE001 — bucketed, never silent
-            skips["parse_fail"] += 1
-            print( "# PARSE FAIL %s: %s" % ( inst["instance_id"], e ), file=sys.stderr )
-            continue
-
-        # The universe run answers a question the served head cannot: was the gold INDEXED at all?
-        # A miss on an unindexable gold symbol is a parser limit, not a ranking failure, and folding
-        # the two together would let a parse gap masquerade as a calibration gap.
-        uni = subprocess.run( [ binary, str( repo_dir ), "--query=%s" % query, "--format=candidates",
-                                "--top-k=1000000000", "--cache=%s" % rich ],
-                              capture_output=True, text=True, timeout=1800 )
-        try:
-            uni_cands = LB.parse_candidates( uni.stdout, str( repo_dir ) )
-        except Exception:                                        # noqa: BLE001
-            uni_cands = []
-        universe_files = sorted( { c["path"] for c in uni_cands } )
-        indexable_gold_file = any( LB.norm_path( g ) in universe_files for g in gold_files )
-        covered_funcs = LB.covered( uni_cands, gold_funcs, universe_files ) if uni_cands else []
-
-        gold_norm = { LB.norm_path( g ) for g in gold_files }
-        head_files = { LB.norm_path( p ) for p, _n, _r in head }
-        bundle_files = head_files | { LB.norm_path( p ) for p in tail } | { LB.norm_path( p ) for p, _n in hops }
-        head_syms = { ( LB.norm_path( p ), n ) for p, n, _r in head }
-        file_hit = bool( gold_norm & head_files )
-        all_file_hit = bool( gold_norm ) and gold_norm <= head_files
-        func_hit = any( ( LB.norm_path( f ), n ) in head_syms for f, _s, n in gold_funcs )
-        bundle_file_hit = bool( gold_norm & bundle_files )
-        gold_ranks = [ r for p, _n, r in head if r is not None and LB.norm_path( p ) in gold_norm ]
-
-        row = dict( instance_id=inst["instance_id"], repo=inst["repo"], wall=round( wall, 3 ),
-                    gold_files=sorted( gold_norm ), n_gold_funcs=len( gold_funcs ),
-                    indexable_gold_file=indexable_gold_file, covered_gold_funcs=len( covered_funcs ),
-                    served_syms=len( head ), served_files=len( head_files ),
-                    bundle_files=len( bundle_files ), first_gold_rank=min( gold_ranks ) if gold_ranks else None,
-                    file_hit=file_hit, all_file_hit=all_file_hit, func_hit=func_hit,
-                    bundle_file_hit=bundle_file_hit, **attrs )
-        row["score"] = arb_score( attrs["confidence"], attrs["margin_pct"] )
         out.append( row )
-        if verbose:
+        if cfg.verbose:
             print( "# [%d] %s conf=%s margin=%s file_hit=%s func_hit=%s" %
                    ( len( out ), row["instance_id"], row["confidence"], row["margin_pct"],
-                     file_hit, func_hit ), file=sys.stderr )
-        if limit and len( out ) >= limit:
+                     row["file_hit"], row["func_hit"] ), file=sys.stderr )
+        if cfg.limit and len( out ) >= cfg.limit:
             break
     return out, skips
 
@@ -342,83 +393,105 @@ def fmt_rate( cell ):
     return "%.3f [%.3f, %.3f]" % ( cell["rate"], cell["ci_lo"], cell["ci_hi"] )
 
 
-def markdown( summary ):
+GRAINS = ( ( "file_hit", "a gold FILE is in the served head" ),
+           ( "func_hit", "a gold FUNCTION is in the served head" ),
+           ( "all_file_hit", "EVERY gold file is in the served head" ),
+           ( "bundle_file_hit", "a gold FILE is named anywhere in the bundle (head, tail or hops)" ) )
+
+
+def md_num( v, spec = "%.3f" ):
+    """One formatter for every optional number in the tables. `n/a` means the statistic was not
+    computable on these rows (a single-class cell, an absent attribute) — never a zero."""
+    return spec % v if v is not None else "n/a"
+
+
+def md_band_sections( summary ):
+    """One `confidence=` table per grain. The grains are listed in GRAINS rather than inline so the
+    markdown and the TSV emit the same four, in the same order, from one list."""
     L = []
-    m = summary["meta"]
-    L.append( "<!-- generated by bench/locbench/calibrate_confidence.py — do not hand-edit -->" )
-    L.append( "" )
-    L.append( "Corpus: LocBench %s split, %d instances scored, binary `%s`." %
-              ( m["split"], summary["n_scored"], m["binary_version"] ) )
-    L.append( "" )
-    L.append( "### Skipped, by reason (zero-silent-skip)" )
-    L.append( "" )
-    L.append( "| reason | n |" )
-    L.append( "| --- | --- |" )
-    for k, v in sorted( summary["skips"].items() ):
-        L.append( "| %s | %d |" % ( k, v ) )
-    L.append( "" )
-    for metric, title in ( ( "file_hit", "a gold FILE is in the served head" ),
-                           ( "func_hit", "a gold FUNCTION is in the served head" ),
-                           ( "all_file_hit", "EVERY gold file is in the served head" ),
-                           ( "bundle_file_hit", "a gold FILE is named anywhere in the bundle (head, tail or hops)" ) ):
+    for metric, title in GRAINS:
         t = summary["bands"][metric]
-        L.append( "### `confidence=` vs %s" % title )
-        L.append( "" )
-        L.append( "| confidence | n | hits | hit rate [95% Wilson] |" )
-        L.append( "| --- | --- | --- | --- |" )
-        for band in ( "high", "low" ):
-            L.append( "| %s | %d | %d | %s |" % ( band, t[band]["n"], t[band]["hits"], fmt_rate( t[band] ) ) )
+        L += [ "### `confidence=` vs %s" % title, "",
+               "| confidence | n | hits | hit rate [95% Wilson] |", "| --- | --- | --- | --- |" ]
+        L += [ "| %s | %d | %d | %s |" % ( b, t[b]["n"], t[b]["hits"], fmt_rate( t[b] ) ) for b in ( "high", "low" ) ]
         d = t["difference"]
         L.append( "" )
-        if d["value"] is None:
-            L.append( "difference (high - low): n/a (a band is empty)" )
-        else:
-            L.append( "difference (high - low): **%+.3f** [%+.3f, %+.3f] — %s" %
-                      ( d["value"], d["ci_lo"], d["ci_hi"],
-                        "excludes 0" if d["excludes_zero"] else "**includes 0**" ) )
+        L.append( "difference (high - low): n/a (a band is empty)" if d["value"] is None else
+                  "difference (high - low): **%+.3f** [%+.3f, %+.3f] — %s" %
+                  ( d["value"], d["ci_lo"], d["ci_hi"],
+                    "excludes 0" if d["excludes_zero"] else "**includes 0**" ) )
         L.append( "" )
-    L.append( "### Reliability over `margin_pct=` bins (metric: a gold file in the served head)" )
-    L.append( "" )
-    L.append( "| margin_pct | n | of which confidence=high | hits | hit rate [95% Wilson] |" )
-    L.append( "| --- | --- | --- | --- | --- |" )
-    for b in summary["reliability"]["file_hit"]:
-        L.append( "| %s | %d | %d | %d | %s |" % ( b["bin"], b["n"], b["high"], b["hits"], fmt_rate( b ) ) )
-    L.append( "" )
-    L.append( "### Discrimination — can the signal pick out the misses?" )
-    L.append( "" )
-    L.append( "| metric | n | misses | AUROC (positive class = miss) | DOP recall | DOP false-warn rate |" )
-    L.append( "| --- | --- | --- | --- | --- | --- |" )
+    return L
+
+
+def md_signal_sections( summary ):
+    """Reliability, discrimination, and the exploratory block — the three tables about the SIGNAL, as
+    opposed to the four about the grains."""
+    L = [ "### Reliability over `margin_pct=` bins (metric: a gold file in the served head)", "",
+          "| margin_pct | n | of which confidence=high | hits | hit rate [95% Wilson] |",
+          "| --- | --- | --- | --- | --- |" ]
+    L += [ "| %s | %d | %d | %d | %s |" % ( b["bin"], b["n"], b["high"], b["hits"], fmt_rate( b ) )
+           for b in summary["reliability"]["file_hit"] ]
+    L += [ "", "### Discrimination — can the signal pick out the misses?", "",
+           "| metric | n | misses | AUROC (positive class = miss) | DOP recall | DOP false-warn rate |",
+           "| --- | --- | --- | --- | --- | --- |" ]
     for metric in ( "file_hit", "func_hit" ):
         d = summary["discrimination"][metric]
         L.append( "| %s | %d | %d | %s | %s | %s |" %
-                  ( metric, d["n"], d["misses"],
-                    "%.3f" % d["auroc"] if d["auroc"] is not None else "n/a",
-                    "%.3f" % d["dop"]["recall"] if d["dop"]["recall"] is not None else "n/a",
-                    "%.3f" % d["dop"]["false_abstain_rate"] if d["dop"]["false_abstain_rate"] is not None else "n/a" ) )
-    L.append( "" )
-    L.append( "### EXPLORATORY — two other root facts as miss detectors (decides nothing)" )
-    L.append( "" )
-    L.append( "| signal | n | AUROC vs a missed gold file | AUROC vs a missed gold function |" )
-    L.append( "| --- | --- | --- | --- |" )
+                  ( metric, d["n"], d["misses"], md_num( d["auroc"] ),
+                    md_num( d["dop"]["recall"] ), md_num( d["dop"]["false_abstain_rate"] ) ) )
+    L += [ "", "### EXPLORATORY — two other root facts as miss detectors (decides nothing)", "",
+           "| signal | n | AUROC vs a missed gold file | AUROC vs a missed gold function |",
+           "| --- | --- | --- | --- |" ]
     for name in ( "coverage", "dropped_positive", "margin_pct_alone" ):
         f, u = summary["secondary"]["file_hit"][name], summary["secondary"]["func_hit"][name]
-        L.append( "| `%s` | %d | %s | %s |" %
-                  ( name, f["n"], "%.3f" % f["auroc"] if f["auroc"] is not None else "n/a",
-                    "%.3f" % u["auroc"] if u["auroc"] is not None else "n/a" ) )
-    L.append( "" )
-    L.append( "### Where the misses live" )
-    L.append( "" )
+        L.append( "| `%s` | %d | %s | %s |" % ( name, f["n"], md_num( f["auroc"] ), md_num( u["auroc"] ) ) )
+    return L + [ "" ]
+
+
+def md_miss_section( summary ):
+    """Where the misses live — the table that separates a parser limit from a ranking one, and prices
+    the false warnings against the misses they bought."""
     c = summary["miss_composition"]
-    L.append( "| population | n |" )
-    L.append( "| --- | --- |" )
-    L.append( "| scored | %d |" % summary["n_scored"] )
-    L.append( "| gold file never indexed (a parser limit, not a ranking one) | %d |" % c["gold_unindexable"] )
-    L.append( "| gold file indexed but not in the served head | %d |" % c["indexed_but_missed"] )
-    L.append( "| of those, warned (`confidence=low`) | %d |" % c["indexed_missed_and_warned"] )
-    L.append( "| gold file in the served head | %d |" % c["file_hits"] )
-    L.append( "| of those, warned (`confidence=low`) — the false-warn cost | %d |" % c["hit_but_warned"] )
-    L.append( "" )
-    return "\n".join( L )
+    return [ "### Where the misses live", "", "| population | n |", "| --- | --- |",
+             "| scored | %d |" % summary["n_scored"],
+             "| gold file never indexed (a parser limit, not a ranking one) | %d |" % c["gold_unindexable"],
+             "| gold file indexed but not in the served head | %d |" % c["indexed_but_missed"],
+             "| of those, warned (`confidence=low`) | %d |" % c["indexed_missed_and_warned"],
+             "| gold file in the served head | %d |" % c["file_hits"],
+             "| of those, warned (`confidence=low`) — the false-warn cost | %d |" % c["hit_but_warned"], "" ]
+
+
+def markdown( summary ):
+    m = summary["meta"]
+    L = [ "<!-- generated by bench/locbench/calibrate_confidence.py — do not hand-edit -->", "",
+          "Corpus: LocBench %s split, %d instances scored, binary `%s`." %
+          ( m["split"], summary["n_scored"], m["binary_version"] ), "",
+          "### Skipped, by reason (zero-silent-skip)", "", "| reason | n |", "| --- | --- |" ]
+    L += [ "| %s | %d |" % ( k, v ) for k, v in sorted( summary["skips"].items() ) ]
+    return "\n".join( L + [ "" ] + md_band_sections( summary ) + md_signal_sections( summary )
+                       + md_miss_section( summary ) )
+
+
+def print_metric_lines( summary, rows ):
+    """The greppable TSV surface, same convention as run_arb.py's `ARB\tcalib\t...` lines. Split out
+    of main() so main() is argument handling and file writing, and this is the report."""
+    for line in ( "n_scored\t%d" % len( rows ),
+                  "file_hit_overall\t%.4f" % summary["overall"]["file_hit"],
+                  "func_hit_overall\t%.4f" % summary["overall"]["func_hit"],
+                  "confidence_high\t%d" % summary["overall"]["confidence_high"],
+                  "confidence_low\t%d" % ( len( rows ) - summary["overall"]["confidence_high"] ) ):
+        print( "LOCBENCH\tcalib\t%s" % line )
+    for metric, _title in GRAINS:
+        t = summary["bands"][metric]
+        for band in ( "high", "low" ):
+            print( "LOCBENCH\tcalib\t%s_%s\t%s\t(n=%d)" % ( metric, band, fmt_rate( t[band] ), t[band]["n"] ) )
+        d = t["difference"]
+        print( "LOCBENCH\tcalib\t%s_difference\t%s" % ( metric,
+               "n/a" if d["value"] is None else "%+.4f [%+.4f, %+.4f] excludes_zero=%s"
+               % ( d["value"], d["ci_lo"], d["ci_hi"], d["excludes_zero"] ) ) )
+    for metric in ( "file_hit", "func_hit" ):
+        print( "LOCBENCH\tcalib\t%s_auroc\t%s" % ( metric, md_num( summary["discrimination"][metric]["auroc"], "%.4f" ) ) )
 
 
 def main():
@@ -449,7 +522,8 @@ def main():
     binary_version = ver.stdout.strip().splitlines()[0] if ver.stdout.strip() else "unknown"
 
     print( "# calibrate_confidence — assets=%s split=%s binary=%s" % ( assets, a.split, binary ), file=sys.stderr )
-    rows, skips = scored_instances( assets, a.split, binary, cache_dir, a.query_chars, a.limit, a.verbose )
+    rows, skips = scored_instances( assets, a.split,
+                                    RunConfig( binary, cache_dir, a.query_chars, a.limit, a.verbose ) )
     if not rows:
         raise SystemExit( "calibrate_confidence: nothing scored — skips: %s" % skips )
 
@@ -477,23 +551,7 @@ def main():
         secondary={ m: secondary_signals( rows, m ) for m in ( "file_hit", "func_hit" ) },
         miss_composition=miss_composition, instances=rows )
 
-    for line in ( "n_scored\t%d" % len( rows ),
-                  "file_hit_overall\t%.4f" % summary["overall"]["file_hit"],
-                  "func_hit_overall\t%.4f" % summary["overall"]["func_hit"],
-                  "confidence_high\t%d" % summary["overall"]["confidence_high"],
-                  "confidence_low\t%d" % ( len( rows ) - summary["overall"]["confidence_high"] ) ):
-        print( "LOCBENCH\tcalib\t%s" % line )
-    for metric in ( "file_hit", "func_hit", "all_file_hit", "bundle_file_hit" ):
-        t = summary["bands"][metric]
-        for band in ( "high", "low" ):
-            print( "LOCBENCH\tcalib\t%s_%s\t%s\t(n=%d)" % ( metric, band, fmt_rate( t[band] ), t[band]["n"] ) )
-        d = t["difference"]
-        print( "LOCBENCH\tcalib\t%s_difference\t%s" % ( metric,
-               "n/a" if d["value"] is None else "%+.4f [%+.4f, %+.4f] excludes_zero=%s"
-               % ( d["value"], d["ci_lo"], d["ci_hi"], d["excludes_zero"] ) ) )
-    for metric in ( "file_hit", "func_hit" ):
-        d = summary["discrimination"][metric]
-        print( "LOCBENCH\tcalib\t%s_auroc\t%s" % ( metric, "n/a" if d["auroc"] is None else "%.4f" % d["auroc"] ) )
+    print_metric_lines( summary, rows )
 
     if a.json_out:
         pathlib.Path( a.json_out ).write_text( json.dumps( summary, indent=2, sort_keys=True ) )
