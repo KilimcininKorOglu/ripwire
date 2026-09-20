@@ -3957,18 +3957,90 @@ inline std::vector<std::vector<std::uint32_t>> gitCoChangeAndChurnCached(
 // `root` = the ingest root exactly as invoked (cfg.rootPath). It is folded into every baseline key via
 // baselineCanonId so the written sidecar is root-spelling-independent (S2). g.canonId is still consulted only
 // as the "has a canonical id" presence gate — the HASHED key is the root-relative baselineCanonId, never g's.
-// `fileInBaseline`, when non-null, is a per-fileId flag: 0 means "this file is NOT part of the baseline this
+// ── computeSnapshot's BASELINE-MEMBERSHIP filter, in three named pieces ──────────────────────────────────
+//
+// `fileInBaseline`, when non-null, is a per-fileId flag: 0 means "this file is NOT part of the baseline the
 // snapshot stands for". The IDENTITY BASIS (computeHeadBasis, below) is its only caller — it builds the HEAD
 // baseline out of the WORKING TREE's own ingest and has to leave out the files HEAD does not track, so their
 // symbols stay ABSENT at baseline and keep reading as new. It is a MEMBERSHIP filter, never a metric change:
 // a file that is in the baseline contributes exactly the records it always did, computed from exactly the same
-// graph. Out-of-range fileIds read as in-baseline so a short/absent vector can only ever widen, never narrow.
+// graph. A null filter is the pre-#228 behaviour, branch for branch, which is what lets computeHeadSnapshot
+// keep writing a cached Snapshot that means exactly what it always meant (see test/qschemetripcheck.sh).
+//
+// Out-of-range fileIds read as IN-baseline: a short or absent vector can then only ever widen the baseline,
+// never narrow it, so a plumbing mistake cannot invent a regression.
+inline bool fileIsInBaseline( const std::vector<char>* fileInBaseline, std::uint32_t fileId ) noexcept
+{
+    return fileInBaseline == nullptr || fileId >= fileInBaseline->size() || ( *fileInBaseline )[ fileId ] != 0;
+}
+
+// A clone group is a SET identity (see cloneGroupHash), so a member the baseline does not contain makes the
+// whole set something the baseline never held: the group is left out rather than re-hashed without it.
+inline bool cloneGroupIsInBaseline( const CloneGroup& cg, const IngestResult& ing, const std::vector<char>* fileInBaseline ) noexcept
+{
+    for( NodeId m : cg.members )
+    {
+        if( m < ing.symbols.size() && !fileIsInBaseline( fileInBaseline, ing.symbols[m].fileId ) )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// errorMaskCountsBySym and bodyHashesBySym walk EVERY symbol, so the membership filter reaches their results
+// here, on their keys. The key space is path-qualified (qualityKey), so a key belongs to exactly ONE file:
+// dropping a non-baseline file's key can never take a baseline file's record with it.
+inline void dropNonBaselineKeys( Snapshot& snap, const IngestResult& ing, std::string_view root,
+                                 const std::vector<char>* fileInBaseline )
+{
+    if( fileInBaseline == nullptr )
+    {
+        return;
+    }
+    std::vector<std::uint64_t> dropKeys;
+    for( NodeId i = 0; i < ing.symbols.size(); ++i )
+    {
+        if( !fileIsInBaseline( fileInBaseline, ing.symbols[i].fileId ) )
+        {
+            dropKeys.push_back( qualityKey( ing, i, root ) );
+        }
+    }
+    std::sort( dropKeys.begin(), dropKeys.end() );
+    const auto dropped = [ & ]( std::uint64_t k ) noexcept
+    { return std::binary_search( dropKeys.begin(), dropKeys.end(), k ); };
+    for( auto it = snap.maskBySym.begin(); it != snap.maskBySym.end(); )
+    {
+        it = dropped( it->first ) ? snap.maskBySym.erase( it ) : std::next( it );
+    }
+    for( auto it = snap.bodyHashBySym.begin(); it != snap.bodyHashBySym.end(); )
+    {
+        it = dropped( it->first ) ? snap.bodyHashBySym.erase( it ) : std::next( it );
+    }
+}
+
+// The duplication baseline = both exact (Type-1/2) AND gapped (Type-3) groups, folded into one set. A Type-3
+// pair hashes by its sorted member canonIds exactly like an exact group, so introducing a NEW near-clone
+// changes the set and the delta flags it. Both passes are deterministic, so the set is stable.
+inline std::vector<std::uint64_t> baselineCloneGroupHashes( const IngestResult& ing, std::string_view root,
+                                                            const std::vector<char>* fileInBaseline )
+{
+    std::vector<std::uint64_t> out;
+    for( const CloneGroup& cg : findClones( ing, int( kMinCloneTokens ) ) )
+    {
+        if( cloneGroupIsInBaseline( cg, ing, fileInBaseline ) ) { out.push_back( cloneGroupHash( cg, ing, root ) ); }
+    }
+    for( const CloneGroup& cg : findClonesType3( ing, int( kMinCloneTokens ) ) )
+    {
+        if( cloneGroupIsInBaseline( cg, ing, fileInBaseline ) ) { out.push_back( cloneGroupHash( cg, ing, root ) ); }
+    }
+    return out;
+}
+
 inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root,
                                  const std::vector<char>* fileInBaseline )
 {
     Snapshot snap;
-    const auto inBaseline = [ & ]( std::uint32_t fileId ) noexcept
-    { return fileInBaseline == nullptr || fileId >= fileInBaseline->size() || ( *fileInBaseline )[ fileId ] != 0; };
     const std::vector<std::uint32_t> codeLoc         = codeLocByNode( ing );                     // Q-DIAL-3: the verbosity kind's metric is CODE lines
     const std::vector<std::uint64_t> topLevelCallees = topLevelCalleeNameHashes( ing );          // W1-S2: dead-kind evidence, built once
     const std::vector<std::string>   macroNames      = registeredMacroNames( root );             // P2.2: built-ins + .ripwire_config
@@ -3981,9 +4053,9 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
             continue;
         }
         const Symbol& s = ing.symbols[i];
-        if( !inBaseline( s.fileId ) )
+        if( !fileIsInBaseline( fileInBaseline, s.fileId ) )
         {
-            continue;   // IDENTITY BASIS: this file is not in the baseline — every record below would be a phantom
+            continue;   // IDENTITY BASIS: not a baseline file — every record below would be a phantom
         }
         const std::uint64_t key = qualityKey( ing, i, root );   // path-qualified ALWAYS — see qualityKey
         // overloads share a canonical id (scope+name) → keep the MAX of each per-symbol metric per id, not
@@ -4009,36 +4081,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
             snap.publicApi.push_back( key );
         }
     }
-    // duplication baseline = both exact (Type-1/2) AND gapped (Type-3) groups, folded into one set. A
-    // Type-3 pair hashes by its sorted member canonIds exactly like an exact group, so introducing a NEW
-    // near-clone changes the set ⇒ the delta flags it. Both passes are deterministic → the set is stable.
-    // A group is a SET identity (see cloneGroupHash): a member the baseline does not contain makes the whole
-    // set something the baseline never held, so the group is left out rather than re-hashed without it.
-    const auto groupInBaseline = [ & ]( const CloneGroup& cg ) noexcept
-    {
-        for( NodeId m : cg.members )
-        {
-            if( m < ing.symbols.size() && !inBaseline( ing.symbols[m].fileId ) )
-            {
-                return false;
-            }
-        }
-        return true;
-    };
-    for( const CloneGroup& cg : findClones( ing, int( kMinCloneTokens ) ) )
-    {
-        if( groupInBaseline( cg ) )
-        {
-            snap.cloneGroups.push_back( cloneGroupHash( cg, ing, root ) );
-        }
-    }
-    for( const CloneGroup& cg : findClonesType3( ing, int( kMinCloneTokens ) ) )
-    {
-        if( groupInBaseline( cg ) )
-        {
-            snap.cloneGroups.push_back( cloneGroupHash( cg, ing, root ) );
-        }
-    }
+    snap.cloneGroups = baselineCloneGroupHashes( ing, root, fileInBaseline );
 
     // §D#4 error-masking baseline: per-canonId count of error-masking constructs (the SUM the delta compares).
     snap.maskBySym = errorMaskCountsBySym( ing, root );
@@ -4047,31 +4090,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
     // metric (a literal-only edit). Compared, never bar-checked — presence-or-difference IS the rewrite signal.
     snap.bodyHashBySym = bodyHashesBySym( ing, root );
 
-    // The two maps above are built by helpers that walk EVERY symbol, so the membership filter reaches them
-    // here, on their keys. The key space is path-qualified (qualityKey), so a key belongs to exactly ONE file:
-    // dropping a non-baseline file's key can never take a baseline file's record with it.
-    if( fileInBaseline != nullptr )
-    {
-        std::vector<std::uint64_t> dropKeys;
-        for( NodeId i = 0; i < ing.symbols.size(); ++i )
-        {
-            if( !inBaseline( ing.symbols[i].fileId ) )
-            {
-                dropKeys.push_back( qualityKey( ing, i, root ) );
-            }
-        }
-        std::sort( dropKeys.begin(), dropKeys.end() );
-        const auto dropped = [ & ]( std::uint64_t k ) noexcept
-        { return std::binary_search( dropKeys.begin(), dropKeys.end(), k ); };
-        for( auto it = snap.maskBySym.begin(); it != snap.maskBySym.end(); )
-        {
-            it = dropped( it->first ) ? snap.maskBySym.erase( it ) : std::next( it );
-        }
-        for( auto it = snap.bodyHashBySym.begin(); it != snap.bodyHashBySym.end(); )
-        {
-            it = dropped( it->first ) ? snap.bodyHashBySym.erase( it ) : std::next( it );
-        }
-    }
+    dropNonBaselineKeys( snap, ing, root, fileInBaseline );   // IDENTITY BASIS membership, on the two key-built maps
 
     std::sort( snap.dead.begin(),        snap.dead.end() );
     std::sort( snap.cloneGroups.begin(), snap.cloneGroups.end() );
@@ -4141,6 +4160,27 @@ inline bool workingTreeMatchesHead( const std::string& root )
     return os::system( cmd.c_str() ) == 0;
 }
 
+// Split one NUL-separated `git ls-tree -z` listing into SORTED root-relative views over it, dropping `prefix`
+// (the crawl root's position inside the repository) from each. The views alias `listing`, which therefore has
+// to outlive them — the one caller keeps it in scope for exactly that reason. A trailing newline is trimmed
+// because popenTrimmed re-joins its reads on '\n' and a -z listing carries none inside.
+inline std::vector<std::string_view> splitNulPaths( const std::string& listing, const std::string& prefix )
+{
+    std::vector<std::string_view> out;
+    for( std::size_t start = 0; start < listing.size(); )
+    {
+        const std::size_t nul = listing.find( '\0', start );
+        const std::size_t end = ( nul == std::string::npos ) ? listing.size() : nul;
+        std::string_view  p( listing.data() + start, end - start );
+        while( !p.empty() && ( p.back() == '\n' || p.back() == '\r' ) ) { p.remove_suffix( 1 ); }
+        if( !prefix.empty() && p.size() > prefix.size() && p.compare( 0, prefix.size(), prefix ) == 0 ) { p.remove_prefix( prefix.size() ); }
+        if( !p.empty() ) { out.push_back( p ); }
+        start = end + 1;
+    }
+    std::sort( out.begin(), out.end() );
+    return out;
+}
+
 // Per-fileId flags for computeSnapshot: 1 = this crawled file is TRACKED AT HEAD and therefore part of the
 // baseline, 0 = it is not. `outNotAtHead` receives the count of crawled files HEAD does not track — the number
 // the stderr disclosure reports. Returns false when git could not answer at all, in which case the caller MUST
@@ -4160,29 +4200,7 @@ inline bool baselineFileMaskAtHead( const std::string& root, const IngestResult&
     }
     // A subdirectory root: ls-tree answers in REPOSITORY-relative paths while every ingest path is
     // ROOT-relative, so the repo prefix comes off before the two are compared.
-    std::string prefix = gitOneLine( root, "rev-parse --show-prefix 2>/dev/null" );
-
-    std::vector<std::string_view> tracked;
-    for( std::size_t start = 0; start < listing.size(); )
-    {
-        const std::size_t nul = listing.find( '\0', start );
-        const std::size_t end = ( nul == std::string::npos ) ? listing.size() : nul;
-        std::string_view  p( listing.data() + start, end - start );
-        while( !p.empty() && ( p.back() == '\n' || p.back() == '\r' ) )
-        {
-            p.remove_suffix( 1 );   // popenTrimmed re-joins on '\n'; a -z listing has none inside, the tail can
-        }
-        if( !prefix.empty() && p.size() > prefix.size() && p.compare( 0, prefix.size(), prefix ) == 0 )
-        {
-            p.remove_prefix( prefix.size() );
-        }
-        if( !p.empty() )
-        {
-            tracked.push_back( p );
-        }
-        start = end + 1;
-    }
-    std::sort( tracked.begin(), tracked.end() );
+    const std::vector<std::string_view> tracked = splitNulPaths( listing, gitOneLine( root, "rev-parse --show-prefix 2>/dev/null" ) );
 
     outMask.assign( ing.files.size(), 0 );
     outNotAtHead = 0;
