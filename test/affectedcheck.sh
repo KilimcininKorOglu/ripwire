@@ -300,6 +300,89 @@ printf '%s' "$A" | grep -qE '<test p="test/test_leaf\.cpp" hops="1"|<g hops="1" 
     && ok "(7g) core.cpp's direct test row carries hops=\"1\"" \
     || no "(7g) core.cpp rows lack hops="
 
+# ── 8) issue #60: a call with no enclosing NAMED function is still a call ─────────────────────────────
+# @thavlik's reproduction, verbatim in shape: a node:test arrow callback calls the changed function, and
+# the test file's name does not share the source file's stem, so the filename-partner fallback cannot fire.
+# The CONTROL is the same assertion moved into a named function — the contrast that isolated the defect.
+# Before ingest_model.h mintModuleScopeOwners the callback arm read tests="0" and the named arm tests="1";
+# both must now read 1, and they must agree, because the two source shapes mean the same thing.
+echo "=== (8) #60: an arrow-callback call and a named-function call give the SAME tests ==="
+T60="$TMP/issue60"; mkdir -p "$T60/arrow/src" "$T60/arrow/test" "$T60/named/src" "$T60/named/test"
+for v in arrow named; do
+    printf 'export function bounded(text: string): string {\n  return text.replace(/x/g, "");\n}\n' > "$T60/$v/src/bounded.ts"
+done
+printf 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { bounded } from "../src/bounded.ts";\ntest("bounded removes x", () => { assert.equal(bounded("x value"), " value"); });\n' > "$T60/arrow/test/behavior.test.ts"
+printf 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { bounded } from "../src/bounded.ts";\nfunction checkBounded() { assert.equal(bounded("x value"), " value"); }\ntest("bounded removes x", checkBounded);\n' > "$T60/named/test/behavior.test.ts"
+AR="$( "$BIN" "$T60/arrow" --no-cache --affected=src/bounded.ts 2>/dev/null )"
+NA="$( "$BIN" "$T60/named" --no-cache --affected=src/bounded.ts 2>/dev/null )"
+arrowTests="$( attr tests "$AR" )"; namedTests="$( attr tests "$NA" )"
+[ "$namedTests" = 1 ] && ok "(8) the named-function control still reports tests=\"1\"" \
+    || no "(8) the named-function control reports tests=\"${namedTests:-absent}\" — the contrast proves nothing"
+[ "$arrowTests" = 1 ] && ok "(8) the arrow-callback arm reports tests=\"1\" (the pre-#60 binary reports 0)" \
+    || no "(8) the arrow-callback arm reports tests=\"${arrowTests:-absent}\", expected 1"
+[ "$arrowTests" = "$namedTests" ] && ok "(8) both source shapes give the SAME tests= ($arrowTests)" \
+    || no "(8) arrow=$arrowTests named=$namedTests — the two shapes still disagree"
+printf '%s' "$AR" | grep -q 'p="test/behavior\.test\.ts"' \
+    && ok "(8) the arrow arm NAMES test/behavior.test.ts, whose stem never matches bounded.ts" \
+    || no "(8) the arrow arm reports a count but not the file: $AR"
+# --test-gate must FAIL (exit 4) while that test is not in the run set — the verb an agent acts on.
+"$BIN" "$T60/arrow" --no-cache --test-gate=src/bounded.ts >"$TMP/tg60.xml" 2>/dev/null
+tgrc=$?
+[ "$tgrc" = 4 ] && ok "(8) --test-gate exits 4 on the arrow arm: the test to run is named, not silently zero" \
+    || no "(8) --test-gate exited $tgrc on the arrow arm, expected 4"
+grep -q 'behavior\.test\.ts' "$TMP/tg60.xml" \
+    && ok "(8) --test-gate names test/behavior.test.ts as the test to run" \
+    || no "(8) --test-gate exits non-zero but never names the test: $( head -c 400 "$TMP/tg60.xml" )"
+
+# ── 8b) issue #60, @alex-michaud's arm: the same root cause in ORDINARY PRODUCTION code ───────────────
+# No test file, no test framework: a module top-level call is framework registration / DI wiring / route
+# setup, and --callers and --impact both used to be one short. The named-function call in the same file is
+# the control: it was always counted, and it must still be.
+echo "=== (8b) #60: a module top-level call is a caller ==="
+P60="$TMP/issue60prod/src"; mkdir -p "$P60"
+printf 'export function setPhase(phase: string): void {\n  console.log(phase)\n}\n' > "$P60/lifecycle.ts"
+printf "import { setPhase } from './lifecycle'\n\nexport function boot(): void {\n  setPhase('booting')\n}\n\nsetPhase('starting')\n" > "$P60/index.ts"
+CA="$( "$BIN" "$TMP/issue60prod" --no-cache --callers=setPhase 2>/dev/null )"
+IM="$( "$BIN" "$TMP/issue60prod" --no-cache --impact=setPhase 2>/dev/null )"
+[ "$( attr count "$CA" )" = 2 ] && ok "(8b) --callers=setPhase count=\"2\" (the pre-#60 binary reports 1)" \
+    || no "(8b) --callers=setPhase count=\"$( attr count "$CA" )\", expected 2"
+[ "$( attr reaches "$IM" )" = 2 ] && ok "(8b) --impact=setPhase reaches=\"2\" (the pre-#60 binary reports 1)" \
+    || no "(8b) --impact=setPhase reaches=\"$( attr reaches "$IM" )\", expected 2"
+printf '%s' "$CA" | grep -q '<s t="fn" n="boot" p="src/index.ts:3"/>' \
+    && ok "(8b) the named-function caller row is unchanged — no existing edge moved" \
+    || no "(8b) the boot row changed shape: $CA"
+printf '%s' "$CA" | grep -q '<s t="modscope" n="&lt;file-scope&gt;" p="src/index.ts:1"/>' \
+    && ok "(8b) the module-scope caller is a LABELLED t=\"modscope\" row, not a fabricated function" \
+    || no "(8b) --callers=setPhase has no modscope row: $CA"
+# HONESTY, IN EVERY POSTURE. The default CLI legend is compact and the clause is a present-only term
+# (compactlegend.h, keyed on the t= VALUE); --legend=full takes the conditional clause in graphlegend.h.
+# Both must define the kind, and the two must be asserted separately — a reader holds one or the other.
+printf '%s' "$CA" | grep -q 't=modscope n=<file-scope>' \
+    && ok "(8b) the compact callers legend defines t=\"modscope\" in the document that emits it" \
+    || no "(8b) --callers emits t=\"modscope\" and its compact legend never defines it"
+printf '%s' "$IM" | grep -q 't=modscope n=<file-scope>' \
+    && ok "(8b) the compact impact legend defines t=\"modscope\" too" \
+    || no "(8b) --impact emits t=\"modscope\" and its compact legend never defines it"
+for v in callers impact; do
+    F="$( "$BIN" "$TMP/issue60prod" --no-cache --$v=setPhase --legend=full 2>/dev/null )"
+    printf '%s' "$F" | grep -q 'modscope" is a row for a file' \
+        && ok "(8b) --$v --legend=full defines t=\"modscope\" as well" \
+        || no "(8b) --$v --legend=full emits t=\"modscope\" with no definition"
+done
+# …and the clause costs 0 bytes where no such row exists (the "0 bytes when inert" placement rule).
+NM="$( "$BIN" "$T60/named" --no-cache --callers=bounded 2>/dev/null )"
+printf '%s' "$NM" | grep -q 'modscope' \
+    && no "(8b) a callers answer with no modscope row still pays for the clause" \
+    || ok "(8b) no modscope row ⇒ no clause: the definition costs 0 bytes when inert"
+# BLAST RADIUS: an unrelated symbol's counts must not move. lonely() in the ORIGINAL corpus is reached by
+# no test and called by nobody; leaf() is called from one named function and one test.
+LON="$( "$BIN" "$R" --no-cache --callers=lonely 2>/dev/null )"
+[ "$( attr count "$LON" )" = 0 ] && ok "(8b) control: --callers=lonely is still count=\"0\" — no count moved that should not" \
+    || no "(8b) control: --callers=lonely is now count=\"$( attr count "$LON" )\""
+MIDC="$( "$BIN" "$R" --no-cache --callers=leaf 2>/dev/null )"
+[ "$( attr count "$MIDC" )" = 2 ] && ok "(8b) control: --callers=leaf still count=\"2\" (mid + test_leaf)" \
+    || no "(8b) control: --callers=leaf is now count=\"$( attr count "$MIDC" )\", expected 2"
+
 # ── 6) xml well-formed ───────────────────────────────────────────────────────────────────────────────
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$A" | xmllint --noout - 2>/dev/null; then ok "--affected xml well-formed"; else no "--affected xml malformed"; fi

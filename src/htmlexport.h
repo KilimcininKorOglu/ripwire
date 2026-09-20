@@ -2206,6 +2206,8 @@ inline constexpr const char* kSymShapes[] = {
     "triangle",   // Macro
     "plus",       // Field
     "cross",      // Other
+    "bar",        // ModuleScope — a file's module scope holds statements, it is not callable: it shares
+                  //   Section's bar rather than borrowing the function circle it is not.
 };
 inline constexpr std::size_t kSymShapeCount = sizeof( kSymShapes ) / sizeof( kSymShapes[0] );
 static_assert( kSymShapeCount == kSymKindCount,

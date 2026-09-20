@@ -2111,6 +2111,15 @@ inline constexpr const char* kBodiesLegend =
     "bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already "
     "do, so source that spells one round-trips). Absent = paste-back is byte-exact. -->";
 
+// MODULE-SCOPE OWNERS (issue #60, ingest_model.h mintModuleScopeOwners) — the reading of the t="modscope" kind,
+// written only into a map whose corpus HAS one, by the same rule the extent clause below follows: a corpus with
+// no file-scope call stays byte-identical. Its own comment node rather than a widening of the t= list in the
+// opener, because that list is unconditional and this kind is not.
+inline constexpr std::string_view kModScopeMapLegend =
+    "<!-- t=modscope=a-file's-MODULE-SCOPE(n=<file-scope>):the-statements-outside-every-named-definition,where-a-top-level-call"
+    "-and-an-anonymous-callback-body's-calls-live;a-CALLER-never-a-callee(nothing-in-the-source-can-name-it)-with-no-body-to-expand;"
+    "a-file-with-no-such-call-has-no-such-row -->";
+
 // EXTENT HONESTY (src/extentsuspect.h, gate test/extentcheck.sh) — the ONE reading of extent_suspect= on every ROW
 // surface: the map's <s>, a bundle's <d> and <b>. Written only into a document that carries the attribute, right
 // where the reader meets it, so a corpus with nothing flagged stays byte-identical. The map adds the header count
@@ -2481,6 +2490,20 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     // EXTENT HONESTY (src/extentsuspect.h): how many definitions carry extent_suspect= corpus-wide — the header's
     // extent_suspect_syms= — and the row + header readings, appended ONLY when that is non-zero, so a corpus with
     // nothing flagged keeps every byte of this legend.
+    // MODULE-SCOPE OWNERS (issue #60): the t="modscope" kind's reading, appended ONLY when the corpus
+    // actually has one, under the same byte-identity rule as the two clauses below — a corpus with no
+    // file-scope call keeps every byte of this legend, which is what kept test/printf_parity.manifest's
+    // --pack-signatures and --around hashes and every est_tokens ceiling where they were.
+    bool hasModuleScope = false;
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( sym.kind == SymKind::ModuleScope ) { hasModuleScope = true; break; }
+    }
+    if( hasModuleScope )
+    {
+        legend += kModScopeMapLegend;
+    }
+
     std::size_t extentSuspectTotal = 0;
     for( const Symbol& sym : ing.symbols )
     {

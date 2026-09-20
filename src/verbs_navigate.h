@@ -150,11 +150,19 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         {
             // M12: under multi-root this verb carries no root= at all (correctly — no single root exists)
             // and, before this, disclosed nothing about the `<label>/` prefix every p= below carries.
-            rw::emitTo( stdout, "{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
+            // #60: exactly when a module-scope owner is on THIS page — the emitter's own condition, so a
+            // page without one pays 0 bytes for the clause.
+            bool chHasModScope = false;
+            for( std::size_t rowIndex = pw.begin; rowIndex < pw.end && !chHasModScope; ++rowIndex )
+            {
+                chHasModScope = ing.symbols[ result[ rowIndex ] ].kind == SymKind::ModuleScope;
+            }
+            rw::emitTo( stdout, "{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
                          rw::declinedCallsLegend( chRows.declinedCalls > 0 ),   // exactly when the root carries declined_calls=
                          rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ),     // H1: likewise, exactly when unproven_defs= is there
+                         rw::modScopeLegend( chHasModScope ),                   // #60: likewise, exactly when a t="modscope" row is
                          rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         }
@@ -2312,12 +2320,19 @@ std::optional<int> runImpact( const MainDispatch& d )
             // twin cannot drift from this wording (the §B4 echo-site class).
             // LB-H: the import-tier clause is the columnar variant under --format=columnar, because that
             // form carries the count without the rows and a reader must be told which shape they hold.
-            rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
+            // #60: exactly when a module-scope owner is one of the rows this answer prints.
+            bool imHasModScope = false;
+            for( const NodeId shownId : show )
+            {
+                if( ing.symbols[ shownId ].kind == SymKind::ModuleScope ) { imHasModScope = true; break; }
+            }
+            rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
                          cfg.columnar ? rw::kImpactImportTierColumnarLegend : rw::kImpactImportTierLegend,
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
                          rw::kTestedLensBlindSpotLegend,                           // F-02: rides with the partition
                          rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
                          rw::declinedCallsLegend( imDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
+                         rw::modScopeLegend( imHasModScope ),                      // #60: likewise, exactly when a t="modscope" row is
                          rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         }
         // P2.1 + §P8 G1: the rank-ordered listing's 40 is a DEFAULT now, not a ceiling — see the §P10.3 note

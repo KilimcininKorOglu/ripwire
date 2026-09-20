@@ -199,9 +199,9 @@ struct Snapshot
 inline bool isPublicApi( const IngestResult& ing, NodeId i ) noexcept
 {
     const Symbol& s = ing.symbols[i];
-    if( s.kind == SymKind::Section )
+    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
     {
-        return false; // markdown heading — not a code contract
+        return false; // markdown heading / a file's module scope — neither is a code contract
     }
     const std::string& p = ing.files[ s.fileId ];
     const auto ends = [ & ]( std::string_view e )
@@ -656,9 +656,9 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
         *exemptedByRegisterMacro = false;
     }
     const Symbol& s = ing.symbols[i];
-    if( s.kind == SymKind::Section )
+    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
     {
-        return false; // markdown heading
+        return false; // markdown heading / a file's module scope (no body of its own)
     }
     if( s.sigEndByte >= s.endByte )
     {
@@ -1162,7 +1162,7 @@ inline std::vector<std::uint32_t> codeLocByNode( const IngestResult& ing )
     }
     forEachSymbolBody( ing, [ & ]( NodeId i, const Symbol& s, std::string_view body )
     {
-        if( s.kind == SymKind::Section )
+        if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
         {
             return;   // a markdown SECTION is prose: there is no code/comment line to separate, and counting
                       // its non-blank lines as "code" makes an in-place doc rewrite that swaps 5 blank lines
@@ -7250,9 +7250,9 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                         continue;
                     }
                     const Symbol& s = ing.symbols[i];
-                    if( s.kind == SymKind::Section )
+                    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
                     {
-                        continue; // doc sections churn by design (exempt)
+                        continue; // doc sections churn by design; a module scope has no body to churn (exempt)
                     }
                     if( s.fileId >= commitCounts.size() || commitCounts[s.fileId] < kShortHorizonMinCommits )
                     {

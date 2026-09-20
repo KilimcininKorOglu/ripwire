@@ -303,6 +303,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
     { "declined_calls",    "declined_calls=K: K call sites left unbound (several defs, none chosen), in no count or row" },
+    // Issue #60: the module-scope owner's kind, and the first term keyed on a VALUE rather than on an
+    // attribute's presence — `t=` is on every <s> row, so only `t="modscope"` may pull this reading in.
+    // Present-only like the rest: a corpus with no file-scope call emits no such row and pays 0 bytes, which
+    // is what keeps the three graphlegendbudgetcheck pins and every compact byte ceiling where they were.
+    { "t",                 "t=modscope n=<file-scope>: a row for the file's MODULE SCOPE, where a top-level call and an anonymous callback body's calls live; a CALLER, never a callee, with no body to expand", false, "s", MapHeaderRead::No, "modscope" },
     // --uses=Owner.field's member form (fielduses.h appends kUsesFieldLegend to that answer alone). owner_candidates= is a
     // row attribute that exists only beside member=, so one head term defines the whole form.
     { "member",            "member=Owner.field: rows use that field; pinned=/amb_sites= rows with one owner/with owner_candidates=K; owners_of_name= fields so named" },
