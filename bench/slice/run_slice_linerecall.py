@@ -94,12 +94,60 @@ def pack( numbered, budget ):
     return got
 
 
-def measure_instance( binary, tree, r, rng, skips, varinst, timings, acc, tag ):
+def rank_scores( span, gold, cover, depth, depth_o, rng ):
+    """§4(b): Recall@k and MRR for R0/R1/R2/R2-oracle and the random control, plus the R2 order.
+
+    R0 is plain source order, R1 orders by how many inventory variables' flat slices cover the line,
+    R2 by the flow depth that reached it, R2-oracle by the same depth restricted to the gold-touching
+    seeds, and CTL is the mean over SHUFFLES permutations of the same candidate pool."""
+    orders = { "r0": list( span ),
+               "r1": sorted( span, key=lambda n: ( -cover[ n ], n ) ),
+               "r2": sorted( span, key=lambda n: ( depth[ n ], -cover[ n ], n ) ),
+               "oracle": sorted( span, key=lambda n: ( depth_o[ n ], -cover[ n ], n ) ) }
+    ctl, ctl_mrr = control_curve( span, gold, rng )
+    out = { f"mrr_{t}": mrr( o, gold ) for t, o in orders.items() }
+    out[ "mrr_ctl" ] = ctl_mrr
+    for k in KS:
+        for t, o in orders.items():
+            out[ f"{t}@{k}" ] = recall_at_k( o, gold, k )
+        out[ f"ctl@{k}" ] = ctl[ k ]
+    return orders[ "r2" ], out
+
+
+def budget_scores( span, gold, lines, r2_order, cover, span_bounds ):
+    """§5: the share of gold lines delivered under each byte budget at each granularity.
+
+    Every payload is line-numbered `N: text`, so the numbering costs the same in each arm and the
+    score is an exact line-number match. `file_window` is the strongest fair file-level arm: it packs
+    outward from the function's centre instead of from the file's first line."""
+    start, span_end = span_bounds
+    mid = ( start + span_end ) // 2
+    txt = lambda n: line_text( lines, n )
+    file_head   = [ ( n, txt( n ) ) for n in range( 1, len( lines ) + 1 ) ]
+    file_window = sorted( file_head, key=lambda t: ( abs( t[ 0 ] - mid ), t[ 0 ] ) )
+    symbol      = [ ( n, txt( n ) ) for n in span ]
+    line_level  = [ ( n, txt( n ) ) for n in r2_order ]
+    line_filt   = [ ( n, txt( n ) ) for n in
+                    [ n for n in span if cover[ n ] > 0 ] + [ n for n in span if cover[ n ] == 0 ] ]
+    arms = ( ( "file_head", file_head ), ( "file_window", file_window ), ( "symbol", symbol ),
+             ( "line_filtered", line_filt ), ( "line", line_level ) )
+    out = {}
+    for b in BUDGETS:
+        for name, payload in arms:
+            out[ f"budget{b}_{name}" ] = len( set( pack( payload, b ) ) & gold ) / len( gold )
+        out[ f"budget{b}_symbol_fits" ] = sum( len( f"{n}: {t}\n".encode() ) for n, t in symbol ) <= b
+    return out
+
+
+def measure_instance( binary, tree, r, sink, tag ):
     """measure ONE carried row; return its instance row, or None when a stage disqualifies it.
 
-    `skips` and `acc` are the disclosure counters (why a row dropped out, and the per-gold-line
-    reachability cascade); `varinst` and `timings` collect the per-variable rows and the wall
-    clock. Every early return is a counted skip, never a silent one."""
+    `sink` carries everything that outlives one row: `skips` and `acc` are the disclosure counters
+    (why a row dropped out, and the per-gold-line reachability cascade), `varinst` and `timings`
+    collect the per-variable rows and the wall clock, and `rng` is the control's seeded generator.
+    Every early return is a counted skip, never a silent one."""
+    skips, varinst, timings, acc, rng = ( sink[ "skips" ], sink[ "varinst" ], sink[ "timings" ],
+                                          sink[ "acc" ], sink[ "rng" ] )
     src = tree / Path( r[ "path" ] ).name
     show = git( r[ "repo_dir" ], "show", f"{r['base_commit']}:{r['path']}", ok_fail=True )
     if show.returncode != 0:
@@ -194,12 +242,7 @@ def measure_instance( binary, tree, r, rng, skips, varinst, timings, acc, tag ):
             if ln in depth_o:
                 depth_o[ ln ] = min( depth_o[ ln ], d )
 
-    r0_order = list( span )                                # plain source order: read the function top-down
-    r1_order = sorted( span, key=lambda n: ( -cover[ n ], n ) )
-    r2_order = sorted( span, key=lambda n: ( depth[ n ], -cover[ n ], n ) )
-    ro_order = sorted( span, key=lambda n: ( depth_o[ n ], -cover[ n ], n ) )
-    ctl, ctl_mrr = control_curve( span, gold, rng )
-
+    r2_order, rank = rank_scores( span, gold, cover, depth, depth_o, rng )
     row = { "instance_id": r[ "instance_id" ], "repo": r[ "repo" ], "scoped": r[ "scoped" ],
             "span_lines": len( span ), "gold_total": len( gold_all ), "gold_in_span": len( gold ),
             "inventory": len( invent ), "touched_vars": len( touched ),
@@ -208,34 +251,9 @@ def measure_instance( binary, tree, r, rng, skips, varinst, timings, acc, tag ):
             "v2_bytes_mean": statistics.mean( v2_bytes ) if v2_bytes else None,
             "covered_lines": sum( 1 for n in span if cover[ n ] > 0 ),
             "flow_lines": sum( 1 for n in span if depth[ n ] < 10 ** 6 ),
-            "mrr_r0": mrr( r0_order, gold ),
-            "mrr_r1": mrr( r1_order, gold ), "mrr_r2": mrr( r2_order, gold ),
-            "mrr_oracle": mrr( ro_order, gold ), "mrr_ctl": ctl_mrr }
-    for k in KS:
-        row[ f"r0@{k}" ] = recall_at_k( r0_order, gold, k )
-        row[ f"r1@{k}" ] = recall_at_k( r1_order, gold, k )
-        row[ f"r2@{k}" ] = recall_at_k( r2_order, gold, k )
-        row[ f"oracle@{k}" ] = recall_at_k( ro_order, gold, k )
-        row[ f"ctl@{k}" ] = ctl[ k ]
+            **rank,
+            **budget_scores( span, gold, lines, r2_order, cover, ( start, span_end ) ) }
 
-    # (d) §5 fixed-budget granularity comparison — all three payloads line-numbered, so the
-    # score is by line number and the numbering cost is identical in every arm.
-    mid = ( start + span_end ) // 2
-    half = sorted( range( 1, len( lines ) + 1 ), key=lambda n: ( abs( n - mid ), n ) )
-    file_head   = [ ( n, text_of( n ) ) for n in range( 1, len( lines ) + 1 ) ]
-    file_window = [ ( n, text_of( n ) ) for n in sorted( half[ : min( len( lines ), 4 * len( span ) + 200 ) ] ) ]
-    # the window is centred on the function, so pack it outward from the centre
-    file_window = sorted( file_window, key=lambda t: ( abs( t[ 0 ] - mid ), t[ 0 ] ) )
-    symbol      = [ ( n, text_of( n ) ) for n in span ]
-    line_level  = [ ( n, text_of( n ) ) for n in r2_order ]
-    covered_src = [ n for n in span if cover[ n ] > 0 ] + [ n for n in span if cover[ n ] == 0 ]
-    line_filt   = [ ( n, text_of( n ) ) for n in covered_src ]
-    for b in BUDGETS:
-        for name, payload in ( ( "file_head", file_head ), ( "file_window", file_window ),
-                               ( "symbol", symbol ), ( "line_filtered", line_filt ), ( "line", line_level ) ):
-            got = set( pack( payload, b ) )
-            row[ f"budget{b}_{name}" ] = len( got & gold ) / len( gold )
-        row[ f"budget{b}_symbol_fits" ] = sum( len( f"{n}: {t}\n".encode() ) for n, t in symbol ) <= b
     print( f"[{tag}] {r['instance_id']} span={len(span)} gold={len(gold)}/{len(gold_all)} "
            f"inv={len(invent)} touched={len(touched)}", file=sys.stderr )
     return row
@@ -257,18 +275,18 @@ def main():
     if a.limit:
         rows = rows[ :a.limit ]
 
-    rng = random.Random( SEED )
     skips = { "selector_refused": 0, "selector_scoped_refused": 0, "no_body": 0,
               "gold_all_outside_span": 0, "empty_inventory": 0 }
     inst, varinst, timings = [], [], []
-    gold_carried = sum( len( x[ "gold" ] ) for x in rows )
     acc = { "resolved": 0, "in_span": 0, "naming_local": 0 }
+    sink = { "skips": skips, "varinst": varinst, "timings": timings, "acc": acc,
+             "rng": random.Random( SEED ) }
+    gold_carried = sum( len( x[ "gold" ] ) for x in rows )
 
     for i, r in enumerate( rows ):
         tree = work / f"i{i:04d}"
         tree.mkdir( exist_ok=True )
-        row = measure_instance( binary, tree, r, rng, skips, varinst, timings, acc,
-                                f"{i+1}/{len(rows)}" )
+        row = measure_instance( binary, tree, r, sink, f"{i+1}/{len(rows)}" )
         if row is not None:
             inst.append( row )
     # ---- summary -------------------------------------------------------------------------------
