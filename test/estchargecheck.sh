@@ -1156,6 +1156,11 @@ strm = region( ser, r'inline std::FILE\* openChargeStream\s*\(', '}' )
 # os.h included, still fires.
 osh    = os.path.join( 'infra', 'os.h' )
 osOpen = region_oneline( osh, r'\[\[gnu::always_inline\]\] inline std::FILE\* open_memstream\(' )
+# The same seam's Windows half: os.h's Windows branch DECLARES open_memstream (one line), and src/infra/os_win32.cpp
+# DEFINES it (a temporary file whose bytes os::fflush / os::fclose publish). Both are the seam itself, exempt by name.
+osWin  = os.path.join( 'infra', 'os_win32.cpp' )
+osDecl = region_oneline( osh, r'std::FILE\* open_memstream\( char\*\* buffer, std::size_t\* size \);' )
+winDef = region( osWin, r'std::FILE\* open_memstream\(', '}' )
 inside = lambda rel, i, r, want: rel == want and r[0] is not None and r[1] is not None and r[0] <= i <= r[1]
 finish = cls[1] is not None and any( re.search( r'\[\[nodiscard\]\]\s*MemoryStreamBytes\s+finish\s*\(', l ) for l in texts[ emit ][ cls[0]:cls[1] ] )
 holders, violations = 0, []
@@ -1166,7 +1171,8 @@ for rel, lines in sorted( texts.items() ):
     closes = re.compile( r'\b(?:std::)?(fflush|fclose)\s*\(\s*(' + '|'.join( re.escape( n ) for n in sorted( names ) ) + r')\s*\)' ) if names else None
     for i, l in enumerate( lines ):
         c = code( l )
-        if re.search( r'\bopen_memstream\s*\(', c ) and not inside( rel, i, cls, emit ) and not inside( rel, i, opnr, ser ) and not inside( rel, i, osOpen, osh ):
+        if re.search( r'\bopen_memstream\s*\(', c ) and not inside( rel, i, cls, emit ) and not inside( rel, i, opnr, ser ) and not inside( rel, i, osOpen, osh ) \
+           and not inside( rel, i, osDecl, osh ) and not inside( rel, i, winDef, osWin ):
             violations.append( f'{rel}:{i + 1}: (A) open_memstream outside MemoryStream' )
         if re.search( r'\bopenChargeBuffer\s*\(', c ) and not inside( rel, i, opnr, ser ) and not inside( rel, i, strm, ser ):
             violations.append( f'{rel}:{i + 1}: (B) openChargeBuffer called outside openChargeStream' )

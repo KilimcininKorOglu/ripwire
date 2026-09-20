@@ -123,6 +123,9 @@ COLD_FILES = (
       "top of the file." ),
     ( "src/infra/diagnostics.cpp",
       "the ASSUME / DISCLOSE handlers. They run on a degrade path: once, after something has already gone wrong." ),
+    ( "src/infra/os_win32.cpp",
+      "os.h's Windows bodies. CMake compiles it only for a Windows target (cmake/Windows.cmake), so no optimization-remarks run on Linux or macOS "
+      "sees it; on POSIX every os:: call is an always_inline passthrough with no body of its own." ),
 
     # ── name-family siblings of a hot file ────────────────────────────────────────────────────────
     ( "src/pagerank.h",

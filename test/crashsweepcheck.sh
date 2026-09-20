@@ -308,6 +308,7 @@ gitmine.h	gitCommandLines	popen	1	closes	status = pclose after the loop; no exit
 gitmine.h	gitFileAuthors	popen	1	closes	continue-only loop; pclose after it
 gitmine.h	gitFileCommitCountsInDayWindow	popen	1	closes	continue-only loop; pclose after it
 gitmine.h	gitLogDecayedFileMining	popen	1	closes	continue-only loop; pclose after the flush
+infra/os_win32.cpp	system	popen	1	closes	Windows body of os::system (compiled only for Windows): the drain loop has no exit; pclose after it
 gitmine.h	gitLogFileSets	popen	1	closes	continue-only loop; pclose after the flush
 gitmine.h	gitLogNameOnlyRaw	popen	1	closes	continue-only loop; pclose after it
 gitmine.h	popenTrimmed	popen	1	closes	no exit between popen and pclose

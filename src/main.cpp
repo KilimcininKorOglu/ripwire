@@ -3900,6 +3900,8 @@ int main( int argc, char** argv )
 {
     using namespace rw;
 
+    rw::os::init_process( argc, argv );   // POSIX: nothing. Windows: UTF-8 argv, binary stdio, path-valued environment in the program's spelling
+
     if( argc >= 2 && std::string_view( argv[1] ) == "wrap" )
     { // adoption recipe (subcommand, not a flag)
         return runWrap( argc, argv, selfExecutablePath( argv[0] ) );

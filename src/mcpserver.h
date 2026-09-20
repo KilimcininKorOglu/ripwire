@@ -515,7 +515,7 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
     int one = 1;
     os::setsockopt( listenFd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof( one ) );
 
-    sockaddr_in addr{};
+    os::sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons( static_cast<uint16_t>( port ) );
     const std::string bindHost = ( host == "localhost" ) ? std::string( "127.0.0.1" ) : host;
@@ -525,7 +525,7 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
         os::close( listenFd );
         return 1;
     }
-    if( os::bind( listenFd, reinterpret_cast<sockaddr*>( &addr ), sizeof( addr ) ) != 0 )
+    if( os::bind( listenFd, reinterpret_cast<os::sockaddr*>( &addr ), sizeof( addr ) ) != 0 )
     {
         rw::emitTo( stderr, "ripwire: --listen: bind {}:{} failed: {}\n", host.c_str(), port, std::strerror( errno ) );
         os::close( listenFd );
@@ -583,7 +583,7 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
 
         // slow-loris guard: a client that opens a connection and dribbles (or stalls) must not wedge the
         // single-threaded loop. SO_RCVTIMEO makes recv() return after kRecvTimeoutSec → readRequest drops it.
-        timeval tv{ kRecvTimeoutSec, 0 };
+        os::timeval tv{ kRecvTimeoutSec, 0 };
         os::setsockopt( fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof( tv ) );
         os::setsockopt( fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof( one ) );
         // a client that drops mid-response costs only its own connection: a send() to a peer that is gone fails with EPIPE
