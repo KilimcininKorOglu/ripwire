@@ -337,9 +337,7 @@ inline constexpr std::string_view kForBudgetBytesNote =
 inline constexpr std::string_view kForRootRelProse =
     "root= is the crawl root; p= below is RELATIVE to it (single-root only; absent => p= is ingest's own path, unchanged)";
 inline constexpr std::string_view kForAtStampProse = "; at=this commit(+dirty)";
-static_assert( std::string_view( kForRootRelPathsLegendShort ).find( kForRootRelProse ) == 5
-               && std::string_view( kForRootRelAtLegendShort ).find( kForRootRelProse ) == 5
-               && std::string_view( kForRootRelAtLegendShort ).find( kForAtStampProse ) == 5 + kForRootRelProse.size(),
+static_assert( std::string_view( kForRootRelPathsLegendShort ).find( kForRootRelProse ) == 5 && std::string_view( kForRootRelAtLegendShort ).find( kForRootRelProse ) == 5 && std::string_view( kForRootRelAtLegendShort ).find( kForAtStampProse ) == 5 + kForRootRelProse.size(),
                "the root-relative --for comments and the prose the session dictionary quotes from them drifted apart" );
 
 // ONE decision about what these two readings ARE for a given answer. Two surfaces APPEND them (the CLI lens's

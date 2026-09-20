@@ -273,6 +273,22 @@ for flags in ([], ["--legend=compact"]):
     r = subprocess.run([BIN, FX, "--callers=helper"] + flags, capture_output=True, text=True)
     check(r.returncode == 0 and "<about " not in r.stdout, f"(G) CLI --callers {' '.join(flags) or '(default)'} carries no <about>")
 
+# --legend-dict reads the WHOLE argv before it prints, so one command line has one verdict whatever the order.
+# Answering at the first occurrence made `--legend-dict=roster --legend-dict=bad` exit 0 and print the roster while
+# the same two flags reversed exited 1 — a typo honoured or refused depending on where it sat (CodeRabbit 4056670839).
+for argv, wantRc, why in (
+    (["--legend-dict"],                                  0, "bare prints the dictionary"),
+    (["--legend-dict=roster"],                           0, "=roster prints the roster"),
+    (["--legend-dict", "--legend-dict"],                 0, "the same form twice is one answer, not a conflict"),
+    (["--legend-dict=bad"],                              1, "an unknown value is refused"),
+    (["--legend-dict=bad", "--legend-dict=roster"],      1, "an unknown value BEFORE a good one is refused"),
+    (["--legend-dict=roster", "--legend-dict=bad"],      1, "an unknown value AFTER a good one is refused too"),
+    (["--legend-dict", "--legend-dict=roster"],          1, "two different forms are a conflict, not a preference"),
+):
+    r = subprocess.run([BIN] + argv, capture_output=True, text=True)
+    good = r.returncode == wantRc and (bool(r.stdout) if wantRc == 0 else (not r.stdout and "--legend-dict" in r.stderr))
+    check(good, f"(G) {' '.join(argv)} -> rc {r.returncode} (want {wantRc}): {why}")
+
 # ── (H) L6 un-grouping ─────────────────────────────────────────────────────────────────────────────────────────────
 print("=== (H) a small runner-less group prints as its rows under ref ===")
 ei = [i for i, (v, _) in enumerate(CALLS) if v == "explore"][0]
