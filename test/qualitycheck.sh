@@ -435,14 +435,22 @@ fi
 # in a temp dir, which is a DIFFERENT POPULATION from the working tree, and a dead-code verdict is a property
 # of the whole population. Measured on the binary before the fix, each row's tree `git status`-clean of
 # modifications unless marked (+dirty): untracked file 1 gating row, untracked nested repo 2, export-ignore 1,
-# sparse checkout 2, skip-worktree 1 — every one of them exit 2. A shallow clone on its own read ZERO, which
-# is why the reporter's `+shallow` is a bystander and is pinned here as one.
+# sparse checkout 2, `--no-ignore` over a gitignored same-named definition 1 — every one of them exit 2. A
+# shallow clone on its own read ZERO, which is why the reporter's `+shallow` is a bystander and is pinned here
+# as one.
+#
+# AND THE OTHER DIRECTION, which is why the (U5) family exists. `git diff --quiet HEAD` is SPECIFIED to be
+# blind to a `skip-worktree` or `assume-unchanged` path, so taking it as proof that the tree IS HEAD let a
+# REAL dead-code regression inside such a file report gating="0" exit 0. A false negative on the gate's
+# central promise is worse than the false positive this work set out to remove, so the identity basis is
+# refused whenever such a path is still on disk, and (U5)/(U5c) pin both halves of that.
 #
 # EVERY ARM HAS A SENSITIVITY CONTROL, because a delta that reports nothing would pass a zero-assertion for
 # the wrong reason (CONTRIBUTING §2, "empty equals agreement"): U7 makes a REAL edit in the hardest shape and
-# requires exactly one gating dead-code row, and U1 requires the untracked file's own new-symbol debt to still
-# be reported. TMPDIR is set explicitly in every arm and the fixture directories are neutrally named, so
-# neither this gate's own location nor the temp dir's can decide a verdict through isFixturePath.
+# requires exactly one gating dead-code row, U1 requires the untracked file's own new-symbol debt to still be
+# reported, and every zero arm pins `head_basis=` so that a zero from the WRONG floor cannot pass for the
+# right one. TMPDIR is set explicitly in every arm and the fixture directories are neutrally named, so neither
+# this gate's own location nor the temp dir's can decide a verdict through isFixturePath.
 UROOT="$WORK/unchanged"; mkdir -p "$UROOT"
 UTMP="$UROOT/scratch"; mkdir -p "$UTMP"
 ug(){ git -c user.name=qc -c user.email=qc@x -c core.hooksPath=/dev/null "$@"; }
@@ -470,8 +478,13 @@ uzero(){  # $1 = label, rest = urun args
     reg="$( UATTR regressions )"; gat="$( UATTR gating )"; pre="$( UATTR preexisting-worse )"; new="$( UATTR new-symbol )"
     if ! printf '%s' "$UOUT" | grep -q '<quality-delta '; then
         no "(U) $label: no quality-delta document at all (exit $URC) — the run did not produce a report"
+    elif [ "$( UATTR head_basis )" != "identity" ]; then
+        # WHICH floor answered is half the claim. A zero from the archived tree here would be a DIFFERENT
+        # (and, on these shapes, historically wrong) answer that happens to read the same, so the arm pins
+        # the basis as well as the counts — see the (U5) family for the shapes that must NOT take it.
+        no "(U) $label: head_basis=$( UATTR head_basis ) — the identity basis was not taken, so this zero is not the one the arm is about"
     elif [ "$URC" -eq 0 ] && [ "$gat" = "0" ] && [ "$pre" = "0" ] && [ "$reg" = "$new" ]; then
-        ok "(U) $label: gating=0 preexisting-worse=0 exit 0 (regressions=$reg, all new-symbol)"
+        ok "(U) $label: head_basis=identity gating=0 preexisting-worse=0 exit 0 (regressions=$reg, all new-symbol)"
     else
         no "(U) $label: exit $URC regressions=$reg gating=$gat preexisting-worse=$pre new-symbol=$new — a no-op diff gated"
     fi
@@ -521,16 +534,52 @@ uzero "a tracked file marked export-ignore" "$UROOT/exportignore"
 umk "$UROOT/sparsesrc"
 ug clone -q "$UROOT/sparsesrc" "$UROOT/sparse" >/dev/null 2>&1
 if ( cd "$UROOT/sparse" && ug sparse-checkout init --cone && ug sparse-checkout set lib ) >/dev/null 2>&1; then
+    # Cone-mode sparse sets skip-worktree on every excluded path — the same bit (U5) refuses over — and this
+    # arm's uzero REQUIRES head_basis=identity, which is the point: those files are DELETED from disk, so they
+    # are absent from both sides of a self-comparison and can lie about nothing. Present-on-disk is what (U5)
+    # tests, and the two arms together pin that the distinction is the one being made.
     uzero "sparse checkout hiding a tracked caller" "$UROOT/sparse"
 else
     no "(U4) sparse-checkout is unavailable here — the arm would be vacuous"
 fi
 
-# U5 skip-worktree over an edited caller: the index says clean, the bytes are not.
-umk "$UROOT/skipworktree"
-printf 'def driver():\n    return 0\n' > "$UROOT/skipworktree/app/main.py"
-( cd "$UROOT/skipworktree" && ug update-index --skip-worktree app/main.py ) >/dev/null 2>&1
-uzero "skip-worktree over an edited caller" "$UROOT/skipworktree"
+# U5 THE TWO INDEX BITS GIT'S OWN DIFF IS SPECIFIED NOT TO READ. `git update-index --skip-worktree` and
+# `--assume-unchanged` both make `git diff --quiet HEAD` exit 0 over a file whose on-disk bytes genuinely
+# differ from HEAD — that is the entire purpose of the bits. Treating that exit code as "the tree IS HEAD"
+# turned a REAL dead-code regression into gating="0" exit 0: a false NEGATIVE, which is a worse answer than
+# the false positive the identity basis exists to remove. So the identity basis is refused whenever such a
+# path is still ON DISK, and these arms are the proof. They must read exactly like the archived comparison,
+# because that is what answers them.
+ublind(){  # $1 = label, $2 = git update-index flag
+    local label="$1" flag="$2"
+    local d; d="$UROOT/blind$( printf '%s' "$flag" | tr -cd 'a-z' )"   # own dir per bit: one `local` cannot expand a name it is still assigning
+    umk "$d"
+    printf 'def driver():\n    return 0\n' > "$d/app/main.py"                 # a REAL edit: the only caller, gone
+    ( cd "$d" && ug update-index "$flag" app/main.py ) >/dev/null 2>&1
+    if [ -n "$( cd "$d" && ug status --porcelain )" ]; then
+        no "(U5) $label: git status is NOT clean, so the arm does not test what it claims"
+        return
+    fi
+    urun "$d"
+    local dead; dead="$( printf '%s' "$UOUT" | grep -c 'kind="dead-code" sym="zeta_helper"' )"
+    { [ "$URC" -eq 2 ] && [ "$( UATTR gating )" = "1" ] && [ "$dead" -eq 1 ]; } \
+        && ok "(U5) $label: the hidden edit STILL gates one dead-code row (exit 2)" \
+        || no "(U5) $label: exit $URC gating=$( UATTR gating ) dead rows=$dead — a real regression was swallowed by an index bit"
+    [ -z "$( UATTR head_basis )" ] \
+        && ok "(U5) $label: head_basis is absent — the archived HEAD tree answered, and the root says so" \
+        || no "(U5) $label: head_basis=$( UATTR head_basis ) — the identity basis was taken over bytes git will not read"
+}
+ublind "skip-worktree over an edited caller"     --skip-worktree
+ublind "assume-unchanged over an edited caller"  --assume-unchanged
+
+# U5c the refusal must not become its own source of noise: a flagged file whose content still IS HEAD's
+# reports zero through the archived comparison, and says so.
+umk "$UROOT/blindclean"
+( cd "$UROOT/blindclean" && ug update-index --skip-worktree app/main.py ) >/dev/null 2>&1
+urun "$UROOT/blindclean"
+{ [ "$URC" -eq 0 ] && [ "$( UATTR gating )" = "0" ] && [ -z "$( UATTR head_basis )" ]; } \
+    && ok "(U5c) a flagged but UNEDITED file reports zero through the archived comparison (head_basis absent)" \
+    || no "(U5c) exit $URC gating=$( UATTR gating ) head_basis=$( UATTR head_basis ) — refusing the identity basis introduced noise of its own"
 
 # U6 crawl flags that reached ONE side of the delta only.
 umk "$UROOT/noignore"

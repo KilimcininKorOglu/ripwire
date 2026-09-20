@@ -4148,11 +4148,22 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
 // archive path's population equal by construction is the follow-on, and the starter kit
 // (prompts/help-wanted/quality-delta-unchanged-tree-zero.md) is where its per-class decisions live.
 
-// Is every TRACKED path under `root` byte-identical to HEAD? `git diff --quiet HEAD -- .` answers staged AND
-// unstaged changes, additions and deletions of tracked paths, in one exit code and with no output to parse.
-// Untracked files are deliberately NOT a difference here — they are handled by the baseline mask below. The
-// `-- .` pathspec scopes the question to the crawl root when the root is a SUBDIRECTORY of the repository, so
-// an edit elsewhere in the repo cannot take the basis away from a root that never crawls it. Any git failure
+// THE FAST PRE-CHECK, and ONLY that. `git diff --quiet HEAD -- .` answers staged and unstaged changes,
+// additions and deletions of tracked paths, in one exit code with no output to parse — but it is SPECIFIED to
+// be blind to two index bits, and being blind is the whole point of them:
+//
+//   * `git update-index --skip-worktree PATH`      — "the file on disk is not the file I committed; do not look"
+//   * `git update-index --assume-unchanged PATH`   — "trust the stat cache; do not read the bytes"
+//
+// A tracked file carrying either one can hold a REAL edit — including one that deletes a function's only
+// caller — and `git diff` still exits 0. Trusting that exit code alone as "the working tree IS HEAD" turned a
+// genuine gating dead-code regression into `gating="0"` exit 0, silently: a false NEGATIVE, which is a worse
+// answer than the false positive the identity basis exists to remove. So this function is the cheap FIRST of
+// two conditions, and `indexHidesPresentContent` below is the second; `computeHeadBasis` requires both.
+//
+// The `-- .` pathspec scopes the question to the crawl root when the root is a SUBDIRECTORY of the repository,
+// so an edit elsewhere in the repo cannot take the basis away from a root that never crawls it. Untracked
+// files are deliberately NOT a difference here — they are handled by the baseline mask below. Any git failure
 // (not a repo, unborn HEAD, git absent) reads as "not identical" and falls back to the archived baseline.
 inline bool workingTreeMatchesHead( const std::string& root )
 {
@@ -4179,6 +4190,55 @@ inline std::vector<std::string_view> splitNulPaths( const std::string& listing, 
     }
     std::sort( out.begin(), out.end() );
     return out;
+}
+
+// THE SECOND CONDITION: does any crawled path carry an index bit that makes the check above blind, AND still
+// sit on disk for the crawl to read? `git ls-files -v` is the one command that reports both bits — a `S` tag
+// for skip-worktree, a LOWERCASE tag for assume-unchanged — and it is asked here explicitly rather than
+// inferred, because git's own diff will never mention them.
+//
+// PRESENT is half the test, and it is what keeps a sparse checkout on the identity basis. Cone-mode
+// `git sparse-checkout` sets skip-worktree on every excluded path and DELETES those files, so they are absent
+// from both sides of a self-comparison and cannot lie about anything; the identity basis is exactly right
+// there, and the gate arm for it stays green. A flagged file that is still on disk is the dangerous one: the
+// crawl reads bytes that `git diff` has promised not to look at.
+//
+// WHY REFUSAL AND NOT A CONTENT TEST. The reviewed alternative was to hash each flagged file
+// (`git hash-object`) against `git rev-parse HEAD:path` and keep the identity basis when they agree. That buys
+// back one case — a file someone flagged but never edited — at the cost of two git children per flagged path
+// and a new quoting/filter/gitlink surface, on a tree where the flag exists precisely BECAUSE the bytes
+// differ. Refusal is provable, costs nothing when no path is flagged (the overwhelming case), and its
+// fallback is the archived comparison that was in force before this lane and that the review confirmed gates
+// such a tree correctly. `head_basis=` on the root says which of the two answered.
+//
+// A git failure returns true — "assume it hides something" — so an unreadable index can only ever COST the
+// identity basis, never grant it.
+inline bool indexHidesPresentContent( const std::string& root )
+{
+    const std::string listing = gitOneLine( root, "ls-files -v -z -- . 2>/dev/null" );
+    if( listing.empty() )
+    {
+        return !gitOneLine( root, "ls-files -z -- . 2>/dev/null" ).empty();   // empty because there is nothing, or because git failed?
+    }
+    for( std::string_view entry : splitNulPaths( listing, std::string{} ) )   // "<tag> <path>" — no prefix to strip
+    {
+        if( entry.size() < 3 || entry[1] != ' ' )
+        {
+            continue;
+        }
+        const char tag = entry[0];
+        if( tag != 'S' && !( tag >= 'a' && tag <= 'z' ) )
+        {
+            continue;   // 'H' and the other uppercase tags are ordinary index states git's diff does read
+        }
+        std::error_code   ec;
+        const std::string abs = root + "/" + std::string( entry.substr( 2 ) );
+        if( std::filesystem::exists( std::filesystem::symlink_status( std::filesystem::path( abs ), ec ) ) )
+        {
+            return true;   // flagged AND on disk: the crawl reads bytes `git diff` promised not to look at
+        }
+    }
+    return false;
 }
 
 // Per-fileId flags for computeSnapshot: 1 = this crawled file is TRACKED AT HEAD and therefore part of the
@@ -4246,7 +4306,11 @@ inline HeadBasis computeHeadBasis( const std::string& root, const IngestResult& 
                                    const std::vector<std::string>& excludes = {} )
 {
     HeadBasis out;
-    if( gitRepoHasHistory( root ) && workingTreeMatchesHead( root ) )
+    // THREE conditions, cheapest first, and all three are required. The third — indexHidesPresentContent — is
+    // not a refinement of the second: `git diff` is SPECIFIED to answer "clean" for a skip-worktree or
+    // assume-unchanged path, so without it a real regression in such a file is compared against a baseline
+    // that already contains the edit, and vanishes. See the two functions' own comments.
+    if( gitRepoHasHistory( root ) && workingTreeMatchesHead( root ) && !indexHidesPresentContent( root ) )
     {
         std::vector<char> mask;
         if( baselineFileMaskAtHead( root, ing, rootPath, mask, out.notAtHead ) )

@@ -181,6 +181,11 @@ struct DeltaBasis
     std::size_t                                         registerMacroExcluded = 0;   // P2.2: disclosed dead-code exemption count
     std::size_t                                         apiNewSurface         = 0;   // Q-DIAL-4: new PUBLIC symbols this change added — the count that replaced one never-gating row each
     std::size_t acksBadLines = 0;   // 2026-09-06: .ripwire_quality_acks lines skipped as unparseable (disclosed on the root)
+    // #228: WHICH basis produced baseSel.snapshot when the marker is one of the git-HEAD family. true = the
+    // identity basis (the tracked tree already IS HEAD, so the baseline is this tree's own snapshot);
+    // false = the archived HEAD tree. The two are materially different claims about a zero, so the root says
+    // which one it is — head_basis= below.
+    bool headBasisIdentity = false;
 };
 
 // Returns an EXIT CODE when there is nothing to compare against (already reported), nullopt when `out` holds
@@ -260,7 +265,8 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
             std::fputs( noBaselineFatalMessage( baselineFile, out.baseSel ).c_str(), stderr );
             return 1;
         }
-        out.baseSel.snapshot = std::move( basis.snapshot );
+        out.baseSel.snapshot   = std::move( basis.snapshot );
+        out.headBasisIdentity  = basis.identity;
         if( basis.notAtHead != 0 )
         {
             // The basis is stated where it is not the obvious one: these files are in the tree and in the graph,
@@ -611,6 +617,16 @@ inline constexpr const char* kQdBaseRefPair =
     "that one of the ten kinds, short-horizon-churn, cannot be measured at all in that form: it needs git "
     "history at the tree being judged, and both trees are materialized OUT of the repo into temp dirs. Its "
     "silence in such a report is not evidence that nothing churned. ";
+// #228 — emitted only when head_basis= is on the root, i.e. only when the identity basis produced the floor.
+// The attribute exists because a zero from a self-comparison and a zero from an archived comparison are
+// DIFFERENT CLAIMS, and the honesty rule is that a zero means "none found", never "none exists". Its absence
+// on a git-HEAD run is not a silent no: it is the archived HEAD tree, which is what every git-HEAD marker
+// meant before this attribute existed.
+inline constexpr const char* kQdHeadBasisLegend =
+    "head_basis=\"identity\" means the tracked files already WERE HEAD, so the floor is this tree's own "
+    "snapshot: a comparison with itself. Files HEAD does not TRACK are crawled but are not in that floor, so "
+    "their symbols read as new. Absent: the archived HEAD tree. ";
+
 // at= is absent in the ref-pair form, so its sentence is too.
 inline constexpr const char* kQdAtLegend =
     "at= is the git commit (plus a dirty marker when the working tree differs) this list was computed at. ";
@@ -750,6 +766,7 @@ struct QualityDeltaLegendParts
     bool                                          scoped;        // a scope partition or a foreign-ack row is in the document
     bool                                          anyForeignAck; // foreign-acks= is on the root, with foreign-scope sa rows under it
     std::size_t                                   baselineAbsorbed; // H11: baseline_absorbed= on the root (0 = attribute absent)
+    bool                                          headBasisIdentity; // #228: head_basis= is on the root (false = attribute absent)
 };
 
 // A DEFINITION IS EMITTED WHEN THE THING IT DEFINES IS IN THE DOCUMENT. Nothing is dropped and no limit is
@@ -782,6 +799,10 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
     if( p.baselineAbsorbed > 0 )
     {
         std::fputs( kQdBaselineAbsorbedLegend, stdout );   // H11 — the attribute that re-reads the exit code
+    }
+    if( p.headBasisIdentity )
+    {
+        std::fputs( kQdHeadBasisLegend, stdout );          // #228 — the attribute that says WHICH git-HEAD floor this is
     }
 
     // (2) at= is omitted in the ref-pair form, so its sentence follows the attribute, not the verb.
@@ -1370,11 +1391,13 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             // H11: the JSON twin of baseline_absorbed=, under the same absent-means-none rule as the XML half.
             const std::string absorbedJson = baselineAbsorbed == 0 ? std::string()
                                             : ",\"baseline_absorbed\":" + std::to_string( baselineAbsorbed );
+            // #228: the JSON twin of head_basis=, under the same absent-means-the-archived-tree rule.
+            const std::string headBasisJson = basis.headBasisIdentity ? std::string( ",\"head_basis\":\"identity\"" ) : std::string();
             rw::emitTo( stdout, "{{\"baseline\":\"{}\",\"regressions\":{},\"minor\":{},\"acked\":{},\"stale\":{},"
-                         "\"preexisting-worse\":{},\"new-symbol\":{},\"gating\":{},\"register-macro-excluded\":{},\"api-new-surface\":{},\"at\":{}{}{}{}{}{},\"r\":[",
+                         "\"preexisting-worse\":{},\"new-symbol\":{},\"gating\":{},\"register-macro-excluded\":{},\"api-new-surface\":{},\"at\":{}{}{}{}{}{}{},\"r\":[",
                          jsonStr( baseMarkerJ ).c_str(), regs.size(), minorCount, ackedCount, staleAcks.size(),
                          preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface, atJsonJ.c_str(), refs.jsonAttrs.c_str(),
-                         identityJson.c_str(), scopeJson.c_str(), configWarnJson.c_str(), absorbedJson.c_str() );
+                         identityJson.c_str(), scopeJson.c_str(), configWarnJson.c_str(), absorbedJson.c_str(), headBasisJson.c_str() );
             // P1: one row emitter, called for both halves of the scope partition — the disclosed rows carry
             // the identical key set, so nothing about a row changes by being someone else's. `gatingAllowed`
             // is the ONE difference: an out-of-scope row is not what the exit code fires on, so claiming
@@ -1470,12 +1493,16 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // one set of values rather than restated as a second condition that could drift from it.
         emitQualityDeltaLegend( { baseSel.marker, refPair, identityAttrs, !saRows.empty(), ackedCount > 0,
                                   basis.registerMacroExcluded > 0, configDiag.total() > 0, regs, outOfScope,
-                                  scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed } );
+                                  scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed,
+                                  basis.headBasisIdentity } );
         const char* baseMarker = baseSel.marker;    // R3: ditto — one seam decides staleness AND names it
         // 2026-09-06: what the sidecar readers skipped, on the root (absent means none) — see kQdBaseHeadUnreadable
         std::string sidecarHealthAttrs;
         if( baseSel.sidecarBadLines > 0 ) { sidecarHealthAttrs += " baseline_bad_lines=\"" + std::to_string( baseSel.sidecarBadLines ) + "\""; }
         if( basis.acksBadLines > 0 )      { sidecarHealthAttrs += " acks_bad_lines=\"" + std::to_string( basis.acksBadLines ) + "\""; }
+        // #228: present-only, and its absence is the archived HEAD tree — the floor every git-HEAD marker
+        // named on its own before this attribute existed.
+        if( basis.headBasisIdentity )     { sidecarHealthAttrs += " head_basis=\"identity\""; }
         // at= anchors this regression list to the commit (+dirty state) it was computed against.
         rw::emitTo( stdout, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\" api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
                      baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface,
