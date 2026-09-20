@@ -227,10 +227,13 @@ field un-places every field after it. A `modeled="1"` number that agrees with th
 - Rule of thumb: `--for` for a task you're about to do; `--query` for a vocabulary you're hunting. Both shine
   on specific technical wording; for broad common-word asks, plain `rg` + one read can still win.
 
-**Budgeting trap:** `--top-k` is inert on `--for` — the run warns on stderr and emits the full bundle anyway.
-Narrow `--for` with its own arguments: `--signatures-only` (no auto-bodies), `--token-budget=N` (shapes the
-bundle to fit), `--detail=N` (full bodies for just the top N). `--top-k` does shape `--query` — and pair it
-with `--expand` as `--top-k=0` whenever you want one body without the ranked map riding along.
+**Budgeting trap:** a positive, explicit `--top-k` is inert on plain `--for` — the run warns on stderr and
+emits the full bundle anyway. (`--for --format=candidates --top-k=N` is different: the export consumes the
+flag and caps the rows, no warning. `--for --top-k=0` is refused by the payload-only guard.)
+Narrow plain `--for` with its own arguments: `--signatures-only` (no auto-bodies), `--token-budget=N` (shapes
+the bundle to fit), `--detail=N` (full bodies for just the top N). `--top-k` does shape `--query` — and pair
+it with `--expand` as `--top-k=0` when SYM is an *ambiguous* bare name; an unambiguous single match already
+drops the map by default (`topk_default="0"`).
 
 ## When the fixed verbs can't phrase the question
 

@@ -683,9 +683,13 @@ to do with it.** Two shapes get the most out of it, and one gets nothing.
 <summary>The three controls that decide what it costs — <b>a budget</b> (<code>--token-budget</code> / <code>--top-k</code>), <b>routing</b> (<code>--help-task</code>), and <b>the skills</b> that teach an agent when <i>not</i> to reach for it</summary>
 
 1. **A budget.** `--token-budget=N` caps the bundle; `--top-k=N` caps the rows **of the default map,
-   `--query`, `--format=candidates`, `--recall` and `--graph-query` — it does not shape `--for`**. On
-   `--for` it is read by nothing: the run prints a stderr note (`--top-k is not read by --for`) and
-   still emits the full bundle. Narrow `--for` with its own arguments instead — `--signatures-only`
+   `--query`, `--format=candidates`, `--recall` and `--graph-query` — it does not shape plain `--for`**.
+   On `--for`, a *positive, explicit* `--top-k` is read by nothing: the run prints a stderr note
+   (`--top-k is not read by --for`) and still emits the full bundle. Two neighbours of that shape are
+   different and neither warns: `--for --format=candidates --top-k=N` *does* consume the flag (the
+   candidate export composes with it and caps the rows), and `--for --top-k=0` is refused outright by the
+   payload-only guard (`--top-k=0` needs a payload verb), not warned-and-emitted. Narrow plain `--for`
+   with its own arguments instead — `--signatures-only`
    (drop the auto-bodies), `--token-budget=N` (shapes the bundle to fit), `--detail=N` (full bodies for
    just the top N). Unbudgeted `--for` returns
    a rich terminal bundle by design — right when it ends the question, wasteful when it does not.
@@ -704,9 +708,9 @@ to do with it.** Two shapes get the most out of it, and one gets nothing.
 |---|---|---|
 | `ripwire . --for="…" --top-k=5` | `ripwire . --for="…" --signatures-only` (or `--token-budget=N`, `--detail=N`) | `--top-k` is inert on `--for`: the run warns on stderr and emits the full bundle anyway, so the agent *believes* it narrowed the output and did not. |
 | `ripwire . --query="…"` as the default lens | `ripwire . --for="…"` | `--query` is the raw BM25 ranking — the binary's own help calls it debug and says "use --for". It is the right tool for hunting a vocabulary, the wrong default for a task. |
-| `ripwire . --expand=SYM` | `ripwire . --expand=SYM --top-k=0` | Without `--top-k=0` the ~200-symbol ranked map (~10K est_tokens) rides along with the one body you asked for. |
+| `ripwire . --expand=SYM` where SYM is an **ambiguous** bare name | `ripwire . --expand=SYM --top-k=0` (or name it exactly: `--expand=FILE:NAME`) | A multi-match name keeps the ranked map — there IS something to disambiguate — so ~9K est_tokens of map ride along with the bodies. An **unambiguous** single match already defaults to `--top-k=0` on its own (disclosed as `topk_default="0"`); no flag needed there. |
 | `--callers=<route handler>` expecting routes | find the URL in the project's own docs (e.g. a feature map), then `--expand` the handler | Framework route handlers have no callers in the graph — the decorator reaches them, not project code. Empty `--callers` on a handler is the design, not a bug. |
-| `ripwire <dir-of-repos> …` | `cd` into ONE checkout first | The map is per-repository; pointing it at a directory *of* repositories is the expensive mistake the wrapper guards exist to refuse. |
+| `ripwire <dir-of-repos> …` (ONE root that happens to contain checkouts) | `cd` into ONE checkout first | Nothing refuses this: the crawl silently walks the nested repos and merges them into one corpus, so you pay for a map of everything and rank across unrelated codebases. Distinct from the real multi-root feature, which is N **explicit** positional roots (`ripwire dir1 dir2 … <verb>`, 2–16 checkouts merged on purpose). |
 
 **What ripwire does not replace** — reach for `grep`/`read` here even when a verb looks close:
 
