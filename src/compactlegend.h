@@ -1684,7 +1684,10 @@ inline bool closeRosterGaps( std::string& doc )
     std::string add;
     for( const std::uint16_t i : compactPresentTerms( compactDocHead( view, root ), view ) )
     {
-        const CompactCompletenessTerm& t = kCompactCompletenessTerms[ i ];
+        // compactPresentTerms returns a JOINT index over both reading tables, so it is resolved by compactReading and
+        // never by subscripting the first table — which is only 92 long and would be read past for every key-qualified
+        // reading the second table holds.
+        const CompactCompletenessTerm& t = compactReading( i );
         if( !commentsSpellAttr( view, t.attr ) && add.find( std::string( t.attr ) + "=" ) == std::string::npos )
         {
             add += ' ';
