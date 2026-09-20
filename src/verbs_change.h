@@ -77,13 +77,18 @@ std::optional<int> runAffected( const MainDispatch& d )
     // changed SYMBOL (impact analysis for review, and — §P11.2a — for change PLANNING).
     if( !cfg.affectedFiles.empty() )
     {
-        // §P11.2a: the map was file-granular, so "which tests cover the function I am about to change?" had
-        // to be widened to its whole FILE first, over-reporting the obligation. Only the SEED SET changes
-        // here: everything below (transitiveCallers → isTestPath → path-sorted rows) is the same traversal
-        // --affected always ran. The file-first argument rule and its per-item refusal live in
-        // testmap.h::resolveAffectedSeeds; only the did-you-mean wording is main's (withDidYouMean is).
-        const rw::AffectedSeeds sel = rw::resolveAffectedSeeds( ing, cfg.affectedFiles );
-        if( !sel.ok )
+        // M12: --affected carried no root= at all and printed every <test p=> row as the raw ingest-stored
+        // path ("./test/…" on a relative root), unlike --situ/--test-gate/--pr-context/--handoff, whose
+        // tests_to_run rows are all root-relative — the L1 finding: "same three tests, same file, two
+        // spellings — the four tests_to_run lists cannot be diffed with sort | uniq".
+        const bool afSingleRoot = ing.realPaths.empty() && cfg.roots.size() == 1;
+        // lane/t10-mcp-coverage: the resolve-and-render body moved verbatim into testmap.h::writeAffectedReport
+        // — the ONE renderer this CLI arm and the MCP `affected` verb both call, so the two surfaces can never
+        // hand-copy-drift apart (see that function's own header comment). Only the two refusals stay here,
+        // in the CLI's own stderr idiom (--affected=" prefix, did-you-mean, exit 1); the success bytes below
+        // are unchanged from before this split.
+        const rw::AffectedReportResult r = rw::writeAffectedReport( stdout, ing, g, d.root, cfg.affectedFiles, afSingleRoot );
+        if( r.badSelector )
         {
             // §M7 (W3FIX): resolveAffectedSeeds accepts file:name and path::scope::name too, so a bad item gets
             // the shared file-half diagnosis appended to this arm's own two-reading sentence (which explains
@@ -91,81 +96,18 @@ std::optional<int> runAffected( const MainDispatch& d )
             // H6/F18: the item was tried as a PATH first, so the PATH near-miss comes first too — the
             // pre-fix arm offered only selectorFaultClause's symbol suggestion and answered `--affected=tow.c`
             // with "did you mean 'TOOLS'?" while `two.c` sat in the file list.
-            const std::string affectedNearPath = rw::nearestIndexedFileClause( ing, sel.badItem );
+            const std::string affectedNearPath = rw::nearestIndexedFileClause( ing, r.badItem );
             rw::emitTo( stderr, "ripwire: --affected: '{}' matches no indexed file path (as a path pattern) and no indexed "
                                   "symbol (as a symbol name; file:name and path::scope::name also accepted){}{}\n",
-                          sel.badItem.c_str(), affectedNearPath.c_str(),
-                          affectedNearPath.empty() ? rw::selectorFaultClause( ing, sel.badItem, "--affected=" ).c_str() : "" );
+                          r.badItem.c_str(), affectedNearPath.c_str(),
+                          affectedNearPath.empty() ? rw::selectorFaultClause( ing, r.badItem, "--affected=" ).c_str() : "" );
             return 1;
         }
-        const std::vector<NodeId>& seeds = sel.seeds;
-        if( seeds.empty() ) { rw::emitTo( stderr, "ripwire: --affected matched no symbols: {}\n", std::string_view( cfg.affectedFiles.data(), cfg.affectedFiles.size() ) ); return 1; }
-        // F3: the caller walk and the matched-test rows are assembled in testmap.h::affectedAnswer, next to the
-        // seeding whose test partition constrains them (lane-L8 found-not-fixed #1: seeding the walk with a
-        // matched test file's own symbols subtracted the very tests that reach the change).
-        const rw::AffectedAnswer          answer    = rw::affectedAnswer( ing, g, sel );
-        const std::vector<NodeId>&        reach     = answer.reach;
-        const std::vector<std::uint32_t>& testFiles = answer.testFiles;
-        std::vector<char> esc;
-        const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
-        // M12: --affected carried no root= at all and printed every <test p=> row as the raw ingest-stored
-        // path ("./test/…" on a relative root), unlike --situ/--test-gate/--pr-context/--handoff, whose
-        // tests_to_run rows are all root-relative — the L1 finding: "same three tests, same file, two
-        // spellings — the four tests_to_run lists cannot be diffed with sort | uniq".
-        const bool        afSingleRoot = ing.realPaths.empty() && cfg.roots.size() == 1;
-        const std::string afRootPrefix = afSingleRoot ? rw::sarif::rootPrefixOf( cfg.roots[0] ) : std::string();
-        const std::string afRootAttr   = afSingleRoot ? ( " root=\"" + ex( cfg.roots[0] ) + "\"" ) : std::string();
-        // No multi-root branch inside the lambda (situ.h's tgPathRel is spelled the same way, deliberately):
-        // afRootPrefix is EMPTY under multi-root, and a merged `<label>/<rel>` identity carries neither a
-        // leading "./" nor that prefix, so rootRelativeUri returns it byte-identical. One code path, one
-        // spelling rule, and the multi-root case is a value rather than a branch.
-        const auto         afPathRel   = [ & ]( std::uint32_t fileId ) -> std::string_view
+        if( r.noSeeds )
         {
-            return rw::sarif::rootRelativeUri( ing.files[ fileId ], afRootPrefix );
-        };
-        // §P11.4 / E1: the rows are rendered FIRST (testmap.h's seam: run= where a REAL runner is derivable,
-        // runner-less rows with equal evidence grouped into one <g> row) so the legend below can splice the
-        // run=/run_unknown=/<g> clause only when there are rows for it to be a rule about — a tests="0" answer,
-        // the common clean case, pays nothing for it. The index is constructed here (not hoisted into
-        // MainDispatch) because it is lazy — a run with no test row reads no script.
-        const rw::TestRunnerIndex   runners( ing, d.root );
-        std::vector<rw::TestRowOut> afRows;
-        afRows.reserve( answer.rows.size() );
-        for( rw::TestRow row : answer.rows )   // by value: a matched test file's changed= is spelled seed_kind="test" on this verb
-        {
-            const std::uint32_t f = row.fileId;
-            row.changed           = false;
-            afRows.push_back( { f, std::string( afPathRel( f ) ), std::string( answer.isSeedTestFile[f] ? " seed_kind=\"test\"" : "" ) + rw::testRowEvidence( row, rw::EvDialect::Xml ) } );
+            rw::emitTo( stderr, "ripwire: --affected matched no symbols: {}\n", std::string_view( cfg.affectedFiles.data(), cfg.affectedFiles.size() ) );
+            return 1;
         }
-        const rw::JoinedTestRows afRowsXml = rw::testRowsList( runners, afRows, rw::TestRowShape{ rw::RowDialect::Xml, "test" }, ex );
-        // seeded_by= is the honesty half of the file-first rule: the two readings answer DIFFERENT questions
-        // over the same argument string and return different counts, so which one fired is a fact about the
-        // measurement, not a detail. seeds= is the resolved seed-symbol count (1 for a lone function, ~84
-        // for a header), which is what makes the two readings comparable at a glance.
-        rw::emitTo( stdout, "<!-- ripwire affected: test files that transitively reach the changed files/symbols (run these); seeded_by= says which reading the argument took. "
-                     "seed_test_files= how many of the matched files are TEST files: a test cannot reach a change it is part of, so its own symbols are not seeds of the "
-                     "caller walk and its row carries seed_kind=\"test\" — it is listed because the argument matched it (it changed, run it), not because it reaches the change. "
-                     "script_gates_unmodelled= counts test/*.sh runners in the corpus (a path count; not every one invokes the binary) — "
-                     "script-to-binary edges are NOT modelled, so those gates are invisible to this walk and never counted in tests=/reached=. "
-                     "{}"     // H2H-Graft F1: the evidence-order clause, testmap.h's ONE wording (changed= is spelled seed_kind="test" here: the argument matched it)
-                     "order=evidence says so on the root; partners= counts the partner rows. "
-                     "{}"     // M21(b)/E1: the run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
-                     "{}{}-->{}", rw::kTestRowEvidenceLegend, rw::runHintClauseIfRows( afRowsXml.files, rw::runsAreRootRelative( ing, d.root ) ),
-                     // H1: the decl→def residue resolveAffectedSeeds summed over the symbol items. A file:name item whose
-                     // definitions were dropped seeded the walk with declarations alone, which reached the reader as a bare
-                     // tests="0" — on the verb whose answer is the list of tests to run. Exactly when the root carries it.
-                     rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Affected, sel.unprovenDefs > 0 ).c_str(),
-                     rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( afSingleRoot ) );
-        rw::emitTo( stdout, "<affected changed=\"{}\" seeded_by=\"{}\" seeds=\"{}\" seed_test_files=\"{}\" tests=\"{}\" reached=\"{}\"{} script_gates_unmodelled=\"{}\""
-                     " order=\"evidence\" partners=\"{}\"{}{}>",
-                     ex( cfg.affectedFiles ).c_str(), rw::affectedSeededBy( sel ), seeds.size(), sel.seedTestFiles.size(), testFiles.size(), reach.size(),
-                     rw::unprovenDefsAttrXml( sel.unprovenDefs ).c_str(),   // H1: beside the zero it qualifies; absent at zero
-                     scriptGatesUnmodelledCount( ing ),
-                     rw::testRowPartnerCount( answer.rows ),      // F1: how many rows stand on the name convention alone or as well
-                     afRootAttr.c_str(),                          // M12: root= says what every <test p=> below is relative to
-                     rw::graphCountFloorAttrXml( g ).c_str()  );   // H5/M15: gauge + marker; tests=/reached= are a transitive-caller walk over the name-based CSR
-        rw::emitRaw( stdout, afRowsXml.text.c_str() );   // E1: the rows rendered above — runner-less rows with equal evidence as ONE <g> row, the multiset unchanged
-        rw::emitRaw( stdout, "</affected>" );
         return 0;
     }
     return std::nullopt;

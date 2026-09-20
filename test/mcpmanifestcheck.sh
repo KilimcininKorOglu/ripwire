@@ -248,7 +248,18 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # owner authorized on 2026-09-13 with the measured number; #214's names the response shape for two answers
 # that carry no legend at all), and the merge only makes them visible together. Headroom after this line:
 # 68 B, again less than one declared argument, which is rule 5 above working.
-CEILING = 43500
+# RE-ANCHORED 2026-09-19 (lane/t10-mcp-coverage): 43,500 -> 46,600, measured 46,371 (from 43,432, 31 tools).
+# TWO NEW ADVERTISED TOOLS, not a prose trim: `rank_by` (the --rank-by=pagerank|authority|hub|rrf MCP twin)
+# and `affected` (the --affected=F1,F2|SYM MCP twin) — closing the exact ref-eligibility gap
+# graft-iter2a.md §9 measured (these two verbs had no MCP form at all). Each carries a routing sentence
+# (pinned below) plus its own declared argument list, same as every tool already in the manifest.
+# Attributed tool by tool against a build of origin/main (561636336): rank_by +636 B description +481 B
+# schema = 1,117 B; affected +790 B description +610 B schema = 1,400 B; the remaining +422 B is JSON
+# envelope structure (two more {"name":…,"annotations":{…}} objects in the tools array, not counted in
+# either sum above) — 2,939 B in all, nothing else moved. Same rule as every entry above: the ceiling moves
+# UP only for a DECLARED tool or argument the contract obliges to carry a description, in the commit that
+# lands it, with its bytes attributed here — never for prose. Headroom after this line: 229 B.
+CEILING = 46600
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )

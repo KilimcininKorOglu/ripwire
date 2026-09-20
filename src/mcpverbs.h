@@ -35,6 +35,7 @@
 #include "sarif.h"         // G1 (2026-08-15): rw::sarif::rootRelativeUri/rootPrefixOf — grepHitsJson's root-relative `file` (CLI ≡ MCP, no re-derivation)
 #include "slice.h"         // lane/tc-sliceat: the shared --slice / MCP slice def-use core (sliceBundleText — ONE emitter, two surfaces)
 #include "fielduses.h"     // the member-variable round: the ONE --uses=Owner.field renderer (renderFieldUses — CLI ≡ MCP)
+#include "testmap.h"       // lane/t10-mcp-coverage: writeAffectedReport — the shared --affected / `affected` verb renderer
 
 #include <filesystem>      // §B6 M3: the shared root-path existence/directory check (mcpRootRefusal below)
 #include <optional>        // mcpAnswerText / usesText: nullopt is an answer buffer that failed, never an empty answer
@@ -447,6 +448,73 @@ inline std::string analyzeToString( const std::string& root, int topK, bool stab
                                     // §B4 family, and mcpclidiffcheck is the gate that keeps the two surfaces one.
                                     /*ann=*/rw::MapAnnotations{ .prDisclosure = ix.prDisclosure },
                                     /*statsFirstScreen=*/true, anRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut ); } );
+}
+
+// `rank_by` verb (lane/t10-mcp-coverage): the MCP twin of --rank-by=pagerank|authority|hub|rrf — the SAME
+// map `analyze` serves, ranked by a different signal, through the SAME renderer (serialize(), the SAME
+// captureXml idiom analyzeToString uses just above) — never a forked emitter. `mode` is the CLI's own
+// closed-value spelling ("pagerank"/"authority"/"hub"/"rrf"); an unrecognised value degrades to "pagerank"
+// (the CLI's own default RankBy), so the dispatcher only needs to validate the CLOSED SET once, at the call
+// site, before reaching here.
+//
+// churn / churn-decay are NOT reachable through this front door: their CLI implementation (main.cpp
+// churnRankedGraph) is wired through MainDispatch/Config — the parsed-argv object this stdio server never
+// builds — and mining git history for a ranking prior is a materially bigger lift than swapping in a
+// pre-computed rank vector. The dispatch arm in mcp.h refuses those two values by name rather than silently
+// downgrading to pagerank (Honesty in output is a feature: a named gap, never a quiet substitution).
+//
+// DELIBERATELY NOT `ix.rank`: the warm index's cached vector is working-set-PERSONALIZED (mcpindex.h
+// feature 2, Cody-style — teleport-biased toward the uncommitted diff as of the last rebuild), which is
+// what `analyze` serves and is right for that verb, but the CLI's `--rank-by=pagerank|authority|hub|rrf`
+// runs a PLAIN `rankGraph(g)` with no working-set bias (main.cpp's `else` arm) — the `ix.rank` shortcut
+// would make this verb NOT byte-identical to its CLI twin on a dirty tree, which is exactly the parity
+// this lane is required to hold. A fresh, uniform-teleport run costs one extra power iteration per call;
+// correctness over that call's own CLI-parity gate wins the trade.
+inline std::string rankByText( const std::string& root, std::string_view mode, int topK, bool stable = false )
+{
+    const McpIndex& ix = getIndex( root );
+
+    RankDisclosure      plainDisclosure;
+    std::vector<float>  plainRank = takeRank( rankGraph( ix.g ), plainDisclosure );   // CLI parity: rankGraph(g), no working-set bias
+
+    std::vector<float> rank;
+    RankDisclosure      disclosure;   // default: isPageRank=false — HITS rankings disclose no pr_iters=/pr_converged=
+    const char*         rankByLabel = nullptr;   // nullptr ⇒ pagerank, the CLI's own windowless-label convention (§B2.1)
+
+    if( mode == "authority" || mode == "hub" || mode == "rrf" )
+    {
+        auto [ authority, hub ] = hits( ix.g );   // HITS runs ALONGSIDE PageRank — does not replace it (graph.h)
+        if( mode == "rrf" )
+        {
+            rank        = rrfFuse( { &plainRank, &authority, &hub } );   // fuse pagerank + authority + hub, CLI parity
+            disclosure  = plainDisclosure;   // rrf keeps pagerank's disclosure — pagerank is one of the three fused vectors
+            rankByLabel = "rrf";
+        }
+        else
+        {
+            rank        = ( mode == "hub" ) ? std::move( hub ) : std::move( authority );
+            rankByLabel = ( mode == "hub" ) ? "hub" : "authority";
+        }
+    }
+    else   // "pagerank" (and the closed-set default)
+    {
+        rank       = std::move( plainRank );
+        disclosure = plainDisclosure;
+    }
+
+    const std::string_view rbRootArg = ix.ing.realPaths.empty() ? std::string_view( root ) : std::string_view();
+    return captureXml( [ & ]( std::FILE* f )
+                       { serialize( f, ix.ing, rank, ix.g.outOff, ix.g.outTargets, topK,
+                                    /*mostImportantLast=*/false, /*metrics=*/false, /*fanIn=*/nullptr,
+                                    &ix.g.ambOut, stable,
+                                    ix.g.outProv.empty() ? nullptr : &ix.g.outProv,
+                                    /*cbo=*/nullptr, /*tested=*/nullptr,
+                                    /*lcom4=*/nullptr, /*amp=*/nullptr, &ix.g.unresolvedOut,
+                                    ix.g.bindLabel.empty() ? nullptr : &ix.g.bindLabel,
+                                    /*autoOrder=*/false, /*outEstTokens=*/nullptr,
+                                    /*extraPayloadTokens=*/0,
+                                    /*ann=*/rw::MapAnnotations{ .rankByLabel = rankByLabel, .prDisclosure = disclosure },
+                                    /*statsFirstScreen=*/true, rbRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut ); } );
 }
 
 // ─── the cross-branch + dark-content MCP twins (`whereis`, `stray_content`, `flags`) ───
@@ -2867,6 +2935,43 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
     }
     rw::emitRaw( mem, "</uses>" );
     return mcpAnswerText( stream );
+}
+
+// `affected` verb (lane/t10-mcp-coverage): the tests-to-run reflex, MCP twin of --affected=F1,F2|SYM. Calls
+// testmap.h::writeAffectedReport — the SAME renderer the CLI arm calls (verbs_change.h::runAffected) — so the
+// two surfaces answer byte-identical <affected>…</affected> XML for the same seed set; nothing here re-derives
+// the traversal or hand-copies the legend. Only the REFUSAL composition is surface-specific (this verb's own
+// idiom, JSON-RPC error text, rather than the CLI's stderr + did-you-mean), exactly as impactText/usesText
+// above already split resolution failure from the shared answer.
+struct McpAffectedResult
+{
+    std::optional<std::string> text;         // nullopt only on an internal buffer failure — never a plain refusal
+    bool                        badSelector = false;   // `spec`'s bad item matched neither an indexed path nor a symbol
+    std::string                 badItem;
+    bool                        noSeeds     = false;   // resolved, but zero seed symbols — spec named nothing to seed from
+};
+
+inline McpAffectedResult affectedText( const std::string& root, std::string_view spec )
+{
+    const McpIndex&     ix         = getIndex( root );
+    const IngestResult& ing        = ix.ing;
+    const Graph&        g          = ix.g;
+    const bool           singleRoot = ing.realPaths.empty();   // same single-root test every other MCP verb uses
+
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
+    if( !mem )
+    {
+        return { std::nullopt, false, {}, false };
+    }
+    const AffectedReportResult r = writeAffectedReport( mem, ing, g, root, spec, singleRoot );
+    if( !r.ok )
+    {
+        // Nothing was written to `mem` on this path (writeAffectedReport's own contract) — the stream closes
+        // unfinished in MemoryStream's destructor, exactly the "unfinished: nobody to tell" case it documents.
+        return { std::string{}, r.badSelector, r.badItem, r.noSeeds };
+    }
+    return { mcpAnswerText( stream ), false, {}, false };
 }
 
 // `path` verb: the shortest directed CALL path from `from` to `to` (does A reach B, and how?). Reuses
@@ -5320,7 +5425,7 @@ inline bool mcpVerbDeclaresLegend( std::string_view verb ) noexcept
 // main.cpp's compactLegendHint, keyed by verb name instead of by flag. Verbs with a unique root need none.
 inline std::string_view mcpCompactLegendHint( std::string_view verb ) noexcept
 {
-    if( verb == "analyze" )                            { return "map"; }
+    if( verb == "analyze" || verb == "rank_by" )        { return "map"; }   // lane/t10-mcp-coverage: rank_by's XML root is the SAME <r> shape analyze serves
     if( verb == "explore" || verb == "pack_task" )     { return "pack-task"; }
     if( verb == "from_trace" )                         { return "from-trace"; }
     if( verb == "lego" )                               { return "lego"; }

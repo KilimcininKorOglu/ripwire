@@ -106,14 +106,14 @@ def parseSingleRoot():
 verbFields  = parseVerbFields()
 universal   = parseUniversal()
 singleRoot  = parseSingleRoot()
-check( len( verbFields ) == 31, "kMcpVerbFields parsed: %d verbs" % len( verbFields ) )
+check( len( verbFields ) == 33, "kMcpVerbFields parsed: %d verbs" % len( verbFields ) )
 check( universal == [ "path", "paths" ], "kMcpUniversalFields parsed: %s" % universal )
 check( len( singleRoot ) >= 6, "kMcpSingleRootVerbs parsed: %d rows (%s)" % ( len( singleRoot ), ",".join( singleRoot ) ) )
 
 # ═══ (A) DECLARED == ENFORCED — the schema vs the unknown-field guard (M2) ═════════════════════════════════
 srv   = Stdio()
 tools = srv.call( "tools/list" )[ "result" ][ "tools" ]
-check( len( tools ) == 31, "(A) tools/list advertises 31 verbs" )
+check( len( tools ) == 33, "(A) tools/list advertises 33 verbs" )
 
 mismatch, missingPaths, noDesc = [], [], []
 for t in tools:
@@ -129,19 +129,19 @@ for t in tools:
 
 for n, got, want in mismatch[ :5 ]:
     print( "  FAIL  (A) %s schema=%s enforced=%s" % ( n, got, want ) )
-check( not mismatch,     "(A) all 31 inputSchemas == declaredFieldsFor (schema and unknown-field guard are ONE list)" )
+check( not mismatch,     "(A) all 33 inputSchemas == declaredFieldsFor (schema and unknown-field guard are ONE list)" )
 # M2 stated as its own assertion so a regression names the finding, not just the invariant.
-check( not missingPaths, "(A/M2) `paths` declared on all 31 verbs (was 18; %d missing)" % len( missingPaths ) )
+check( not missingPaths, "(A/M2) `paths` declared on all 33 verbs (was 18; %d missing)" % len( missingPaths ) )
 # M12
 check( not noDesc,       "(A/M12) every declared property carries a description (%d missing)" % len( noDesc ) )
 totalProps = sum( len( t[ "inputSchema" ][ "properties" ] ) for t in tools )
-print( "  INFO  (A) %d declared properties across 31 verbs" % totalProps )
+print( "  INFO  (A) %d declared properties across 33 verbs" % totalProps )
 
 # ═══ (B) M4 — `path` is required exactly when this server cannot supply a root ═════════════════════════════
 # R2a (the 2026-08-12 usage mine) changed WHICH servers can: a bare `--mcp` launched inside a workspace
 # now supplies its own launch cwd (assumedRoot), so the shipped install's schema stops demanding `path`.
 # The M4 principle is unchanged; the truly root-less server is one launched from "/" (the startup guard
-# refuses to assume "/" or $HOME), and THAT schema must still require `path` on all 31 verbs.
+# refuses to assume "/" or $HOME), and THAT schema must still require `path` on all 33 verbs.
 stillReq0 = [ t[ "name" ] for t in tools if "path" in t[ "inputSchema" ].get( "required", [] ) ]
 check( not stillReq0, "(B/M4+R2a) bare `--mcp` launched in a workspace cwd: `path` NOT required (%d wrongly required)" % len( stillReq0 ) )
 rootless = Stdio( cwd = "/" )
@@ -360,8 +360,10 @@ TWIN = {
     # the CLI report's is 8: the payload is machine-read and has always served every row, so limit there is
     # relief for a caller who wants less, never a new cut.
     "--flags": "flags", "--situ": "situational_awareness",
-    # 2026-09-12 (C1-b): --in=DIR joined the paging set for its <recent scope=DIR> page (--offset=N). The MCP server
-    # exposes no churn ranker at all (no rank_by argument on any tool), so there is nothing for it to twin: CLI-only.
+    # 2026-09-12 (C1-b): --in=DIR joined the paging set for its <recent scope=DIR> page (--offset=N). lane/t10-mcp-coverage
+    # (2026-09-19) added an MCP `rank_by` tool (pagerank/authority/hub/rrf), but it still exposes no churn ranker —
+    # churn/churn-decay mine git history through a CLI-only path (rankByText's own comment) — so --in=DIR, which only
+    # ever scopes churn-decay's <recent> page, still has nothing to twin: CLI-only.
     "--in": "",
     # L-W (2026-09-12, forpage.h): --for joined the paging set for its FILE PAGE (--limit/--offset select the
     # one-row-per-file widening document); its twin takes the same limit/offset through mcpPageArgs.

@@ -129,7 +129,9 @@ def cli( args ):
 # slice block below is the one that does, and it is where the flip itself is pinned CLI-to-MCP.
 LEGEND_FAMILY = { "analyze", "lego", "owners", "batch", "exemplar", "impact", "uses", "path_between",
                   "connect", "explore", "from_trace", "edit_check", "whereis", "stray_content", "flags",
-                  "doc_drift", "slice" }
+                  "doc_drift", "slice",
+                  # lane/t10-mcp-coverage: rank_by and affected both declare `legend` (mcprefusal.h)
+                  "rank_by", "affected" }
 
 def mcp( name, arguments, raw = False ):
     arguments = dict( arguments )
@@ -298,6 +300,55 @@ if anMcp.startswith( "__ERROR__" ):
 else:
     check( 'overloads="' in mapXml, "analyze fixture: the CLI map merges the const/non-const pair (the twin arm is not vacuous)" )
     report( "analyze rows", xmlRowAttrs( mapXml, "s" ), xmlRowAttrs( anMcp, "s" ), declaredLens( anMcp ) )
+
+# lane/t10-mcp-coverage: rank_by — the SAME <r> map shape as analyze (same serialize() call, same
+# statsFirstScreen=true MCP posture, same known divergence: the files=/symbols=/… stanza rides a LEADING
+# CLI comment and a TRAILING MCP one — see analyze's own comment above). The <s> row attribute SET is the
+# fact that must not move; the comment's POSITION is the declared, accepted difference.
+rbXml = cliAt( AFX, [ "--rank-by=authority" ] )
+rbMcp = mcp( "rank_by", { "path": AFX, "rank_by": "authority" } )
+if rbMcp.startswith( "__ERROR__" ):
+    check( False, "rank_by probe: " + rbMcp[ :120 ] )
+else:
+    check( 'rank_by="authority"' in rbXml, "rank_by fixture: the CLI map stamps rank_by=\"authority\" (the twin arm is not vacuous)" )
+    report( "rank_by rows", xmlRowAttrs( rbXml, "s" ), xmlRowAttrs( rbMcp, "s" ), declaredLens( rbMcp ) )
+    check( ( 'rank_by="authority"' in stripComments( rbMcp ) ), "rank_by root: MCP stamps the same rank_by=\"authority\" attribute the CLI does" )
+
+# lane/t10-mcp-coverage: affected — UNLIKE analyze/rank_by, this verb has NO posture difference at all
+# (testmap.h::writeAffectedReport is the literal same function both surfaces call), so the bar here is the
+# tighter one: byte-IDENTICAL once root= (which legitimately differs — "." on a relative CLI invocation vs
+# an absolute MCP `path`) is normalised away. Same technique the slice legend-posture block below uses.
+afXml = cliAt( ROOT, [ "--affected=src/graph.h" ] )
+afMcp = mcp( "affected", { "path": ROOT, "files": "src/graph.h" } )
+if afMcp.startswith( "__ERROR__" ):
+    check( False, "affected probe: " + afMcp[ :120 ] )
+else:
+    normAf = lambda t: re.sub( r' root="[^"]*"', ' root="R"', t ).strip()
+    check( normAf( afXml ) == normAf( afMcp ),
+           "affected: the MCP payload is byte-identical to the CLI's, modulo root= (%d vs %d B)"
+           % ( len( afXml ), len( afMcp ) ) )
+
+# ═══ REFUSAL parity: the new tools' bad-input messages name the same facts the CLI's do ═══════════════════
+print( "" )
+print( "=== REFUSAL: rank_by / affected refuse the CLI's own closed-set and two-reading facts ===" )
+# rank_by=churn / churn-decay are valid CLI values this tool REFUSES for now (no MainDispatch/Config over
+# MCP to mine git history through) — the refusal must NAME the value and the CLI escape hatch, never read
+# as an unknown-value typo (that message is a DIFFERENT sentence, asserted separately below).
+for mode in ( "churn", "churn-decay" ):
+    m = mcp( "rank_by", { "path": ROOT, "rank_by": mode } )
+    check( m.startswith( "__ERROR__" ) and mode in m and "CLI" in m,
+           "rank_by=%s: refused by name, pointing at the CLI (%s)" % ( mode, m[ :140 ] ) )
+badRb = mcp( "rank_by", { "path": ROOT, "rank_by": "nonsense" } )
+check( badRb.startswith( "__ERROR__" ) and "unknown value" in badRb and "nonsense" in badRb,
+       "rank_by=nonsense: refused as an unknown value, not silently read as pagerank (%s)" % badRb[ :140 ] )
+# affected: an item matching neither an indexed path nor a symbol refuses with the same two-reading fact
+# the CLI's stderr states (verbs_change.h::runAffected) — echoed on both surfaces, never silently dropped.
+cliBad = subprocess.run( [ BIN, ROOT, "--affected=__definitely_not_indexed__" ], capture_output = True, text = True ).stderr
+mcpBad = mcp( "affected", { "path": ROOT, "files": "__definitely_not_indexed__" } )
+check( "matches no indexed file path" in cliBad and "__definitely_not_indexed__" in cliBad,
+       "affected (CLI): the bad-selector refusal names the fact and echoes the item (%s)" % ( "yes" if "matches no indexed file path" in cliBad else "NO" ) )
+check( mcpBad.startswith( "__ERROR__" ) and "matches no indexed file path" in mcpBad and "__definitely_not_indexed__" in mcpBad,
+       "affected (MCP): the same two-reading refusal, same echoed item (%s)" % mcpBad[ :160 ] )
 
 # ═══ CLI-vs-CLI dialects: the same property between a verb's own two spellings ══════════════════════════
 print( "" )
