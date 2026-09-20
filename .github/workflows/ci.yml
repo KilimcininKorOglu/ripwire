@@ -885,7 +885,12 @@ jobs:
   # watched live by whoever triggered it. See CONTRIBUTING.md §5 for the paragraph-length version.
   report-failure:
     name: report-failure (open or update the tracking issue)
-    needs: [plan, style, release, fallback-emitter, rhel, asan, windows]
+    # `windows` is deliberately NOT in this list while its cl.exe leg carries continue-on-error: a
+    # non-gating leg's entry in the needs context is exactly the thing this pair must not guess about,
+    # and a tracking issue opened for a KNOWN gap is noise that teaches people to close it unread. The
+    # legs run in the same scheduled run and are read from it directly. Add `windows` here in the same
+    # commit that removes continue-on-error.
+    needs: [plan, style, release, fallback-emitter, rhel, asan]
     if: failure() && github.event_name == 'schedule' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -909,7 +914,8 @@ jobs:
             echo "- run: $RUN_URL (schedule)"
             echo "- failing jobs: ${failed_jobs:-none recorded}"
             echo
-            echo "This is ci.yml's full 33-job matrix (release/fallback-emitter/rhel/asan/style/windows), not the"
+            echo "This is ci.yml's full 33-job matrix (release/fallback-emitter/rhel/asan/style, plus two windows"
+            echo "legs this pair does not summarise — read them in the run itself), not the"
             echo "nightly.yml ThreadSanitizer run — read this run's own job logs for the failing gate."
           } > "$body"
           if ! gh api "repos/$REPO/labels/$label" --silent 2>/dev/null; then
@@ -929,7 +935,12 @@ jobs:
 
   report-green:
     name: report-green (close the tracking issue on this workflow's own green schedule run)
-    needs: [plan, style, release, fallback-emitter, rhel, asan, windows]
+    # `windows` is deliberately NOT in this list while its cl.exe leg carries continue-on-error: a
+    # non-gating leg's entry in the needs context is exactly the thing this pair must not guess about,
+    # and a tracking issue opened for a KNOWN gap is noise that teaches people to close it unread. The
+    # legs run in the same scheduled run and are read from it directly. Add `windows` here in the same
+    # commit that removes continue-on-error.
+    needs: [plan, style, release, fallback-emitter, rhel, asan]
     if: success() && github.event_name == 'schedule' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
