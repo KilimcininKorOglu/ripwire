@@ -76,15 +76,32 @@ if(RIPWIRE_TARGET_ARCH MATCHES "^(x86_64|x86_64h|amd64|AMD64)$")
   set(RIPWIRE_IS_X86_64 ON)
 endif()
 
+# ── MSVC: whether OUR flag list carries the optimization level at all ──────────────────────────────────
+# The four MSVC branches below spell /O2 because a PLAIN configure (no CMAKE_BUILD_TYPE — the flavour CLAUDE.md
+# mandates for a dev tree) leaves CMake supplying no optimization flag of its own, and an unoptimized ripwire is
+# a different tool. The moment a build type IS named, CMake supplies that configuration's own flags and ours
+# arrives after them: on Debug that is `/Od /RTC1`, and cl.exe refuses the pair outright — "Command line error
+# D8016: '/RTC1' and '/O2' command-line options are incompatible" — while clang-cl only warns and silently
+# builds an optimized binary the configurer asked to be debuggable. Found by the windows-latest CI leg, 2026-09-20.
+# A multi-config generator (Visual Studio, Ninja Multi-Config) has an empty CMAKE_BUILD_TYPE and still supplies
+# per-configuration flags, so it is asked separately rather than read off the empty string.
+get_property(_ripwire_pf_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(CMAKE_BUILD_TYPE OR _ripwire_pf_multi_config)
+  set(RIPWIRE_MSVC_OPT_FLAGS "")
+else()
+  set(RIPWIRE_MSVC_OPT_FLAGS /O2)
+endif()
+message(STATUS "RIPWIRE_MSVC_OPT_FLAGS:${RIPWIRE_MSVC_OPT_FLAGS}")
+
 if(RIPWIRE_NATIVE)
   if(MSVC)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
       # ClangCL accepts the LLVM architecture flag through /clang:, but /O3 is a GCC/Clang
       # driver spelling and is ignored by its MSVC frontend. Keep the Windows native arm
       # genuinely optimized even when the build type is empty.
-      set(RIPWIRE_ARCH_FLAGS /O2 /clang:-march=native /fp:precise /permissive- /utf-8)
+      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=native /fp:precise /permissive- /utf-8)
     else()
-      set(RIPWIRE_ARCH_FLAGS /O2 /fp:precise /permissive- /utf-8)
+      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8)
     endif()
   else()
     set(RIPWIRE_ARCH_FLAGS -O3 -march=native -ffast-math -fno-finite-math-only)
@@ -92,10 +109,10 @@ if(RIPWIRE_NATIVE)
 elseif(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND RIPWIRE_IS_X86_64)
   # ClangCL accepts the MSVC frontend flags but still needs the LLVM architecture level explicitly;
   # keeping this branch ahead of the generic MSVC one is what enables strkern.h's AVX2 path on Windows.
-  set(RIPWIRE_ARCH_FLAGS /O2 /clang:-march=x86-64-v3 /fp:precise /permissive- /utf-8)
+  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=x86-64-v3 /fp:precise /permissive- /utf-8)
 elseif(MSVC)
   # MSVC compiler flags: precise math (preserves isnan/isfinite), conformant C++ mode, UTF-8 source/exec charset
-  set(RIPWIRE_ARCH_FLAGS /O2 /fp:precise /permissive- /utf-8)
+  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8)
 elseif(RIPWIRE_IS_APPLE_SILICON)
   set(RIPWIRE_ARCH_FLAGS -O2 -mcpu=apple-m1 -ffast-math -fno-finite-math-only)
 elseif(RIPWIRE_IS_X86_64)

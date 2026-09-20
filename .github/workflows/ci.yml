@@ -788,16 +788,13 @@ jobs:
           if not defined VSINSTALL ( echo ci: no Visual Studio install with the x64 C++ tools & exit /b 1 )
           echo VSINSTALL=%VSINSTALL%
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          if "${{ matrix.toolchain }}"=="clang-cl" (
-            if exist "C:\Program Files\LLVM\bin\clang-cl.exe" (
-              set "PATH=C:\Program Files\LLVM\bin;%PATH%"
-            ) else (
-              set "PATH=%VSINSTALL%\VC\Tools\Llvm\x64\bin;%PATH%"
-            )
-          )
-          if "${{ matrix.toolchain }}"=="clang-cl" ( set "RW_TC=-DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl" ) else ( set "RW_TC=-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl" )
+          set "RW_LLVM=%VSINSTALL%\VC\Tools\Llvm\x64\bin"
+          if exist "C:\Program Files\LLVM\bin\clang-cl.exe" set "RW_LLVM=C:\Program Files\LLVM\bin"
+          set "RW_TC=-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl"
+          if "${{ matrix.toolchain }}"=="clang-cl" set "RW_TC=-DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
+          if "${{ matrix.toolchain }}"=="clang-cl" set "PATH=%RW_LLVM%;%PATH%"
           cmake --version || exit /b 1
-          cmake -S . -B build -G Ninja %RW_TC% -DRIPWIRE_TESTS=ON || exit /b 1
+          cmake -S . -B build -G Ninja %RW_TC% -DCMAKE_BUILD_TYPE= -DRIPWIRE_TESTS=ON || exit /b 1
           cmake --build build -j || exit /b 1
 
       # The front end this leg actually configured with, read off the cache rather than inferred from the
@@ -805,6 +802,11 @@ jobs:
       - name: Confirm the front end this leg actually configured with
         run: |
           grep -h 'CMAKE_CXX_COMPILER_ID\|CMAKE_CXX_COMPILER_VERSION\|CMAKE_CXX_COMPILER_FRONTEND_VARIANT' build/CMakeFiles/*/CMakeCXXCompiler.cmake
+          # The flavour is PINNED by the configure above (-DCMAKE_BUILD_TYPE= is the plain one), not inherited:
+          # this runner's environment hands an unasked-for Debug to a bare configure, and a flavour that depends
+          # on the machine is not one deterministic build step (G3). Read it back rather than assume it took.
+          grep -x 'CMAKE_BUILD_TYPE:STRING=' build/CMakeCache.txt \
+            || { echo "ci: windows leg did not configure the plain flavour: $( grep '^CMAKE_BUILD_TYPE:' build/CMakeCache.txt )" >&2; exit 1; }
           id="$( grep -h 'set(CMAKE_CXX_COMPILER_ID' build/CMakeFiles/*/CMakeCXXCompiler.cmake )"
           case "${{ matrix.toolchain }}" in
             clang-cl) case "$id" in *Clang*) ;; *) echo "ci: clang-cl leg configured with $id" >&2; exit 1 ;; esac ;;
@@ -843,8 +845,10 @@ jobs:
           @echo on
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          if exist "C:\Program Files\LLVM\bin\clang-cl.exe" ( set "PATH=C:\Program Files\LLVM\bin;%PATH%" ) else ( set "PATH=%VSINSTALL%\VC\Tools\Llvm\x64\bin;%PATH%" )
-          cmake -S . -B build-asan -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DRIPWIRE_ASAN=ON || exit /b 1
+          set "RW_LLVM=%VSINSTALL%\VC\Tools\Llvm\x64\bin"
+          if exist "C:\Program Files\LLVM\bin\clang-cl.exe" set "RW_LLVM=C:\Program Files\LLVM\bin"
+          set "PATH=%RW_LLVM%;%PATH%"
+          cmake -S . -B build-asan -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE= -DRIPWIRE_ASAN=ON || exit /b 1
           cmake --build build-asan --target ripwire_probe || exit /b 1
 
 
