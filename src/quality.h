@@ -7325,14 +7325,35 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     {
         const auto* ro = g.inEdges.rowOffsets();
         gtl::btree_map<std::uint64_t, std::uint8_t> reuseSeen;   // clone-group count is not strictly bounded by symbol count, so keep the unbounded sorted map here
-        const auto reportReusedClones = [ & ]( const std::vector<CloneGroup>& cgs )
+        // T13/fix2: reportReusedClones read the SAME clone vectors as reportNewClones (duplication, above)
+        // but carried neither of its two demotions — the all-test-script skip and the idiom→minor demotion —
+        // so a clone group entirely composed of test SCRIPTS (sibling shell gates repeating the house
+        // mcp_call()-style boilerplate by convention) fired this kind even though `duplication` exempts the
+        // identical shape. Both demotions now mirror reportNewClones exactly: the skip continues outright
+        // (never a row), and the idiom verdict rides the row the same way (vd.demoted / cloneIdiomName).
+        const auto reportReusedClones = [ & ]( const std::vector<CloneGroup>& cgs, const std::vector<CloneIdiomVerdict>& vx )
         {
-            for( const CloneGroup& cg : cgs )
+            for( std::size_t ci = 0; ci < cgs.size(); ++ci )
             {
+                const CloneGroup&        cg = cgs[ci];
+                const CloneIdiomVerdict& vd = vx[ci];
                 const std::uint64_t h = cloneGroupHash( cg, ing, root );
                 if( std::binary_search( base.cloneGroups.begin(), base.cloneGroups.end(), h ) )
                 {
                     continue; // group already existed → not new
+                }
+                // B10.1a (mirrors reportNewClones): a clone group ENTIRELY composed of test-SCRIPT members
+                // is fixture-class noise — sibling shell test scripts repeat near-identical setup/ok/no
+                // boilerplate by convention (see isTestScriptPath). Exempt only when every member is a test
+                // script, so a real src/ ↔ test-script clone (still worth a look) is unaffected.
+                bool allTestScript = !cg.members.empty();
+                for( NodeId m : cg.members )
+                {
+                    if( m >= ing.symbols.size() || !isTestScriptPath( rootRelPath( ing, ing.symbols[m].fileId ) ) ) { allTestScript = false; break; }
+                }
+                if( allTestScript )
+                {
+                    continue;
                 }
                 // r27 SUSPICION-C FIX — "the reused helper is preexisting BY CONSTRUCTION" was asserted here
                 // (and in fbc527e's commit message) but never ENFORCED: fan-in ≥ 3 is trivially reached by a
@@ -7389,12 +7410,13 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                         joined += " | ";
                     }
                 }
-                regs.push_back( { "new-clone-of-reused-helper", joined, 0, maxFanin, h, false, {}, cloneGroupIsNew( cg ) } );   // now = the eroded helper's fan-in; ack identity = the member-set hash
+                regs.push_back( { "new-clone-of-reused-helper", joined, 0, maxFanin, h, vd.demoted,
+                                  std::string( cloneIdiomName( vd.idiom ) ), cloneGroupIsNew( cg ) } );   // now = the eroded helper's fan-in; ack identity = the member-set hash
                 stampCloneLoc( cg );
             }
         };
-        reportReusedClones( exactClones );
-        reportReusedClones( type3Clones );
+        reportReusedClones( exactClones, exactIdioms );
+        reportReusedClones( type3Clones, type3Idioms );
     }
 
     std::sort( regs.begin(), regs.end(), []( const Regression& a, const Regression& b )
