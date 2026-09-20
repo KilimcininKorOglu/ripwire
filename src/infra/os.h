@@ -249,10 +249,19 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 // path_is_root: is `path` a filesystem root itself ("/"; Windows also "C:/").
 // program_path: a std::filesystem::path in the program's spelling — its native string here; on Windows the generic
 //   ('/') one. A template, so this header needs no <filesystem>.
+// path_arg: the same spelling at the moment a std::filesystem::path is handed to one of the calls ABOVE, every one of
+//   which takes `const char*`. `path.c_str()` cannot be that argument on both platforms — std::filesystem::path's
+//   value_type is char here and wchar_t on Windows, so `os::stat( p.c_str(), … )` compiles on exactly one of them
+//   (@lennix1337's Windows validation of #44 caught it in src/ingest.cpp and src/wrap.h, clang-cl and cl.exe alike).
+//   This is the ONE place that difference is absorbed, instead of a per-call-site narrowing. Here a path's own native
+//   bytes ARE the program's spelling, so it returns a reference to them and copies nothing: `os::path_arg( p ).c_str()`
+//   is the very pointer `p.c_str()` was, and every POSIX call site below it is byte-for-byte the call it already made.
 [[gnu::always_inline]] inline bool path_is_absolute( const std::string& path ) { return !path.empty() && path.front() == '/'; }
 [[gnu::always_inline]] inline bool path_is_root( const std::string& path )     { return path == "/"; }
 template<class FsPath>
 [[gnu::always_inline]] inline std::string program_path( const FsPath& path ) { return path.string(); }
+template<class FsPath>
+[[gnu::always_inline]] inline const std::string& path_arg( const FsPath& path ) { return path.native(); }
 
 // The nanosecond modification / status-change time of a filled stat_t. POSIX.1-2008 names the fields st_mtim and
 // st_ctim; Darwin and the BSDs spell them st_mtimespec and st_ctimespec. A reference to the field itself, so
@@ -773,6 +782,13 @@ void normalize_path_arg( char* text );
 }
 template<class FsPath>
 [[gnu::always_inline]] inline std::string program_path( const FsPath& path ) { return path.generic_string(); }
+// path_arg (see the POSIX branch for what it is for): here path::value_type is wchar_t, so the path's own c_str() is
+// NOT a `const char*` and cannot reach the calls above. generic_string() narrows the wide native form to the same
+// UTF-8 '/'-separated spelling program_path() produces and every os:: body takes, so the two never disagree about
+// what a path IS. It returns by value: the caller's `.c_str()` names that temporary, which the language keeps alive
+// to the end of the full expression the os:: call is part of — the only shape any call site uses.
+template<class FsPath>
+[[gnu::always_inline]] inline std::string path_arg( const FsPath& path ) { return path.generic_string(); }
 
 // field reads, not calls: inline on every platform
 [[gnu::always_inline]] inline const ::timespec& st_mtim( const stat_t& st ) { return st.st_mtim; }
