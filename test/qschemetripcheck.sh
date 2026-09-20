@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-19, TRAIN 10 (integration/train-10 on main 59b241d7: lane/t10-mcp-coverage 12970e48):
+#   RE-DERIVED ON THE FINAL MERGED TREE with UPDATE_GOLDEN=1 — the hash is UNCHANGED at a8b6c050….
+#   The member adds two MCP tools (src/mcpverbs.h, src/mcp.h, src/mcprefusal.h) and lifts --affected's
+#   renderer into src/testmap.h; none of the 17 functions the tripwire comment names moved, and nothing
+#   on the extraction path was touched. kParserVer and its mirror stay 118, kCacheVersion stays 24,
+#   kQSnapCacheScheme stays 14.
 # 2026-09-19, TRAIN 9 (integration/train-9 on main 56163633: lane/r1-compact-default a02931a0,
 #   lane/t9-mergescout-empty 2480bc5c): RE-DERIVED ON THE FINAL MERGED TREE with UPDATE_GOLDEN=1 — the hash is
 #   UNCHANGED at a8b6c050…. t9-mergescout-empty rewrites materializeCommitTree (src/quality.h), but that
