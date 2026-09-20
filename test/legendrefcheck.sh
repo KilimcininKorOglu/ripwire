@@ -93,7 +93,7 @@ def pairs(t):
             for p in ps: out += [("p", p)] + rest
             continue
         out += av
-    return sorted((k, v) for k, v in out if k not in ("schema", "legend", "dict", "dictv"))
+    return sorted((k, v) for k, v in out if k not in ("schema", "legend", "dict", "dictv", "est_tokens"))
 def is_ref(t): return '<about ' in t and ' legend="ref"' in t
 
 # ── (A) the dictionary ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -204,6 +204,19 @@ for i, t in refs:
     twin = full_by.get(i) if CALLS[i][0] != "for" else pre[i][1]
     if twin is None or pairs(t) != pairs(twin): diffs.append(CALLS[i][0])
 check(NREF >= 12 and not diffs, f"(D) over {NREF} ref answers, each ref answer carries the same attribute name=value multiset as its inline twin (differ: {diffs})")
+# est_tokens= is the answer's DELIVERED price (L1's budget work), not a fact about the corpus: it must track the bytes
+# this answer actually carries, so it is the one attribute that SHOULD differ between a ref answer and its longer twin.
+# Excluded from the multiset above and asserted here instead — present in both, and never priced above the twin.
+def est(t):
+    m = re.search(r'\sest_tokens="(\d+)"', t)
+    return int(m.group(1)) if m else None
+badprice = []
+for i, t in refs:
+    if not is_ref(t): continue
+    twin = full_by.get(i) if CALLS[i][0] != "for" else pre[i][1]
+    er, ef = est(t), est(twin) if twin else None
+    if (er is None) != (ef is None) or (er is not None and er > ef): badprice.append((CALLS[i][0], er, ef))
+check(not badprice, f"(D) est_tokens= is the answer's own delivered price: present in both postures, never above the twin ({badprice[:3]})")
 KEEP = {"task", "changed", "from", "to"}
 badroot, badlast = [], []
 for i, t in refs:
