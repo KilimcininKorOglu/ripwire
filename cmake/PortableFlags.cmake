@@ -93,15 +93,26 @@ else()
 endif()
 message(STATUS "RIPWIRE_MSVC_OPT_FLAGS:${RIPWIRE_MSVC_OPT_FLAGS}")
 
+# cl.exe only: the CONFORMANT preprocessor. MSVC's traditional one predates C99 variadic macros and has no
+# __VA_OPT__, which src/infra/Diagnostics.h's whole check vocabulary is built on — without this flag every
+# ASSUME/EXPECTS/ENSURES/DASSERT/VALIDATE/DISCLOSE site is a syntax error ("C2760: '__VA_OPT__' was unexpected
+# here", windows-latest CI 2026-09-20). /permissive- does NOT imply it. clang-cl's preprocessor is conformant
+# already and the flag is not its spelling, so this is the one place the two MSVC-ABI front ends differ here.
+if(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(RIPWIRE_MSVC_CL_FLAGS /Zc:preprocessor)
+else()
+  set(RIPWIRE_MSVC_CL_FLAGS "")
+endif()
+
 if(RIPWIRE_NATIVE)
   if(MSVC)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
       # ClangCL accepts the LLVM architecture flag through /clang:, but /O3 is a GCC/Clang
       # driver spelling and is ignored by its MSVC frontend. Keep the Windows native arm
       # genuinely optimized even when the build type is empty.
-      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=native /fp:precise /permissive- /utf-8)
+      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=native /fp:precise /permissive- /utf-8 ${RIPWIRE_MSVC_CL_FLAGS})
     else()
-      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8)
+      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8 ${RIPWIRE_MSVC_CL_FLAGS})
     endif()
   else()
     set(RIPWIRE_ARCH_FLAGS -O3 -march=native -ffast-math -fno-finite-math-only)
@@ -109,10 +120,10 @@ if(RIPWIRE_NATIVE)
 elseif(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND RIPWIRE_IS_X86_64)
   # ClangCL accepts the MSVC frontend flags but still needs the LLVM architecture level explicitly;
   # keeping this branch ahead of the generic MSVC one is what enables strkern.h's AVX2 path on Windows.
-  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=x86-64-v3 /fp:precise /permissive- /utf-8)
+  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=x86-64-v3 /fp:precise /permissive- /utf-8 ${RIPWIRE_MSVC_CL_FLAGS})
 elseif(MSVC)
   # MSVC compiler flags: precise math (preserves isnan/isfinite), conformant C++ mode, UTF-8 source/exec charset
-  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8)
+  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8 ${RIPWIRE_MSVC_CL_FLAGS})
 elseif(RIPWIRE_IS_APPLE_SILICON)
   set(RIPWIRE_ARCH_FLAGS -O2 -mcpu=apple-m1 -ffast-math -fno-finite-math-only)
 elseif(RIPWIRE_IS_X86_64)
