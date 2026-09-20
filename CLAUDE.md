@@ -119,9 +119,10 @@ the same commit — `test/manifestcheck.sh` fails otherwise.
 - **G4 — maximum token density.** Minified XML, no inter-tag whitespace, terse attributes. The legend is emitted
   once per answer on the CLI (`--legend=full|compact`) or once per session on agent surfaces (`--legend=ref`,
   served only after the session dictionary was delivered in that process; the answer then ends with
-  `<about … legend="ref" dict= dictv=/>`). Every attribute and element an answer emits is defined in that answer's
-  legend or in the dictionary its `dictv=` names — gate `legendrefcheck`. Output pipes clean through
-  `xmllint --noout`; no newline outside CDATA.
+  `<about … legend="ref" dict= dictv=/>`). Every attribute a default answer emits is defined in that answer's own
+  legend — gates `legendcoveragecheck` (G) and `compactlegendcheck` (UG); a ref answer carries the same attributes
+  as its inline twin, and every definition it leans on is bytes that session was already sent or that the answer
+  carries itself — gate `legendrefcheck`. Output pipes clean through `xmllint --noout`; no newline outside CDATA.
 - **G5 — modular zero-dependency CLI.** Hand-rolled argument parser; a flagless run is the core map;
   every flag is purely additive.
 
