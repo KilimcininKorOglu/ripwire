@@ -843,25 +843,21 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     {
         h += kForCompactLegendBodies;
     }
-    if( p.tailLegend )
+    // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
+    // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
+    // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
+    // next one is a row, not another block. hdr is never ceiling-dropped (R2-AF round 2, S4); tail is.
+    const struct { bool on; std::string_view clause; } kPresentOnly[] = {
+        { p.tailLegend, kForCompactLegendTail },         { p.hdrLegend, kForCompactLegendHdr },
+        { p.composePresent, kForCompactLegendCompose },  { p.legoPresent, kForCompactLegendLego },
+        { p.layerPresent, kForCompactLegendLayer },
+    };
+    for( const auto& [ on, clause ] : kPresentOnly )
     {
-        h += kForCompactLegendTail;
-    }
-    if( p.hdrLegend )
-    {
-        h += kForCompactLegendHdr;   // R2-AF (round 2, S4): present-only, never ceiling-dropped
-    }
-    if( p.composePresent )
-    {
-        h += kForCompactLegendCompose;
-    }
-    if( p.legoPresent )
-    {
-        h += kForCompactLegendLego;
-    }
-    if( p.layerPresent )
-    {
-        h += kForCompactLegendLayer;
+        if( on )
+        {
+            h += clause;
+        }
     }
     if( p.legendDropped )
     {
