@@ -275,7 +275,7 @@ inline constexpr std::string_view kMcpServerInstructions =
     // H2H-Graft (2026-09-07, taken from Graft's src/mcp/instructions.ts): a host that DEFERS tool schemas
     // hands the agent bare names and withholds descriptions, but this `instructions` string survives on its
     // own track — so it is the one channel that can tell the agent to load the verbs in ONE lookup instead of
-    // paying a round trip per verb (31 verbs here; the deferral tax is the larger cost).
+    // paying a round trip per verb (33 verbs here; the deferral tax is the larger cost).
     "If these tools arrive deferred (names shown, schemas withheld), load them all in ONE lookup rather than "
     "one at a time.";
 inline constexpr std::string_view kMcpProtocolVersions[] =

@@ -259,6 +259,17 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # either sum above) — 2,939 B in all, nothing else moved. Same rule as every entry above: the ceiling moves
 # UP only for a DECLARED tool or argument the contract obliges to carry a description, in the commit that
 # lands it, with its bytes attributed here — never for prose. Headroom after this line: 229 B.
+# RE-MEASURED 2026-09-19, TRAIN 10 (integration/train-10 on main 59b241d7): 46,371 B on the merged tree —
+# the lane's number reproduces exactly, and the ceiling is unmoved at 46,600 with the same 229 B of headroom.
+# The BASE reading in the line above is the one that does not reproduce. Measured here with THIS file's own
+# formula against three builds — 56163633 (the lane's base), 1b772eac and 59b241d7 (main) — all three answer
+# 43,500 B, descriptions 20,579, schemas 18,494, 31 tools. The 43,432 B / schemas 18,426 B pair has been
+# carried in this block since 2026-09-14 and the lane copied it forward; descriptions match to the byte on
+# every build, so the 68 B sits in the schemas alone and predates both sides of this train. Two consequences,
+# neither of them a defect in the lane: the pre-lane manifest was sitting EXACTLY on the 43,500 ceiling with
+# zero headroom rather than the 68 B this block claimed (the arm asserts <=, so it passed on the number, not
+# on the margin), and the delta this train lands is 2,871 B rather than 2,939. The per-tool attribution above
+# is unaffected — it was measured tool by tool, not as a difference of two totals.
 CEILING = 46600
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )

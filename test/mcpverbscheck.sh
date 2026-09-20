@@ -9,7 +9,7 @@
 #   3. tools/call for  {path, task} → assert non-empty text result containing <sigs>
 #   4. tools/call owners {path}     → assert valid owners XML (uses a synthetic git repo)
 #   5. Determinism: call sequences 3 and 4 each run twice and produce byte-identical output.
-#   6. L4: tools/list shows 31 verbs (`pack_task` dispatch-only, not separately advertised);
+#   6. L4: tools/list shows 33 verbs (`pack_task` dispatch-only, not separately advertised);
 #      `explore` round-trips a pack-task-shaped bundle and is byte-identical to `pack_task`;
 #      `from_trace` maps a fixture trace onto zoomfix's appMain; `edit_check` returns the
 #      contract shape and refuses an unknown symbol; each of explore/pack_task/from_trace/
@@ -270,7 +270,7 @@ print("OK" if code == -32602 else "GOT:" + str(code))
 echo
 echo "=== 6. L4 — explore/pack_task/from_trace/edit_check (B11 verb parity) ==="
 
-# ── tools/list shows 31 verbs, including the L4 three and the field-notes four ───────────────
+# ── tools/list shows 33 verbs, including the L4 three and the field-notes four ───────────────
 LIST_OUT2="$( mcp_call \
     '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | tail -1 )"
