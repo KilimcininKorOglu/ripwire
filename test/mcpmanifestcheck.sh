@@ -248,7 +248,35 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # owner authorized on 2026-09-13 with the measured number; #214's names the response shape for two answers
 # that carry no legend at all), and the merge only makes them visible together. Headroom after this line:
 # 68 B, again less than one declared argument, which is rule 5 above working.
-CEILING = 43500
+# RE-ANCHORED 2026-09-19 (lane/t10-mcp-coverage): 43,500 -> 46,600, measured 46,371 (from 43,432, 31 tools).
+# TWO NEW ADVERTISED TOOLS, not a prose trim: `rank_by` (the --rank-by=pagerank|authority|hub|rrf MCP twin)
+# and `affected` (the --affected=F1,F2|SYM MCP twin) — closing the exact ref-eligibility gap
+# graft-iter2a.md §9 measured (these two verbs had no MCP form at all). Each carries a routing sentence
+# (pinned below) plus its own declared argument list, same as every tool already in the manifest.
+# Attributed tool by tool against a build of origin/main (561636336): rank_by +636 B description +481 B
+# schema = 1,117 B; affected +790 B description +610 B schema = 1,400 B; the remaining +422 B is JSON
+# envelope structure (two more {"name":…,"annotations":{…}} objects in the tools array, not counted in
+# either sum above) — 2,939 B in all, nothing else moved. Same rule as every entry above: the ceiling moves
+# UP only for a DECLARED tool or argument the contract obliges to carry a description, in the commit that
+# lands it, with its bytes attributed here — never for prose. Headroom after this line: 229 B.
+# RE-MEASURED 2026-09-19, TRAIN 10 (integration/train-10 on main 59b241d7): 46,371 B on the merged tree —
+# the lane's number reproduces exactly, and the ceiling is unmoved at 46,600 with the same 229 B of headroom.
+# The BASE reading in the line above is the one that does not reproduce. Measured here with THIS file's own
+# formula against three builds — 56163633 (the lane's base), 1b772eac and 59b241d7 (main) — all three answer
+# 43,500 B, descriptions 20,579, schemas 18,494, 31 tools. The 43,432 B / schemas 18,426 B pair has been
+# carried in this block since 2026-09-14 and the lane copied it forward; descriptions match to the byte on
+# every build, so the 68 B sits in the schemas alone and predates both sides of this train. Two consequences,
+# neither of them a defect in the lane: the pre-lane manifest was sitting EXACTLY on the 43,500 ceiling with
+# zero headroom rather than the 68 B this block claimed (the arm asserts <=, so it passed on the number, not
+# on the margin), and the delta this train lands is 2,871 B rather than 2,939. The per-tool attribution above
+# is unaffected — it was measured tool by tool, not as a difference of two totals.
+# TRAIN 10 FIX ROUND (CodeRabbit 4056211645): 46,371 -> 46,493 B, the ceiling UNMOVED at 46,600. The rank_by
+# description claimed its default was "byte-identical to 'analyze'", which is false on a tree with uncommitted
+# changes — `analyze` serves the warm index's working-set-PERSONALIZED rank and rankByText deliberately does
+# not, which is the divergence that lane fixed. +122 B of description to say what is true instead; no schema
+# byte moved and no tool was added. Spent from the 229 B this block already held, not from a raise: correcting
+# a claim the manifest itself makes is what headroom is for. Headroom after this line: 107 B.
+CEILING = 46600
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )

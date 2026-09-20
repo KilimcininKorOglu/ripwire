@@ -29,6 +29,9 @@
 #include "sarif.h"       // rootPrefixOf / rootRelativeUri — the ONE relativizer every p= emitter already shares (A3)
 #include "infra/jsonesc.h" // rw::shSingleQuote — the ONE shell quoter; run= is a COMMAND, see spell() below
 #include "pythonrunner.h" // main-guard / pytest evidence; a .py extension alone is not a runner
+#include "serialize.h"    // lane/t10-mcp-coverage: escapeXml — writeAffectedReport's ONE escaper (CLI ≡ MCP)
+#include "graphlegend.h"  // lane/t10-mcp-coverage: unprovenDefsVerbLegend/unprovenDefsAttrXml/graphCountFloorBrief/
+                          // rootRelPathsLegend — writeAffectedReport's shared legend vocabulary
 
 #include <algorithm>
 #include <cstdio>
@@ -1186,6 +1189,115 @@ inline std::size_t scriptGatesUnmodelledCount( const IngestResult& ing )
         }
     }
     return gateCount;
+}
+
+// ─── writeAffectedReport (lane/t10-mcp-coverage) — THE renderer behind BOTH --affected (CLI,
+// main.cpp verbs_change.h::runAffected) and the MCP `affected` verb (mcpverbs.h::affectedText). One
+// function, one FILE* target: the two surfaces answer byte-identical <affected>…</affected> XML for the
+// identical seed set, never a second hand-copied emitter to drift from the first — the exact mistake
+// this file's header comment already warns against for the test<->code map itself. Lifted verbatim out
+// of what used to be runAffected's body (main.cpp), with `stdout`/`cfg.affectedFiles`/`d.root` generalized
+// to `out`/`spec`/`root` — the CLI wrapper's own bytes are unchanged (it is the same code, just callable
+// from two places now).
+//
+// Resolution failure is reported through the return value ONLY (nothing is written to `out` on failure):
+// each surface composes its own refusal in its own idiom — the CLI prints a near-miss suggestion to stderr
+// and exits 1; the MCP arm returns a JSON-RPC error. Only the SUCCESS document has to be byte-identical,
+// never the two callers' very different failure UX (the same split every other CLI/MCP verb pair in this
+// tree already draws — see impactText/usesText's own refusal wording beside their CLI twins).
+struct AffectedReportResult
+{
+    bool        ok           = false;   // true ⇒ `out` now holds a complete <affected>…</affected> document
+    bool        badSelector  = false;   // sel.ok == false: `badItem` matched neither an indexed path nor a symbol
+    std::string badItem;                // populated only when badSelector
+    bool        noSeeds      = false;   // sel.ok, but the matched item(s) resolved to zero seed symbols
+};
+
+inline AffectedReportResult writeAffectedReport( std::FILE* out, const IngestResult& ing, const Graph& g,
+                                                  const std::string& root, std::string_view spec, bool singleRoot )
+{
+    EXPECTS( out != nullptr, "writeAffectedReport: the answer needs a stream to write to; the failure returns below write nothing, so a null sink would be silent" );
+    // §P11.2a: the map was file-granular, so "which tests cover the function I am about to change?" had
+    // to be widened to its whole FILE first, over-reporting the obligation. Only the SEED SET changes
+    // here: everything below (transitiveCallers → isTestPath → path-sorted rows) is the same traversal
+    // --affected always ran. The file-first argument rule and its per-item refusal live in
+    // resolveAffectedSeeds above; only the did-you-mean wording is each surface's own.
+    const AffectedSeeds sel = resolveAffectedSeeds( ing, spec );
+    if( !sel.ok )
+    {
+        return { false, true, sel.badItem, false };
+    }
+    const std::vector<NodeId>& seeds = sel.seeds;
+    if( seeds.empty() )
+    {
+        return { false, false, {}, true };
+    }
+    // F3: the caller walk and the matched-test rows are assembled in affectedAnswer, next to the seeding
+    // whose test partition constrains them (lane-L8 found-not-fixed #1: seeding the walk with a matched
+    // test file's own symbols subtracted the very tests that reach the change).
+    const AffectedAnswer          answer    = affectedAnswer( ing, g, sel );
+    const std::vector<NodeId>&    reach     = answer.reach;
+    const std::vector<std::uint32_t>& testFiles = answer.testFiles;
+    std::vector<char> esc;
+    const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
+    // M12: root-relative --situ/--test-gate/--pr-context/--handoff parity — every <test p=> row below is
+    // root-relative, and root= says what it is relative to (absent under multi-root, same convention as
+    // every other verb's root= disclosure).
+    const std::string afRootPrefix = singleRoot ? sarif::rootPrefixOf( root ) : std::string();
+    const std::string afRootAttr   = singleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
+    const auto         afPathRel   = [ & ]( std::uint32_t fileId ) -> std::string_view
+    {
+        return sarif::rootRelativeUri( ing.files[ fileId ], afRootPrefix );
+    };
+    // §P11.4 / E1: the rows are rendered FIRST (the run=/run_unknown= rule and the <g> group row) so the
+    // legend below can splice that clause only when there are rows for it to be a rule about — a tests="0"
+    // answer, the common clean case, pays nothing for it.
+    // TRAIN 10 (CodeRabbit 4056211650): the index is handed a root ONLY when this document declares one, so
+    // the command spelling cannot contradict the root= disclosure whatever a caller passes for singleRoot.
+    // With no root the ctor keeps the absolute spelling, which is what an unanchored document owes its reader
+    // (see TestRunnerIndex's own ctor comment). The caller-side half of this — counting the roots that SURVIVED
+    // dedupe rather than the roots as typed — is in verbs_change.h::runChangeViews.
+    const TestRunnerIndex   runners( ing, singleRoot ? std::string_view( root ) : std::string_view() );
+    std::vector<TestRowOut> afRows;
+    afRows.reserve( answer.rows.size() );
+    for( TestRow row : answer.rows )   // by value: a matched test file's changed= is spelled seed_kind="test" on this verb
+    {
+        const std::uint32_t f = row.fileId;
+        row.changed           = false;
+        afRows.push_back( { f, std::string( afPathRel( f ) ), std::string( answer.isSeedTestFile[f] ? " seed_kind=\"test\"" : "" ) + testRowEvidence( row, EvDialect::Xml ) } );
+    }
+    const JoinedTestRows afRowsXml = testRowsList( runners, afRows, TestRowShape{ RowDialect::Xml, "test" }, ex );
+    // seeded_by= is the honesty half of the file-first rule: the two readings answer DIFFERENT questions
+    // over the same argument string and return different counts, so which one fired is a fact about the
+    // measurement, not a detail. seeds= is the resolved seed-symbol count (1 for a lone function, ~84
+    // for a header), which is what makes the two readings comparable at a glance.
+    rw::emitTo( out, "<!-- ripwire affected: test files that transitively reach the changed files/symbols (run these); seeded_by= says which reading the argument took. "
+                 "seed_test_files= how many of the matched files are TEST files: a test cannot reach a change it is part of, so its own symbols are not seeds of the "
+                 "caller walk and its row carries seed_kind=\"test\" — it is listed because the argument matched it (it changed, run it), not because it reaches the change. "
+                 "script_gates_unmodelled= counts test/*.sh runners in the corpus (a path count; not every one invokes the binary) — "
+                 "script-to-binary edges are NOT modelled, so those gates are invisible to this walk and never counted in tests=/reached=. "
+                 "{}"     // H2H-Graft F1: the evidence-order clause, testmap.h's ONE wording (changed= is spelled seed_kind="test" here: the argument matched it)
+                 "order=evidence says so on the root; partners= counts the partner rows. "
+                 "{}"     // M21(b)/E1: the run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
+                 // TRAIN 10: read off the index rather than re-derived here (testmap.h's own rule for this fact),
+                 // so the sentence is decided by the very object that spelled the commands it describes.
+                 "{}{}-->{}", kTestRowEvidenceLegend, runHintClauseIfRows( afRowsXml.files, runners.rootRelative() ),
+                 // H1: the decl→def residue resolveAffectedSeeds summed over the symbol items. A file:name item whose
+                 // definitions were dropped seeded the walk with declarations alone, which reached the reader as a bare
+                 // tests="0" — on the verb whose answer is the list of tests to run. Exactly when the root carries it.
+                 unprovenDefsVerbLegend( UnprovenDefsVerb::Affected, sel.unprovenDefs > 0 ).c_str(),
+                 graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rootRelPathsLegend( singleRoot ) );
+    rw::emitTo( out, "<affected changed=\"{}\" seeded_by=\"{}\" seeds=\"{}\" seed_test_files=\"{}\" tests=\"{}\" reached=\"{}\"{} script_gates_unmodelled=\"{}\""
+                 " order=\"evidence\" partners=\"{}\"{}{}>",
+                 ex( spec ).c_str(), affectedSeededBy( sel ), seeds.size(), sel.seedTestFiles.size(), testFiles.size(), reach.size(),
+                 unprovenDefsAttrXml( sel.unprovenDefs ).c_str(),   // H1: beside the zero it qualifies; absent at zero
+                 scriptGatesUnmodelledCount( ing ),
+                 testRowPartnerCount( answer.rows ),      // F1: how many rows stand on the name convention alone or as well
+                 afRootAttr.c_str(),                      // M12: root= says what every <test p=> below is relative to
+                 graphCountFloorAttrXml( g ).c_str()  );   // H5/M15: gauge + marker; tests=/reached= are a transitive-caller walk over the name-based CSR
+    rw::emitRaw( out, afRowsXml.text.c_str() );   // E1: the rows rendered above — runner-less rows with equal evidence as ONE <g> row, the multiset unchanged
+    rw::emitRaw( out, "</affected>" );
+    return { true, false, {}, false };
 }
 
 struct ShellGateObligation

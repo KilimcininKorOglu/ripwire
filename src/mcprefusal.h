@@ -89,6 +89,15 @@ inline constexpr McpFieldSpec kMcpRequiredFields[] = {
       FieldRule::Optional, "or this tree has no git history (owners is mined from git)" },
     { "for",                     "task",      "the task in plain words",                                           "task=\"add a since filter\"" },
     { "lego",                    "type",      "an interface or base-type name (file:name disambiguates; @FILE:LINE line-seeds resolve)", "type=\"Shape\"" },
+    // lane/t10-mcp-coverage: rank_by is OPTIONAL — an OMITTED value defaults to pagerank, which is the CLI's
+    // own unbiased `--rank-by=pagerank` and NOT necessarily `analyze`'s map (train 10, CodeRabbit 4056211645:
+    // `analyze` serves the warm index's working-set-PERSONALIZED rank, so on a tree with uncommitted changes
+    // the two rankings legitimately differ — that divergence is the whole reason rankByText computes a fresh
+    // unbiased rankGraph). A PRESENT-BUT-EMPTY value is not the default and is refused; see mcp.h's
+    // rankByIsPresent. The verb-specific override exists only so the schema description matches this tool's
+    // own default sentence rather than the generic kMcpValueFields one.
+    { "rank_by",                 "rank_by",   "OPTIONAL — pagerank|authority|hub|rrf|churn|churn-decay (default pagerank when omitted; churn/churn-decay refuse)", "rank_by=\"authority\"",
+      FieldRule::Optional },
     { "fetch_body",              "handle",    "a `handle` string taken from a read verb's result (@FILE:LINE line-seeds resolve too)",   "handle=\"src/cli.h::rw::parseArgs\"" },
     { "batch",                   "queries",   "an array of {verb, ...args} sub-query objects",                      "queries=[{\"verb\":\"grep\",\"pattern\":\"x\"}]" },
 
@@ -97,6 +106,11 @@ inline constexpr McpFieldSpec kMcpRequiredFields[] = {
     { "exemplar",                "task",      "a task string whose top match donates its kind",                     "task=\"a JSON writer\"", FieldRule::AnyOf },
     { "impact",                  "symbol",    "a symbol name to take the blast radius of (file:name disambiguates; @FILE:LINE line-seeds resolve)", "symbol=\"parseArgs\"" },
     { "uses",                    "symbol",    "a symbol name to find the resolvable use-sites of (an @FILE:LINE line-seed serves the enclosing definition's name)", "symbol=\"parseArgs\"" },
+    // lane/t10-mcp-coverage: affected's `files` field reuses situational_awareness's field NAME (same STRING
+    // shape, same N11 shape-refusal) but a different READING — the CLI --affected= file-first rule, not a
+    // git-diff file list — so it needs its own `needs` sentence rather than the generic kMcpValueFields one.
+    { "affected",                "files",     "changed files and/or symbols to seed the test-reach walk (comma-separated): each item is tried as an indexed PATH pattern first, then — only if that fails — as a symbol name (file:name / path::scope::name also resolve)", "files=\"src/cli.h\"",
+      FieldRule::Required },
     { "path_between",            "from",      "the SOURCE symbol name (or @FILE:LINE)",                             "from=\"main\"" },
     { "path_between",            "to",        "the DESTINATION symbol name (or @FILE:LINE)",                        "to=\"parseArgs\"" },
     { "connect",                 "symbols",   "an array (or comma-string) of 2..16 symbol names (@FILE:LINE entries resolve)", "symbols=[\"main\",\"parseArgs\"]" },
@@ -322,12 +336,19 @@ inline constexpr McpValueSpec kMcpValueFields[] = {
     // @FILE:LINE seed line pre-pick), flow is a CLOSED direction set so the sentence names it.
     { "var",           "a STRING variable name inside the resolved definition (omit it to list the sliceable locals)", "var=\"out\"" },
     { "flow",          "a STRING flow direction: back, fwd or both (omit it for the flat per-line rows)", "flow=\"back\"" },
+    // lane/t10-mcp-coverage: rank_by's own CLOSED value set, the CLI --rank-by= spelling verbatim (cli.h's
+    // parse arm). churn/churn-decay are valid CLI values that this row still names — the closed-set check
+    // must accept them so the refusal can then say WHY they are unsupported HERE (a named gap, not an
+    // unknown-value error about a value the CLI itself accepts).
+    { "rank_by",       "a STRING ranking signal: pagerank (default), authority, hub, rrf, churn or churn-decay — "
+                        "churn/churn-decay are refused on this verb (git-mining ranking, CLI-only for now)", "rank_by=\"authority\"" },
     // §5a decision 3: a CLOSED set, so the sentence names it — an unknown value is refused, never read as
     // the default (the rule the `in` row above records, for the same reason: a typo must not silently
     // change the shape of the answer).
     // M1 (terminality round A, 2026-09-05): the default moved full → COMPACT (mcp.h, legendCompactPosture).
-    // This one string is where every declaring tool's schema states it — it is spliced into all seventeen
-    // inputSchema stanzas, so it is the per-tool sentence an MCP client actually reads, and it names both
+    // This one string is where every declaring tool's schema states it — it is spliced into every declaring
+    // tool's inputSchema stanza (seventeen at landing; lane/t10-mcp-coverage added rank_by and affected, nineteen
+    // now), so it is the per-tool sentence an MCP client actually reads, and it names both
     // values and which one is the default in the SAME 54 bytes the old wording spent (compact is 3 longer
     // than full, and the two swapped places). Deliberately NOT a clause added to seventeen tool
     // DESCRIPTIONS: mcpmanifestcheck's own registered rule is that the ceiling moves for a declared
@@ -979,6 +1000,10 @@ struct McpVerbFields
 inline constexpr McpVerbFields kMcpVerbFields[] = {
     // ── read verbs ──
     { "analyze",                  "path paths legend" },
+    // lane/t10-mcp-coverage: same map `analyze` serves, an alternate ranking signal — no limit/offset (the
+    // CLI --rank-by= map has none either; it shapes with --top-k, a server-wide startup config here, exactly
+    // as `analyze`'s own topK is).
+    { "rank_by",                   "path paths rank_by legend" },
     // M13: limit/offset are DECLARED because these two now HONOR them (symbolQueryJson takes an
     // McpPageArgs) — their CLI twins --callees/--callers are both in cli.h's honorsPaging set, and a verb
     // that pages on one surface and is pinned to page 1 on the other is the parity gap this closed.
@@ -1010,6 +1035,11 @@ inline constexpr McpVerbFields kMcpVerbFields[] = {
     // (mcpPageArgs -> pageWindow), exactly as `impact` one row up. `uses` grew a default site cap in the
     // same round, so a caller that wants the whole footprint needs the hatch the CLI --uses already had.
     { "uses",                     "path paths symbol limit offset legend" },
+    // lane/t10-mcp-coverage: the tests-to-run reflex — testmap.h::writeAffectedReport is the SAME renderer
+    // the CLI --affected= arm calls (verbs_change.h::runAffected). No limit/offset: the CLI --affected=
+    // answer is never paged (its rows ARE the answer, the same "never pages the answer" rule --test-gate's
+    // <t> rows and --flip's context rows already follow).
+    { "affected",                 "path paths files legend" },
     { "path_between",             "path paths from to legend" },
     { "connect",                  "path paths symbols radius legend" },
     { "explore",                  "path paths task budget_tokens partition legend no_route" },
@@ -1025,10 +1055,10 @@ inline constexpr McpVerbFields kMcpVerbFields[] = {
     // lane/tc-sliceat: the ARISE def-use slice — var/flow/depth mirror the CLI's :VAR / --slice-flow /
     // --slice-depth knobs; single-root by kMcpSingleRootVerbs (a per-definition on-disk re-parse).
     // §5a decision 3: `legend` — the opt-in compact posture (the CLI --legend=compact), default full.
-    // P1 (L7): the same argument on every verb above that answers XML (analyze/lego/owners/batch/exemplar/impact/uses/
-    // path_between/connect/explore/from_trace/edit_check/whereis/stray_content/flags/doc_drift) — mcp.h's textResult
-    // applies compactlegend.h's rewrite; the JSON/text verbs (find_*/grep/cochange/mentions/quality_delta/
-    // situational_awareness/memory_recall/fetch_body) do not declare it and refuse it as an unknown field.
+    // P1 (L7): the same argument on every verb above that answers XML (analyze/rank_by/lego/owners/batch/exemplar/
+    // impact/uses/affected/path_between/connect/explore/from_trace/edit_check/whereis/stray_content/flags/doc_drift)
+    // — mcp.h's textResult applies compactlegend.h's rewrite; the JSON/text verbs (find_*/grep/cochange/mentions/
+    // quality_delta/situational_awareness/memory_recall/fetch_body) do not declare it and refuse it as an unknown field.
     { "slice",                    "path symbol var flow depth legend" },
     // ── edit verbs ──
     { "replace_symbol_body",      "path paths symbol file new_body post_check", McpVerbFields::Effect::Destructive },

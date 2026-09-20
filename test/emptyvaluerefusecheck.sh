@@ -279,6 +279,35 @@ for probe in 'absent|{"path":"MFIX","symbol":"geometry.cpp:distance"}' 'full|{"p
         || ok "MCP slice legend=$label still answers (the refusal is for the EMPTY value only)"
 done
 
+# TRAIN 10 (CodeRabbit 4056211646): the SAME defect, one verb over, on a field that landed after the arm
+# above was written — `rank_by` reached the server through `if( arg.empty() )` and so read `rank_by:""` as
+# "omitted", answering a 19,552 B pagerank map at exit 0 where `--rank-by=` refuses. F9's rule is not a fact
+# about `legend`; it is a fact about every OPTIONAL-with-a-default field this surface declares, so the arm is
+# repeated here in full rather than pointed at. RED, measured, on the pre-fix binary: "ANSWERED".
+"$BIN" "$MFIX" --rank-by= >/dev/null 2>"$TMP/cli.rankby.err"; rbCliRc=$?
+{ [ "$rbCliRc" -ne 0 ] && grep -q 'rank-by' "$TMP/cli.rankby.err"; } \
+    && ok "MCP-half premise: the CLI --rank-by= refuses (exit $rbCliRc), which is the rule the MCP field must match" \
+    || no "MCP-half premise: --rank-by= did not refuse (exit $rbCliRc) — the CLI rule moved, fix this arm before the MCP one"
+RBEMPTY="$( mcp_reply rank_by "{\"path\":\"$MFIX\",\"rank_by\":\"\"}" )"
+printf '%s' "$RBEMPTY" | python3 -c '
+import sys, json
+r = json.load( sys.stdin )
+if "error" not in r:
+    print( "ANSWERED" ); raise SystemExit( 1 )
+msg = r[ "error" ].get( "message", "" )
+print( "OK" if "rank_by" in msg else "UNNAMED: " + msg[ :120 ] )
+raise SystemExit( 0 if "rank_by" in msg else 1 )
+' >"$TMP/mcp.rankby.res" 2>&1 \
+    && ok "MCP rank_by=\"\": refused by name, never silently read as the omitted default" \
+    || no "MCP rank_by=\"\": $( cat "$TMP/mcp.rankby.res" ) — an empty value read as the default is F9's own defect on a newer field"
+# and the shapes that must NOT have moved: absent = pagerank, an explicit valid value still works
+for probe in 'absent|{"path":"MFIX"}' 'pagerank|{"path":"MFIX","rank_by":"pagerank"}' 'authority|{"path":"MFIX","rank_by":"authority"}'; do
+    label="${probe%%|*}"; body="$( printf '%s' "${probe#*|}" | sed "s|MFIX|$MFIX|" )"
+    printf '%s' "$( mcp_reply rank_by "$body" )" | grep -q '"error"' \
+        && no "MCP rank_by=$label was refused — the empty-value rule swallowed a working signal" \
+        || ok "MCP rank_by=$label still answers (the refusal is for the EMPTY value only)"
+done
+
 # ── the harness must not mutate the tree it tests ──────────────────────────────────────────────────────
 # Compared against the status captured at the top of the run, not against a clean checkout: this gate is
 # normally run mid-change with the tree already dirty.

@@ -962,6 +962,12 @@ LEGEND_VERBS="$( sed -n 's/^[[:space:]]*{ "\([a-z_]*\)", *"[^"]*legend[^"]*" },.
 nArgs() {   # the call this gate makes for VERB, on the two-commit fixture repo above
     case "$1" in
         analyze)       printf '{"path":"."}' ;;
+        # TRAIN 10 (lane/t10-mcp-coverage x L1): two verbs joined the family while the default posture was moving.
+        # rank_by shares analyze's <r> root (mcpCompactLegendHint answers "map" for both); affected has a root of its
+        # own (<aff schema="ripwire.affected/v1">) and needs no hint. This is the arm's own design working — the family
+        # is read from kMcpVerbFields, so the two new rows FAILED here rather than skipping silently.
+        rank_by)       printf '{"path":".","rank_by":"authority"}' ;;
+        affected)      printf '{"path":".","files":"geometry.cpp"}' ;;
         lego)          printf '{"path":".","type":"Point"}' ;;
         owners)        printf '{"path":".","symbol":"distance"}' ;;
         batch)         printf '{"path":".","queries":["callers: distance","uses: distance"]}' ;;
@@ -1021,7 +1027,7 @@ for verb in $LEGEND_VERBS; do
     fi
     ok "(N) $verb: default == compact ($cLeg B legend), legend:\"full\" restores $fLeg B, payload byte-identical"
 done
-[ "$nVerbs" -ge 17 ] && ok "(N) the family was read from source: $nVerbs verbs declare legend" \
+[ "$nVerbs" -ge 19 ] && ok "(N) the family was read from source: $nVerbs verbs declare legend" \
                      || no "(N) only $nVerbs verbs were extracted from kMcpVerbFields — the family read is broken, so every PASS above means nothing"
 
 echo

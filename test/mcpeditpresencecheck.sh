@@ -271,6 +271,10 @@ VAL = {
     "handle": '"a.h::alpha"', "trace": '"  File \\"a.h\\", line 4, in alpha"',
     "new_body": '"int alpha( int x )\\n{\\n    return 5;\\n}"', "text": '"// note\\n"',
     "queries": '[{"verb":"grep","pattern":"alpha"}]', "symbols": '["alpha","beta"]',
+    # lane/t10-mcp-coverage: affected's Required `files` — a comma-separated path/symbol spec (same STRING
+    # shape as situational_awareness's optional `files`, which never needed a VAL row: it has no Required
+    # rule of its own to test).
+    "files": '"a.h"',
 }
 # ── ITEM B: the WRITE set comes from src/mcp.h's VERB REGISTRY, parsed — never restated here ──────────────
 #

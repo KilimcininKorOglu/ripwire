@@ -9,7 +9,7 @@
 #   3. tools/call for  {path, task} → assert non-empty text result containing <sigs>
 #   4. tools/call owners {path}     → assert valid owners XML (uses a synthetic git repo)
 #   5. Determinism: call sequences 3 and 4 each run twice and produce byte-identical output.
-#   6. L4: tools/list shows 31 verbs (`pack_task` dispatch-only, not separately advertised);
+#   6. L4: tools/list shows 33 verbs (`pack_task` dispatch-only, not separately advertised);
 #      `explore` round-trips a pack-task-shaped bundle and is byte-identical to `pack_task`;
 #      `from_trace` maps a fixture trace onto zoomfix's appMain; `edit_check` returns the
 #      contract shape and refuses an unknown symbol; each of explore/pack_task/from_trace/
@@ -270,7 +270,7 @@ print("OK" if code == -32602 else "GOT:" + str(code))
 echo
 echo "=== 6. L4 — explore/pack_task/from_trace/edit_check (B11 verb parity) ==="
 
-# ── tools/list shows 31 verbs, including the L4 three and the field-notes four ───────────────
+# ── tools/list shows 33 verbs, including the L4 three and the field-notes four ───────────────
 LIST_OUT2="$( mcp_call \
     '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | tail -1 )"
@@ -291,7 +291,7 @@ L4_WHEREIS="$( l4_field '"whereis" in names' )"
 L4_STRAY="$(   l4_field '"stray_content" in names' )"
 L4_FLAGS="$(   l4_field '"flags" in names' )"
 L4_DDRIFT="$( l4_field '"doc_drift" in names' )"
-if [ "$L4_COUNT" = "31" ]; then ok "tools/list shows exactly 31 verbs"; else no "tools/list shows $L4_COUNT verbs, expected 31"; fi
+if [ "$L4_COUNT" = "33" ]; then ok "tools/list shows exactly 33 verbs"; else no "tools/list shows $L4_COUNT verbs, expected 33"; fi
 if [ "$L4_DDRIFT" = "True" ]; then ok "tools/list includes 'doc_drift'"; else no "tools/list is missing 'doc_drift'"; fi
 if [ "$L4_WHEREIS" = "True" ]; then ok "tools/list includes 'whereis'"; else no "tools/list is missing 'whereis'"; fi
 if [ "$L4_STRAY" = "True" ]; then ok "tools/list includes 'stray_content'"; else no "tools/list is missing 'stray_content'"; fi

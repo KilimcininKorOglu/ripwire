@@ -58,6 +58,9 @@ struct McpVerbInfo
 inline constexpr McpVerbInfo kMcpVerbTable[] = {
     // ── read verbs (no side effects) ──
     { "analyze",                 "architecture map for a directory (PageRank + signatures + call graph)", McpVerbGroup::Read },
+    // lane/t10-mcp-coverage: same map, an alternate ranking signal (pagerank/authority/hub/rrf; churn and
+    // churn-decay are CLI-only for now — see rankByText's own comment).
+    { "rank_by",                 "the same map, ranked by authority/hub/rrf instead of plain PageRank",    McpVerbGroup::Read },
     { "find_symbol",             "one symbol's 1-hop neighborhood (callers + callees)",                    McpVerbGroup::Read },
     { "find_referencing_symbols","direct (1-hop) callers of a symbol",                                     McpVerbGroup::Read },
     { "grep",                    "trigram literal search, hits annotated with enclosing symbol",           McpVerbGroup::Read },
@@ -76,6 +79,9 @@ inline constexpr McpVerbInfo kMcpVerbTable[] = {
     { "quality_baseline",        "pin the quality floor (writes .ripwire_quality_baseline sidecar)",       McpVerbGroup::FlagshipReflex },
     { "impact",                  "transitive blast radius of a symbol (is it safe to change?)",            McpVerbGroup::FlagshipReflex },
     { "uses",                    "the resolvable use-sites of a symbol (call/read/write/import/extends)",  McpVerbGroup::FlagshipReflex },
+    // lane/t10-mcp-coverage: the tests-to-run reflex — testmap.h::writeAffectedReport, the SAME renderer the
+    // CLI --affected= arm calls.
+    { "affected",                "tests that transitively reach changed files/symbols (which tests to run?)", McpVerbGroup::FlagshipReflex },
     { "path_between",            "shortest directed call path from A to B (does A reach B, and how?)",     McpVerbGroup::FlagshipReflex },
     { "connect",                 "minimal connecting subgraph over N symbols (how do they relate?)",       McpVerbGroup::FlagshipReflex },
     // L4: the one-call orientation front door + B11 verb parity. `pack_task` is a
@@ -105,7 +111,8 @@ inline constexpr McpVerbInfo kMcpVerbTable[] = {
 // (`ctx`, `r`). M1 moved it DOWN into mcpverbs.h (unchanged, same signature): applyCompactToBatchSubs
 // needs it there, and mcpverbs.h is included BY this file, so the mapping has to live on the lower side.
 
-inline constexpr std::size_t kMcpVerbCount = 31;   // +1 lane/tc-sliceat: the `slice` read verb
+inline constexpr std::size_t kMcpVerbCount = 33;   // +1 lane/tc-sliceat: the `slice` read verb; +2 lane/t10-mcp-coverage:
+                                                   // `rank_by` and `affected` — the two --rank-by/--affected MCP twins
 static_assert( sizeof( kMcpVerbTable ) / sizeof( kMcpVerbTable[0] ) == kMcpVerbCount,
                "kMcpVerbTable size drifted from kMcpVerbCount — update both together (A4-S2)" );
 
@@ -174,7 +181,10 @@ inline constexpr std::string_view kAtSeedRebindClause =
 // it derives its expectation by ENUMERATION (it asks the live batch arm which verbs refuse and counts them)
 // rather than by re-running this formula — a gate that restates the formula cannot catch the formula.
 inline constexpr std::size_t kBatchExcludedCount = kMcpVerbCount - kBatchServedCount;
-static_assert( kBatchExcludedCount == 15,
+// lane/t10-mcp-coverage: 15 → 17 — `rank_by` and `affected` joined kMcpVerbTable; neither joined
+// kBatchServedVerbs in this lane (a deliberate scope cut, not a structural one — both are read-only,
+// single-path verbs and are reasonable batch candidates for a future lane).
+static_assert( kBatchExcludedCount == 17,
                "the batch tools/list stanza spells kBatchExcludedCount in prose — a verb joined or left "
                "kMcpVerbTable / kBatchServedVerbs; update the stanza's number and this assert together" );
 
@@ -265,7 +275,7 @@ inline constexpr std::string_view kMcpServerInstructions =
     // H2H-Graft (2026-09-07, taken from Graft's src/mcp/instructions.ts): a host that DEFERS tool schemas
     // hands the agent bare names and withholds descriptions, but this `instructions` string survives on its
     // own track — so it is the one channel that can tell the agent to load the verbs in ONE lookup instead of
-    // paying a round trip per verb (31 verbs here; the deferral tax is the larger cost).
+    // paying a round trip per verb (33 verbs here; the deferral tax is the larger cost).
     "If these tools arrive deferred (names shown, schemas withheld), load them all in ONE lookup rather than "
     "one at a time.";
 inline constexpr std::string_view kMcpProtocolVersions[] =
@@ -724,6 +734,10 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    // agent that wants the rank must read membership, not row position.
                    "{\"name\":\"analyze\",\"description\":\"Architecture map for a directory: signatures and the call graph for the top symbols. Use when landing cold in a repo or subdir, before reading files; for a task-scoped inventory use 'for', for one symbol's neighborhood find_symbol. path = directory to map. MEMBERSHIP is by PageRank (the top-K most important symbols are the ones served); the emitted ORDER is the stable file-grouped order, not rank-descending — read order= in the first-screen stanza, which also carries files=/symbols=/shown= and the ambiguous=/unresolved= completeness gauges.\","
                    + mcprefuse::toolMetadataFor( "analyze", pathIsRequired ) + "},"
+                   // lane/t10-mcp-coverage: the MCP twin of --rank-by=pagerank|authority|hub|rrf|churn|churn-decay.
+                   // Same map `analyze` serves (same MEMBERSHIP/ORDER split), a different ranking SIGNAL.
+                   "{\"name\":\"rank_by\",\"description\":\"The SAME architecture map 'analyze' serves, ranked by a different signal instead of plain PageRank. rank_by = pagerank (default, omit it — the CLI's own unbiased --rank-by=pagerank; 'analyze' can rank differently on a tree with uncommitted changes, where it biases toward your working set), authority (called by many good hubs — core APIs/utilities), hub (calls many good authorities — entrypoints/orchestrators), or rrf (fuses all three, Reciprocal Rank Fusion). churn and churn-decay are valid CLI --rank-by= values this tool REFUSES for now — they mine git history through a path this server does not build yet; use the CLI (ripwire <dir> --rank-by=churn) until then. The MEMBERSHIP/ORDER split and every other attribute follow the same rule as 'analyze'.\","
+                   + mcprefuse::toolMetadataFor( "rank_by", pathIsRequired ) + "},"
                    "{\"name\":\"find_symbol\",\"description\":\"A symbol's 1-hop neighborhood: the symbol (with a fetch_body handle) plus direct callers (calledBy) and callees (calls). Full transitive reach: 'impact'. Read/write/import sites, not just calls: 'uses'. JSON {symbol, calledBy, calls, defs, count, hop_tested, hop_untested, declined_calls, counts_floor}; both arrays are FLOORS and the payload says why. limit/offset page them. symbol = final name segment (add scope to disambiguate); " + std::string( kAtSeedDocClause ) + "\","
                    + mcprefuse::toolMetadataFor( "find_symbol", pathIsRequired ) + "},"
                    "{\"name\":\"find_referencing_symbols\",\"description\":\"Direct (1-hop) callers of a symbol, each with a fetch_body handle. For the full transitive blast radius use 'impact', for read/write/import sites 'uses'. JSON {symbol, calledBy, defs, count, hop_tested, hop_untested, declined_calls, counts_floor}; calledBy is a FLOOR and the payload says why; declined_calls: same-named calls left unbound, not in count. limit/offset page it. " + std::string( kAtSeedShortClause ) + "\","
@@ -776,6 +790,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    + mcprefuse::toolMetadataFor( "impact", pathIsRequired ) + "},"
                    "{\"name\":\"uses\",\"description\":\"The STATICALLY RESOLVABLE use-sites of a symbol, not just calls: role (call | read | write | import | extends), file:line, and enclosing symbol. Use to see the footprint before renaming or changing a name — find_referencing_symbols and impact follow only calls. external=\\\"1\\\" means no definition in the indexed tree; count=\\\"0\\\" is a real answer, and counts_floor=\\\"1\\\" says count= is a FLOOR (the legend names the causes). symbol = the bare name, the union across same-named defs (file:name narrowing is CLI-only); an @FILE:LINE seed serves the enclosing definition's sites and of= echoes it as typed. limit/offset page the sites.\","
                    + mcprefuse::toolMetadataFor( "uses", pathIsRequired ) + "},"
+                   // lane/t10-mcp-coverage: the MCP twin of --affected=F1,F2|SYM — WHICH TESTS TO RUN before a PR.
+                   "{\"name\":\"affected\",\"description\":\"WHICH TESTS TO RUN for a change — test files that transitively reach the changed files/symbols, ranked by evidence (edited > partner-named > hop distance). files = changed files and/or symbols, comma-separated: each item is tried as an indexed PATH pattern first, then — only if that fails — as a symbol name (file:name / path::scope::name also resolve). seeded_by= on the root says which reading fired; a test file matched by the argument gets seed_kind=\\\"test\\\" rather than being subtracted from its own answer. script_gates_unmodelled= discloses test/*.sh runners this call-graph walk cannot see (script-to-binary is not a call edge) — never counted in tests=/reached=. Pairs with quality_delta (structure) and the CLI-only --test-gate (the same rows as a PASS/FAIL gate; not MCP-exposed).\","
+                   + mcprefuse::toolMetadataFor( "affected", pathIsRequired ) + "},"
                    "{\"name\":\"path_between\",\"description\":\"Does A REACH B, and HOW? — the shortest directed CALL path between two symbols, hop-by-hop. reachable=\\\"0\\\" hops=\\\"0\\\" is a valid 'not reachable' answer — call edges are name-based, so a missing dynamic/callback edge can hide a real path. Named path_between because 'path' is the repo-root arg. from/to: " + std::string( kAtSeedShortClause ) + "\","
                    + mcprefuse::toolMetadataFor( "path_between", pathIsRequired ) + "},"
                    // --connect: the N-symbols-how-do-they-relate reflex (R7-lean description by design: one sentence, when-to-use + what-it-answers).
@@ -804,7 +821,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    "{\"name\":\"slice\",\"description\":\"WHERE IS THIS VARIABLE DEFINED AND USED inside one function — NAME-BASED intra-procedural def-use rows of one variable inside ONE uniquely-resolved definition (the ARISE slicer, arXiv:2605.03117). symbol alone lists the sliceable locals to pick from; add var (or spell symbol as SYM:VAR / file:name:VAR) for the per-line rows. flow=back|fwd|both adds the TRANSITIVE data-flow slice over reaching-definition edges, bounded by depth (1..32, default 8; a cutting bound emits flow_truncated). @FILE:LINE seeds resolve here and complete the paper's (file, line[, variable]) seed. Reaching definitions are flow-sensitive for C-family and Python (reach=cfg), source-order elsewhere (reach=linear). Its LIMITS — name-based, intra-procedural, line-granular, DATA dependence only — are stated clause by clause in the answer's own legend. Served: C/C++/ObjC (+CUDA/Metal), Python, JS/TS, Go, Java, Rust; every other language refuses loudly. Single-root; read-only.\","
                    + mcprefuse::toolMetadataFor( "slice", pathIsRequired ) + "},"
                    // A4-R3 batch — one-turn context sweep: N read sub-queries in ONE round-trip, merged + deduped.
-                   "{\"name\":\"batch\",\"description\":\"ONE-TURN CONTEXT SWEEP: answer up to 16 heterogeneous READ sub-queries in a single call (the deterministic $0 counterpart of a parallel-search agent). queries = array over the SAME path, in EITHER grammar: {verb, ...args} objects, or the CLI --batch file's own \\\"verb:arg\\\" strings (queries=[\\\"for:parse the config\\\",\\\"callers:escapeXml\\\"]) - one grammar, both front doors; each verb is one of " + mcpBatchServedVerbsList( omitGitVerbs ) + " (plus the ALIASES callers=find_referencing_symbols and callees=find_symbol) with that verb's own args. The other " + std::to_string( batchExcluded ) + " advertised verbs are NOT batchable: side effects (the 3 edit verbs, quality_baseline), a heavy both-trees pass (quality_delta), no nesting (batch), and whole-repo / cross-branch scope (situational_awareness, memory_recall, connect, explore — and its alias pack_task — from_trace, " + mcprefuse::batchGitOnlyExcludedNames( omitGitVerbs ) + "flags, doc_drift). Result is one <batch> of <q i verb ok> elements IN ORDER, each sub-answer verbatim in CDATA; a failing sub-query is an inline ok=0 err= entry and never fails the batch; identical payloads dedup; over 16 caps honestly.\","
+                   "{\"name\":\"batch\",\"description\":\"ONE-TURN CONTEXT SWEEP: answer up to 16 heterogeneous READ sub-queries in a single call (the deterministic $0 counterpart of a parallel-search agent). queries = array over the SAME path, in EITHER grammar: {verb, ...args} objects, or the CLI --batch file's own \\\"verb:arg\\\" strings (queries=[\\\"for:parse the config\\\",\\\"callers:escapeXml\\\"]) - one grammar, both front doors; each verb is one of " + mcpBatchServedVerbsList( omitGitVerbs ) + " (plus the ALIASES callers=find_referencing_symbols and callees=find_symbol) with that verb's own args. The other " + std::to_string( batchExcluded ) + " advertised verbs are NOT batchable: side effects (the 3 edit verbs, quality_baseline), a heavy both-trees pass (quality_delta), no nesting (batch), whole-repo / cross-branch scope (situational_awareness, memory_recall, connect, explore — and its alias pack_task — from_trace, " + mcprefuse::batchGitOnlyExcludedNames( omitGitVerbs ) + "flags, doc_drift), and rank_by/affected (not yet swept into batch). Result is one <batch> of <q i verb ok> elements IN ORDER, each sub-answer verbatim in CDATA; a failing sub-query is an inline ok=0 err= entry and never fails the batch; identical payloads dedup; over 16 caps honestly.\","
                    + mcprefuse::toolMetadataFor( "batch", pathIsRequired ) + "}"
                    "]}}";
             }
@@ -874,6 +891,14 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             const std::string file    = strArg( "file" );
             const std::string task    = strArg( "task" );
             const std::string type    = strArg( "type" );     // lego verb: the interface/base name
+            const std::string rankByArg = strArg( "rank_by" ); // lane/t10-mcp-coverage: rank_by verb's ranking-signal selector
+            // F9/F11 (train 10, CodeRabbit 4056211646) — the defect `sections` and `legend` below already carry
+            // the fix for, one field over. ABSENT and PRESENT-BUT-EMPTY are two different requests, and
+            // `rankByArg.empty()` alone collapses them: `rank_by:""` read as "omitted" and answered pagerank at
+            // exit 0, where the CLI's own `--rank-by=` refuses ("--rank-by: unknown value ''"). A schema default
+            // applies to an OMITTED field, never to one that is present and outside the closed set. Same raw
+            // reader every other MCP argument's shape check uses.
+            const bool rankByIsPresent = mcpdetail::findRawValue( args, "rank_by" ).isPresent;
             const std::string sections = strArg( "sections" ); // L2: `for`'s <lego>/<compose> stub opt-back-in (CLI --sections= twin)
             // F9/F11 (V2, mirrored from `legend` below): ABSENT and PRESENT-BUT-EMPTY are two different
             // requests — `sections.empty()` alone collapses them, so `sections:""` was silently read as the
@@ -1347,6 +1372,13 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 {
                     return mcpArrayArg( args, "symbols", true ).isPresent;
                 }
+                // lane/t10-mcp-coverage: affected's Required `files` — reuses situational_awareness's already-
+                // parsed `files` local (N11: a schema-typed STRING, never an array), which never needed a case
+                // here because situational_awareness's own `files` is Optional (falls back to git diff).
+                if( field == "files" )
+                {
+                    return !files.empty();
+                }
                 return true;   // a field this arm does not parse cannot be reported missing by it
             };
             const auto missingArgMsg = [ & ]() -> std::string
@@ -1433,6 +1465,34 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     const std::string t = analyzeToString( path, topK, stable );
                     resp = t.empty() ? errResult( -32603, "could not render the map (out of memory while building the output buffer) — the path itself is fine" )
                                      : textResult( t );
+                }
+                else if( name == "rank_by" && !path.empty() )
+                {
+                    // lane/t10-mcp-coverage: the MCP twin of --rank-by=pagerank|authority|hub|rrf|churn|churn-decay.
+                    // An absent `rank_by` defaults to "pagerank" — the CLI's own default RankBy when the flag is
+                    // omitted, so a bare call answers the same map `analyze` does. The closed-set violation is
+                    // refused with the CLI's own wording (cli.h's --rank-by= arm); churn/churn-decay are refused
+                    // by NAME rather than silently downgraded — see rankByText's own comment for why they are not
+                    // reachable here yet.
+                    // F9/F11: the default is for an OMITTED field only. A present `rank_by:""` keeps its empty
+                    // value and falls through to the closed-set refusal below, which names it the way the CLI does.
+                    const std::string rbMode = ( !rankByIsPresent && rankByArg.empty() ) ? std::string( "pagerank" ) : rankByArg;
+                    if( rbMode != "pagerank" && rbMode != "authority" && rbMode != "hub" && rbMode != "rrf"
+                        && rbMode != "churn" && rbMode != "churn-decay" )
+                    {
+                        resp = errResultMsg( -32602, "rank_by: unknown value '" + rbMode + "' (supported: pagerank|authority|hub|rrf|churn|churn-decay)" );
+                    }
+                    else if( rbMode == "churn" || rbMode == "churn-decay" )
+                    {
+                        resp = errResultMsg( -32602, "rank_by=" + rbMode + " is not available over MCP yet — it mines git history through the CLI's "
+                                              "parsed-argument path (main.cpp), which this server does not build. Use the CLI: ripwire <dir> --rank-by=" + rbMode );
+                    }
+                    else
+                    {
+                        const std::string t = rankByText( path, rbMode, topK, stable );
+                        resp = t.empty() ? errResult( -32603, "could not render the map (out of memory while building the output buffer) — the path itself is fine" )
+                                         : textResult( t );
+                    }
                 }
                 else if( ( name == "find_symbol" || name == "find_referencing_symbols" ) && !path.empty() && !symbol.empty() )
                 {
@@ -1697,6 +1757,39 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                                                                : errResult( -32603, "internal error: the uses answer buffer lost bytes — no answer served" );
                                              } )
                                            : errResultMsg( -32602, refusal );
+                }
+                else if( name == "affected" && !path.empty() && !files.empty() )
+                {
+                    // lane/t10-mcp-coverage: the MCP twin of --affected=F1,F2|SYM — testmap.h::writeAffectedReport
+                    // is the SAME renderer the CLI arm calls, so the success bytes are answered once, not forked.
+                    // `files` is reused rather than a new field — same string shape and shape-refusal as
+                    // situational_awareness's `files` (a comma-separated spec, never an array), a different
+                    // reading (path pattern OR symbol name, the CLI's own file-first rule).
+                    const McpAffectedResult r = affectedText( path, files );
+                    if( !r.text )
+                    {
+                        resp = errResult( -32603, "internal error: the affected answer buffer lost bytes — no answer served" );
+                    }
+                    else if( r.badSelector )
+                    {
+                        // Same two-reading refusal the CLI prints to stderr (verbs_change.h::runAffected), minus
+                        // the "ripwire: " transport prefix no MCP message carries; the CLI flag spelling stays in
+                        // the retry clause, the same convention qualifiedSelectorRefusal already uses for
+                        // mentions/owners ("--mentions=" / "--owners=").
+                        const IngestResult& afIng     = getIndex( path ).ing;
+                        const std::string   afNearPath = nearestIndexedFileClause( afIng, r.badItem );
+                        resp = errResultMsg( -32602, "affected: '" + r.badItem + "' matches no indexed file path (as a path pattern) and no indexed "
+                                              "symbol (as a symbol name; file:name and path::scope::name also accepted)" + afNearPath
+                                              + ( afNearPath.empty() ? selectorFaultClause( afIng, r.badItem, "--affected=" ) : std::string() ) );
+                    }
+                    else if( r.noSeeds )
+                    {
+                        resp = errResultMsg( -32602, "affected: matched no symbols: " + files );
+                    }
+                    else
+                    {
+                        resp = textResult( *r.text );
+                    }
                 }
                 else if( name == "path_between" && !path.empty() && !from.empty() && !to.empty() )
                 {

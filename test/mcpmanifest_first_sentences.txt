@@ -2,6 +2,7 @@
 # One `name<TAB>first sentence` row per advertised MCP tool. The FIRST sentence is the routing text:
 # what an agent reads to choose a verb. Every other byte of a description may be trimmed; these may
 # not move without a deliberate rewrite, stated in the commit that moves them.
+affected	WHICH TESTS TO RUN for a change — test files that transitively reach the changed files/symbols, ranked by evidence (edited > partner-named > hop distance).
 analyze	Architecture map for a directory: signatures and the call graph for the top symbols.
 batch	ONE-TURN CONTEXT SWEEP: answer up to 16 heterogeneous READ sub-queries in a single call (the deterministic $0 counterpart of a parallel-search agent).
 cochange	Files that historically change together with this file — the co-edit partners.
@@ -27,6 +28,7 @@ owners	Bus-factor: recency-weighted (6-month half-life) author ownership per fil
 path_between	Does A REACH B, and HOW? — the shortest directed CALL path between two symbols, hop-by-hop.
 quality_baseline	PIN the quality floor: writes .ripwire_quality_baseline stamped with the current git HEAD sha, snapshotting complexity / duplication / dead-code / API surface.
 quality_delta	Your PR self-check, run every time you think a change is DONE — pairs with the CLI-only --test-gate (names the tests to run + the untested blast radius; not MCP-exposed) to form the two-step pre-PR gate.
+rank_by	The SAME architecture map 'analyze' serves, ranked by a different signal instead of plain PageRank.
 replace_symbol_body	Replace a symbol's ENTIRE definition (signature through closing brace) with new_body — splices over the full def span, preserving every byte outside it verbatim; new_body must be a complete, well-formed definition.
 situational_awareness	The 5 things to know about a diff, as JSON: blast_radius, tests_to_run, forgotten (usual co-change partners missing from this diff), hotspot_alert, modules_touched.
 slice	WHERE IS THIS VARIABLE DEFINED AND USED inside one function — NAME-BASED intra-procedural def-use rows of one variable inside ONE uniquely-resolved definition (the ARISE slicer, arXiv:2605.03117).
