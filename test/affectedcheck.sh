@@ -301,7 +301,7 @@ printf '%s' "$A" | grep -qE '<test p="test/test_leaf\.cpp" hops="1"|<g hops="1" 
     || no "(7g) core.cpp rows lack hops="
 
 # ── 8) issue #60: a call with no enclosing NAMED function is still a call ─────────────────────────────
-# @thavlik's reproduction, verbatim in shape: a node:test arrow callback calls the changed function, and
+# @YogevKr's reproduction, verbatim in shape: a node:test arrow callback calls the changed function, and
 # the test file's name does not share the source file's stem, so the filename-partner fallback cannot fire.
 # The CONTROL is the same assertion moved into a named function — the contrast that isolated the defect.
 # Before ingest_model.h mintModuleScopeOwners the callback arm read tests="0" and the named arm tests="1";

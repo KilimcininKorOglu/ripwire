@@ -42,9 +42,11 @@ repository); and the map header's `unresolved=` rises — on shell-heavy trees s
 here) — because calls that used to vanish into an ungauged bucket are now counted by the resolver gauges
 they always belonged to. Node count grows 0.3–4.3% depending on corpus, so every `k=` rank shifts slightly.
 
-Reported by @thavlik (the `node:test` arrow-callback arm) and @alex-michaud, whose second arm — that
-module-scope side-effect calls are ordinary production code and not a test-shaped corner — is what made a
-callback-only fix insufficient.
+Reported by **@YogevKr** in #60: a passing `node:test` test calls an imported function from an arrow
+callback and `--affected` reports zero tests, while moving the assertion into a named function restores
+detection. **@alex-michaud** added the arm that made a callback-only fix insufficient — the same root cause
+drops `--callers` and `--impact` edges for a module top-level call in ordinary production code, with no test
+file and no test framework anywhere in the tree.
 
 ### Added — the legend once per session, so an agent stops paying for the same definitions on every call
 
@@ -67,7 +69,7 @@ past to reach the answer. An MCP session can now be served each definition once.
 - **`--legend-dict[=roster]`** prints the same dictionary on the CLI — one definition per line, headed by its
   `dictv=`; `=roster` lists the completeness attributes it defines, as attribute/element/source rows. It is
   answered wherever it appears on the command line and nothing else runs. On this build the dictionary is
-  68,021 B over 700 entries and the roster is 600 rows; a session receives only the entries its own answers
+  68,316 B over 702 entries and the roster is 602 rows; a session receives only the entries its own answers
   used, not the whole thing.
 - **`--legend=ref` refuses on the CLI**, naming the resource and `--legend-dict`. A CLI run is a single answer
   with no session to have been served anything, so a ref answer there would point its reader at definitions
@@ -83,9 +85,12 @@ default posture, `legendrefcheck` for the ref posture.
 `--quality-delta` built its HEAD side by archiving the commit into a temp directory and re-ingesting it. That
 tree is a different **population** from the working tree, and a dead-code verdict is a property of the whole
 population — so a file present on only one side moved the verdict of a symbol in a file both sides shared. On a
-working tree identical to HEAD, with untracked directories present, a reporter saw 58 gating `preexisting-worse`
-dead-code rows and exit 2 (#228), and `--quality-baseline` then refused to pin a floor over that same phantom
-debt, so the documented escape hatch was unavailable exactly where it was needed.
+working tree identical to HEAD, with untracked directories present, **@hnipps** saw 58 gating
+`preexisting-worse` dead-code rows and exit 2 on a Python monolith of ~7,100 tracked files (#228) — every row
+in a test file nobody had touched — and `--quality-baseline` then refused to pin a floor over that same
+phantom debt, so the documented escape hatch was unavailable exactly where it was needed. The case that makes
+it matter is the one reported: the exit code is meant to be a pre-commit gate, and a gate that fires on a
+clean tree cannot be used.
 
 When the tracked tree already **is** HEAD, ripwire now stops materializing a second tree: the baseline is this
 tree's own snapshot, so the comparison is a snapshot against itself and no regression can exist in it. Files the
