@@ -1,9 +1,9 @@
 # `--slice` line recall on an issue-derived Python corpus — ARISE rung 1, measured
 
-**Status: PRE-REGISTRATION ONLY at this commit.** Everything below the `## Results` marker is
-written after the protocol was committed, and this paragraph is the proof of ordering: the commit
-that adds this file contains no number produced by the harness. Amendments made after a first look at
-any result are dated inline and labelled **AMENDMENT**.
+**Status: RUN, 2026-09-20.** The protocol in sections 1 to 6 was committed in `3d994cda` with the
+results section empty — that commit contains no number produced by the harness, which is the proof
+of ordering. Amendments are dated inline and labelled **AMENDMENT**, and each says whether it was
+made before or after a result was seen.
 
 **Scope.** This is the retrieval-quality question ARISE (arXiv:2605.03117) raises, asked of
 ripwire's `--slice` primitive on a corpus ripwire has not measured it on: issue-derived Python fix
@@ -72,7 +72,7 @@ corpus is py-family in its entirety and is reported as such, never averaged with
 1. its `repo` has a local checkout;
 2. `base_commit` resolves as a commit in that checkout;
 3. `edit_functions_length == 1` — exactly one edited function. **Rows failing only this are the
-   by-construction-unreachable population** (§5) and are counted, never scored as misses;
+   by-construction-unreachable population** (§4c) and are counted, never scored as misses;
 4. the single `edit_functions` entry is `PATH:FN` with `PATH` ending `.py`, and `PATH` materializes
    at `base_commit`;
 5. the selector resolves **uniquely**: `FILE:FN` for a plain name, `FILE::CLASS::METHOD` for a
@@ -110,7 +110,7 @@ All arms run on the same instances, at the base commit's own file.
 | **v2** | `--slice=SEL:VAR --slice-flow=both` | rung 2, bounded def-use BFS |
 | **inv** | `--slice=SEL` | the sliceable-local inventory (addressing cost) |
 | **expand** | `--expand=SEL` | whole-body baseline, recall 1.0 by construction, priced in bytes |
-| **file** | the raw file | file-level baseline for §6 |
+| **file** | the raw file | file-level baseline for §5 |
 
 ---
 
@@ -187,4 +187,256 @@ granularity. It cannot speak to ranking a whole repository — see §8.
 
 ## Results
 
-_(empty at the pre-registration commit — filled by the commit that runs the harness)_
+**Binary** `ripwire 0.6.1 (dev, built_from=755f9026f)` — plain dev build, no `-DCMAKE_BUILD_TYPE`.
+**Re-runs:** the full harness was run end to end twice; the summary, every per-instance row and
+every per-variable row compared **identical** (wall-clock timings excluded, as they must be).
+
+**AMENDMENT 2026-09-20 (b), made AFTER seeing the first misses and reported BESIDE the registered
+metric, never instead of it.** The registered relevance oracle is a word regex over the changed
+line's text. It counts a variable's name inside a docstring, a comment, a string literal, and even
+the `f` of an f-string prefix, as an occurrence the slice "ought" to have rowed. A *strict* oracle is
+added: an occurrence counts only when Python's own tokenizer calls it a `NAME` token on that line.
+Both numbers are reported. The registered number is the headline; the strict number is what the
+misses turn out to be made of.
+
+**AMENDMENT 2026-09-20 (c), made after a 6-row smoke run and before the corpus ran.** Two arms were
+added: **R0**, plain source order over the function's lines — "just read the function top-down",
+the baseline an agent actually has — and **line-filtered**, the def-use-covered lines in *source*
+order, which separates the granularity FILTER from the RANKING in §5.
+
+### R1. Corpus — what was usable, and why the rest was not
+
+| stage | rows | note |
+| --- | ---: | --- |
+| dataset | **560** | LocBench V1 test; every `edit_functions` path is `.py` |
+| multi-function (`edit_functions_length > 1`) | **208** | out of reach by construction — §R3, not a miss |
+| single-function | 352 | |
+| …no local checkout | 169 | 90 of the dataset's 165 repositories are on disk |
+| …`base_commit` absent from the checkout | 1 | |
+| **carried to the harness** | **182** | 1 040 gold lines |
+| …selector refused, plain `FILE:FN` | 3 | |
+| …selector refused, scoped `FILE::CLASS::METHOD` | 2 | |
+| …`--expand` served no body | 2 | |
+| …every gold line outside the resolved span | 2 | |
+| **scored instances** | **173** | 2 453 `--slice` calls per arm; **498** (instance, variable) pairs |
+
+Selector resolution on the one-file tree is **177/182 = 97.3 %**. That is an upper bound (§2), and
+§R6 prices the gap.
+
+### R2. Set recall — the registered shape, at the pre-fix tree
+
+498 (instance, variable) pairs; 480 of them also scoreable under the strict oracle.
+
+| metric | registered oracle | strict oracle |
+| --- | ---: | ---: |
+| v1 per-variable line-recall (mean) | **0.932** | **0.995** |
+| v1 hit-all rate | **0.902** | **0.994** |
+| v2 (`--slice-flow=both`) per-variable line-recall | 0.935 | — |
+| v1 over-inclusion, rows / relevant lines | 5.12× | — |
+| v2 over-inclusion | 12.46× | — |
+
+**Every miss was inspected, not sampled** (`bench/slice/inspect_slice_misses.py`). 100 gold lines
+miss under the registered oracle. **97 of the 100** are lines where the variable's name is not a
+`NAME` token at all — docstring prose, a trailing comment, a string literal, and in one instance the
+`f` of `f"Incompatible safetensors file…"` matching a local called `f`. The **3** that survive the
+strict oracle are all the same construct, a **keyword-argument name that collides with a local**:
+
+```
+pydantic-10789  var=schema  L1918: lambda x, h: h(x), schema=core_schema.any_schema()
+dask-11539      var=store   L3759: z = zarr.open_array(store=url, read_only=True, path=component, **kwargs)
+feast-4727      var=actions L235 : assert_permissions(resource=feature_view, actions=[AuthzedAction.WRITE_ONLINE])
+```
+
+In all three the `store=` / `schema=` / `actions=` token is the **callee's** parameter name, not a
+use of the local — so the classifier is right and the gold line is one the localization task wants
+but the def-use relation genuinely does not contain. **On this corpus the slicer drops no real
+identifier occurrence.** This replicates, on a different family and a different corpus shape, the
+2026-08-30 cpp reading that the misses belong to the oracle rather than to the slice; that reading
+was a per-instance inspection then and is an exhaustive, tokenizer-decided classification now.
+
+### R3. Reachability — what is out of reach by construction
+
+The primitive is name-based and intra-procedural. Two cascades, kept apart on purpose.
+
+**Dataset-level, over all 560 rows and all 9 615 gold lines** (computed without reference to which
+repositories happen to be on disk):
+
+| population | rows | gold lines | share of gold |
+| --- | ---: | ---: | ---: |
+| multi-function fixes — **out of reach by construction** | 208 | **6 809** | **70.8 %** |
+| single-function fixes — addressable in principle | 352 | 2 806 | 29.2 % |
+
+A fix spanning functions cannot be served by an intra-procedural slice at all. **Seven in ten gold
+lines in this corpus live in such a fix.** That is the single largest number in this document and it
+is a statement about the primitive's ceiling, not about its accuracy.
+
+**Within the 173 scored instances**, per gold line:
+
+| stage | gold lines | share of resolved |
+| --- | ---: | ---: |
+| carried into the harness | 1 040 | — |
+| in an instance whose selector resolved and whose body was served | 945 | 100 % |
+| **inside the resolved function's span** | **809** | **85.6 %** |
+| …and naming a variable in that function's own sliceable inventory | **536** | **56.7 %** |
+
+The 136 lines inside a single-function row but outside the function's span are import lines,
+decorators and module-level constants the patch also touched — the row's `edit_functions` names one
+function, the patch is not confined to it. The 273 further lines are inside the function but name no
+local: `self.x` attribute writes, bare `return`, `raise`, blank/comment anchors, and calls whose
+arguments are all literals.
+
+**So: 56.7 % of the gold of the reachable population is addressable by a per-variable slice, and of
+that 56.7 %, the slice recovers 99.5 % (strict) / 93.2 % (registered).** Those two numbers multiply;
+neither on its own is the primitive's line recall.
+
+### R4. Rank — does the primitive order, or only present?
+
+Candidate pool = every line of the resolved function (mean span **86.9** lines; mean inventory
+**14.2** sliceable locals). Instance mean of Recall@k, n = 173.
+
+| order | @1 | @3 | @5 | @10 | @20 | MRR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **R0** source order (read the function top-down) | 0.029 | 0.099 | 0.156 | 0.263 | 0.428 | 0.154 |
+| **CTL** random permutation (200 shuffles, seed 20260920) | 0.042 | 0.123 | 0.191 | 0.321 | 0.498 | 0.234 |
+| **R1** def-use coverage | **0.048** | **0.206** | **0.311** | **0.455** | **0.595** | **0.289** |
+| **R2** flow depth, `--slice-flow=both` | 0.048 | 0.206 | 0.311 | 0.455 | 0.595 | 0.289 |
+| *R2-oracle* seeded with the gold-touching variables | *0.053* | *0.292* | *0.415* | *0.570* | *0.706* | *0.349* |
+
+Three readings, in descending order of how much they matter.
+
+1. **The ordering carries real signal, and it is modest.** R1 beats the random control at every
+   depth — +8.3 pp @3, +12.0 pp @5, +13.4 pp @10 — and beats it on MRR 0.289 vs 0.234. It is not
+   close to pinpointing: **@1 is 0.048 against a 0.042 chance rate**, which is no effect worth
+   naming. The primitive re-ranks a shortlist; it does not name the line.
+2. **Reading the function top-down is worse than random** (MRR 0.154 vs 0.234). Fixes cluster away
+   from the function head, so the default presentation order an agent gets is an actively bad
+   ranking, and *anything* is an improvement on it. Half of what looks like "the slice ranks well"
+   is really "source order ranks badly".
+3. **`--slice-flow=both` adds exactly nothing here, and the reason is structural.** R1 and R2 are
+   identical to every digit, and the fraction of the function's lines the flow rows reach equals the
+   fraction the flat rows reach, to 16 decimal places (0.5126 both). This is not a coincidence and
+   not a bug: a flow row at depth ≥ 1 is a line where *another* variable `w` occurs, so that line is
+   already in `w`'s own flat slice. **Unioned over the whole inventory, rung 2 is provably
+   redundant.** Flow's value is confined to the *seeded* case — you know which variable you care
+   about and you do not want the other thirteen slices — which is exactly what the R2-oracle row
+   measures, and there it is worth +8.6 pp @3 over unseeded R1.
+
+The def-use filter keeps **51.3 %** of the function's lines. That is the granularity floor moving:
+half the body is dropped before any ranking happens.
+
+### R5. Granularity versus presentation — the paper's question
+
+Same correct function, same byte budget, different granularity. All four payloads are delivered as
+`line-number: source text`, so the numbering costs the same in every arm and the score is an exact
+line-number match. Instance mean over the 173 instances.
+
+**All instances:**
+
+| budget | file (from line 1) | file (window on the fn) | symbol (`--expand`) | line-filtered | line-ranked |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 512 B | 0.004 | 0.329 | 0.286 | 0.373 | **0.411** |
+| 1 024 B | 0.015 | 0.500 | 0.457 | 0.505 | **0.560** |
+| 2 048 B | 0.057 | 0.693 | 0.682 | **0.744** | 0.738 |
+| 4 096 B | 0.116 | 0.840 | 0.857 | 0.868 | **0.872** |
+
+Symbol-level is 1.0 by construction whenever the body fits the budget, so the comparison only bites
+where it does not. **Restricted to instances whose body does NOT fit:**
+
+| budget | n | file (window) | symbol | line-filtered | line-ranked | filter gain | ranking gain |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 512 B | 150 | 0.226 | 0.176 | 0.276 | **0.321** | **+10.0 pp** | +4.4 pp |
+| 1 024 B | 129 | 0.330 | 0.272 | 0.336 | **0.410** | **+6.4 pp** | +7.4 pp |
+| 2 048 B | 94 | 0.435 | 0.414 | **0.530** | 0.517 | **+11.6 pp** | −1.3 pp |
+| 4 096 B | 51 | 0.458 | 0.517 | 0.552 | **0.567** | +3.6 pp | +1.5 pp |
+
+*filter gain* = line-filtered − symbol (granularity alone, source order preserved).
+*ranking gain* = line-ranked − line-filtered (ordering alone, same lines).
+
+**Answer: finer granularity changes retrieval quality, not only presentation — and on this corpus
+the granularity is worth more than the ordering.** The filter is worth +3.6 to +11.6 pp at equal
+bytes and is positive at every budget; the ranking adds +1.5 to +7.4 pp and at 2 048 B it is
+*negative*. Both effects shrink as the budget grows, which is what "granularity floor" predicts: the
+floor only binds when the budget is below the symbol.
+
+The honest size of the claim: at a 512-byte budget, line-level delivery gets 32 % of the gold lines
+in front of the agent where whole-function delivery gets 18 %. That is a real lift and it is
+nowhere near ARISE's +17 pp on Function Recall@1, because it is not the same measurement — this one
+is handed the correct function and ARISE's is not (§6).
+
+### R6. Cost
+
+| arm | mean output bytes | share of `--expand` | wall clock, median | mean |
+| --- | ---: | ---: | ---: | ---: |
+| `--slice=SEL` (inventory) | 1 297 | 21 % | 43.9 ms | 51.4 ms |
+| `--slice=SEL:VAR` (v1) | 1 152 | **18 %** | 9.3 ms | 11.5 ms |
+| `--slice=SEL:VAR --slice-flow=both` (v2) | 2 087 | 34 % | 9.7 ms | 12.0 ms |
+| `--expand=SEL` | 6 230 | 100 % | 7.1 ms | 8.1 ms |
+
+The inventory call is the first invocation against each tree and pays the index build; v1/v2/expand
+are warm. n = 2 453 for v1 and v2, 173 for inv and expand.
+
+**The one-file-tree deviation, priced** (`bench/slice/probe_wholerepo_selector.py`, a deterministic
+16-instance sample materialized read-only with `git archive`):
+
+| | one-file tree | whole tree at `base_commit` |
+| --- | ---: | ---: |
+| selector resolves uniquely | 97.3 % (177/182) | **87.5 % (14/16)** |
+| cold `--slice=SEL` wall clock | 43.9 ms median | **435 ms mean** (68 – 979 ms, 65 – 2 794 py files) |
+
+Both failures on the whole tree are ambiguity refusals — a bare method name matching definitions in
+several classes across the repository. So roughly **one selector in eight needs qualifying** on a
+real checkout, and the refusal names the qualifying spellings rather than guessing, which is the
+behaviour we want but is also a round trip the agent pays for.
+
+---
+
+## 7. Where our construct is weaker than ARISE's
+
+Named so the gaps can be argued with, each with what we expect it to cost.
+
+| gap | ours | ARISE | expected cost |
+| --- | --- | --- | --- |
+| **def-use relation** | name-based: an occurrence of the identifier, classified by role | true def-use by the reaching-definition rule over an AST | Over-inclusion, not under-inclusion: 5.12× rows per relevant line. R2's strict recall of 0.995 says we lose almost nothing; the price is precision, and precision is exactly what a ranking needs. We expect a true def-use relation to help @1 far more than @10. |
+| **aliasing** | none | none stated for the slicer either | Unknown, probably similar. Python's `a = b` on a mutable object makes both names live; we row neither for the other. |
+| **scope** | scope-insensitive; shadowing may over-include | explicit global/nonlocal handling | Python comprehension and `except … as` bindings shadow constantly; we suspect a share of the 5.12× over-inclusion is this, and we have not separated it. |
+| **statement granularity** | one row per source LINE | AST statement nodes | A multi-statement line merges; a statement continued across lines splits. Python's style makes the second the common case, and it will *understate* recall wherever a gold line is a continuation line of a statement we rowed at its first line. We have not measured how often. |
+| **inter-procedural** | none — refuses to leave the definition | also stops at function boundaries in the slicer; expansion lives in its call-graph tier | **This is the big one.** 70.8 % of this corpus's gold lines are in multi-function fixes. ARISE has a tier that covers them; rung 1 and rung 2 do not, and the number above is what that costs. |
+| **seed** | `(symbol, variable)`, or `@FILE:LINE` | `(file, line, variable)` | Equivalent in reach. Ours forces a name the caller may not have; the inventory call that supplies it costs 1 297 B and a round trip. |
+| **addressing** | no `Class.method` spelling — `FILE::CLASS::METHOD` only | n/a | 12.5 % of real-checkout selectors refuse as ambiguous. Costs a round trip each; never a wrong answer. |
+
+## 8. What we would like help with
+
+Written as questions, because we expect several of these to have obvious answers we have missed.
+
+1. **Is the +17 pp attributable to the relation, or to the ceiling?** Our name-based relation loses
+   essentially nothing in recall (0.995 strict) and pays in precision (5.12× over-inclusion). If the
+   paper's gain came from *precision* rather than *coverage*, name-based def-use is a dead end for
+   ranking and we should build the real thing. Does the ablation separate these?
+2. **Is our intra-procedural reading of the paper's slicer right?** We read §"stops at function
+   boundaries" as the slicer proper, with cross-function expansion in the call-graph tier. If the
+   slicer itself crosses boundaries, our 70.8 %-out-of-reach figure is a self-inflicted ceiling and
+   we would change the design rather than report the number.
+3. **What is the right relevance oracle for a line-level gold?** Ours went from 0.932 to 0.995 by
+   switching from a word regex to a tokenizer. Both are defensible and the difference is 6 points.
+   How is Line Recall's gold decided in the paper — post-image added lines, pre-image deleted lines,
+   or a tokenized identifier match?
+4. **How should a keyword-argument name that shadows a local be scored?** The only three misses that
+   survive our strict oracle are exactly this. The def-use relation says "not an occurrence"; the
+   localization task says "a line the fix touched". We currently count it as a miss and think that
+   is wrong.
+5. **Does statement-node granularity beat line granularity enough to be worth the rebuild?** We
+   expect it matters most for continuation lines, which Python produces constantly, and we have not
+   measured it.
+
+## 9. Reproducing
+
+```bash
+python3 bench/slice/locbench_gold.py        --assets <assets> --json gold.json
+python3 bench/slice/run_slice_linerecall.py --gold gold.json --bin build/ripwire --work <scratch> --json results.json
+python3 bench/slice/inspect_slice_misses.py --results results.json --gold gold.json
+python3 bench/slice/probe_wholerepo_selector.py --gold gold.json --bin build/ripwire --work <scratch> --sample 16
+```
+
+`<assets>` is a directory holding `datasets/<dataset>.json` and one or more directories of
+`owner__repo` checkouts. Nothing is downloaded and no checkout is written to. Gold is built without
+invoking ripwire, so it cannot move when the binary does.
