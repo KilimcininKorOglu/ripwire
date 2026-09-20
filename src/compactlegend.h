@@ -284,6 +284,13 @@ struct CompactCompletenessTerm
                                           // element means different things on two verbs (<f files=> on context-ratio vs ensemble)
 };
 
+// #60: the escaped spelling of the module-scope owner's name, as it reaches a rendered document, and the
+// compact reading it pulls in. One constant each so the scan and the sentence cannot drift apart.
+inline constexpr std::string_view kModScopeEscapedName = "&lt;file-scope&gt;";
+inline constexpr std::string_view kCompactModScopeReading =
+    "<file-scope> (t=modscope): a file's MODULE SCOPE — where a top-level call and an anonymous callback "
+    "body's calls live; a CALLER, never a callee, with no body to expand";
+
 inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
 {
     { "counts_floor",      "counts_floor=1: every count is a FLOOR, never a total" },
@@ -305,6 +312,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
     { "declined_calls",    "declined_calls=K: K call sites left unbound (several defs, none chosen), in no count or row" },
+    // #60: <bodies bodyless=N> — requested symbols with no body BY CONSTRUCTION (a module-scope owner), so
+    // capped= stays 0. Absent at zero, like every term here.
+    { "bodyless",          "bodyless=N of total=: requested symbols with NO body by construction (t=modscope), never in shown=, never raising capped=", true },
     // --uses=Owner.field's member form (fielduses.h appends kUsesFieldLegend to that answer alone). owner_candidates= is a
     // row attribute that exists only beside member=, so one head term defines the whole form.
     { "member",            "member=Owner.field: rows use that field; pinned=/amb_sites= rows with one owner/with owner_candidates=K; owners_of_name= fields so named" },
@@ -1170,6 +1180,9 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // quality-delta: src/verbs_quality.h (range attrs, duplication r row); staleAcksXml in src/quality.h
     { "key", "sa key=/why=: the stale ack's ledger hash / target-gone (names nothing now) or finding-gone (no longer fires)", true, "sa", MapHeaderRead::No, {}, "quality-delta" },   // also defines why=
     { "members", "r members=/tokens=: a duplication row's clone group (member ids) / their shared normalized-token count", true, "r", MapHeaderRead::No, {}, "quality-delta" },   // also defines tokens=
+    // #228: which git-HEAD floor answered. A zero from a self-comparison and a zero from an archived
+    // comparison are different claims, so the attribute is present-only and its ABSENCE is the archived tree.
+    { "head_basis", "head_basis=identity: the floor is this tree's own snapshot; archived-index-hidden: refused, a tracked path is skip-worktree/assume-unchanged; absent: the archived HEAD tree", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "base_ref", "base_ref=/target_ref=: the two resolved full shas a range compared (committed trees; at= omitted)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },   // also defines target_ref=
     { "churn", "churn=unavailable: range form; short-horizon-churn cannot be measured, so its silence is not no churn", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     // from-trace: src/tracelocus.h (frame and skipped rows)
@@ -1626,6 +1639,20 @@ inline std::string compactLegendText( const CompactLegendSpec& spec, std::string
     {
         out += ' ';
         out.append( compactReading( i ).reading );
+        out += '.';
+    }
+    // #60: the module-scope owner is the one kind that arrives under a dozen different spellings —
+    // <s t="modscope">, a columnar <kind> array item, <h n=>, <edge caller=>, <u sym=>, <c n=>, <t t=> —
+    // so keying this reading on an element or an attribute would have to enumerate them and would miss the
+    // next one. It keys on the NAME instead, which every surface escapes identically and which no source
+    // identifier can collide with (angle brackets are not a legal identifier in any indexed language).
+    // Present-only like every reading above: a document without such a row pays 0 bytes. It sits outside
+    // compactPresentTerms deliberately — that function answers "which TERM-TABLE rows are present", and this
+    // reading is not one of them (test/compactlegendcheck.sh arm (S) proves it live instead of by a row).
+    if( doc.find( kModScopeEscapedName ) != std::string_view::npos )
+    {
+        out += ' ';
+        out.append( kCompactModScopeReading );
         out += '.';
     }
     out += " -->";

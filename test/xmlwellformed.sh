@@ -260,6 +260,80 @@ fi
 
 # ── summary ─────────────────────────────────────────────────────────────────────────────
 echo
+# ── #60 — WITH A MODULE-SCOPE OWNER IN THE BODY SET ─────────────────────────────────────
+# WHY THIS SECTION EXISTS, in this gate's own §B4b terms: a document's shape can break on the KIND of row it
+# carries, not on the flags it was asked for, and a bare invocation cannot see it. `packBodies` writes a
+# legend comment ahead of its `<bodies …>` tag when a requested symbol has no body by construction (a
+# t="modscope" module-scope owner, issue #60), and that comment contains `n=<file-scope>` — an angle bracket
+# in legend PROSE. `packtask.h`'s restating wrapper found the tag with `find( '>' )`, so it spliced inside the
+# comment and emitted TWO `<bodies` opens and one close. Every case above passed: none of them puts an owner
+# in a body set. So the corpus is BUILT here rather than sampled, and the callers of packBodies are walked
+# over it — the same "derive it, do not hand-pick it" rule §B4b states, applied to a row KIND.
+MS="$TMP/modscope"; mkdir -p "$MS/src"
+printf 'export function setPhase(phase: string): void {\n  console.log(phase)\n}\n' > "$MS/src/lifecycle.ts"
+printf "import { setPhase } from './lifecycle'\n\nexport function boot(): void {\n  setPhase('booting')\n}\n\nsetPhase('starting')\n" > "$MS/src/index.ts"
+# premise: this corpus really does mint an owner, so the cases below are not vacuous
+if "$BIN" "$MS" --no-cache --callers=setPhase 2>/dev/null | grep -q 't="modscope"'; then
+    ok "#60 premise: the built corpus mints a module-scope owner"
+else
+    no "#60 premise: no t=\"modscope\" row in the built corpus — every case below would prove nothing"
+fi
+check_xml "#60 --pack-task, owner named"        "$MS" --pack-task='<file-scope> setPhase'
+check_xml "#60 --pack-task, owner ranked in"    "$MS" --pack-task='module scope of a file'
+check_xml "#60 --pack-task --with-graph"        "$MS" --pack-task='<file-scope> setPhase' --with-graph
+check_xml "#60 --partition + --pack-task"       "$MS" --partition=2 --pack-task='<file-scope> setPhase'
+check_xml "#60 --expand on the owner"           "$MS" --expand='<file-scope>'
+check_xml "#60 --expand owner + real symbol"    "$MS" --expand='<file-scope>,setPhase'
+check_xml "#60 --for names the owner"           "$MS" --for='module scope of a file'
+check_xml "#60 --callers of the owner's callee" "$MS" --callers=setPhase
+check_xml "#60 --impact"                        "$MS" --impact=setPhase
+check_xml "#60 --safe-delete"                   "$MS" --safe-delete=setPhase
+check_xml "#60 --edit-check"                    "$MS" --edit-check=setPhase
+check_xml "#60 --graph-query kind(all,modscope)" "$MS" --graph-query='kind(all,modscope)'
+check_xml "#60 --tree"                          "$MS" --tree
+check_xml "#60 --pack-task at CORPUS width"     "$ROOT" --pack-task='scope of a file'
+# …and the structural fact the malformed shape broke: exactly ONE <bodies element, and it is not restamped
+# as capped over a body that never existed.
+#
+# CodeRabbit 4057546154: the two blocks below are the first in this gate to need python3 — one to count
+# <bodies opens outside comments, one to unwrap the MCP envelope. Without it, `$( … | python3 … )` is the
+# EMPTY STRING and both report a failure that is about the environment, not about the binary: BOPEN="" is
+# "not 1", and an empty MCP payload is "did not answer". A gate that cannot tell a missing interpreter
+# from a real defect is worse than one that says so, so the prerequisite is checked ONCE, by name, and the
+# section skips with the reason. Every arm above this point uses only the shell and xmllint and still runs.
+if ! command -v python3 >/dev/null 2>&1; then
+    printf '  SKIP  #60 <bodies> structure and the MCP explore twin — python3 is not on PATH (prerequisite, not a failure)\n'
+else
+PT="$( "$BIN" "$MS" --no-cache --pack-task='<file-scope> setPhase' 2>/dev/null )"
+BOPEN="$( printf '%s' "$PT" | python3 -c 'import sys,re; d=sys.stdin.read(); print(len(re.findall(r"<bodies[ >]", re.sub(r"<!--.*?-->","",d,flags=re.S))))' )"
+BCLOSE="$( printf '%s' "$PT" | grep -o "</bodies>" | wc -l | tr -d " " )"
+[ "$BOPEN" = 1 ] && [ "$BCLOSE" = 1 ] \
+    && ok "#60 --pack-task emits exactly one <bodies> element (open=$BOPEN close=$BCLOSE)" \
+    || no "#60 --pack-task emits open=$BOPEN close=$BCLOSE <bodies> — the wrapper spliced inside a legend comment"
+printf '%s' "$PT" | grep -qE '<bodies shown="[0-9]+" total="[0-9]+" capped="0" bodyless="1">' \
+    && ok "#60 --pack-task restates capped=\"0\" bodyless=\"1\": a bodyless owner is not an over-budget cut" \
+    || no "#60 --pack-task restated the bodies tag wrongly: $( printf '%s' "$PT" | grep -oE '<bodies shown[^>]*>' )"
+printf '%s' "$PT" | grep -q 'body omitted (over budget): &lt;file-scope&gt;' \
+    && no "#60 --pack-task marks the owner as an over-budget omission — it has no body to omit" \
+    || ok "#60 --pack-task does not call the owner an over-budget omission"
+# the MCP twin of the same document (explore = --pack-task), through one tools/call round trip
+mcp_text(){ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+                          "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" \
+    | "$BIN" --mcp 2>/dev/null | tail -1 | python3 -c '
+import sys,json
+try:    d=json.loads(sys.stdin.read() or "{}")
+except Exception as e: sys.stdout.write("__ERROR__ unparseable: %s"%e);  raise SystemExit
+if "error" in d: sys.stdout.write("__ERROR__ %s"%d["error"].get("message",""));  raise SystemExit
+sys.stdout.write(d.get("result",{}).get("content",[{}])[0].get("text",""))'; }
+MCPTXT="$( mcp_text explore "{\"path\":\"$MS\",\"task\":\"<file-scope> setPhase\"}" )"
+case "$MCPTXT" in
+    __ERROR__*|"") no "#60 MCP explore did not answer: ${MCPTXT:-empty}" ;;
+    *) printf '%s' "$MCPTXT" | xmllint --noout - 2>/dev/null \
+           && ok "#60 MCP explore (the --pack-task twin) is well-formed with an owner in the body set" \
+           || { no "#60 MCP explore rejected by xmllint"; printf '%s' "$MCPTXT" | xmllint --noout - 2>&1 | head -3; } ;;
+esac
+fi   # end of the python3-dependent #60 section
+
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"
     exit 0

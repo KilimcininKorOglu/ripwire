@@ -3052,9 +3052,17 @@ std::optional<int> runStructureText( const MainDispatch& d )
         }
 
         std::vector<std::pair<std::uint64_t, std::vector<SeamEdge>*>> pairs;
+        // #60: does any collected seam edge have a module-scope owner as its CALLER? A top-level call across
+        // a directory boundary is a real untested seam, and the kind's reading is owed wherever it is shown.
+        bool stHasModScope = false;
         for( auto& kv : grp )
         {
             pairs.push_back( { kv.first, &kv.second } );
+            for( const SeamEdge& e : kv.second )
+            {
+                stHasModScope = stHasModScope
+                    || ( e.u < ing.symbols.size() && ing.symbols[ e.u ].kind == SymKind::ModuleScope );
+            }
         }
         std::sort( pairs.begin(), pairs.end(), [ & ]( const auto& a, const auto& b )
                    { return a.second->size() != b.second->size() ? a.second->size() > b.second->size() : a.first < b.first; } );
@@ -3064,7 +3072,8 @@ std::optional<int> runStructureText( const MainDispatch& d )
         // §B12.5 — the UNIT clause is the same sentence on all three verbs that spell `untested=` (see
         // situ.h's kTestGateLegend and flipimpact.h's writeFlipHeader). Each legend was locally honest,
         // which is precisely why a reader comparing two of the numbers is misled.
-        rw::emitTo( stdout, "<!-- ripwire seams: cross-directory call edges NO test reaches (untested integration seams; a fact, not a mandate). module = parent dir; seam = caller-dir -> callee-dir, spelled from= and to=. Each seam pages its own edge rows with shown=/capped=; an edge names caller= at site p= calling callee= at site cp=. UNIT: untested= here counts cross-directory call EDGES. The test gate verb spells untested= over impacted SYMBOLS and the flip verb over the defs a gate lights, so the three numbers count three different things and must never be compared or summed across verbs. raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it). {}{}-->{}",
+        rw::emitTo( stdout, "<!-- ripwire seams: cross-directory call edges NO test reaches (untested integration seams; a fact, not a mandate). module = parent dir; seam = caller-dir -> callee-dir, spelled from= and to=. Each seam pages its own edge rows with shown=/capped=; an edge names caller= at site p= calling callee= at site cp=. UNIT: untested= here counts cross-directory call EDGES. The test gate verb spells untested= over impacted SYMBOLS and the flip verb over the defs a gate lights, so the three numbers count three different things and must never be compared or summed across verbs. raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it). {}{}{}-->{}",
+                     rw::modScopeLegend( stHasModScope ),   // #60: exactly when a <edge caller="<file-scope>"> row is
                      rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( stSingleRoot ) );
         // P2.1: two nested caps, neither previously marked — at most 20 seam PAIRS, and at most 5 example
         // EDGES inside each. Each <seam> gains shown= alongside its true untested= count.

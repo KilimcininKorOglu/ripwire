@@ -15,6 +15,39 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a call written outside every named function now has a caller, so `callers`, `impact`, `affected` and `test-gate` stop answering one short (#60)
+
+A reference was attributed to the innermost definition whose span contains it, so a call written where no
+definition reaches — a module top-level statement, or a call inside an anonymous callback body — had no
+caller at all. No edge was minted, and the four verbs that walk those edges each answered short: `--affected`
+could report `tests="0"` for a source file a passing test genuinely exercises, and `--callers` could report
+`count="0"` for a function that framework registration, DI wiring or route setup calls at module scope.
+
+Measured before the change with `--pin-census`, as the share of call sites with no caller node: **72.8% of
+vue-core**, 54.8% of this repository, 1.6% of django, 1.0% of llvm-project. On a TypeScript corpus this was
+the majority of the call graph.
+
+Ingest now mints one **module-scope owner** per file that holds such a call, over exactly the population the
+resolver counts as a call, so the two cannot disagree about what a call is. It is labelled rather than
+disguised — `t="modscope"`, named `<file-scope>`, a caller that nothing can name and so never a callee, with
+no body: `--expand` on one answers `bodyless="1" capped="0"` rather than serving the file. Every legend that
+can show the kind defines it, in the full and compact dialects alike, and only when a row is actually
+present. The fix is language-neutral: twelve indexed languages were measured to carry the defect, and all
+twelve take the same path. Two gaps are stated rather than fixed, because they are upstream: a Ruby bare-word
+call without parentheses and a C# top-level-statements call produce no call reference to own.
+
+What a reader will notice: `--callers`/`--impact`/`--affected` counts rise where such calls exist; a
+`--uses` row for a file-scope call gains `in_id=<file-scope>`; the call graph gains edges (+14% on this
+repository); and the map header's `unresolved=` rises — on shell-heavy trees substantially (5,370 → 12,232
+here) — because calls that used to vanish into an ungauged bucket are now counted by the resolver gauges
+they always belonged to. Node count grows 0.3–4.3% depending on corpus, so every `k=` rank shifts slightly.
+
+Reported by **@YogevKr** in #60: a passing `node:test` test calls an imported function from an arrow
+callback and `--affected` reports zero tests, while moving the assertion into a named function restores
+detection. **@alex-michaud** added the arm that made a callback-only fix insufficient — the same root cause
+drops `--callers` and `--impact` edges for a module top-level call in ordinary production code, with no test
+file and no test framework anywhere in the tree.
+
 ### Added — the legend once per session, so an agent stops paying for the same definitions on every call
 
 Every XML answer carried its own legend, so an agent making repeated calls in one session bought the same
@@ -36,7 +69,7 @@ past to reach the answer. An MCP session can now be served each definition once.
 - **`--legend-dict[=roster]`** prints the same dictionary on the CLI — one definition per line, headed by its
   `dictv=`; `=roster` lists the completeness attributes it defines, as attribute/element/source rows. It is
   answered wherever it appears on the command line and nothing else runs. On this build the dictionary is
-  68,021 B over 700 entries and the roster is 600 rows; a session receives only the entries its own answers
+  68,316 B over 702 entries and the roster is 602 rows; a session receives only the entries its own answers
   used, not the whole thing.
 - **`--legend=ref` refuses on the CLI**, naming the resource and `--legend-dict`. A CLI run is a single answer
   with no session to have been served anything, so a ref answer there would point its reader at definitions
@@ -46,6 +79,46 @@ This amends guardrail **G4**, which said the legend is emitted once at the top o
 answer on the CLI and once per session on the agent surfaces. `CLAUDE.md` and `CONTRIBUTING.md` carry the new
 wording and name the gates that hold it — `legendcoveragecheck` (G) and `compactlegendcheck` (UG) for the
 default posture, `legendrefcheck` for the ref posture.
+
+### Fixed — `--quality-delta` on a tree that is already HEAD stops reporting phantom debt
+
+`--quality-delta` built its HEAD side by archiving the commit into a temp directory and re-ingesting it. That
+tree is a different **population** from the working tree, and a dead-code verdict is a property of the whole
+population — so a file present on only one side moved the verdict of a symbol in a file both sides shared. On a
+working tree identical to HEAD, with untracked directories present, **@hnipps** saw 58 gating
+`preexisting-worse` dead-code rows and exit 2 on a Python monolith of ~7,100 tracked files (#228) — every row
+in a test file nobody had touched — and `--quality-baseline` then refused to pin a floor over that same
+phantom debt, so the documented escape hatch was unavailable exactly where it was needed. The case that makes
+it matter is the one reported: the exit code is meant to be a pre-commit gate, and a gate that fires on a
+clean tree cannot be used.
+
+When the tracked tree already **is** HEAD, ripwire now stops materializing a second tree: the baseline is this
+tree's own snapshot, so the comparison is a snapshot against itself and no regression can exist in it. Files the
+tree holds that HEAD does not track — untracked files, an untracked nested repository, a checked-out submodule —
+stay in the crawl and in the graph, but not in the baseline, so their own debt is still reported as `new-symbol`
+exactly as before, and the count is stated on stderr. The CLI delta, the CLI `--quality-baseline` pin and the MCP
+`quality_delta` verb all take the same basis, through one function.
+
+Measured on a nine-file fixture whose working tree is identical to HEAD, gating rows before → after: an untracked
+directory 1 → 0, an untracked nested repository 2 → 0, a tracked file marked `export-ignore` 1 → 0, `--no-ignore`
+over a gitignored same-named definition 1 → 0 — exit 2 → 0 in each. A shallow clone read zero both before and
+after; it was a bystander in the report. A real edit that deletes a function's only caller still gates exactly one
+dead-code row in the hardest of those shapes. New arms in `test/qualitycheck.sh` pin the invariant, its
+sensitivity controls and its determinism across cold, warm and a fresh temp directory.
+
+**Two checkout shapes are NOT fixed, and the answer says so rather than implying otherwise.** A tracked path
+carrying `git update-index --skip-worktree` or `--assume-unchanged` hides its own bytes from git, so the
+identity basis cannot be trusted over it and is refused: that tree takes the archived comparison and keeps
+gating. For a hidden **edit** that is the right answer — the change is real, only concealed — and for a
+**sparse checkout** it is a known gap: the archived tree is not sparse-aware, so an excluded caller can still
+gate a phantom row. Both cases now name the basis on the root, `head_basis="archived-index-hidden"`, instead of
+leaving a reader to guess why the fast path vanished; `head_basis="identity"` marks the answers above, and its
+absence is the ordinary archived comparison. Closing the sparse gap is follow-on work, tracked with the rest of
+the archived-path population problem below.
+
+A tree that carries tracked **modifications** still takes the archived-HEAD path, so a population difference can
+still move a verdict there; `prompts/help-wanted/quality-delta-unchanged-tree-zero.md` is where that follow-on
+lives.
 
 ### Fixed — the MCP `for` bundle defines `at=`, `ccx=` and `next=`, which it was already emitting
 

@@ -39,8 +39,12 @@
 #   (C) controls, each one census decision row, exactly as the pre-change binary emitted it:
 #       same-directory duplicates -> split (Java, C++, Python); a unique global -> unique (Java, C++, Python);
 #       a Rule-1 `narrowed` rescue (Widget::run -> step, flags r); a `canonical` rescue (ns::pick, flags q);
-#       an external name -> external (C++ find, Python sum); header edges=13 ambiguous=5 unresolved=2 external=2
+#       an external name -> external (C++ find, Python sum); header edges=14 ambiguous=5 unresolved=2 external=2
 #       (unresolved: the lang-filtered C++ name, plus the Elixir lexical refusal of arm B)
+#       edges RE-PINNED 13 -> 14 (2026-09-20, issue #60): py/caller/caller.py calls py_undefined() at MODULE
+#       level. That call had no caller node, so it was bucketed file_scope and minted no edge; it now belongs
+#       to that file's module-scope owner (one t="modscope" row, symbols 130 -> 131) and binds. A REAL Python
+#       top-level call the map was missing, not a new fixture.
 #   (D) header declined=16, legend-defined, JSON twin; both ABSENT on a one-directory corpus (test/lpinfix)
 #   (E) the three answers in XML / --json / --format=columnar and the MCP twins; each legend defines the key it
 #       emits, and an answer with nothing declined carries neither the key nor its clause; the callers answer's next=
@@ -215,7 +219,7 @@ R="$( root_tag "$TMP/split.xml" callees )"
     && ok "(C) a same-directory split is an edge pair, never a decline: --callees=javaSplit count=\"2\", no declined_calls=" \
     || no "(C) --callees=javaSplit: $R"
 # unresolved=2 since parser version 95: the pre-change binary's lang-filtered C++ name, plus arm B's Elixir lexical refusal
-for pin in "edges 13" "ambiguous 5" "unresolved 2" "external 2"; do
+for pin in "edges 14" "ambiguous 5" "unresolved 2" "external 2"; do
     set -- $pin
     [ "$( gauge "$HDR" "$1" )" = "$2" ] && ok "(C) header $1=$2, the pre-change binary's own number" \
         || no "(C) header $1=$( gauge "$HDR" "$1" ) — the pre-change binary emits $1=$2 on this fixture"
@@ -398,11 +402,37 @@ else
     [ "$( disp_in "$TMP/c.tsv" bound )" = "$NONEXT" ] \
         && ok "(F) bound=$NONEXT == the non-external decision rows (recorded at the emission point, not the loop's end)" \
         || no "(F) bound=$( disp_in "$TMP/c.tsv" bound ) but the census has $NONEXT non-external decision rows"
-    for d in bound self external unresolved undefined qualified_external declined file_scope; do
+    for d in bound self external unresolved undefined qualified_external declined; do
         v="$( disp_in "$TMP/c.tsv" "$d" )"
         [ -n "$v" ] && [ "$v" -ge 1 ] && ok "(F) presence: the fixture reaches $d ($v)" \
             || no "(F) presence: $d=${v:-absent} — the fixture no longer exercises that exit, so its arm proves nothing"
     done
+    # file_scope is NOT in that loop, and its absence is the assertion (issue #60). The bucket means "a call
+    # with no caller node to hang an edge on"; ingest_model.h mintModuleScopeOwners now gives every such call
+    # an owner over exactly pincensus.h isResolvableCallReference's population, so on any code corpus the
+    # bucket is unreachable and a NON-zero count would mean the mint and the resolve loop had drifted apart.
+    # The bucket is kept rather than deleted: it is still the honest answer if a future non-code lane emits a
+    # call reference, and a 0 here reads "none found", never "none exists".
+    v="$( disp_in "$TMP/c.tsv" file_scope )"
+    [ "$v" = 0 ] && ok "(F) file_scope=0 — every call the resolve loop counts has a caller node (#60)" \
+        || no "(F) file_scope=${v:-absent} — a counted call has no owner: the mint and isResolvableCallReference disagree"
+    # …and the owner it got is a LABELLED module-scope node, not a function: py/caller/caller.py calls
+    # py_undefined() at module level. RED on the pre-#60 binary, which emits neither the row nor the edge.
+    rw --callers=py_undefined >"$TMP/modscope.xml"
+    MS="$( root_tag "$TMP/modscope.xml" callers )"
+    grep -q '<s t="modscope" n="&lt;file-scope&gt;" p="py/caller/caller.py:1"/>' "$TMP/modscope.xml" \
+        && ok '(F) the module-level call to py_undefined is owned by a t="modscope" row (#60)' \
+        || no "(F) --callers=py_undefined has no modscope row: $MS"
+    [ "$( attr "$MS" count )" = 1 ] \
+        && ok '(F) --callers=py_undefined count="1" — the pre-#60 binary reports count="0"' \
+        || no "(F) --callers=py_undefined count=$( attr "$MS" count ), expected 1"
+    legend_of "$TMP/modscope.xml" | grep -q 't=modscope' \
+        && ok "(F) the callers legend defines t=modscope where the reader meets it" \
+        || no '(F) the callers document emits t="modscope" and its legend never defines it'
+    "$BIN" . --no-cache --callers=py_undefined --legend=full >"$TMP/modscope_full.xml" 2>/dev/null
+    legend_of "$TMP/modscope_full.xml" | grep -q 'modscope' \
+        && ok "(F) the FULL-legend posture defines modscope too" \
+        || no '(F) --legend=full emits t="modscope" with no definition'
 fi
 # two roots: the caller's only same-named definition lives in the OTHER root, with no include evidence
 "$BIN" java/caller java/alpha --no-cache --pin-census="$TMP/mr.tsv" >"$TMP/mr.xml" 2>/dev/null

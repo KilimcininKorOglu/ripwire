@@ -939,6 +939,67 @@ struct RankingSection
     std::string farXml;         // the raw <far>…</far> (or "" if omitted) — for the header's listStatus
     std::size_t droppedPositive = 0;   // A2 (survey card, 2026-09-03): rank>0 eligibleIds cut by the ladder's step F
 };
+// WHERE packBodies' OWN `<bodies …>` OPEN TAG STARTS AND ENDS — by structure, never by punctuation.
+// The document is `<!-- legend --><!-- legend --><bodies …>…</bodies>`: packBodies writes zero or more
+// COMMENT nodes ahead of the tag, and since #60 one of them (kBodylessBodiesLegend) contains
+// `n=<file-scope>` — an angle bracket inside legend prose. `find( '>' )` used to be the end of the open
+// tag; with that comment present it is a byte inside the comment, so the wrapper spliced mid-legend and
+// emitted TWO opens and one close: malformed XML, past every gate (nothing ran xmllint over a --pack-task
+// document holding an owner). The lesson generalises past this one legend — a document that can carry a
+// tag-like NAME in prose can never be parsed by matching punctuation — so this skips comment nodes
+// explicitly and then takes the '>' that closes the element it actually found.
+// #60: how many of these candidates have NO BODY BY CONSTRUCTION — a module-scope owner, whose Symbol
+// extent is empty (ingest_model.h assignSymbols). Such a candidate can never be in `emitted.kept`, so
+// counting it as an over-budget omission is the same false cap --expand was fixed for, one verb over: the
+// wrapper below used to write `<!-- body omitted (over budget): <file-scope> -->` and restamp capped="1"
+// over a body that never existed. The ledger and the monotone roll read this same count, so the document
+// cannot say capped="0" bodyless="1" in the tag and "(capped)" in its own ledger.
+inline std::size_t countBodylessCandidates( const IngestResult& ing, const std::vector<NodeId>& bodyIds ) noexcept
+{
+    std::size_t n = 0;
+    for( NodeId id : bodyIds )
+    {
+        n += ( id < ing.symbols.size() && ing.symbols[id].kind == SymKind::ModuleScope ) ? 1u : 0u;
+    }
+    return n;
+}
+
+struct SectionOpenTag
+{
+    std::size_t start = std::string::npos;   // offset of the element's '<'
+    std::size_t end   = std::string::npos;   // offset of the '>' that closes THAT tag
+};
+inline SectionOpenTag findSectionOpenTag( std::string_view xml, std::string_view element ) noexcept
+{
+    SectionOpenTag t;
+    std::size_t    i = 0;
+    while( i < xml.size() )
+    {
+        if( xml.compare( i, 4, "<!--" ) == 0 )
+        {
+            const std::size_t close = xml.find( "-->", i );
+            if( close == std::string_view::npos )
+            {
+                return t;   // an unterminated comment: refuse rather than guess where the element begins
+            }
+            i = close + 3;
+            continue;
+        }
+        if( xml.compare( i, element.size(), element ) == 0 )
+        {
+            const std::size_t close = xml.find( '>', i );
+            if( close != std::string_view::npos )
+            {
+                t.start = i;
+                t.end   = close;
+            }
+            return t;
+        }
+        return t;   // something other than a comment or the element we restate — refuse
+    }
+    return t;
+}
+
 
 template<class EscFn>
 inline RankingSection renderRankingWithFar( const IngestResult& ing, const RankingSectionInputs& ri, EscFn&& ex )
@@ -967,9 +1028,13 @@ inline RankingSection renderRankingWithFar( const IngestResult& ing, const Ranki
     // string enum load-bearing. Read off the OPENING TAG only, so a capped= on any nested child can never
     // be read as the ranking section's own verdict.
     {
-        const std::size_t tagEnd = out.sigsStr.find( '>' );
-        out.capped = tagEnd != std::string::npos && out.sigsStr.compare( 0, 6, "<sigs " ) == 0
-                  && out.sigsStr.substr( 0, tagEnd ).find( " capped=\"1\"" ) != std::string::npos;
+        // Structural, not positional. This read was already safe — it required the string to START with
+        // `<sigs `, so no leading comment could move the '>' — but that is the same coupling that broke the
+        // <bodies> splice below the moment packBodies grew a legend comment ahead of its tag. Both now go
+        // through findSectionOpenTag, so a future legend written before <sigs> cannot repeat it.
+        const SectionOpenTag sigsTag = findSectionOpenTag( out.sigsStr, "<sigs " );
+        out.capped = sigsTag.end != std::string::npos
+                  && std::string_view( out.sigsStr ).substr( sigsTag.start, sigsTag.end - sigsTag.start ).find( " capped=\"1\"" ) != std::string_view::npos;
     }
 
     const std::vector<std::string> farRows = renderNameOnlyRows( ing, *ri.d2plusIds, ex, ri.in->rootArg );
@@ -1131,14 +1196,16 @@ inline std::uint32_t bodyMaskRankScore( std::uint32_t mask, std::size_t n )
 // comment; the JSON lists bodies_omitted") still holds for candidates OUR pre-selection dropped, not only
 // ones packBodies itself would have dropped. A no-op (bodiesXml returned unchanged) when every candidate
 // was shown — the common case once the budget clears the whole set.
+
 template<class EscFn>
 inline std::string restatePackTaskBodiesWrapper( const IngestResult& ing, const std::string& bodiesXml,
                                                   const std::vector<NodeId>& bodyIds, EmittedBodies& emitted, EscFn&& ex,
                                                   bool compress = false )
 {
-    if( bodiesXml.empty() || emitted.kept.size() >= bodyIds.size() )
+    const std::size_t bodylessOwners = countBodylessCandidates( ing, bodyIds );   // #60
+    if( bodiesXml.empty() || emitted.kept.size() + bodylessOwners >= bodyIds.size() )
     {
-        return bodiesXml;
+        return bodiesXml;   // nothing was actually dropped: packBodies' own tag already says so
     }
     std::vector<char> keptMark( ing.symbols.size(), 0 );
     for( const EmittedBody& b : emitted.kept )
@@ -1151,7 +1218,7 @@ inline std::string restatePackTaskBodiesWrapper( const IngestResult& ing, const 
     std::string markers;
     for( NodeId id : bodyIds )
     {
-        if( id < keptMark.size() && !keptMark[id] )
+        if( id < keptMark.size() && !keptMark[id] && ing.symbols[id].kind != SymKind::ModuleScope )
         {
             markers += "<!-- body omitted (over budget): ";
             markers += ex( xmlCommentText( ing.symbols[id].name ) );
@@ -1159,21 +1226,34 @@ inline std::string restatePackTaskBodiesWrapper( const IngestResult& ing, const 
             emitted.omitted.push_back( id );
         }
     }
-    const std::size_t openEnd = bodiesXml.find( '>' );
-    const bool         closesRight = bodiesXml.size() >= 9 && bodiesXml.compare( bodiesXml.size() - 9, 9, "</bodies>" ) == 0;
-    if( openEnd == std::string::npos || !closesRight )
+    const SectionOpenTag    tag         = findSectionOpenTag( bodiesXml, "<bodies" );
+    const bool              closesRight = bodiesXml.size() >= 9 && bodiesXml.compare( bodiesXml.size() - 9, 9, "</bodies>" ) == 0;
+    if( tag.end == std::string::npos || !closesRight )
     {
         DISCLOSE( "pack-task: <bodies> did not have the expected open/close shape — restated omissions dropped" );
         return bodiesXml;
     }
     // compress="1" restated with shown=/total=: this wrapper REPLACES packBodies' own open tag, so the
     // per-bundle compression disclosure (serialize.h packBodies) must survive the rewrite or the restated
-    // bundle would silently claim uncompressed bodies (test/forcompresscheck.sh arm 5).
-    char open[ 112 ];
-    rw::formatTo( open, sizeof( open ), "<bodies shown=\"{}\" total=\"{}\" capped=\"1\"{}>", emitted.kept.size(), bodyIds.size(),
-                   compress ? " compress=\"1\"" : "" );
-    std::string out = open;
-    out += bodiesXml.substr( openEnd + 1, bodiesXml.size() - 9 - ( openEnd + 1 ) );
+    // bundle would silently claim uncompressed bodies (test/forcompresscheck.sh arm 5). Everything BEFORE
+    // the tag — packBodies' legend comments, including the bodyless clause — is kept verbatim.
+    // 40, not 32: ' bodyless="' + '"' is 12 B and bodylessOwners is a std::size_t, 20 digits at absolute
+    // most, so 32 B of text needs 33 with the NUL. formatTo truncates rather than overruns, but a cut here
+    // drops the closing quote and the document stops being well-formed — 39 usable leaves 7 B of margin
+    // and no arithmetic to re-check (test/fixedbufsweep.sh's TABLE states it).
+    char bodylessAttr[ 40 ] = { 0 };
+    if( bodylessOwners > 0 )
+    {
+        rw::formatTo( bodylessAttr, sizeof( bodylessAttr ), " bodyless=\"{}\"", bodylessOwners );   // #60, absent at zero
+    }
+    char open[ 160 ];
+    rw::formatTo( open, sizeof( open ), "<bodies shown=\"{}\" total=\"{}\" capped=\"{}\"{}{}>",
+                   emitted.kept.size(), bodyIds.size(),
+                   emitted.kept.size() + bodylessOwners < bodyIds.size() ? 1 : 0,
+                   rw::cstr( bodylessAttr ), compress ? " compress=\"1\"" : "" );
+    std::string out = bodiesXml.substr( 0, tag.start );
+    out += open;
+    out += bodiesXml.substr( tag.end + 1, bodiesXml.size() - 9 - ( tag.end + 1 ) );
     out += markers;
     out += "</bodies>";
     return out;
@@ -1460,6 +1540,10 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     std::string        bodiesStr;
     rw::EmittedBodies emittedBodies;
     const std::size_t  bodiesTotal = bodyIds.size();
+    // #60: candidates that have NO BODY BY CONSTRUCTION (a module-scope owner). They can never be `kept`,
+    // so without this the ledger below reads "kept 1 of 2 (capped)" and the roll reads "capped" on a bundle
+    // the budget did not cut — contradicting the <bodies capped="0" bodyless="1"> the same document emits.
+    const std::size_t  bodiesBodyless = countBodylessCandidates( ing, bodyIds );
     std::size_t        bodiesKept  = 0;
 
     // ── section 3 — d1: the anchors' 1-hop callers+callees (computed above), each shown with its OWN one-line
@@ -1661,7 +1745,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     }
     // §W2-K: bodyIds (the candidate SET) never depends on budgetTokens either, so the same monotoneRoll
     // treatment applies at this handoff too.
-    const MonotoneRoll bodiesRoll = monotoneRoll( bodiesKept < bodiesTotal, bodiesBudget, bodiesStr.size() );
+    const MonotoneRoll bodiesRoll = monotoneRoll( bodiesKept + bodiesBodyless < bodiesTotal, bodiesBudget, bodiesStr.size() );
     remaining = remaining > bodiesRoll.charge ? remaining - bodiesRoll.charge : 0;
 
     // ── §W2-K.2 (K2): the reflow lap — see reflowListSection above for the finding and the argument ──────────
@@ -1885,7 +1969,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
                                     bundleBudget, budgetTokens, rw::declaredByteCeiling( budgetTokens )  );  report += b; }
     const bool isRankingFailed = renderFaults.hasFailed( PackTaskRenderFaults::DisclosureWhy::RankingRenderFailed );
     report += std::string( "ranking: " ) + ( isRankingFailed ? "render-failed" : sigsCapped ? "capped" : "full" ) + " | ";
-    report += "bodies: "  + listStatus( bodiesTotal,  bodiesStr,  bodiesKept )  + ( bodiesTotal > 0 && !bodiesStr.empty() && bodiesKept < bodiesTotal ? " (capped)" : "" ) + " | ";
+    report += "bodies: "  + listStatus( bodiesTotal,  bodiesStr,  bodiesKept )  + ( bodiesTotal > 0 && !bodiesStr.empty() && bodiesKept + bodiesBodyless < bodiesTotal ? " (capped)" : "" ) + " | ";
     report += "callers: " + listStatus( callersTotal, callersStr, callersKept ) + " | ";
     report += "notes: "   + listStatus( notesTotal,   notesStr,   notesKept )   + " | ";
     report += "tests: "   + listStatus( testsTotal, testsStr, testsKept );   // E1: test files, as the section's shown=/total= say

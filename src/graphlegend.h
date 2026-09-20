@@ -388,7 +388,7 @@ inline constexpr const char* kUsesLegendOpen =
     // defining it — a reader had to guess it was the CALLER's canonical id from shape alone. Written to the
     // shortest honest form, deliberately: test/graphlegendbudgetcheck.sh's ratchet exists to stop the shared
     // prose essay re-inflating, and a missing honesty fact is not a licence to spend 370 B stating it.
-    "in_id=canonical id (root-relative path::scope::name) of the symbol the site sits INSIDE; a scope-less enclosing symbol degrades to its bare name; absent at file scope. "; // LB-G
+    "in_id=canonical id (root-relative path::scope::name) of the symbol the site sits INSIDE; a scope-less enclosing symbol degrades to its bare name; <file-scope> is the file's MODULE SCOPE, owning a top-level or anonymous-callback CALL; absent for other roles there. "; // LB-G, #60
 
 // The member-variable round (card A3): the clause the `Owner.field` answer appends to the opener above — ONLY
 // on that answer, so the name-matched --uses legend keeps its byte budget (test/graphlegendbudgetcheck.sh) and
@@ -599,6 +599,26 @@ inline std::string declinedCallsKeyJson( std::size_t declinedCalls )
 inline constexpr const char* kUnprovenDefsLegend =
     "unproven_defs=K (absent when 0) counts same-named DEFINITIONS this file:name selector found and could not tie to the file it named: they are NOT in defs= and no row or count here includes them. A declaration widens to the definitions it stands for only where the definition is IN the named file, or its own file includes the named file, resolved path-precisely; a same-named body anywhere else is not evidence and is never served. Widen the selector to the bare NAME, or to Scope::name, to see them. ";
 inline const char* unprovenDefsLegend( bool on ) noexcept { return on ? kUnprovenDefsLegend : ""; }
+
+// ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
+// A file-scope call (a top-level statement, or a call inside an anonymous callback body) used to have no
+// caller node, so --callers/--impact answered with a row short. It now has one, and the row's t= is a kind
+// no reader has met before — so the kind needs its reading where the reader meets it, and NOWHERE else:
+// `on` is the emitter's own "this page holds such a row" condition, never a re-derivation, so a corpus
+// with no module-scope call pays 0 bytes and test/graphlegendbudgetcheck.sh's pins (measured on selectors
+// that reach no such row) did not move. Same shape, and the same two reasons, as unprovenDefsLegend above.
+// G4: no double hyphen — this lands inside an XML comment.
+inline constexpr const char* kModScopeLegend =
+    "t=\"modscope\" is a row for a file's MODULE SCOPE, named <file-scope>: the statements outside every named definition, which is where a top-level call and an anonymous callback body's calls live. It is a CALLER, not a function — nothing in the source can name it, so it never appears as a callee, and it has no body, so expanding it returns none. A file that has no such call has no such row. ";
+inline const char* modScopeLegend( bool on ) noexcept { return on ? kModScopeLegend : ""; }
+
+// The same fact in --for's two dialects, which are prose strips joined by ';' and ':' rather than XML comment
+// clauses — one constant each so the wording cannot drift from kModScopeLegend above. Present-only, on that
+// verb's own `modScopePresent` bit (verbs_for.h), like every other clause in those two strips.
+inline constexpr std::string_view kForCompactModScopeClause =
+    "; t=modscope n=<file-scope>: a file's MODULE SCOPE (top-level statements + anonymous callback bodies) — a caller, never a callee, with no body to expand";
+inline constexpr std::string_view kForModScopeClause =
+    " A row or hop named <file-scope> (t=\"modscope\") is a file's MODULE SCOPE — the statements outside every named definition, where a top-level call and an anonymous callback body's calls live. It is a CALLER, never a callee, and has no body to expand.";
 
 // The attribute and the key, one spelling each, absent at zero — through the shared countAttrXmlOrEmpty
 // above, so this cannot become a second spelling of bodyless_defs='s hand-rolled idiom.

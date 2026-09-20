@@ -422,5 +422,317 @@ else
     no "Python inherited self/cls hooks were classified dead or the orphan was hidden"
 fi
 
+# ── (U) THE UNCHANGED-TREE INVARIANT — a no-op diff must never gate (issue #228, part 1) ──────────────────
+#
+# THE CONTRACT: a working tree whose TRACKED files are identical to HEAD reports regressions="0" gating="0"
+# and exit 0, whatever shape the checkout has. The reporter's tree was exactly that — `git status` clean of
+# modifications, untracked directories present, a shallow clone — and it gated 58 dead-code rows, all
+# `preexisting-worse`, exit 2. A pre-commit hook that fires on an unchanged tree is unusable, and the escape
+# hatch is blocked with it: --quality-baseline refuses to pin over a tree that "already holds N gating
+# finding(s) against HEAD".
+#
+# WHY THE SHAPES. Before the identity basis (src/quality.h) the HEAD side was `git archive HEAD` re-ingested
+# in a temp dir, which is a DIFFERENT POPULATION from the working tree, and a dead-code verdict is a property
+# of the whole population. Measured on the binary before the fix, each row's tree `git status`-clean of
+# modifications unless marked (+dirty): untracked file 1 gating row, untracked nested repo 2, export-ignore 1,
+# sparse checkout 2, `--no-ignore` over a gitignored same-named definition 1 — every one of them exit 2. A
+# shallow clone on its own read ZERO, which is why the reporter's `+shallow` is a bystander and is pinned here
+# as one.
+#
+# AND THE OTHER DIRECTION, which is why the (U5) family exists. `git diff --quiet HEAD` is SPECIFIED to be
+# blind to a `skip-worktree` or `assume-unchanged` path, so taking it as proof that the tree IS HEAD let a
+# REAL dead-code regression inside such a file report gating="0" exit 0. A false negative on the gate's
+# central promise is worse than the false positive this work set out to remove. The first fix refused only
+# when such a path was still ON DISK, and that was defeated by DELETING it — the bit hides a deletion exactly
+# as it hides an edit. The next fix kept an exception for cone-mode sparse checkout and decided for itself
+# which paths a cone includes; that was defeated by a file in an ANCESTOR of a listed directory, which real
+# cone mode materializes. So there is no exception left: ANY flagged path, present or absent, sparse or not,
+# refuses the identity basis, and the root says so with head_basis="archived-index-hidden". (U5) runs both
+# bits against both an edit and a deletion, inside and outside a cone; (U5a) is the ancestor-directory shape
+# that defeated the cone rule; (U5c) is the "refusal costs nothing" half; (U4) records what a sparse checkout
+# pays for the refusal as a KNOWN GAP. Every (U5) arm also asserts that --quality-baseline declines to pin,
+# because an escape hatch that launders the finding is the same bug with a different exit code.
+#
+# EVERY ARM HAS A SENSITIVITY CONTROL, because a delta that reports nothing would pass a zero-assertion for
+# the wrong reason (CONTRIBUTING §2, "empty equals agreement"): U7 makes a REAL edit in the hardest shape and
+# requires exactly one gating dead-code row, U1 requires the untracked file's own new-symbol debt to still be
+# reported, and every zero arm pins `head_basis=` so that a zero from the WRONG floor cannot pass for the
+# right one. TMPDIR is set explicitly in every arm and the fixture directories are neutrally named, so neither
+# this gate's own location nor the temp dir's can decide a verdict through isFixturePath.
+UROOT="$WORK/unchanged"; mkdir -p "$UROOT"
+UTMP="$UROOT/scratch"; mkdir -p "$UTMP"
+ug(){ git -c user.name=qc -c user.email=qc@x -c core.hooksPath=/dev/null "$@"; }
+umk(){   # $1 = dir — a tree with a symbol whose verdict MOVES when the population changes
+    mkdir -p "$1/lib" "$1/app"
+    printf 'def zeta_helper(v):\n    return v + 1\n'                                  > "$1/lib/core.py"
+    printf 'def driver():\n    return zeta_helper(1)\n'                               > "$1/app/main.py"
+    printf 'void omicron_helper(int v);\nvoid omicron_helper(int v) { (void)v; }\n'    > "$1/lib/core.c"
+    printf 'void omicron_helper(int v);\nvoid runner(void) { omicron_helper(2); }\n'   > "$1/app/main.c"
+    ( cd "$1" && ug init -q . && ug add -A && ug commit -qm init ) >/dev/null 2>&1
+}
+UOUT=""; UATTR(){ printf '%s' "$UOUT" | grep -o "<quality-delta [^>]*>" | head -1 | sed -n "s/.*[^-]$1=\"\([^\"]*\)\".*/\1/p"; }
+urun(){  # $1 = dir, rest = extra flags — fills UOUT / URC
+    local d="$1"; shift
+    UOUT="$( cd "$d" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-delta --legend=compact "$@" 2>/dev/null )"; URC=$?
+}
+# `uzero` asserts the WHOLE contract, and asserts the document exists FIRST: a crashed run also prints no rows.
+# The contract is NOT "no rows at all" — a file the tree holds and HEAD does not track is new code, and its own
+# debt is reported as it always was. It is "nothing pre-existing got worse": exit 0, gating="0",
+# preexisting-worse="0", and every row counted in regressions= accounted for by new-symbol=.
+uzero(){  # $1 = label, rest = urun args
+    local label="$1"; shift
+    urun "$@"
+    local reg gat pre new
+    reg="$( UATTR regressions )"; gat="$( UATTR gating )"; pre="$( UATTR preexisting-worse )"; new="$( UATTR new-symbol )"
+    if ! printf '%s' "$UOUT" | grep -q '<quality-delta '; then
+        no "(U) $label: no quality-delta document at all (exit $URC) — the run did not produce a report"
+    elif [ "$( UATTR head_basis )" != "identity" ]; then
+        # WHICH floor answered is half the claim. A zero from the archived tree here would be a DIFFERENT
+        # (and, on these shapes, historically wrong) answer that happens to read the same, so the arm pins
+        # the basis as well as the counts — see the (U5) family for the shapes that must NOT take it.
+        no "(U) $label: head_basis=$( UATTR head_basis ) — the identity basis was not taken, so this zero is not the one the arm is about"
+    elif [ "$URC" -eq 0 ] && [ "$gat" = "0" ] && [ "$pre" = "0" ] && [ "$reg" = "$new" ]; then
+        ok "(U) $label: head_basis=identity gating=0 preexisting-worse=0 exit 0 (regressions=$reg, all new-symbol)"
+    else
+        no "(U) $label: exit $URC regressions=$reg gating=$gat preexisting-worse=$pre new-symbol=$new — a no-op diff gated"
+    fi
+}
+
+umk "$UROOT/plain";  uzero "clean tree"                    "$UROOT/plain"
+umk "$UROOT/tmpfix"; mkdir -p "$UROOT/fixtures/tmp"
+# CodeRabbit 4057546124: this ran `uzero` inside a ( … ) subshell to scope UTMP. `no()` sets fail=1, and a
+# subshell's fail=1 dies with the subshell — the arm could print FAIL while the gate exited 0. There is no
+# `set -e` and nothing checked $?, so the vacuity was total. UTMP is saved and restored in the PARENT
+# instead; the override is just as scoped and the assertion now reaches the gate's own exit code.
+UTMP_SAVED="$UTMP"; UTMP="$UROOT/fixtures/tmp"
+uzero "TMPDIR under a fixtures/ directory" "$UROOT/tmpfix"
+UTMP="$UTMP_SAVED"
+
+# U1 untracked content — the reporter's own shape — and the control that its debt is still REPORTED.
+umk "$UROOT/untracked"
+mkdir -p "$UROOT/untracked/scratchdir"
+printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/untracked/scratchdir/dup.py"
+uzero "untracked directory with a same-named definition" "$UROOT/untracked"
+urun "$UROOT/untracked"
+[ "$( UATTR new-symbol )" != "0" ] && [ -n "$( UATTR new-symbol )" ] \
+    && ok "(U1) control: the untracked file's own debt is still reported as new-symbol=$( UATTR new-symbol ) (never gating)" \
+    || no "(U1) control: the untracked file contributed NO new-symbol row — the zero above could be a silenced tree"
+case "$( UATTR at )" in *+dirty*) ok "(U1) the stamp still says +dirty — the untracked content is disclosed, not hidden";;
+                        *) no "(U1) at=$( UATTR at ) does not carry +dirty although untracked content is present";; esac
+
+umk "$UROOT/nestedrepo"; umk "$UROOT/nestedrepo/vendored"
+uzero "untracked nested git repository" "$UROOT/nestedrepo"
+
+# U2 a shallow clone, with and without untracked content: `+shallow` is a bystander, pinned as one.
+umk "$UROOT/shallowsrc"
+ug clone -q --depth=1 "file://$UROOT/shallowsrc" "$UROOT/shallow" >/dev/null 2>&1
+if [ -d "$UROOT/shallow/.git" ]; then
+    uzero "shallow clone" "$UROOT/shallow"
+    case "$( UATTR at )" in *+shallow*) ok "(U2) the stamp says +shallow — the shape is disclosed";;
+                            *) no "(U2) at=$( UATTR at ) does not carry +shallow in a --depth=1 clone";; esac
+    mkdir -p "$UROOT/shallow/scratchdir"
+    printf 'def zeta_helper(v):\n    return v * 7\n' > "$UROOT/shallow/scratchdir/dup.py"
+    uzero "shallow clone WITH an untracked directory (the reported shape)" "$UROOT/shallow"
+else
+    no "(U2) could not make a shallow clone of a local path — the shallow arms would be vacuous"
+fi
+
+# U3 export-ignore: `git archive` drops the file, the working tree keeps it. git status: clean.
+umk "$UROOT/exportignore"
+printf 'def zeta_helper(v):\n    return v * 9\n' > "$UROOT/exportignore/lib/other.py"
+printf 'lib/other.py export-ignore\n'            > "$UROOT/exportignore/.gitattributes"
+( cd "$UROOT/exportignore" && ug add -A && ug commit -qm attrs ) >/dev/null 2>&1
+uzero "a tracked file marked export-ignore" "$UROOT/exportignore"
+
+# U4 sparse checkout hiding a tracked caller. git status: clean.
+umk "$UROOT/sparsesrc"
+ug clone -q "$UROOT/sparsesrc" "$UROOT/sparse" >/dev/null 2>&1
+if ( cd "$UROOT/sparse" && ug sparse-checkout init --cone && ug sparse-checkout set lib ) >/dev/null 2>&1; then
+    # Cone-mode sparse sets skip-worktree on every excluded path — the same bit (U5) refuses over — and this
+    # arm's uzero REQUIRES head_basis=identity, which is the point: those files are DELETED from disk, so they
+    # are absent from both sides of a self-comparison and can lie about nothing. Present-on-disk is what (U5)
+    # tests, and the two arms together pin that the distinction is the one being made.
+    # KNOWN GAP, and the acceptance test for closing it is flipping this arm.
+    #
+    # A sparse checkout sets skip-worktree on every excluded path, so it lands in (U5)'s refusal and takes the
+    # ARCHIVED comparison. That tree is not sparse-aware — `git archive HEAD` materializes the excluded files —
+    # so an excluded caller reads as vanished and GATES, on a tree with no edit in it. That is the same
+    # population divergence this block exists to remove, left in place for this one shape, and it is main's
+    # pre-existing behaviour rather than anything the identity basis introduced.
+    #
+    # It is left in place on purpose. Deciding for ourselves which paths a cone includes is what this lane
+    # tried twice and had defeated twice — most recently by a file in an ANCESTOR of a listed directory, which
+    # real cone mode materializes and a hand-written rule did not know about. `git sparse-checkout check-rules`
+    # would be authoritative but lands in git 2.42, newer than this tool's supported floor. So the answer says
+    # which branch it took (head_basis="archived-index-hidden") and the fix belongs to slice 2 of
+    # prompts/help-wanted/quality-delta-unchanged-tree-zero.md: make the ARCHIVED side's population equal by
+    # construction, which fixes this shape and every other one at once.
+    if [ -z "$( cd "$UROOT/sparse" && ug ls-files -v | grep '^S ' )" ]; then
+        no "(U4) no skip-worktree bit in the sparse checkout — this arm proves nothing about the bit"
+    else
+        urun "$UROOT/sparse"
+        { [ "$( UATTR head_basis )" = "archived-index-hidden" ] && [ "$URC" -eq 2 ]; } \
+            && ok "(U4) KNOWN GAP: a sparse checkout refuses the identity basis and gates on the archived tree, and the root SAYS which branch it took (head_basis=archived-index-hidden, exit 2) — flipping this arm to gating=0 is the acceptance test for slice 2" \
+            || no "(U4) exit $URC head_basis=$( UATTR head_basis ) — expected the disclosed archived refusal; if this now reports gating=0 with head_basis=identity, the gap is CLOSED and this arm should be flipped to uzero"
+    fi
+else
+    no "(U4) sparse-checkout is unavailable here — the arm would be vacuous"
+fi
+
+# U5 THE TWO INDEX BITS GIT'S OWN DIFF IS SPECIFIED NOT TO READ. `git update-index --skip-worktree` and
+# `--assume-unchanged` both make `git diff --quiet HEAD` exit 0 over a file whose on-disk bytes genuinely
+# differ from HEAD — that is the entire purpose of the bits. Treating that exit code as "the tree IS HEAD"
+# turned a REAL dead-code regression into gating="0" exit 0: a false NEGATIVE, which is a worse answer than
+# the false positive the identity basis exists to remove. So the identity basis is refused whenever such a
+# path is still ON DISK, and these arms are the proof. They must read exactly like the archived comparison,
+# because that is what answers them.
+# $1 = label, $2 = git update-index flag, $3 = how the caller is made to vanish: `edit` or `delete`,
+# $4 = optional `cone:<dirs>` to run the same shape inside an ACTIVE cone-mode sparse checkout.
+ublind(){
+    local label="$1" flag="$2" how="$3" cone="${4:-}"
+    local d; d="$UROOT/blind$( printf '%s%s%s' "$flag" "$how" "$cone" | tr -cd 'a-z' )"   # own dir per shape: one `local` cannot expand a name it is still assigning
+    umk "$d"
+    if [ -n "$cone" ]; then
+        ( cd "$d" && ug sparse-checkout init --cone && ug sparse-checkout set ${cone#cone:} ) >/dev/null 2>&1 \
+            || { no "(U5) $label: sparse-checkout is unavailable here — the arm would be vacuous"; return; }
+    fi
+    ( cd "$d" && ug update-index "$flag" app/main.py ) >/dev/null 2>&1
+    case "$how" in
+        edit)   printf 'def driver():\n    return 0\n' > "$d/app/main.py" ;;   # a REAL edit: the only caller, gone
+        delete) rm -f "$d/app/main.py" ;;                                       # a REAL deletion: the file that held it, gone
+        *)      no "(U5) $label: unknown mode $how"; return ;;
+    esac
+    # The arm is only about the BIT if git itself reports nothing. If the change shows in `git status` the
+    # ordinary dirty path would catch it anyway and the arm proves nothing.
+    if [ -n "$( cd "$d" && ug status --porcelain )" ]; then
+        no "(U5) $label: git status is NOT clean, so the bit is not hiding the change and the arm is vacuous"
+        return
+    fi
+    urun "$d"
+    local dead; dead="$( printf '%s' "$UOUT" | grep -c 'kind="dead-code" sym="zeta_helper"' )"
+    { [ "$URC" -eq 2 ] && [ "$( UATTR gating )" = "1" ] && [ "$dead" -eq 1 ]; } \
+        && ok "(U5) $label: the hidden change STILL gates one dead-code row (exit 2)" \
+        || no "(U5) $label: exit $URC gating=$( UATTR gating ) dead rows=$dead — a real regression was swallowed by an index bit"
+    # THE REFUSAL IS NAMED ON THE ANSWER, not left to silence. A user whose fast path vanished can read why
+    # off the root instead of guessing, and "identity" here would be the bug itself asserting it verified.
+    [ "$( UATTR head_basis )" = "archived-index-hidden" ] \
+        && ok "(U5) $label: head_basis=archived-index-hidden — the archived HEAD tree answered, and the root says WHY" \
+        || no "(U5) $label: head_basis=$( UATTR head_basis ) — the refusal is undisclosed, or the identity basis was claimed over a change git will not read"
+    # THE ESCAPE HATCH MUST NOT LAUNDER IT EITHER. --quality-baseline refuses to pin over a tree that already
+    # holds gating findings (H11), so a shape that gates must also be a shape the bare pin declines.
+    if ( cd "$d" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-baseline >/dev/null 2>&1 ); then
+        no "(U5) $label: --quality-baseline PINNED over the hidden regression — the floor was laundered"
+    else
+        ok "(U5) $label: --quality-baseline declines to pin over it"
+    fi
+}
+ublind "skip-worktree over an edited caller"          --skip-worktree    edit
+ublind "assume-unchanged over an edited caller"       --assume-unchanged edit
+# The DELETION half. `git update-index --skip-worktree PATH` followed by `rm PATH` hides a deletion exactly as
+# it hides an edit, and the deleted file held the only caller. Round 1 of the fix tested PRESENCE ON DISK and
+# was defeated here: the file is gone, so "not present" read as "nothing hidden" and the identity basis was
+# taken — reporting gating="0" and ASSERTING head_basis="identity" over a real regression.
+ublind "skip-worktree over a DELETED caller"          --skip-worktree    delete
+ublind "assume-unchanged over a DELETED caller"       --assume-unchanged delete
+# ...and the same deletion INSIDE an active cone-mode sparse checkout that INCLUDES the path. The sparse
+# specification says this file belongs here, so its absence is not explained by the spec and the basis must
+# still be refused: "a sparse checkout is on" is not by itself an explanation for any flagged path.
+ublind "skip-worktree over a DELETED caller inside the cone" --skip-worktree delete "cone:lib app"
+# ...and the ANCESTOR-DIRECTORY shape, which is what defeated the hand-written cone rule. Cone mode also
+# materializes the direct files of every ANCESTOR of a listed directory: with cone=[app/sub, lib], `app` is not
+# listed but `app/other.py` is checked out all the same. A rule that only knew "listed, or under a listed one,
+# or a repository-root file" called that path cone-excluded and took the identity basis over a real deletion.
+# There is no cone rule here any more, so this arm is the proof that the class is closed rather than narrowed.
+uanc(){
+    local d="$UROOT/ancestorcone"
+    mkdir -p "$d/lib" "$d/app/sub"
+    printf 'def zeta_helper(v):\n    return v + 1\n'    > "$d/lib/core.py"
+    printf 'def driver():\n    return zeta_helper(1)\n' > "$d/app/other.py"   # the ONLY caller, in the ancestor dir
+    printf 'def nested():\n    return 1\n'               > "$d/app/sub/deep.py"
+    ( cd "$d" && ug init -q . && ug add -A && ug commit -qm init ) >/dev/null 2>&1
+    ( cd "$d" && ug sparse-checkout init --cone && ug sparse-checkout set app/sub lib ) >/dev/null 2>&1 \
+        || { no "(U5a) sparse-checkout is unavailable here — the ancestor arm would be vacuous"; return; }
+    if [ ! -f "$d/app/other.py" ]; then
+        no "(U5a) this git does not materialize the ancestor directory's own files, so the arm does not test the shape it claims"
+        return
+    fi
+    ( cd "$d" && ug update-index --skip-worktree app/other.py ) >/dev/null 2>&1
+    rm -f "$d/app/other.py"
+    if [ -n "$( cd "$d" && ug status --porcelain )" ]; then
+        no "(U5a) git status is NOT clean, so the bit is not hiding the deletion and the arm is vacuous"
+        return
+    fi
+    urun "$d"
+    local dead; dead="$( printf '%s' "$UOUT" | grep -c 'kind="dead-code" sym="zeta_helper"' )"
+    { [ "$URC" -eq 2 ] && [ "$( UATTR gating )" = "1" ] && [ "$dead" -eq 1 ]; } \
+        && ok "(U5a) a flagged+deleted file in an ANCESTOR of a listed cone directory STILL gates one dead-code row (exit 2)" \
+        || no "(U5a) exit $URC gating=$( UATTR gating ) dead rows=$dead — the ancestor-directory shape was misjudged as explained"
+    [ "$( UATTR head_basis )" = "archived-index-hidden" ] \
+        && ok "(U5a) head_basis=archived-index-hidden — the refusal is disclosed on the answer" \
+        || no "(U5a) head_basis=$( UATTR head_basis ) — identity was claimed over a deletion in an ancestor directory"
+    if ( cd "$d" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-baseline >/dev/null 2>&1 ); then
+        no "(U5a) --quality-baseline PINNED over it — the floor was laundered"
+    else
+        ok "(U5a) --quality-baseline declines to pin over it"
+    fi
+}
+uanc
+
+# U5c the refusal must not become its own source of noise: a flagged file whose content still IS HEAD's
+# reports zero through the archived comparison, and says so.
+umk "$UROOT/blindclean"
+( cd "$UROOT/blindclean" && ug update-index --skip-worktree app/main.py ) >/dev/null 2>&1
+urun "$UROOT/blindclean"
+{ [ "$URC" -eq 0 ] && [ "$( UATTR gating )" = "0" ] && [ "$( UATTR head_basis )" = "archived-index-hidden" ]; } \
+    && ok "(U5c) a flagged but UNEDITED file reports zero through the archived comparison, with the refusal disclosed" \
+    || no "(U5c) exit $URC gating=$( UATTR gating ) head_basis=$( UATTR head_basis ) — refusing the identity basis introduced noise of its own"
+
+# U6 crawl flags that reached ONE side of the delta only.
+umk "$UROOT/noignore"
+printf 'generated/\n' > "$UROOT/noignore/.gitignore"; mkdir -p "$UROOT/noignore/generated"
+printf 'def zeta_helper(v):\n    return v * 3\n' > "$UROOT/noignore/generated/gen.py"
+( cd "$UROOT/noignore" && ug add -A && ug commit -qm ignore ) >/dev/null 2>&1
+uzero "--no-ignore over a gitignored same-named definition" "$UROOT/noignore" --no-ignore
+umk "$UROOT/ignoretests"; mkdir -p "$UROOT/ignoretests/tests"
+printf 'def test_it():\n    return zeta_helper(1)\n' > "$UROOT/ignoretests/tests/test_core.py"
+( cd "$UROOT/ignoretests" && ug add -A && ug commit -qm tests ) >/dev/null 2>&1
+uzero "--ignore-tests with a helper called only from tests/" "$UROOT/ignoretests" --ignore-tests
+
+# U7 THE SENSITIVITY CONTROL: a real edit in the hardest shape must still produce exactly one gating row.
+umk "$UROOT/control"
+printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/control/scratchdir_dup.py"
+printf 'def driver():\n    return 0\n'           > "$UROOT/control/app/main.py"
+urun "$UROOT/control"
+UDEAD="$( printf '%s' "$UOUT" | grep -c 'kind="dead-code" sym="zeta_helper"' )"
+{ [ "$URC" -eq 2 ] && [ "$( UATTR gating )" = "1" ] && [ "$UDEAD" -eq 1 ]; } \
+    && ok "(U7) control: deleting the only caller still gates exactly one dead-code row (exit 2) with untracked content present" \
+    || no "(U7) control did not fire — exit $URC gating=$( UATTR gating ) dead-code rows on zeta_helper=$UDEAD; every zero above is suspect"
+
+# U8 DETERMINISM: cold (a temp dir that never held a blob), warm, cold again — byte for byte.
+umk "$UROOT/determinism"
+printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/determinism/scratchdir_dup.py"
+urun "$UROOT/determinism"; UD1="$UOUT"
+urun "$UROOT/determinism"; UD2="$UOUT"
+mkdir -p "$UROOT/scratch2"
+# The same shape as the (U) TMPDIR arm above, found by sweeping this file for it as CodeRabbit asked.
+# `urun` itself calls no assertion, so nothing was lost here YET — but it is one `no()` away from the same
+# silent failure, and UOUT crossing a subshell boundary is exactly why the third run had to be written to a
+# file. Save/restore in the parent: the write-to-a-file dance goes with it.
+UTMP_SAVED="$UTMP"; UTMP="$UROOT/scratch2"
+urun "$UROOT/determinism"; UD3="$UOUT"
+UTMP="$UTMP_SAVED"
+{ [ "$UD1" = "$UD2" ] && [ "$UD2" = "$UD3" ]; } \
+    && ok "(U8) cold / warm / cold-with-a-fresh-TMPDIR are byte-identical" \
+    || no "(U8) the unchanged-tree answer moved between cold, warm and a fresh TMPDIR"
+
+# U9 THE ESCAPE HATCH: --quality-baseline refused to pin over the phantom debt. It must pin now.
+umk "$UROOT/pin"
+printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/pin/scratchdir_dup.py"
+if ( cd "$UROOT/pin" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-baseline >/dev/null 2>&1 ); then
+    ok "(U9) --quality-baseline pins on an unchanged tree that holds untracked content"
+else
+    no "(U9) --quality-baseline still refuses to pin over an unchanged tree's phantom debt"
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

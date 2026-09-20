@@ -135,6 +135,11 @@ echo
 echo "=== (a) atomic publish: no torn read — tmp+rename, checksum-valid, no residue ==="
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 read A_W A_C <<<"$( new_repo )"
+# #228 part 1 — the IDENTITY BASIS (src/quality.h): a working tree that already IS HEAD is compared with
+# ITSELF and never materializes a HEAD tree, so it never writes a qsnap blob at all. This arm is about the
+# ATOMICITY of that write, so it needs a tree that reaches it: one comment-only line, appended once (HEAD does
+# not move inside this arm), makes `git diff HEAD` non-empty without adding a symbol or a row.
+printf '\n// dirty marker: the identity basis skips the HEAD materialization this arm measures\n' >> "$A_W/geometry.cpp"
 # a background sampler: while quality_delta rewrites the qsnap repeatedly, the file must ALWAYS be ABSENT or
 # checksum-VALID — never a non-empty partial one (the torn-read the direct-ofstream write allowed).
 SAMPLE_BAD=0

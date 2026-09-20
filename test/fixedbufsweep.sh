@@ -179,7 +179,9 @@ TABLE = {
     ( "src/prcontext.h", "tail" ):     ( 1, "latent",     "tail[320]: truncated=\"%s\" is ESCAPE-THEN-SNPRINTF in shape, but the value is bounded — kPrTrims[].dropped is a const table (longest 48 B) plus ';budget-floor-exceeded' (22 B) plus ';est-unmeasured' (15 B), none of which escapes, and the last two CAN co-occur (a small --max-tokens puts even the unmeasured empty-body envelope over budget). Worst case 88 lit + 90 digits + 85 label = 263 B + NUL against 320: 56 B of margin. WAS tail[256] at 248 B — SEVEN bytes — and the review of #214 spent 15 of them on est-unmeasured, which is the 'one more attribute crosses it' this row used to warn about; the buffer moved in the same commit as the label. formatTo was never the thing saving it: it truncates silently and its return is not read here, so an overrun drops the closing quote of truncated=\" and ships a malformed root (a G4 breach with no diagnostic). A sixth trim level or one more label needs this recomputed again." ),
     # ── src/quality.h ────────────────────────────────────────────────────────────────────────────────────
     ( "src/quality.h", "tail" ):       ( 2, "not-markup", "tail[96] in shaKeyedCachePath: the qsnap/qheadsnap cache FILENAME; family + two hex digests + %016llx, all fixed-width. tail[64] in rootKeyedCachePath: the lean/rich + mcp cache FILENAME, a literal prefix + the 16-hex root key + a literal suffix — every part a compile-time or fixed-width constant. Neither is emitted." ),
+    ( "src/packtask.h", "bodylessAttr" ): ( 1, "safe", "bodylessAttr[40] in restatePackTaskBodiesWrapper (issue #60, integration/train-12): ' bodyless=\"{}\"' — 12 B of literal (' bodyless=\"' 11 + '\"' 1) and ONE interpoland, bodylessOwners, a std::size_t: 20 digits at absolute most, so 32 B against 39 usable + NUL, 7 B of margin. No string interpolation at all — the count is a count, never caller text — so no escaper can sit on either side of the buffer. It is a TABLE row and not NUMERIC_ONLY for arch.h hex[17]'s reason: a buffer that never existed before the std::print conversion has no pre-conversion format to derive a class from. THE BUFFER WAS DECLARED [32] WHEN IT ARRIVED, which is 1 B short of its own worst case (32 B of text needs 33 with the NUL); formatTo truncates rather than overruns, so the failure mode was a dropped closing quote and a document that stops being well-formed, not a memory breach. Widened to 40 in the same commit as this row rather than classified latent, so there is no arithmetic left to re-check." ),
     # ── src/serialize.h ──────────────────────────────────────────────────────────────────────────────────
+    ( "src/serialize.h", "bodylessAttr" ): ( 1, "safe", "bodylessAttr[40] in packBodies (issue #60, integration/train-12): the exact twin of the packtask.h row above — same format, same 12 B of literal, one std::size_t (bodylessCount), 32 B against 39 usable + NUL, 7 B of margin, no string interpoland. Same [32]-on-arrival correction, widened in the same commit." ),
     ( "src/serialize.h", "fitAttr" ):  ( 1, "safe",       "fitAttr[96]: two %zu plus the literal ' over_ceiling=1'." ),
     ( "src/serialize.h", "attr" ):     ( 2, "safe",       "attr[352] x2: the per-symbol metric attrs. Widest 26 lit + 4x10 digits + 11 role + qbuf(<=95) + ambs(<=35: amb= + lpin=) + kbuf(<=23) = 230 B." ),
     ( "src/serialize.h", "tail" ):     ( 2, "safe",       "tail[192] x2: the <d> row tail. Widest 34 lit+digits + inAttr(<=23) + lens(qbuf, <=79) + pure(9) = 145 B." ),
@@ -536,7 +538,20 @@ if not bad:
 #            the note= the bundle selector already counted. Classified alongside noteBuf (main.cpp
 #            probeBuf): identical margin, same reasoning, a second row rather than a derivation for the
 #            same not-NUMERIC_ONLY reason.
-EXPECTED = { "mentions": 336, "calls": 228, "sites": 228, "rows": 100, "widthforms": 0 }
+#            2026-09-20 (integration/train-12, lane/t12-filescope-calls, issue #60): +2 calls/+4 mentions/
+#            +2 sites/+2 rows (336 -> 340 mentions, 228 -> 230 calls/sites, 100 -> 102 rows). One
+#            `bodylessAttr` in packBodies (serialize.h) and one in its restating wrapper (packtask.h), both
+#            formatting ' bodyless="{}"' for the #60 module-scope owner that has no body to serve. Each is a
+#            TABLE row with its own arithmetic — and each arrived declared [32], one byte short of its own
+#            worst case, so the row records the widening to [40] rather than a latent class. MENTIONS MOVES
+#            BY FOUR, NOT TWO, AND THE EXTRA TWO ARE PROSE: mentions counts every LINE holding the token, and
+#            each new site's comment names the formatter to say why truncation, not overrun, is its failure
+#            mode. That is the same population definition that took +85 for include lines at the std::print
+#            conversion; the comments were left as written rather than reworded around a grep. Only
+#            calls/sites/rows count call sites, and those moved by exactly the two. The lane ran the gates its
+#            verbs named; this one greps SOURCE and names no verb, which is how both sites reached a train
+#            unclassified.
+EXPECTED = { "mentions": 340, "calls": 230, "sites": 230, "rows": 102, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

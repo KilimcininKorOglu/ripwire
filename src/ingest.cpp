@@ -393,6 +393,12 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     std::vector<RawDef> fieldDefs = partitionFieldDefs( raw.defs );
     assignFields( result, fieldDefs );
 
+    // 3a-quater) module-scope owners (#60) — one synthetic whole-file def per file whose top-level
+    //    statements or anonymous callback bodies hold a call, so those calls have a caller node to hang an
+    //    edge on. Runs AFTER the parse cache is released, so no cached record format changes and a warm run
+    //    mints exactly what a cold run does (ingest_model.h).
+    mintModuleScopeOwners( result, raw.defs, raw.refs );
+
     // 3b) assign Symbol ids in (fileId, line, name) order + the rich-ingest lex-stats CSR (ingest_model.h)
     assignSymbols( result, raw.defs, captureValueUses );
 

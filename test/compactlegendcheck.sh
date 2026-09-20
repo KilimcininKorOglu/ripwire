@@ -856,11 +856,27 @@ echo
 # A1' rebuilt --for's compact legend present-only, and it is a THIN answer here, so it also carries for-widen's
 # coverage= reading, +162 B); the other nine verbs are 317/770/271/425/212/400/339/708/287 B and did not move. Same
 # rule as every anchor above: the next multiple of 100 B over the measured total.
+# RE-ANCHORED 2026-09-20 (issue #228 part 1): 7,200 → 7,400 B, measured 7,370 on integration/train-12. ONE new
+# reading, on ONE loop verb: --quality-delta's head_basis= says which git-HEAD floor answered — this tree's own
+# snapshot (the tracked files already were HEAD), a refusal because the index hides a tracked path, or the
+# archived commit. It is present-only, and the loop's fixture is a clean tree, which is exactly when the first is
+# taken, so the loop pays it. Attributed by measuring the same fixture with the pre-change binary (755f9026):
+# --quality-delta 753 → 927 B (+174), the other nine verbs unmoved to the byte, and the only legend difference
+# between the two answers is this one reading. A review proved the two floors are different claims about the same
+# zero (a skip-worktree path made them print byte-identical roots while one had seen a real regression), so this
+# is METHODOLOGY §9.4's honesty-in-attributes, not prose creep.
+#   THIS LINE FIRST CARRIED 7,321, WHICH THE LANE'S OWN LAST ROUND HAD ALREADY SUPERSEDED. 7,321 was measured at
+#   1b40e814, where the reading named two values; d54ce3da gave it a third (archived-index-hidden), +49 B on this
+#   loop. The lane's report states the new total (7,370) — the comment beside the pin was simply never brought
+#   with it, and the ceiling did not have to move (7,370 still rounds to 7,400), so no arm could see the drift.
+#   Re-measured here on the merged tree against the base binary. #60's own clauses are conditional and this
+#   fixture holds no file-scope call, so it contributes 0 B; the full-dialect bill moved 33,407 → 33,763 B.
+# Same rule as every anchor above: the next multiple of 100 B over the measured total.
 # RE-ANCHORED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1): 4,700 → 7,200 B, measured 7,131. The default now defines
 # every attribute its answer emits (legendcoveragecheck (G)): --quality-delta's rename/ack counters, --test-gate's four
 # script-gate counts, --affected's seeds/reached, the schema= opener on every verb. Still under a quarter of the full bill
 # (33,407 B on this fixture), and the same rule: the next multiple of 100 B over the measured total.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,200 B (33,407 B in full on the fixture) ==="
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,400 B (33,763 B in full on the fixture) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -869,8 +885,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 7200 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,200 B; full: $fullBytes B)"
+[ "$loopBytes" -le 7400 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,400 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="
@@ -2044,7 +2060,19 @@ for f in leak_anon.cpp leak_plain.cpp leak_lambda.cpp leak_c.c leak_objc.m leak_
 done
 "$BIN" "$XHOT"  --skipped --legend=compact >"$TMP/s.hot"  2>/dev/null </dev/null
 "$BIN" "$XLEAK" --skipped --legend=compact >"$TMP/s.leak" 2>/dev/null </dev/null
-liveDoc(){ case "$1" in extent_suspect_files|extent_suspect_syms) printf '%s' "$TMP/s.hot" ;; macro_blanked_files|macro_blanked) printf '%s' "$TMP/s.leak" ;; *) printf '' ;; esac; }
+# #60: graphlegend.h kModScopeLegend is conditional and its clause opens with `t="modscope"`, so the source
+# reader above asks for a `t` term. It deliberately has none. `t=` is not an absent-at-zero attribute like
+# the rest of this population — it is on EVERY <s> row of every ranked answer, and a term keyed on it would
+# print its reading on documents that hold no owner at all. The compact dialect defines this kind by the one
+# thing every surface spells identically (the NAME, compactlegend.h kModScopeEscapedName → the reading it
+# pulls in), which also covers the columnar <kind> array, <h n=>, <edge caller=> and <u sym=> that a term
+# keyed on an element never would. So it takes this arm's OTHER route — proven live, never on trust: the
+# document below must CARRY t= in its payload and DEFINE it in its legend.
+MODS="$TMP/modscope/src"; mkdir -p "$MODS"
+printf 'export function setPhase(p: string): void { console.log(p) }\n' > "$MODS/lifecycle.ts"
+printf "import { setPhase } from './lifecycle'\nsetPhase('starting')\n"  > "$MODS/index.ts"
+"$BIN" "$TMP/modscope" --no-cache --callers=setPhase --legend=compact >"$TMP/s.mods" 2>/dev/null </dev/null
+liveDoc(){ case "$1" in extent_suspect_files|extent_suspect_syms) printf '%s' "$TMP/s.hot" ;; macro_blanked_files|macro_blanked) printf '%s' "$TMP/s.leak" ;; t) printf '%s' "$TMP/s.mods" ;; *) printf '' ;; esac; }
 while IFS='|' read -r kind name where <&3; do
     case "$kind" in
         PASS) ok "(S) $name" ;;
@@ -2055,7 +2083,7 @@ while IFS='|' read -r kind name where <&3; do
             if [ -z "$doc" ]; then
                 no "(S) $name= ($where) has NO kCompactCompletenessTerms row — under --legend=compact it reaches the reader undefined"
             elif [ "$( ca carries "$doc" "$name" )" = 1 ] && [ "$( ca defines "$doc" "$name" )" = 1 ]; then
-                ok "(S) $name= ($where) needs no term: its --skipped clause is a comment compact KEEPS, verified live (carried and defined)"
+                ok "(S) $name= ($where) needs no term: the compact dialect defines it another way, verified live (carried and defined)"
             else
                 no "(S) $name= ($where) has no term, and its live --skipped compact document does not carry and define it (carried=$( ca carries "$doc" "$name" ) defined=$( ca defines "$doc" "$name" ))"
             fi ;;

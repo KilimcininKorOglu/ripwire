@@ -57,7 +57,12 @@ nsnap(){ snapfiles | wc -l | tr -d ' '; }
 # run against $REPO with the private cache dir and a HEAD-snapshot cache enabled (auto path is internal to
 # computeHeadSnapshot; --no-cache only disables the WORKING-tree auto-cache, not the HEAD-snapshot cache — so
 # the HEAD cache is exercised even here, which is exactly what A4-P1 added).
-run(){ env -u TMPDIR XDG_CACHE_HOME="$XDG" "$BIN" "$REPO" --quality-delta "$@"; }
+# #228 part 1 — the IDENTITY BASIS (src/quality.h): a working tree that already IS HEAD is compared with
+# ITSELF and never materializes a HEAD tree, so it never reads or writes a qsnap/qheadsnap blob. That is the
+# right answer for that tree and the wrong FIXTURE for a CACHE gate, which needs the archived-HEAD path. The
+# marker below is a comment-only line appended to a comment-only TRACKED file: it makes `git diff HEAD`
+# non-empty (so the archived path runs) while adding no symbol, no row and no byte to the reported output.
+run(){ printf '// dirty marker\n' >> "$REPO/src/marker.cpp"; env -u TMPDIR XDG_CACHE_HOME="$XDG" "$BIN" "$REPO" --quality-delta "$@"; }
 
 mkdir -p "$REPO/src" "$REPO/tests"
 cat > "$REPO/src/lib.cpp" <<'EOF'
@@ -68,6 +73,7 @@ cat > "$REPO/tests/test_lib.cpp" <<'EOF'
 extern int helper( int x );
 int runTest() { return helper( 5 ) + 1; }
 EOF
+printf '// cache-gate dirty marker (see run() above)\n' > "$REPO/src/marker.cpp"   # comment-only, tracked: no symbols
 git -C "$REPO" init -q; git -C "$REPO" config user.email x@y; git -C "$REPO" config user.name x
 git -C "$REPO" add -A; git -C "$REPO" commit -qm init
 

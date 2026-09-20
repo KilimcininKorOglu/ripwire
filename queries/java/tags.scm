@@ -71,7 +71,20 @@
   type: (scoped_type_identifier
     (type_identifier) @name .)) @reference.call
 
-; import a.b.C;  — the last scoped-identifier segment is the imported name
+; import a.b.C;  — the last scoped-identifier segment is the imported name.
+;
+; #60 CONSEQUENCE, recorded here beside the choice that causes it (train-12, 2026-09-20). This capture is
+; @reference.call, not @reference.import, DELIBERATELY: an import is a dependency edge to the imported
+; name, and spelling it as a call is what puts it in the graph. An import sits outside every named
+; definition, so since #60 it is owned by the file's synthetic module-scope owner and therefore mints a
+; CALLER edge: in test/kotlinfix, --callers=square went 1 -> 2, the second caller being Greeter.kt's
+; `import com.example.util.square`. Java behaves identically and is inert only because a fixture's
+; `import java.util.List` names nothing defined in-tree. Java and Kotlin are the only two languages where
+; this happens; every other module-scope owner in this tree owns real top-level executable code.
+; The mis-description is in this rule, not in #60, and it predates it: on 755f9026 the same reference
+; already read `<u role="call" p="Greeter.kt:3"/>`. Changing it is an extraction change (kParserVer) and
+; an owner call on whether an import is a caller — open, not taken here. test/kotlincheck.sh §1a pins the
+; behaviour so it cannot go silent.
 (import_declaration
   (scoped_identifier
     name: (identifier) @name)) @reference.call

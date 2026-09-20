@@ -181,6 +181,17 @@ hdr "$TMP/bare.xml" | grep -q 'base_ref=' \
     || no "(D) the bare form reported baseline=ref-pair"
 
 # ── (E) DECISIVE: ripwire's own recorded harvest wave, against the live-recomputed overlay oracle ─────────
+# RE-PIN LOG for the recorded literal below (it is a bare number, so its justification has to live here).
+# 2026-09-20, integration/train-12 (issue #60, lane/t12-filescope-calls): 8 → 9 gating rows on this wave.
+#   The message below offers three candidate causes — "the shas, the corpus or a kind's tier moved". It was a
+#   FOURTH: a kind's EVIDENCE moved, in the direction #60 exists to move it. The extra row is
+#     <r kind="new-clone-of-reused-helper" sym="curl | http_call" p="test/mcpremotecheck.sh:51" was="0" now="6"/>
+#   and the cause is checkable in one command on the wave's B tree: --callers=http_call reports count="0" on
+#   755f9026 and count="1" on this train. The kind fires only when the clone group's maxFanin reaches
+#   kReusedHelperMinFanin (3); a shell top-level call had no caller node before #60, so those call sites
+#   conferred no fan-in and the group never qualified. The clone is not new and no bar moved — only the
+#   evidence that the helper it duplicates is REUSED. The row-for-row oracle comparison and the churn
+#   disclosure arm above both stayed green across the change (6 non-churn + 3 churn = 9).
 WAVE_A=4b9386c
 WAVE_B=ba380b5
 if ! git -C "$ROOT" rev-parse -q --verify "$WAVE_A^{commit}" >/dev/null 2>&1 \
@@ -223,9 +234,9 @@ else
 
         # the two RECORDED literals from the round record — a cross-check that these shas still name that wave
         overlayTotal=$(( oracleN + overlayChurn ))
-        [ "$overlayTotal" = 8 ] \
-            && ok "(E) the overlay reproduces the pinned 8 gating rows (= $oracleN + $overlayChurn churn; 18 pre-dial)" \
-            || no "(E) the overlay gave $overlayTotal gating rows; this binary is pinned at 8 (18 before the 2026-09-10 dial round) — the shas, the corpus or a kind's tier moved"
+        [ "$overlayTotal" = 9 ] \
+            && ok "(E) the overlay reproduces the pinned 9 gating rows (= $oracleN + $overlayChurn churn; 8 pre-#60, 18 pre-dial)" \
+            || no "(E) the overlay gave $overlayTotal gating rows; this binary is pinned at 9 (8 before #60's file-scope callers, 18 before the 2026-09-10 dial round) — the shas, the corpus, a kind's tier or a kind's EVIDENCE moved; the RE-PIN LOG above arm (E) records how the last move was justified"
         dmmVal="$( "$BIN" "$ROOT" "--dmm=$WAVE_A..$WAVE_B" 2>/dev/null | grep -o ' dmm="[0-9.]*"' | head -1 | sed -E 's/.*"([0-9.]*)".*/\1/' )"
         # tolerance band, not equality: dmm is a float printed to 3 places (house float rule).
         if [ -n "$dmmVal" ] && awk -v v="$dmmVal" 'BEGIN{ exit !(v > 0.525 && v < 0.535) }'; then
