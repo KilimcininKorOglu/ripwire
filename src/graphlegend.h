@@ -612,6 +612,14 @@ inline constexpr const char* kModScopeLegend =
     "t=\"modscope\" is a row for a file's MODULE SCOPE, named <file-scope>: the statements outside every named definition, which is where a top-level call and an anonymous callback body's calls live. It is a CALLER, not a function — nothing in the source can name it, so it never appears as a callee, and it has no body, so expanding it returns none. A file that has no such call has no such row. ";
 inline const char* modScopeLegend( bool on ) noexcept { return on ? kModScopeLegend : ""; }
 
+// The same fact in --for's two dialects, which are prose strips joined by ';' and ':' rather than XML comment
+// clauses — one constant each so the wording cannot drift from kModScopeLegend above. Present-only, on that
+// verb's own `modScopePresent` bit (verbs_for.h), like every other clause in those two strips.
+inline constexpr std::string_view kForCompactModScopeClause =
+    "; t=modscope n=<file-scope>: a file's MODULE SCOPE (top-level statements + anonymous callback bodies) — a caller, never a callee, with no body to expand";
+inline constexpr std::string_view kForModScopeClause =
+    " A row or hop named <file-scope> (t=\"modscope\") is a file's MODULE SCOPE — the statements outside every named definition, where a top-level call and an anonymous callback body's calls live. It is a CALLER, never a callee, and has no body to expand.";
+
 // The attribute and the key, one spelling each, absent at zero — through the shared countAttrXmlOrEmpty
 // above, so this cannot become a second spelling of bodyless_defs='s hand-rolled idiom.
 inline std::string unprovenDefsAttrXml( std::size_t unprovenDefs )

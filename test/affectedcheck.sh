@@ -434,6 +434,37 @@ for L in compact full; do
     done
 done
 
+# ── 8e) #60 MED-3 residual: --for and the full dialect on the verbs the first sweep missed ────────────
+# The name-keyed compact rule covers everything that goes through compactLegendText. Two families do not:
+# --for builds its own two legend strips (verbs_for.h, present-only bits), and the full dialect is per-verb.
+echo "=== (8e) #60: --for, and --legend=full on the verbs that were bare ==="
+for L in compact full; do
+    O="$( "$BIN" "$TMP/issue60prod" --no-cache --for='module scope of a file' --legend=$L 2>/dev/null )"
+    if printf '%s' "$O" | grep -q '&lt;file-scope&gt;'; then
+        printf '%s' "$O" | grep -q 'modscope' \
+            && ok "(8e) --for --legend=$L: row shown AND kind defined" \
+            || no "(8e) --for --legend=$L: shows <file-scope> with NO definition (the entry verb, bare)"
+    else
+        no "(8e) --for --legend=$L: no <file-scope> row — the arm proves nothing"
+    fi
+done
+for V in "--edit-check=setPhase" "--tree" "--path=<file-scope>,setPhase" "--connect=<file-scope>,setPhase" "--pack-task=<file-scope> setPhase"; do
+    O="$( "$BIN" "$TMP/issue60prod" --no-cache "$V" --legend=full 2>/dev/null )"
+    if printf '%s' "$O" | grep -q '&lt;file-scope&gt;'; then
+        printf '%s' "$O" | grep -q 'modscope' \
+            && ok "(8e) $V --legend=full: row shown AND kind defined" \
+            || no "(8e) $V --legend=full: shows <file-scope> with NO definition"
+    else
+        no "(8e) $V --legend=full: no <file-scope> row — the arm proves nothing"
+    fi
+done
+# inert again, in both --for dialects: the clause is a present-only bit, not a constant
+for L in compact full; do
+    "$BIN" "$TMP/noms" --no-cache --for='a leafy stalk' --legend=$L 2>/dev/null | grep -q 'modscope' \
+        && no "(8e) --for --legend=$L pays for the clause on a corpus with no owner" \
+        || ok "(8e) --for --legend=$L: no owner ⇒ no clause (0 bytes when inert)"
+done
+
 # ── 8d) #60 MED-2: the legend says the owner has no body, and --expand agrees ──────────────────────────
 # Every clause naming this kind says "no body to expand". --expand used to answer either the WHOLE FILE
 # (the whole-file serving always undercuts an empty bundle) or shown="0" capped="1" — a cap over a body

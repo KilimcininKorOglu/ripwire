@@ -525,6 +525,9 @@ struct ForLensHeaderParts
                                             // the section is rendered (the header is priced, and re-priced, from here).
     bool             layerPresent = false;   // TRAIN 9: does any ranked row's file sit under a built-in arch layer
                                             // directory, so its <d> row carries layer=? Same over-approximation again.
+    bool             modScopePresent = false;   // #60: does any ranked row name a file's MODULE SCOPE (t="modscope",
+                                            // n=<file-scope>)? It reaches this bundle as a <d> row and, more often,
+                                            // as a <h n="<file-scope>"> hop row. Same over-approximation, same reason.
 
     // ── THE DROPPABLE LEGEND, as ONE bit ──────────────────────────────────────────────────────────────
     // confidenceNote / tailLegend / idRouteLegend moved in lock step at every read and every write, and the
@@ -851,6 +854,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
         { p.tailLegend, kForCompactLegendTail },         { p.hdrLegend, kForCompactLegendHdr },
         { p.composePresent, kForCompactLegendCompose },  { p.legoPresent, kForCompactLegendLego },
         { p.layerPresent, kForCompactLegendLayer },
+        { p.modScopePresent, rw::kForCompactModScopeClause },   // #60
     };
     for( const auto& [ on, clause ] : kPresentOnly )
     {
@@ -995,6 +999,10 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     if( p.hdrLegend )
     {
         h.append( rw::kForHdrLegend );   // R2-AF (round 2, S4): present-only, never ceiling-dropped
+    }
+    if( p.modScopePresent )
+    {
+        h.append( rw::kForModScopeClause );   // #60: present-only, on the same bit the compact strip reads
     }
     if( p.legendDropped )
     {
@@ -2527,13 +2535,19 @@ std::optional<int> runForLens( const MainDispatch& d )
                 forLayerPresent = true;
             }
         }
+        // #60: the same shape again. A module-scope owner reaches this bundle as a <d> row and, more often,
+        // as a <h n="<file-scope>"> hop of one — the hop rows are why the ranked-set test is the right one:
+        // a hop's owner need not be ranked itself, so this reads the whole symbol table's kinds and lets the
+        // over-approximation fall the safe way (a clause with nothing to define, never an undefined row).
+        const bool forModScopePresent = std::ranges::any_of( ing.symbols, []( const rw::Symbol& sym ) noexcept
+                                                             { return sym.kind == rw::SymKind::ModuleScope; } );
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,
                                         cfg.anchor, plan.autoBodies, plan.compact, cfg.legend == "compact",
                                         /*tailLegend=*/true, /*idRouteLegend=*/true, /*legendDropped=*/false, flRootArg,
                                         /*hdrLegend=*/!forHdrRows.empty(), forScPresent, forComposePresent,
-                                        forLegoPresent, forLayerPresent };
+                                        forLegoPresent, forLayerPresent, forModScopePresent };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
