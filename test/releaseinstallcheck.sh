@@ -11,8 +11,12 @@ ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write th
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
-# Detection and activation must use only the per-invocation homes below.
-unset CODEX_HOME AGENTS_HOME HERMES_HOME RIPWIRE_NO_ACTIVATE RIPWIRE_SKIP_CPU_CHECK RIPWIRE_CPUINFO
+# Detection and activation must use only the per-invocation homes below. CLAUDE_CONFIG_DIR/
+# RIPWIRE_DATA_HOME added alongside the others (test/lib/clean-env.sh's set) after PR #298's review
+# found scripts/install.sh's Claude-skills block (`${CLAUDE_CONFIG_DIR:-$HOME/.claude}`) reads it the
+# same as skills/install.sh, so an ambient CLAUDE_CONFIG_DIR leaked past the HOME= override here too.
+unset CODEX_HOME AGENTS_HOME HERMES_HOME CLAUDE_CONFIG_DIR RIPWIRE_DATA_HOME \
+      RIPWIRE_NO_ACTIVATE RIPWIRE_SKIP_CPU_CHECK RIPWIRE_CPUINFO
 FAKE="$TMP/fake"; mkdir -p "$FAKE" "$TMP/assets/ripwire-0.3.6-macos-arm64/skills/ripwire-router" "$TMP/assets/ripwire-0.3.6-macos-arm64/hooks"
 
 printf '#!/bin/sh\necho "ripwire 0.3.6 (Release, Test)"\n' >"$TMP/assets/ripwire-0.3.6-macos-arm64/ripwire"
