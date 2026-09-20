@@ -2351,6 +2351,11 @@ std::optional<int> runImpact( const MainDispatch& d )
         const auto           importPage     = std::span<const std::uint32_t>( imports.files ).first( imports.shown );
         const auto           importLazyPage = std::span<const char>( imports.lazy ).first( imports.shown );
 
+        // The ONE page window this answer emits. It was spelled inline in the ImpactView initialiser below,
+        // which left the legend predicate with nothing to read but the whole `show` set — CodeRabbit
+        // 4057546113. Hoisted so the rows and the reading that describes them come from one expression.
+        const rw::PageWindow imPage = pageWindow( show.size(), effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ), cfg.pageOffset );
+
         if( !cfg.json )
         { // L2: JSON has no comment-node analogue; the XML-only leading doc comment
             // §B12.4 in-band (W3FIX): the paging clause comes from pageview.h::kPageRaiseCapClause, which
@@ -2359,8 +2364,9 @@ std::optional<int> runImpact( const MainDispatch& d )
             // twin cannot drift from this wording (the §B4 echo-site class).
             // LB-H: the import-tier clause is the columnar variant under --format=columnar, because that
             // form carries the count without the rows and a reader must be told which shape they hold.
-            // #60: exactly when a module-scope owner is one of the rows this answer prints.
-            const bool imHasModScope = anyModuleScopeRow( ing, show );
+            // #60: exactly when a module-scope owner is one of the rows this answer prints — the PAGE, which
+            // is what `anyModuleScopeRow`'s own contract asks for ("a page of rows, never the corpus").
+            const bool imHasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) );
             rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
                          cfg.columnar ? rw::kImpactImportTierColumnarLegend : rw::kImpactImportTierLegend,
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
@@ -2375,7 +2381,7 @@ std::optional<int> runImpact( const MainDispatch& d )
         // (src/pageview.h, THE TRUNCATION VOCABULARY, rules 1-3). LB-G: the same NAMED constant
         // --callers/--callees use, so the family's default lives in one place instead of three literals.
         const ImpactView view{ ing, cfg.impactSym, seeds.size(), imUnprovenDefs, reach.size(), show,
-                               pageWindow( show.size(), effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ), cfg.pageOffset ),
+                               imPage,   // the same window the legend predicate above reads — one expression, not two
                                imports, importPage, importLazyPage, prD, imSingleRoot, imRootPrefix, imRootAttr,
                                imSingleRoot ? cfg.roots[0] : std::string_view(), cfg.pageLimit, cfg.pageOffset,
                                &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, g };

@@ -1369,7 +1369,11 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     // H2H-Graft F1: the evidence clause (testmap.h's ONE wording) rides the rows-gated half, like the run= rule.
     // #60: exactly when a module-scope owner is one of the untested rows this report prints (it can never
     // be a <t> test row — a test file's module scope is a caller, and the test rows are files).
-    const bool tgHasModScope = std::any_of( r.untested.begin(), r.untested.end(),
+    // CodeRabbit 4057546105: "prints" is `[uw.begin, uw.end)`, which is what walkUntestedRows below emits —
+    // NOT all of r.untested. Scanning the whole set made a page with no owner on it pay for the reading
+    // anyway, which is the same paid-for-nothing defect this round already fixed for --for. The window is
+    // computed above and reused here so the predicate and the emitter cannot drift apart.
+    const bool tgHasModScope = std::any_of( r.untested.begin() + uw.begin, r.untested.begin() + uw.end,
                                             [ & ]( NodeId n ) { return n < ing.symbols.size() && ing.symbols[ n ].kind == SymKind::ModuleScope; } );
     rw::emitTo( out, "<!-- {}{}{}{}{}{}-->{}", kTestGateLegend,
                   tgHasRows ? kTestGateRowLegend : "", std::string_view( kTestRowEvidenceLegend.data(), tgHasRows ? int( kTestRowEvidenceLegend.size() ) : 0 ),

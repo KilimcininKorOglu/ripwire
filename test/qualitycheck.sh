@@ -500,7 +500,13 @@ uzero(){  # $1 = label, rest = urun args
 
 umk "$UROOT/plain";  uzero "clean tree"                    "$UROOT/plain"
 umk "$UROOT/tmpfix"; mkdir -p "$UROOT/fixtures/tmp"
-( UTMP="$UROOT/fixtures/tmp"; uzero "TMPDIR under a fixtures/ directory" "$UROOT/tmpfix" )
+# CodeRabbit 4057546124: this ran `uzero` inside a ( … ) subshell to scope UTMP. `no()` sets fail=1, and a
+# subshell's fail=1 dies with the subshell — the arm could print FAIL while the gate exited 0. There is no
+# `set -e` and nothing checked $?, so the vacuity was total. UTMP is saved and restored in the PARENT
+# instead; the override is just as scoped and the assertion now reaches the gate's own exit code.
+UTMP_SAVED="$UTMP"; UTMP="$UROOT/fixtures/tmp"
+uzero "TMPDIR under a fixtures/ directory" "$UROOT/tmpfix"
+UTMP="$UTMP_SAVED"
 
 # U1 untracked content — the reporter's own shape — and the control that its debt is still REPORTED.
 umk "$UROOT/untracked"
@@ -708,8 +714,14 @@ printf 'def zeta_helper(v):\n    return v * 5\n' > "$UROOT/determinism/scratchdi
 urun "$UROOT/determinism"; UD1="$UOUT"
 urun "$UROOT/determinism"; UD2="$UOUT"
 mkdir -p "$UROOT/scratch2"
-( UTMP="$UROOT/scratch2"; urun "$UROOT/determinism"; printf '%s' "$UOUT" > "$UROOT/d3.txt" )
-{ [ "$UD1" = "$UD2" ] && [ "$UD2" = "$( cat "$UROOT/d3.txt" )" ]; } \
+# The same shape as the (U) TMPDIR arm above, found by sweeping this file for it as CodeRabbit asked.
+# `urun` itself calls no assertion, so nothing was lost here YET — but it is one `no()` away from the same
+# silent failure, and UOUT crossing a subshell boundary is exactly why the third run had to be written to a
+# file. Save/restore in the parent: the write-to-a-file dance goes with it.
+UTMP_SAVED="$UTMP"; UTMP="$UROOT/scratch2"
+urun "$UROOT/determinism"; UD3="$UOUT"
+UTMP="$UTMP_SAVED"
+{ [ "$UD1" = "$UD2" ] && [ "$UD2" = "$UD3" ]; } \
     && ok "(U8) cold / warm / cold-with-a-fresh-TMPDIR are byte-identical" \
     || no "(U8) the unchanged-tree answer moved between cold, warm and a fresh TMPDIR"
 

@@ -80,7 +80,7 @@ answer on the CLI and once per session on the agent surfaces. `CLAUDE.md` and `C
 wording and name the gates that hold it — `legendcoveragecheck` (G) and `compactlegendcheck` (UG) for the
 default posture, `legendrefcheck` for the ref posture.
 
-### Fixed — `--quality-delta` on a tree that is already HEAD reports nothing, whatever shape the checkout has
+### Fixed — `--quality-delta` on a tree that is already HEAD stops reporting phantom debt
 
 `--quality-delta` built its HEAD side by archiving the commit into a temp directory and re-ingesting it. That
 tree is a different **population** from the working tree, and a dead-code verdict is a property of the whole
@@ -100,12 +100,21 @@ exactly as before, and the count is stated on stderr. The CLI delta, the CLI `--
 `quality_delta` verb all take the same basis, through one function.
 
 Measured on a nine-file fixture whose working tree is identical to HEAD, gating rows before → after: an untracked
-directory 1 → 0, an untracked nested repository 2 → 0, a tracked file marked `export-ignore` 1 → 0, a sparse
-checkout hiding a caller 2 → 0, `git update-index --skip-worktree` over an edited caller 1 → 0, `--no-ignore` over
-a gitignored same-named definition 1 → 0 — exit 2 → 0 in every row. A shallow clone read zero both before and
+directory 1 → 0, an untracked nested repository 2 → 0, a tracked file marked `export-ignore` 1 → 0, `--no-ignore`
+over a gitignored same-named definition 1 → 0 — exit 2 → 0 in each. A shallow clone read zero both before and
 after; it was a bystander in the report. A real edit that deletes a function's only caller still gates exactly one
-dead-code row in the hardest of those shapes. Nine new arms in `test/qualitycheck.sh` pin the invariant, its
+dead-code row in the hardest of those shapes. New arms in `test/qualitycheck.sh` pin the invariant, its
 sensitivity controls and its determinism across cold, warm and a fresh temp directory.
+
+**Two checkout shapes are NOT fixed, and the answer says so rather than implying otherwise.** A tracked path
+carrying `git update-index --skip-worktree` or `--assume-unchanged` hides its own bytes from git, so the
+identity basis cannot be trusted over it and is refused: that tree takes the archived comparison and keeps
+gating. For a hidden **edit** that is the right answer — the change is real, only concealed — and for a
+**sparse checkout** it is a known gap: the archived tree is not sparse-aware, so an excluded caller can still
+gate a phantom row. Both cases now name the basis on the root, `head_basis="archived-index-hidden"`, instead of
+leaving a reader to guess why the fast path vanished; `head_basis="identity"` marks the answers above, and its
+absence is the ordinary archived comparison. Closing the sparse gap is follow-on work, tracked with the rest of
+the archived-path population problem below.
 
 A tree that carries tracked **modifications** still takes the archived-HEAD path, so a population difference can
 still move a verdict there; `prompts/help-wanted/quality-delta-unchanged-tree-zero.md` is where that follow-on

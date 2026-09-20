@@ -77,6 +77,11 @@
 ; `identifier` node (multiple simple_identifier children, not Java's right-recursive
 ; scoped_identifier), so the trailing anchor `.` is what picks the LAST segment here, not a `name:`
 ; field — verified against node-types.json: identifier's children are `[simple_identifier]` (repeated).
+; #60 CONSEQUENCE (train-12, 2026-09-20): because this capture is @reference.call and an import sits
+; outside every named definition, the imported name now gets a CALLER — the file's synthetic module-scope
+; owner. Kotlin has no executable top level, so a <file-scope> owner in a .kt file can ONLY come from this
+; rule. See queries/java/tags.scm's note at the same capture for the full reasoning and the open question;
+; test/kotlincheck.sh §1a pins it so it cannot go silent.
 (import_header
   (identifier
     (simple_identifier) @name .)) @reference.call

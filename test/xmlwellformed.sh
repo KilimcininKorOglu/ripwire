@@ -294,6 +294,16 @@ check_xml "#60 --tree"                          "$MS" --tree
 check_xml "#60 --pack-task at CORPUS width"     "$ROOT" --pack-task='scope of a file'
 # …and the structural fact the malformed shape broke: exactly ONE <bodies element, and it is not restamped
 # as capped over a body that never existed.
+#
+# CodeRabbit 4057546154: the two blocks below are the first in this gate to need python3 — one to count
+# <bodies opens outside comments, one to unwrap the MCP envelope. Without it, `$( … | python3 … )` is the
+# EMPTY STRING and both report a failure that is about the environment, not about the binary: BOPEN="" is
+# "not 1", and an empty MCP payload is "did not answer". A gate that cannot tell a missing interpreter
+# from a real defect is worse than one that says so, so the prerequisite is checked ONCE, by name, and the
+# section skips with the reason. Every arm above this point uses only the shell and xmllint and still runs.
+if ! command -v python3 >/dev/null 2>&1; then
+    printf '  SKIP  #60 <bodies> structure and the MCP explore twin — python3 is not on PATH (prerequisite, not a failure)\n'
+else
 PT="$( "$BIN" "$MS" --no-cache --pack-task='<file-scope> setPhase' 2>/dev/null )"
 BOPEN="$( printf '%s' "$PT" | python3 -c 'import sys,re; d=sys.stdin.read(); print(len(re.findall(r"<bodies[ >]", re.sub(r"<!--.*?-->","",d,flags=re.S))))' )"
 BCLOSE="$( printf '%s' "$PT" | grep -o "</bodies>" | wc -l | tr -d " " )"
@@ -322,6 +332,7 @@ case "$MCPTXT" in
            && ok "#60 MCP explore (the --pack-task twin) is well-formed with an owner in the body set" \
            || { no "#60 MCP explore rejected by xmllint"; printf '%s' "$MCPTXT" | xmllint --noout - 2>&1 | head -3; } ;;
 esac
+fi   # end of the python3-dependent #60 section
 
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"

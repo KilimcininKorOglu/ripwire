@@ -113,8 +113,21 @@ echo
 echo "=== 1. STRUCTURE: 16 symbols across 5 files, kinds + edges match the fixture ==="
 # ═══════════════════════════════════════════════════════════════════════════
 
-if grep -q 'files=5 symbols=16' "$MAP_OUT"; then ok "header: files=5 symbols=16"; else no "header: expected files=5 symbols=16: $( grep -o 'files=[0-9]* symbols=[0-9]*' "$MAP_OUT" )"; fi
-if grep -q 'edges=5' "$MAP_OUT"; then ok "header: edges=5"; else no "header: expected edges=5: $( grep -o 'edges=[0-9]*' "$MAP_OUT" )"; fi
+# RE-PINNED 2026-09-20 (train-12, issue #60): symbols 16 -> 17, edges 5 -> 6. ONE synthetic module-scope
+# owner, in view.phtml, and it owns real PHP top-level code: `<?= renderGreeting('world') ?>` on line 13
+# sits outside every function and had no caller node before, so renderGreeting read as called by nobody in
+# the one fixture whose whole point is a template that calls its own helper. The new edge is that call.
+# hdrCounts: the map header's own stats run, never a bare attribute grep. The legend spells `edges= ` in
+# prose ("edges= distinct call edges"), so `grep -o 'edges=[0-9]*'` matches the LEGEND first and a failure
+# message reports an EMPTY count for an attribute the document states correctly — which is what this arm
+# printed before it was re-pinned (the binary said edges=6 throughout).
+hdrCounts(){ grep -oE 'files=[0-9]+ symbols=[0-9]+ edges=[0-9]+[^>]*' "$MAP_OUT" | head -1; }
+if grep -q 'files=5 symbols=17' "$MAP_OUT"; then ok "header: files=5 symbols=17"; else no "header: expected files=5 symbols=17: $( hdrCounts )"; fi
+if grep -q 'edges=6' "$MAP_OUT"; then ok "header: edges=6"; else no "header: expected edges=6: $( hdrCounts )"; fi
+PHP_MS="$( "$BIN" "$FIX" --no-cache "--callees=view.phtml:<file-scope>" 2>/dev/null )"
+printf '%s' "$PHP_MS" | grep -q 'count="1"' && printf '%s' "$PHP_MS" | grep -q 'n="renderGreeting"' \
+    && ok '(#60) view.phtml module scope calls renderGreeting — the template echo is an edge now' \
+    || no "(#60) the top-level <?= renderGreeting() ?> did not mint an owner edge: $( printf '%s' "$PHP_MS" | grep -o '<callees [^>]*>' )"
 if grep -q 'ambiguous=0' "$MAP_OUT"; then ok "header: ambiguous=0 (decl/def collapse resolved the interface's greet away)"; else no "header: expected ambiguous=0: $( grep -o 'ambiguous=[0-9]*' "$MAP_OUT" )"; fi
 if grep -q 'unresolved=0' "$MAP_OUT"; then ok "header: unresolved=0"; else no "header: expected unresolved=0: $( grep -o 'unresolved=[0-9]*' "$MAP_OUT" )"; fi
 
@@ -247,7 +260,7 @@ echo "=== 5. CENSUS: --skipped no longer drops PHP, and names it ==="
 SK="$( "$BIN" "$FIX" --skipped --no-cache 2>/dev/null )"
 echo "$SK" | grep -q 'unsupported_ext="0"' && ok '--skipped: unsupported_ext=0 (no .php/.phtml falls out of the index)' \
     || no "--skipped: expected unsupported_ext=0: $( echo "$SK" | grep -o 'unsupported_ext="[0-9]*"' )"
-echo "$SK" | grep -q '<lang n="php" files="5" symbols="16"/>' && ok '--skipped: <lang n="php" files="5" symbols="16"/> census row' \
+echo "$SK" | grep -q '<lang n="php" files="5" symbols="17"/>' && ok '--skipped: <lang n="php" files="5" symbols="17"/> census row' \
     || no "--skipped: php census row missing/wrong: $( echo "$SK" | grep -o '<lang [^/]*/>' )"
 
 # ═══════════════════════════════════════════════════════════════════════════
