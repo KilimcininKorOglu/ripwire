@@ -60,11 +60,25 @@ n1="$( printf '%s' "$c1" | attr count )"
 [ "$n1" = "1" ] && ok "case 1: <UniqueWidget /> resolves as a call (--callers count=1)" \
                 || no "case 1: --callers=UniqueWidget count=$n1 (want 1) — stderr: $( cat "$TMP/err1" )"
 
-# ── §2 case 2 — the issue's control: an anonymous-callback plain call must stay exactly as before ──
+# ── §2 case 2 — the control, RE-AIMED 2026-09-20 (train-12, issue #60) ────────────────────────────
+# This arm pinned count=1 to say "a plain call is unaffected by the JSX work". isolate/plain.ts holds
+# THREE call sites, and count=1 meant only one of them had a caller node: namedCaller's `helper()`. The
+# other two — the top-level `test("anon caller", …)` and the `helper()` inside its arrow callback — had
+# no enclosing named definition, so they produced no edge at all. That is #285's own case-2 shape and it
+# is the defect #60 closes; pinning the number froze it.
+# The control's REAL question is "does the named caller still resolve": asserted by name now, so it
+# cannot be satisfied by the wrong caller appearing. The arrow-callback call is asserted separately, as
+# the file-scope owner, which is what #60 promises and what the old count=1 was hiding.
 c2="$( "$BIN" "$FIX" --no-cache --callers=helper 2>"$TMP/err2" )"
 n2="$( printf '%s' "$c2" | attr count )"
-[ "$n2" = "1" ] && ok "case 2 control: plain call through helper() unaffected (--callers count=1)" \
-                || no "case 2 control REGRESSED: --callers=helper count=$n2 (want 1) — stderr: $( cat "$TMP/err2" )"
+printf '%s' "$c2" | grep -q 'n="namedCaller"' \
+    && ok "case 2 control: the plain call through namedCaller() still resolves" \
+    || no "case 2 control REGRESSED: --callers=helper no longer lists namedCaller — stderr: $( cat "$TMP/err2" )"
+printf '%s' "$c2" | grep -q 't="modscope"' \
+    && ok "case 2 (#60): the anonymous-callback call site now has a caller — isolate/plain.ts's file-scope owner" \
+    || no "case 2 (#60): --callers=helper has no t=\"modscope\" row, so the arrow-callback call is still ownerless: $c2"
+[ "$n2" = "2" ] && ok "case 2: --callers=helper count=2 — the named caller and the file-scope owner, nothing else" \
+                || no "case 2: --callers=helper count=$n2 (want 2: namedCaller + the file-scope owner) — stderr: $( cat "$TMP/err2" )"
 
 # ── §3 paired element — <Panel>…</Panel> is ONE call, not two ──────────────────────────────────────
 n3c="$( "$BIN" "$FIX" --no-cache --callers=Panel 2>/dev/null | attr count )"

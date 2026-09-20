@@ -139,9 +139,29 @@ has_square = "square" in names
 has_sos = "sum_of_squares" in names
 all_method = all(s["t"] == "method" for s in syms) if syms else False
 edge = any(s["n"] == "sum_of_squares" and "square" in s["calls"] for s in syms)
-# no phantom nodes from `puts` (a resolved-to-nothing call) — the two defs are the only symbols
+# no phantom nodes from `puts` (a resolved-to-nothing call). #60 (train-12) adds a THIRD symbol that is
+# not a phantom: the synthetic module-scope owner of b.rb's last line, `puts sum_of_squares( 3, 4 )` —
+# real Ruby top-level code, which this file has always had and which had no caller node until now. It is
+# excluded from the phantom list BY ITS LABEL (t="modscope", n="<file-scope>"), never by name, so a
+# genuine `puts` node would still be caught. all_method is asked of the two DEFINITIONS only, for the
+# same reason: the owner is not a Ruby `def` and must not be tagged as one.
+# The parser above reads n= straight out of the XML, so the owner's name arrives ESCAPED. Comparing
+# against the escaped spelling is deliberate: it is what the document says, and a gate that silently
+# unescapes would stop noticing if the escaping ever broke.
+OWNER = "&lt;file-scope&gt;"
+defs = [s for s in syms if s["t"] != "modscope"]
+owners = [s for s in syms if s["t"] == "modscope"]
+names = [s["n"] for s in defs]
+has_square = "square" in names
+has_sos = "sum_of_squares" in names
+all_method = all(s["t"] == "method" for s in defs) if defs else False
+edge = any(s["n"] == "sum_of_squares" and "square" in s["calls"] for s in defs)
 phantom = [n for n in names if n not in ("square", "sum_of_squares")]
+owner_ok = len(owners) == 1 and owners[0]["n"] == OWNER
+owner_calls_sos = owner_ok and "sum_of_squares" in owners[0]["calls"]
 print("SYMS:%d" % len(syms))
+print("DEFS:%d" % len(defs))
+print("OWNER:%s OWNER_CALLS_SOS:%s" % (owner_ok, owner_calls_sos))
 print("HAS_SQUARE:%s HAS_SOS:%s ALL_METHOD:%s EDGE:%s PHANTOM:%s" % (has_square, has_sos, all_method, edge, ",".join(phantom) or "none"))
 PYEOF
 cat "$TMP/ruby_check"
@@ -151,10 +171,19 @@ if grep -q "SYMS:0" "$TMP/ruby_check"; then
 else
     ok "b.rb (Ruby): extracted $( grep -o 'SYMS:[0-9]*' "$TMP/ruby_check" | cut -d: -f2 ) symbol(s)"
 fi
-if grep -q "SYMS:2" "$TMP/ruby_check"; then ok "b.rb: exactly 2 symbols (square, sum_of_squares — puts not indexed)"; else no "b.rb: expected 2 symbols, got: $( grep SYMS "$TMP/ruby_check" )"; fi
+# RE-AIMED 2026-09-20 (train-12, issue #60): the count is 3, and the third is not a regression. Ruby HAS
+# an executable top level and this fixture uses it — `puts sum_of_squares( 3, 4 )` on the last line. That
+# call had no caller node before #60, so sum_of_squares read as called by nobody; it is now owned by the
+# file's t="modscope" owner. The DEFINITION count is what this arm was really about and it is still 2.
+if grep -q "DEFS:2" "$TMP/ruby_check"; then ok "b.rb: exactly 2 definitions (square, sum_of_squares — puts not indexed)"; else no "b.rb: expected 2 definitions, got: $( grep -E 'SYMS|DEFS' "$TMP/ruby_check" | tr '\n' ' ' )"; fi
+if grep -q "OWNER:True" "$TMP/ruby_check"; then ok "b.rb: exactly one t=\"modscope\" <file-scope> owner for the top-level puts line"; else no "b.rb: the module-scope owner is missing or not unique: $( grep OWNER "$TMP/ruby_check" )"; fi
+# The point of #60 on this fixture, asserted rather than implied: the top-level call is now an EDGE.
+# Ruby's bare-word form (`puts` itself, no parentheses) still produces no reference at all — the lane's
+# stated Ruby gap — which is exactly why PHANTOM stays none below.
+if grep -q "OWNER_CALLS_SOS:True" "$TMP/ruby_check"; then ok "b.rb: the owner calls sum_of_squares — the top-level call is an edge now (#60)"; else no "b.rb: the top-level puts line did not mint an owner -> sum_of_squares edge: $( grep OWNER "$TMP/ruby_check" )"; fi
 if grep -q "HAS_SQUARE:True" "$TMP/ruby_check"; then ok "b.rb: square method present"; else no "b.rb: square method missing"; fi
 if grep -q "HAS_SOS:True" "$TMP/ruby_check"; then ok "b.rb: sum_of_squares method present"; else no "b.rb: sum_of_squares method missing"; fi
-if grep -q "ALL_METHOD:True" "$TMP/ruby_check"; then ok "b.rb: both symbols tagged t=\"method\""; else no "b.rb: symbols not tagged t=\"method\" as expected"; fi
+if grep -q "ALL_METHOD:True" "$TMP/ruby_check"; then ok "b.rb: both DEFINITIONS tagged t=\"method\" (the owner is t=\"modscope\", not a Ruby def)"; else no "b.rb: symbols not tagged t=\"method\" as expected"; fi
 if grep -q "PHANTOM:none" "$TMP/ruby_check"; then ok "b.rb: no phantom symbol nodes (puts / unresolved calls dropped)"; else no "b.rb: phantom nodes present: $( grep PHANTOM "$TMP/ruby_check" )"; fi
 if grep -q "EDGE:True" "$TMP/ruby_check"; then ok "b.rb: intra-file call edge sum_of_squares -> square present"; else no "b.rb: call edge sum_of_squares -> square MISSING"; fi
 

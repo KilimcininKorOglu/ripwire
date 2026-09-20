@@ -7,7 +7,9 @@
 ;   - type declarations:  class / interface / enum → def nodes (the containers)
 ;   - method + constructor declarations → the def nodes calls resolve TO
 ;   - method invocations + object creations → the call references (edges)
-;   - imports → reference edges to the imported name's final segment
+;   - imports → IMPORT reference edges (role="import", @reference.import) to the imported name's
+;     final segment — a dependency edge, not a call (T13/fix3: was @reference.call, which double-
+;     counted --callers=/--impact= fan-in by one phantom "caller" per importing file)
 ;
 ; Deliberately NOT captured (noise): fields, local variables, annotations, `@name` on
 ; every type mention. Only defs + calls + imports become graph nodes/edges — matching
@@ -71,7 +73,19 @@
   type: (scoped_type_identifier
     (type_identifier) @name .)) @reference.call
 
-; import a.b.C;  — the last scoped-identifier segment is the imported name
+; import a.b.C;  — the last scoped-identifier segment is the imported name. T13/fix3: an import is a
+; DEPENDENCY edge, not a call — @reference.import (not @reference.call) so ingest_sidecap.h's generic
+; "reference.import" check routes it to RefRole::Import, which graph.h's isResolvableCallReference
+; (Call+Macro only) excludes from the call-graph CSR: it still rides --uses as a role="import" use-site
+; (same shape C++'s `using ns::name;` already gets), but --callers/--impact fan-in no longer count it.
+;
+; This answers the owner call train-12 left open beside this rule. #60 gave every file a synthetic
+; module-scope owner, and an import sits outside every named definition, so as a @reference.call it
+; minted a CALLER edge: in test/kotlinfix, --callers=square read 1 -> 2, the second "caller" being
+; Greeter.kt's `import com.example.util.square`. Java behaved identically and was inert only because a
+; fixture's `import java.util.List` names nothing defined in-tree. Java and Kotlin were the only two
+; languages with this shape; every other module-scope owner in this tree owns real top-level executable
+; code. test/kotlincheck.sh §1a pins the behaviour so it cannot go silent again.
 (import_declaration
   (scoped_identifier
-    name: (identifier) @name)) @reference.call
+    name: (identifier) @name)) @reference.import

@@ -51,6 +51,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 . "$ROOT/test/lib/headbinlib.sh"                       # ripwire_private_checkout, for arm (E)'s scratch tree
@@ -181,6 +182,30 @@ hdr "$TMP/bare.xml" | grep -q 'base_ref=' \
     || no "(D) the bare form reported baseline=ref-pair"
 
 # ── (E) DECISIVE: ripwire's own recorded harvest wave, against the live-recomputed overlay oracle ─────────
+# RE-PIN LOG for the recorded literal below (it is a bare number, so its justification has to live here).
+# 2026-09-20, integration/train-13 (lane/t13-honesty-fixes fix 2): 9 → 8 gating rows on this wave, and the
+#   row that left is EXACTLY the row train 12 added below. Fix 2 gives `reuse-decline`
+#   (new-clone-of-reused-helper) the two demotions its sibling `duplication` already had, one of which is
+#   the ALL-TEST-SCRIPT skip. Train 12's extra row was
+#     <r kind="new-clone-of-reused-helper" sym="curl | http_call" p="test/mcpremotecheck.sh:51" .../>
+#   whose every member is a `test/`-pathed `.sh` gate script — precisely the population the skip exempts,
+#   and precisely the shape research-ai-smells measured as the kind's one real-history firing. `duplication`
+#   was already silent on that group; the two reporters now agree on it. Checked on the merged binary: the
+#   overlay carries NO new-clone-of-reused-helper row at all, and arm (E)'s row-for-row oracle comparison
+#   (5 rows) and its churn disclosure arm (3) both stayed green, so 5 + 3 = 8. Nothing else moved: the
+#   recorded dmm 0.530 reproduces unchanged.
+#   FOUND LATE, and worth recording as such: this gate greps src/quality.h and was missed by train 13's
+#   first-round gate selection, then caught by the wider sweep in the fix round.
+# 2026-09-20, integration/train-12 (issue #60, lane/t12-filescope-calls): 8 → 9 gating rows on this wave.
+#   The message below offers three candidate causes — "the shas, the corpus or a kind's tier moved". It was a
+#   FOURTH: a kind's EVIDENCE moved, in the direction #60 exists to move it. The extra row is
+#     <r kind="new-clone-of-reused-helper" sym="curl | http_call" p="test/mcpremotecheck.sh:51" was="0" now="6"/>
+#   and the cause is checkable in one command on the wave's B tree: --callers=http_call reports count="0" on
+#   755f9026 and count="1" on this train. The kind fires only when the clone group's maxFanin reaches
+#   kReusedHelperMinFanin (3); a shell top-level call had no caller node before #60, so those call sites
+#   conferred no fan-in and the group never qualified. The clone is not new and no bar moved — only the
+#   evidence that the helper it duplicates is REUSED. The row-for-row oracle comparison and the churn
+#   disclosure arm above both stayed green across the change (6 non-churn + 3 churn = 9).
 WAVE_A=4b9386c
 WAVE_B=ba380b5
 if ! git -C "$ROOT" rev-parse -q --verify "$WAVE_A^{commit}" >/dev/null 2>&1 \
@@ -224,8 +249,8 @@ else
         # the two RECORDED literals from the round record — a cross-check that these shas still name that wave
         overlayTotal=$(( oracleN + overlayChurn ))
         [ "$overlayTotal" = 8 ] \
-            && ok "(E) the overlay reproduces the pinned 8 gating rows (= $oracleN + $overlayChurn churn; 18 pre-dial)" \
-            || no "(E) the overlay gave $overlayTotal gating rows; this binary is pinned at 8 (18 before the 2026-09-10 dial round) — the shas, the corpus or a kind's tier moved"
+            && ok "(E) the overlay reproduces the pinned 8 gating rows (= $oracleN + $overlayChurn churn; 9 between #60 and reuse-decline's test-script skip, 8 before #60, 18 pre-dial)" \
+            || no "(E) the overlay gave $overlayTotal gating rows; this binary is pinned at 8 (9 between #60's file-scope callers and reuse-decline's all-test-script skip, 8 before #60, 18 before the 2026-09-10 dial round) — the shas, the corpus, a kind's tier or a kind's EVIDENCE moved; the RE-PIN LOG above arm (E) records how the last move was justified"
         dmmVal="$( "$BIN" "$ROOT" "--dmm=$WAVE_A..$WAVE_B" 2>/dev/null | grep -o ' dmm="[0-9.]*"' | head -1 | sed -E 's/.*"([0-9.]*)".*/\1/' )"
         # tolerance band, not equality: dmm is a float printed to 3 places (house float rule).
         if [ -n "$dmmVal" ] && awk -v v="$dmmVal" 'BEGIN{ exit !(v > 0.525 && v < 0.535) }'; then

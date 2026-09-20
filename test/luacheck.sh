@@ -106,7 +106,24 @@ echo
 echo "=== 1. STRUCTURE: all FIVE definition spellings, 8 symbols across 3 files ==="
 # ═══════════════════════════════════════════════════════════════════════════
 
-if grep -q 'files=3 symbols=8' "$MAP_OUT"; then ok "header: files=3 symbols=8"; else no "header: expected files=3 symbols=8: $( grep -o 'files=[0-9]* symbols=[0-9]*' "$MAP_OUT" )"; fi
+# RE-PINNED 2026-09-20 (train-12, issue #60): 8 -> 10. TWO synthetic module-scope owners, one each in
+# greeter.lua and main.lua, and they own real Lua top-level code — a Lua module IS a script. greeter.lua:3
+# and main.lua:9 are `local x = require("…")` calls and main.lua:22 is an `iife_pick(…)` call, all outside
+# every function, all of which had no caller node before. util.lua gets NO owner: it defines functions and
+# returns a table, and never calls anything at top level — which is the control that makes the other two
+# meaningful rather than a per-file constant. §5's iife_pick DEFINITION floor is untouched: the owner owns
+# the CALL, and no definition of iife_pick appears (still asserted below).
+# hdrCounts: the map header's own stats run, never a bare attribute grep — the legend spells `edges= ` and
+# `files=/symbols=` in prose, so an unanchored grep reports an empty count for an attribute the document
+# states correctly (train-12 hit exactly that in kotlincheck and phpcheck).
+hdrCounts(){ grep -oE 'files=[0-9]+ symbols=[0-9]+ edges=[0-9]+[^>]*' "$MAP_OUT" | head -1; }
+if grep -q 'files=3 symbols=10' "$MAP_OUT"; then ok "header: files=3 symbols=10"; else no "header: expected files=3 symbols=10: $( hdrCounts )"; fi
+LUA_MS="$( "$BIN" "$FIX" --no-cache '--graph-query=kind(all,modscope)' 2>/dev/null )"
+printf '%s' "$LUA_MS" | grep -q 'count="2"' \
+  && printf '%s' "$LUA_MS" | grep -q 'p="greeter.lua:1"' && printf '%s' "$LUA_MS" | grep -q 'p="main.lua:1"' \
+  && ! printf '%s' "$LUA_MS" | grep -q 'p="util.lua' \
+    && ok '(#60) module-scope owners in greeter.lua and main.lua only — util.lua calls nothing at top level' \
+    || no "(#60) unexpected module-scope owner set: $( printf '%s' "$LUA_MS" | grep -o '<s [^>]*>' | tr '\n' ' ' )"
 if grep -q 'edges=3' "$MAP_OUT"; then ok "header: edges=3"; else no "header: expected edges=3: $( grep -o 'edges=[0-9]*' "$MAP_OUT" )"; fi
 if grep -q 'ambiguous=0' "$MAP_OUT"; then ok "header: ambiguous=0"; else no "header: expected ambiguous=0: $( grep -o 'ambiguous=[0-9]*' "$MAP_OUT" )"; fi
 if grep -q 'unresolved=0' "$MAP_OUT"; then ok "header: unresolved=0"; else no "header: expected unresolved=0: $( grep -o 'unresolved=[0-9]*' "$MAP_OUT" )"; fi
@@ -201,7 +218,7 @@ echo "=== 3. CENSUS: --skipped no longer drops Lua, and names it ==="
 SK="$( "$BIN" "$FIX" --skipped --no-cache 2>/dev/null )"
 echo "$SK" | grep -q 'unsupported_ext="0"' && ok '--skipped: unsupported_ext=0 (no .lua falls out of the index)' \
     || no "--skipped: expected unsupported_ext=0: $( echo "$SK" | grep -o 'unsupported_ext="[0-9]*"' )"
-echo "$SK" | grep -q '<lang n="lua" files="3" symbols="8"/>' && ok '--skipped: <lang n="lua" files="3" symbols="8"/> census row' \
+echo "$SK" | grep -q '<lang n="lua" files="3" symbols="10"/>' && ok '--skipped: <lang n="lua" files="3" symbols="10"/> census row' \
     || no "--skipped: lua census row missing/wrong: $( echo "$SK" | grep -o '<lang [^/]*/>' )"
 
 # ═══════════════════════════════════════════════════════════════════════════

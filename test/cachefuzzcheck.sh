@@ -76,6 +76,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 ASAN_BIN="${RIPWIRE_ASAN_BIN:-$ROOT/asan/ripwire}"
@@ -601,12 +602,17 @@ cat > "$QREPO/src/lib.cpp" <<'EOF'
 int helper( int x ) { int s = 0; for( int i = 0; i < x; ++i ) { s += i * 2; } return s; }
 int mainThing( int y ) { int t = y; while( t > 1 ) { t = t - 1; } return t; }
 EOF
+printf '// qsnap-fuzz dirty marker (see qrun below)\n' > "$QREPO/src/marker.cpp"   # comment-only, tracked: no symbols
 git -C "$QREPO" init -q; git -C "$QREPO" config user.email x@y; git -C "$QREPO" config user.name x
 git -C "$QREPO" add -A; git -C "$QREPO" commit -qm init >/dev/null
 
 QXDG="$TMP/qxdg"; mkdir -p "$QXDG"
 QCACHEDIR="$QXDG/ripwire"
-qrun(){ env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$BIN" "$QREPO" --quality-delta "$@"; }
+# #228 part 1 — the IDENTITY BASIS (src/quality.h): a working tree that already IS HEAD is compared with
+# ITSELF and never materializes a HEAD tree, so it never reads or writes a qsnap blob. This part fuzzes the
+# qsnap READER, so it needs a tree that reaches it: the marker is a comment-only line appended to a
+# comment-only TRACKED file, which makes `git diff HEAD` non-empty and adds no symbol, no row, no output byte.
+qrun(){ printf '// dirty marker\n' >> "$QREPO/src/marker.cpp"; env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$BIN" "$QREPO" --quality-delta "$@"; }
 # Y4: shard-aware lookup — a blob may be flat under $QCACHEDIR or under $QCACHEDIR/<xx>/ (2-hex shard).
 qsnapfiles(){ find "$QCACHEDIR" -maxdepth 2 -type f -name 'ripwire-qsnap-*.bin' 2>/dev/null; }
 

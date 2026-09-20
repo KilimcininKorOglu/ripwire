@@ -150,10 +150,43 @@ echo "=== 1. STRUCTURE: 3 files / 31 symbols / 14 edges, and no ambiguity left =
 # calls in the fixture. The rest is the original port's accounting: §8's enum_class_body pair (Mode/Mode) adds 3
 # definitions and no call edges; §9's Labeled/Shape/Square/describe adds 8 definitions, and Square's `Shape()` delegation
 # is one real call edge (tags.scm's constructor_invocation capture), like any other call expression.
-if grep -q 'files=3 symbols=31 ' "$MAP_OUT"; then ok "header: files=3 symbols=31"; else no "header: expected files=3 symbols=31: $( grep -o 'files=[0-9]* symbols=[0-9]*' "$MAP_OUT" )"; fi
-if grep -q ' edges=14 ' "$MAP_OUT"; then ok "header: edges=14"; else no "header: expected edges=14: $( grep -o 'edges=[0-9]*' "$MAP_OUT" )"; fi
-if grep -q ' ambiguous=0 ' "$MAP_OUT"; then ok "header: ambiguous=0"; else no "header: expected ambiguous=0: $( grep -o 'ambiguous=[0-9]*' "$MAP_OUT" )"; fi
-if grep -q 'unresolved=0' "$MAP_OUT"; then ok "header: unresolved=0"; else no "header: expected unresolved=0: $( grep -o 'unresolved=[0-9]*' "$MAP_OUT" )"; fi
+# hdrCounts: the map header's OWN stats run, never a bare attribute grep. The legend defines this
+# vocabulary in prose ("files=/symbols=: files and symbols indexed; edges= distinct call edges; ..."), so
+# `grep -o 'edges=[0-9]*'` matches the legend's bare `edges=` FIRST and a failure message reports an empty
+# count for an attribute the document states correctly. Every diagnostic below reads the one run of
+# `files=N symbols=N edges=N ... ambiguous=N unresolved=N` instead (train-12: the empty `edges=` in the
+# #60 re-pin round came from this grep, not from the binary, which stated its edge count throughout).
+hdrCounts(){ grep -oE 'files=[0-9]+ symbols=[0-9]+ edges=[0-9]+[^>]*' "$MAP_OUT" | head -1; }
+if grep -q 'files=3 symbols=31 ' "$MAP_OUT"; then ok "header: files=3 symbols=31"; else no "header: expected files=3 symbols=31: $( hdrCounts )"; fi
+if grep -q ' edges=14 ' "$MAP_OUT"; then ok "header: edges=14"; else no "header: expected edges=14: $( hdrCounts )"; fi
+if grep -q ' ambiguous=0 ' "$MAP_OUT"; then ok "header: ambiguous=0"; else no "header: expected ambiguous=0: $( hdrCounts )"; fi
+if grep -q 'unresolved=0' "$MAP_OUT"; then ok "header: unresolved=0"; else no "header: expected unresolved=0: $( hdrCounts )"; fi
+
+# ── §1a. WHY A .kt FILE HAS NO MODULE SCOPE — the control on "an import is not a caller" ──────────
+# Kotlin has NO executable top level. Every statement lives in a function, a class or an initialiser, so a
+# t="modscope" owner in a .kt file can only come from a reference captured OUTSIDE every named definition.
+# The one such reference in this fixture is Greeter.kt:3's `import com.example.util.square`, and T13/fix3
+# re-captured it as @reference.import in queries/kotlin/tags.scm: an import is a dependency edge, not a
+# call, so graph.h's isResolvableCallReference (Call+Macro only) keeps it out of the call-graph CSR and
+# #60's mint has nothing to own. The fixture therefore carries ZERO module-scope owners — which is the
+# right answer for a language with no top-level code, and the reason symbols/edges read 31/14 and not
+# 32/15.
+#
+# THE PIN IS THE WHOLE CHAIN, not the count: no owner is minted, the import is STILL VISIBLE on --uses
+# with role="import" (recategorized, never dropped), and `square`'s fan-in counts real functions only.
+# If someone re-captures the import as @reference.call, all three arms go red and name the decision
+# instead of a number quietly moving.
+KT_MS="$( "$BIN" "$FIX" --no-cache '--graph-query=kind(all,modscope)' 2>/dev/null )"
+printf '%s' "$KT_MS" | grep -q 'count="0"' \
+    && ok '(1a) ZERO module-scope owners in the Kotlin fixture (no top-level code, and an import is not a call)' \
+    || no "(1a) the Kotlin fixture minted a module-scope owner it has no top-level code for: $( printf '%s' "$KT_MS" | grep -o '<s [^>]*>' | tr '\n' ' ' )"
+KT_USES="$( "$BIN" "$FIX" --no-cache --uses=square 2>/dev/null )"
+printf '%s' "$KT_USES" | grep -q '<u role="import" p="Greeter.kt:3"' \
+    && ok '(1a) the import is still VISIBLE on --uses, as role="import" at Greeter.kt:3 — recategorized, not dropped' \
+    || no "(1a) Greeter.kt:3's import is missing or not role=\"import\" on --uses=square: $( printf '%s' "$KT_USES" | grep -o '<u [^>]*>' | tr '\n' ' ' )"
+printf '%s' "$KT_USES" | grep -q 'in_id="&lt;file-scope&gt;"' \
+    && no "(1a) a file-scope owner still owns a reference in a .kt file: $( printf '%s' "$KT_USES" | grep -o '<u [^>]*in_id="&lt;file-scope&gt;"[^>]*>' )" \
+    || ok '(1a) no reference in the Kotlin fixture is owned by a <file-scope> owner'
 
 grep -q 'n="of" sc="Greeter"' "$MAP_OUT" && ok 'scope: companion-object factory carries sc=Greeter (id Greeter.kt::Greeter::of)' \
     || no "scope: Greeter::of id missing — kotlinEnclosingScopeOf regressed: $( grep -o 'n="of"[^>]*' "$MAP_OUT" )"
@@ -364,14 +397,25 @@ open(p, "w").write(s.replace(old, new, 1))
 # 7a. rename the cross-file call target (greet -> square) — the edge must vanish, proving §1's
 #     --callers=square assertion is not a tautology.
 mutate
+# RE-AIMED 2026-09-20 (train-12, issue #60), RE-DERIVED 2026-09-20 (train-13, fix 3). Train 12 re-aimed
+# this arm at the NAMED edge because §1a's import had become a second caller and the old "is there ANY
+# <c n=\"square\"/> left" form went red on a mutation that worked perfectly. Fix 3 removed that second
+# caller again — an import is no longer a call — so `greet` is once more square's ONLY caller and the
+# count falls 1 -> 0. The named-edge form is kept, because it is the better arm either way: "greet absent"
+# alone would pass on a binary that lost every edge, and a bare count alone would pass if the WRONG caller
+# had dropped out. Together they still fail on the bug this arm was written for — an edge that survives a
+# renamed call site.
 pyedit "$TMP/mut/Greeter.kt" 'val doubled = square(2)' 'val doubled = squareX(2)' \
     && { "$BIN" "$TMP/mut" --no-cache >"$TMP/mut.xml" 2>/dev/null; MUT_RC=$?
+         MUT_CR="$( "$BIN" "$TMP/mut" --no-cache --callers=square 2>/dev/null )"
          if [ "$MUT_RC" -ne 0 ]; then
              no "mutation 7a: binary exited $MUT_RC on the mutated fixture — absent output means a crash, not proof the edge vanished"
-         elif grep -q '<c n="square"/>' "$TMP/mut.xml"; then
-             no "mutation: greet -> square edge survived a renamed call site (tautology)"
+         elif printf '%s' "$MUT_CR" | grep -q 'n="greet"'; then
+             no "mutation: greet -> square edge survived a renamed call site (tautology): $( printf '%s' "$MUT_CR" | grep -o '<callers [^>]*>' )"
+         elif ! printf '%s' "$MUT_CR" | grep -q 'count="0"'; then
+             no "mutation: --callers=square should fall 1 -> 0 (greet was its only caller; an import is not one), got: $( printf '%s' "$MUT_CR" | grep -o 'count="[0-9]*"' | head -1 )"
          else
-             ok "mutation: renamed square() call site -> greet -> square edge vanished"
+             ok "mutation: renamed square() call site -> greet -> square edge vanished (--callers=square 1 -> 0)"
          fi; } \
     || no "mutation 7a: the call-site rename did not apply — the arm would have been inert"
 

@@ -15,6 +15,88 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--dead-code` no longer claims a confidence its evidence cannot support
+
+Every `--dead-code` root carried `confidence="high"`, hardcoded: nothing in the candidate loop — internal
+linkage plus zero indexed callers — varied it, so the attribute was a constant wearing the shape of a
+finding. The claim is also the one most likely to be acted on destructively, since the row an agent deletes
+on a false "high" is live code reached by a virtual call, a reflection hook or a macro-generated caller,
+none of which a name-based graph can see. The attribute is **removed** rather than replaced by a derived
+number: there is no per-finding signal to derive one from, and `evidence="internal-linkage+zero-callers"`
+already states the one thing the code actually knows. The full and compact legends, `--help` for
+`--dead-code` and for `--safe-delete`'s `dead_code_candidate=`, and four skills that asserted the
+confidence in prose all say the same thing now. `test/deadprecisioncheck.sh` asserts the attribute is
+absent — the arm that used to pin the bug.
+
+### Fixed — `reuse-decline` fired on clone groups `duplication` already exempts
+
+`reportReusedClones` (kind `new-clone-of-reused-helper`) reads the same clone vectors as its sibling
+`reportNewClones` (kind `duplication`) but carried neither of that sibling's two demotions: the
+all-test-script skip, which exempts a group of sibling gate scripts repeating the house harness
+boilerplate by convention, and the idiom→minor demotion. So a shell gate script cloning the house test
+helper was exempt as `duplication` and gating as `reuse-decline`, from the same input — and that shape is
+where the kind's one real-history firing came from. Both demotions are now applied identically in both
+reporters.
+
+### Fixed — a Java or Kotlin `import` is a dependency edge, not a call
+
+`queries/java/tags.scm` and `queries/kotlin/tags.scm` captured an `import_declaration`/`import_header` as
+`@reference.call`. That was inert while nothing owned a reference written outside every named definition;
+once a top-level statement gained a `<file-scope>` owner (#60), an import line minted a real caller edge
+and inflated `--callers=`/`--impact=` fan-in by one phantom caller per importing file. Both queries now
+capture `@reference.import`, which routes to the existing `RefRole::Import` the C++ `using ns::name;` form
+already used: the import stays fully visible on `--uses` as a `role="import"` use-site, and is excluded from
+the call-graph CSR. No new C++ — the two query files are the whole change. `kParserVer` moves 118 → 119, so
+any cache written by an earlier binary is refused and reparsed. Every other indexed language was checked:
+Java and Kotlin were the only two that captured an import-shaped construct as a call.
+
+A .kt file has no executable top level, so with this the Kotlin fixture correctly carries **no** module-scope
+owner at all; `test/kotlincheck.sh` §1a pins that whole chain — no owner minted, the import still visible
+with `role="import"`, and `square`'s fan-in counting real functions only.
+
+### Fixed — unseeded `--slice-flow=both` now says that it adds nothing the flat rows do not
+
+Unioned over a function's whole variable inventory, `--slice-flow=both`'s reach is byte-identical to the
+union of the flat rows, which holds by construction: every flow row at depth ≥ 1 lands on an occurrence of
+some other sliceable local, and that is already a row of *that* local's flat slice. Seeded with `--at=`, the
+same analysis adds real reach. The unseeded case is not refused — the answer it returns is correct, just no
+more informative — it is **disclosed**: the `<slice>` root carries `flow_redundant="1"` exactly when
+`--slice-flow=both` runs with no `--at=` seed, never on `back`/`fwd` alone and never on a seeded run, with
+one line in the legend pointing at the seed.
+
+### Fixed — a call written outside every named function now has a caller, so `callers`, `impact`, `affected` and `test-gate` stop answering one short (#60)
+
+A reference was attributed to the innermost definition whose span contains it, so a call written where no
+definition reaches — a module top-level statement, or a call inside an anonymous callback body — had no
+caller at all. No edge was minted, and the four verbs that walk those edges each answered short: `--affected`
+could report `tests="0"` for a source file a passing test genuinely exercises, and `--callers` could report
+`count="0"` for a function that framework registration, DI wiring or route setup calls at module scope.
+
+Measured before the change with `--pin-census`, as the share of call sites with no caller node: **72.8% of
+vue-core**, 54.8% of this repository, 1.6% of django, 1.0% of llvm-project. On a TypeScript corpus this was
+the majority of the call graph.
+
+Ingest now mints one **module-scope owner** per file that holds such a call, over exactly the population the
+resolver counts as a call, so the two cannot disagree about what a call is. It is labelled rather than
+disguised — `t="modscope"`, named `<file-scope>`, a caller that nothing can name and so never a callee, with
+no body: `--expand` on one answers `bodyless="1" capped="0"` rather than serving the file. Every legend that
+can show the kind defines it, in the full and compact dialects alike, and only when a row is actually
+present. The fix is language-neutral: twelve indexed languages were measured to carry the defect, and all
+twelve take the same path. Two gaps are stated rather than fixed, because they are upstream: a Ruby bare-word
+call without parentheses and a C# top-level-statements call produce no call reference to own.
+
+What a reader will notice: `--callers`/`--impact`/`--affected` counts rise where such calls exist; a
+`--uses` row for a file-scope call gains `in_id=<file-scope>`; the call graph gains edges (+14% on this
+repository); and the map header's `unresolved=` rises — on shell-heavy trees substantially (5,370 → 12,232
+here) — because calls that used to vanish into an ungauged bucket are now counted by the resolver gauges
+they always belonged to. Node count grows 0.3–4.3% depending on corpus, so every `k=` rank shifts slightly.
+
+Reported by **@YogevKr** in #60: a passing `node:test` test calls an imported function from an arrow
+callback and `--affected` reports zero tests, while moving the assertion into a named function restores
+detection. **@alex-michaud** added the arm that made a callback-only fix insufficient — the same root cause
+drops `--callers` and `--impact` edges for a module top-level call in ordinary production code, with no test
+file and no test framework anywhere in the tree.
+
 ### Added — the legend once per session, so an agent stops paying for the same definitions on every call
 
 Every XML answer carried its own legend, so an agent making repeated calls in one session bought the same
@@ -36,7 +118,7 @@ past to reach the answer. An MCP session can now be served each definition once.
 - **`--legend-dict[=roster]`** prints the same dictionary on the CLI — one definition per line, headed by its
   `dictv=`; `=roster` lists the completeness attributes it defines, as attribute/element/source rows. It is
   answered wherever it appears on the command line and nothing else runs. On this build the dictionary is
-  68,021 B over 700 entries and the roster is 600 rows; a session receives only the entries its own answers
+  68,316 B over 702 entries and the roster is 602 rows; a session receives only the entries its own answers
   used, not the whole thing.
 - **`--legend=ref` refuses on the CLI**, naming the resource and `--legend-dict`. A CLI run is a single answer
   with no session to have been served anything, so a ref answer there would point its reader at definitions
@@ -46,6 +128,46 @@ This amends guardrail **G4**, which said the legend is emitted once at the top o
 answer on the CLI and once per session on the agent surfaces. `CLAUDE.md` and `CONTRIBUTING.md` carry the new
 wording and name the gates that hold it — `legendcoveragecheck` (G) and `compactlegendcheck` (UG) for the
 default posture, `legendrefcheck` for the ref posture.
+
+### Fixed — `--quality-delta` on a tree that is already HEAD stops reporting phantom debt
+
+`--quality-delta` built its HEAD side by archiving the commit into a temp directory and re-ingesting it. That
+tree is a different **population** from the working tree, and a dead-code verdict is a property of the whole
+population — so a file present on only one side moved the verdict of a symbol in a file both sides shared. On a
+working tree identical to HEAD, with untracked directories present, **@hnipps** saw 58 gating
+`preexisting-worse` dead-code rows and exit 2 on a Python monolith of ~7,100 tracked files (#228) — every row
+in a test file nobody had touched — and `--quality-baseline` then refused to pin a floor over that same
+phantom debt, so the documented escape hatch was unavailable exactly where it was needed. The case that makes
+it matter is the one reported: the exit code is meant to be a pre-commit gate, and a gate that fires on a
+clean tree cannot be used.
+
+When the tracked tree already **is** HEAD, ripwire now stops materializing a second tree: the baseline is this
+tree's own snapshot, so the comparison is a snapshot against itself and no regression can exist in it. Files the
+tree holds that HEAD does not track — untracked files, an untracked nested repository, a checked-out submodule —
+stay in the crawl and in the graph, but not in the baseline, so their own debt is still reported as `new-symbol`
+exactly as before, and the count is stated on stderr. The CLI delta, the CLI `--quality-baseline` pin and the MCP
+`quality_delta` verb all take the same basis, through one function.
+
+Measured on a nine-file fixture whose working tree is identical to HEAD, gating rows before → after: an untracked
+directory 1 → 0, an untracked nested repository 2 → 0, a tracked file marked `export-ignore` 1 → 0, `--no-ignore`
+over a gitignored same-named definition 1 → 0 — exit 2 → 0 in each. A shallow clone read zero both before and
+after; it was a bystander in the report. A real edit that deletes a function's only caller still gates exactly one
+dead-code row in the hardest of those shapes. New arms in `test/qualitycheck.sh` pin the invariant, its
+sensitivity controls and its determinism across cold, warm and a fresh temp directory.
+
+**Two checkout shapes are NOT fixed, and the answer says so rather than implying otherwise.** A tracked path
+carrying `git update-index --skip-worktree` or `--assume-unchanged` hides its own bytes from git, so the
+identity basis cannot be trusted over it and is refused: that tree takes the archived comparison and keeps
+gating. For a hidden **edit** that is the right answer — the change is real, only concealed — and for a
+**sparse checkout** it is a known gap: the archived tree is not sparse-aware, so an excluded caller can still
+gate a phantom row. Both cases now name the basis on the root, `head_basis="archived-index-hidden"`, instead of
+leaving a reader to guess why the fast path vanished; `head_basis="identity"` marks the answers above, and its
+absence is the ordinary archived comparison. Closing the sparse gap is follow-on work, tracked with the rest of
+the archived-path population problem below.
+
+A tree that carries tracked **modifications** still takes the archived-HEAD path, so a population difference can
+still move a verdict there; `prompts/help-wanted/quality-delta-unchanged-tree-zero.md` is where that follow-on
+lives.
 
 ### Fixed — the MCP `for` bundle defines `at=`, `ccx=` and `next=`, which it was already emitting
 
@@ -227,6 +349,68 @@ the arm compares normally. When an arm is still refused, the root carries `reaso
 `reason="tree_unavailable"` — present only when `ok="0"`, and written in every build flavour, not only in a
 debug trace. Both `ok=` postures and `reason=` are defined in the legend. Gates:
 `test/scoutheadconflictcheck.sh` arms T9(a)–(e), `test/mergescoutcheck.sh`. (CodeRabbit review on #295)
+
+### Fixed — sixteen gates now share one GNU/BSD `stat` compat helper instead of a per-gate copy
+
+`stat -f` is GNU coreutils' filesystem-stat flag, not BSD's format-string flag, so it succeeds with junk
+instead of failing — a caller-local `stat -f ... || stat -c ...` one-liner never reaches its own fallback on
+Linux. Sixteen gates each hand-rolled the same detect-once-and-redefine fix independently:
+`cachehashcheck.sh`, `cachesplitcheck.sh`, `clonecachecheck.sh`, `codexpromptroutecheck.sh`,
+`evictioncheck.sh`, `g1freshcheck.sh`, `headsnapcachecheck.sh`, `mcpeditmodecheck.sh`,
+`portablecachecheck.sh`, `prcontextcheck.sh`, `qsnapcachecheck.sh`, `qsnapprefetchcheck.sh`,
+`statgatecheck.sh`, `cacheisolationcheck.sh`, `qsnapproducercheck.sh`, `sidecarsymlinkcheck.sh` and
+`tempfilesymlinkcheck.sh` all now source the new shared `test/lib/statcompat.sh` instead — one place defines
+the GNU-vs-BSD `stat` compat logic, not seventeen. Centralised by **@s0undt3ch** in #298.
+
+### Fixed — a gate that builds a throwaway git repository could be aimed at the caller's repository instead
+
+`git -C DIR` changes the working directory; it does not override the environment, and `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_PREFIX` all outrank it. A gate that builds a fixture repo and
+asks it a question therefore answered from somebody else's repository whenever one of those was exported —
+by a git hook running the suite, a CI job, or a `git rebase` running the suite per commit — and then
+passed or failed on data it never
+selected. Measured at the reported call shape: with `GIT_DIR` set, `git -C "$REPO" init` created no `.git`
+under `$REPO` at all, the gate's own commit landed **in the ambient repository**, and `git -C "$REPO"
+rev-parse HEAD` read that foreign sha back, with the gate still reporting ALL PASS. The clearing joins the
+agent-home names in the shared `test/lib/clean-env.sh` rather than becoming a 156th call-site copy: **155
+gates** build a repo and were exposed, and the two that had already found this independently
+(`dispatchordercheck.sh`, `pagingsweepcheck.sh`) had hand-rolled partial lists that each missed names the
+other had. New gate `test/gitenvhermeticcheck.sh` proves the defect is live on this git, proves the helper
+fixes it, pins the variable list against the helper, and sweeps the tree for a repo-building gate that does
+not source it — with a control that strips the source line from a real gate and requires the sweep to flag
+the copy. (CodeRabbit review on the train-13 branch)
+
+### Fixed — a gate that varies `HOME=` per invocation could still leak into an ambiently-set agent-home variable
+
+`CODEX_HOME`/`AGENTS_HOME`/`HERMES_HOME`/`CLAUDE_CONFIG_DIR`/`RIPWIRE_DATA_HOME` override the default an
+agent's tools derive from `HOME`, so a gate that only sets `HOME=` per invocation is not actually sandboxed
+on a machine where any of these is already exported ambiently. `codexpromptroutecheck.sh`,
+`claudeconfigdircheck.sh`, `skillinstallcheck.sh` and `hermesinstallcheck.sh` now source the new shared
+`test/lib/clean-env.sh` before varying `HOME=`, closing that leak in each. `claudeconfigdircheck.sh` — the
+gate that exists specifically to test `CLAUDE_CONFIG_DIR` relocation — was the one this hit hardest: with
+`CLAUDE_CONFIG_DIR` exported ambiently (a developer whose real Claude Code config is relocated, exactly the
+case this gate tests for), its "unset" baseline arm wrote real files into that directory and then failed
+comparing against its own contaminated baseline. Found and closed by **@s0undt3ch** in #298; carrying the
+same shape through the rest of the suite closed six more — `hookcheck.sh`, `routehookcheck.sh`,
+`agenttablecheck.sh`, `codexinstallhonestycheck.sh`, `meterdisclosurecheck.sh` and `releaseinstallcheck.sh`.
+
+### Added — the advertised MCP verb roster is pinned by deriving it, so a count-preserving rename cannot slip through
+
+`test/mcpverbscheck.sh` checked that `tools/list` advertises the expected *number* of verbs, which a rename
+that swaps one name for another passes unchanged — and a renamed verb is a silently broken contract for every
+agent that had wired up the old name. The gate now derives the roster from a live `tools/list` call and
+compares the **names**, all 33 of them. Proved against the mutation it exists for: planting an added verb, a
+removed verb and a count-preserving rename in the served stanza all redden the new arm, and the rename case
+leaves the old count-only check green — which is the gap. Contributed by **@pt-act** in #291.
+
+### Fixed — two documentation claims that described behaviour the binary does not have
+
+`--expand=SYM` on an ambiguous name was documented without the scoping the disclosed `topk_default="0"`
+actually applies, and the directory-of-repos row described a guard that does not exist, where the real
+behaviour is a silent merge. Both corrected in `README.md` and in the `ripwire-navigate` and `ripwire-orient`
+skills, against a built binary rather than from reading the source. Contributed by **@llvm-x86** in #302,
+who built the Flask fixture that found them.
 
 ### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
 ### Added — native Windows x64 (clang-cl, MSVC ABI), behind `src/infra/os.h` — thanks to @lennix1337 (#44)

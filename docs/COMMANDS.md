@@ -2765,7 +2765,7 @@ $ ./build/ripwire . --owners
 
 ### `--dead-code[=DIR]`
 
-**Answers:** list internal functions with no caller anywhere in the indexed tree high-confidence internal source functions with no caller in the indexed tree;
+**Answers:** list internal functions with no caller anywhere in the indexed tree internal source functions with no caller found in the indexed tree — a name-based graph reading, not a confidence score (dynamic dispatch, reflection and macro-generated callers are invisible to it);
 
 =DIR scopes to whole path components (dir or filename) and REFUSES a filter that names nothing indexed. A symbol whose definition is produced by a SELF-REGISTERING test/benchmark macro is never reported: doctest TEST_CASE/ TEST_CASE_FIXTURE/SCENARIO, gtest TEST/TEST_F/TEST_P, Catch2, Google Benchmark — a static initializer registers them, so a name-based call graph cannot see the caller and every one of them would be a false positive. Extend the list for your own framework with `.ripwire_config`'s one key, `register_macros = NAME[, NAME...]` (one directive per line, # comments). The exemption is DISCLOSED, never silent: register-macro-excluded="N" rides the report and prints even at 0. Exempt from dead-code only — such a symbol still participates in clone detection. A LEADING ./ anchors DIR at the repo ROOT (=./src matches only the top-level src/ subtree); a bare name (=src) matches that component ANYWHERE in the tree, including nested (test/fixture/src/…)
 
@@ -2786,6 +2786,7 @@ $ ./build/ripwire . --dead-code=src
 
 **Caveats (stated by the binary):**
 
+- list internal functions with no caller anywhere in the indexed tree internal source functions with no caller found in the indexed tree — a name-based graph reading, not a confidence score (dynamic dispatch, reflection and macro-generated callers are invisible to it);
 - =DIR scopes to whole path components (dir or filename) and REFUSES a filter that names nothing indexed.
 - The exemption is DISCLOSED, never silent: register-macro-excluded="N" rides the report and prints even at 0.
 
@@ -3218,7 +3219,7 @@ $ ./build/ripwire . --edit-plan=<scratch>/aux/edit_plan.json --apply
 
 ### `--safe-delete=SYM`
 
-**Answers:** "can I delete this?" — one call joining callers, blast radius, tests and history "can I delete this?" — ONE call composing signals the tool already computes for one already-resolved SYM: 1-hop callers=, the transitive --impact blast radius (impact_reaches=), every --uses read/write/import/call/extends site (uses=), how much of the blast radius the tested= lens covers (tested_self=/radius_tested=/radius_untested=), and --dead-code's own high-confidence shape at defs=1 (dead_code_candidate=).
+**Answers:** "can I delete this?" — one call joining callers, blast radius, tests and history "can I delete this?" — ONE call composing signals the tool already computes for one already-resolved SYM: 1-hop callers=, the transitive --impact blast radius (impact_reaches=), every --uses read/write/import/call/extends site (uses=), how much of the blast radius the tested= lens covers (tested_self=/radius_tested=/radius_untested=), and --dead-code's own zero-caller/internal-linkage shape at defs=1 (dead_code_candidate=).
 
 ambiguous_callers= names callers whose own calls include an ambiguously-resolved one (g.ambOut) — a caveat, not a count of proven-wrong edges. FACTS only: risk= names what was found — none-found (zero callers AND zero uses), untested-radius (a radius exists and none of it is test-covered), or uses-exist (a radius exists and some of it is tested) — never a go/no-go verdict.
 
@@ -3279,7 +3280,7 @@ $ ./build/ripwire . --slice=rankGraphTeleport
 
 **Answers:** (with --slice) follow the value flow transitively — back, forward, or in both directions TRANSITIVE cross-statement data-flow slice (modifies --slice=SYM:VAR;
 
-refused alone or on the bare inventory — a flow needs a seed variable). Follows VALUE FLOW over reaching-definition def-use edges — a use of v reaches the last def of v in source order before it — by bounded BFS from the seed variable, the ARISE paper's own slicer semantics (arXiv:2605.03117: seed + direction, bounded BFS, stops at the function boundary; the inter-procedural half stays with --callers/--impact by the paper's own design). back = statements whose values feed the seed; fwd = statements the seed's value reaches; both = the union. Flow rows are <s l= k= t= v= d= f=>: v= the variable at that step, d= BFS depth (seed rows are depth 0), f= the line the step was reached from. steps= counts flow rows; depth= states the bound in force. LIMITS (in the legend too): name-based, no alias analysis, line-granular ROWS (a multi-statement line merges) over statement-anchored CHAINING (a multi-LINE statement chains as ONE unit), a shadowed name's bindings walk separately (never into each other's block), data dependence only — no control dependence (the guard deciding whether a def executes is never a row).
+refused alone or on the bare inventory — a flow needs a seed variable). Follows VALUE FLOW over reaching-definition def-use edges — a use of v reaches the last def of v in source order before it — by bounded BFS from the seed variable, the ARISE paper's own slicer semantics (arXiv:2605.03117: seed + direction, bounded BFS, stops at the function boundary; the inter-procedural half stays with --callers/--impact by the paper's own design). back = statements whose values feed the seed; fwd = statements the seed's value reaches; both = the union. Flow rows are <s l= k= t= v= d= f=>: v= the variable at that step, d= BFS depth (seed rows are depth 0), f= the line the step was reached from. steps= counts flow rows; depth= states the bound in force. LIMITS (in the legend too): name-based, no alias analysis, line-granular ROWS (a multi-statement line merges) over statement-anchored CHAINING (a multi-LINE statement chains as ONE unit), a shadowed name's bindings walk separately (never into each other's block), data dependence only — no control dependence (the guard deciding whether a def executes is never a row). both= is UNSEEDED-REDUNDANT: unioned over a function's whole variable inventory, an unseeded both reaches no line the flat rows (bare --slice=SYM lists them) do not — disclosed as flow_redundant="1", never gated. Seed it (--at=FILE:LINE) for flow to add real reach beyond the flat inventory (measured, docs/research).
 
 **Try it**
 
@@ -3309,6 +3310,7 @@ $ ./build/ripwire . --slice=rankGraphTeleport:teleport --slice-flow=fwd
 **Caveats (stated by the binary):**
 
 - refused alone or on the bare inventory — a flow needs a seed variable).
+- both= is UNSEEDED-REDUNDANT: unioned over a function's whole variable inventory, an unseeded both reaches no line the flat rows (bare --slice=SYM lists them) do not — disclosed as flow_redundant="1", never gated.
 
 ### `--slice-depth=N`
 
@@ -3349,7 +3351,7 @@ $ ./build/ripwire . --at=src/graph.h:3954
 </at>
 ```
 
-**Shaped by:** `--slice`
+**Shaped by:** `--slice`, `--slice-flow`
 
 **Caveats (stated by the binary):**
 
@@ -4384,7 +4386,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=c1c4afad8943b51b entries=700
+ripwire legend dictionary ripwire.dict/v1 dictv=42ad8a51f8890926 entries=702
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)

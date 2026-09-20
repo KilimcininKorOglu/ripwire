@@ -15,9 +15,13 @@
 ;     split into function/method, since the grammar gives no structural way to tell them apart
 ;     without a scope walk (that walk is ingest_sidecap.h's job, not the tags pass's).
 ;   - call expressions (bare and via navigation) → the call references (edges).
-;   - imports → reference edges to the imported name's final segment, mirroring Java's import rule
-;     exactly (including its capture kind: @reference.call, not @reference.import — matched for
-;     consistency with the one other JVM-family query in this tree).
+;   - imports → IMPORT reference edges (role="import", @reference.import) to the imported name's
+;     final segment — a dependency edge, not a call. T13/fix3 (2026-09-20): this used to spell
+;     @reference.call "for consistency with the one other JVM-family query in this tree" — that
+;     consistency was with a defect, not a virtue: an import is not a call in either language, and
+;     with #60's <file-scope> owner an import line got a real caller edge, double-counting
+;     --callers=/--impact= fan-in by one phantom "caller" per importing file. Both queries now agree
+;     on @reference.import instead.
 ;
 ; Deliberately NOT captured (first cut, disclosed floor, not an oversight):
 ;   - property_declaration (`val`/`var`, class or top-level): Kotlin's constant-vs-mutable
@@ -77,6 +81,11 @@
 ; `identifier` node (multiple simple_identifier children, not Java's right-recursive
 ; scoped_identifier), so the trailing anchor `.` is what picks the LAST segment here, not a `name:`
 ; field — verified against node-types.json: identifier's children are `[simple_identifier]` (repeated).
+; #60 CONSEQUENCE (train-12, 2026-09-20): because this capture is @reference.call and an import sits
+; outside every named definition, the imported name now gets a CALLER — the file's synthetic module-scope
+; owner. Kotlin has no executable top level, so a <file-scope> owner in a .kt file can ONLY come from this
+; rule. See queries/java/tags.scm's note at the same capture for the full reasoning and the open question;
+; test/kotlincheck.sh §1a pins it so it cannot go silent.
 (import_header
   (identifier
-    (simple_identifier) @name .)) @reference.call
+    (simple_identifier) @name .)) @reference.import

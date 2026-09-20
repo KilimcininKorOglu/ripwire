@@ -199,9 +199,9 @@ struct Snapshot
 inline bool isPublicApi( const IngestResult& ing, NodeId i ) noexcept
 {
     const Symbol& s = ing.symbols[i];
-    if( s.kind == SymKind::Section )
+    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
     {
-        return false; // markdown heading — not a code contract
+        return false; // markdown heading / a file's module scope — neither is a code contract
     }
     const std::string& p = ing.files[ s.fileId ];
     const auto ends = [ & ]( std::string_view e )
@@ -557,12 +557,28 @@ inline bool startsWithRegisteredMacro( std::string_view region, const std::vecto
 // mark a symbol live) with only the fromSymbol test inverted. NAME-level matching, not per-target resolution
 // — the same heuristic level as the resolver's bare-name spray, and a collision errs in the safe direction
 // (false-live, never false-dead). Sorted + deduped for binary_search; deterministic (reference order is).
+//
+// ISSUE #60 — "FILE SCOPE" IS NOW A SYMBOL, AND THIS SET MUST STILL SEE IT. ingest_model.h
+// mintModuleScopeOwners gives a top-level call an owner, so `fromSymbol == kNoNode` alone stopped selecting
+// anything on a code corpus and this evidence source silently went EMPTY. What that costs is not
+// hypothetical: a file-scope call the resolver DECLINES (tier 3 — several same-named defs, none in the
+// caller's file or directory) mints no in-edge either, so its callee had no evidence left at all and
+// --quality-delta gated dead-code on an untouched, genuinely-called function (measured: +154 dead keys on
+// vue-core, +98 on django, +64 here). The mint only ever ADDS a caller, so this predicate widens to match:
+// a reference owned BY a module-scope owner is exactly the file-scope reference it used to be. kNoNode is
+// kept beside it — a non-call reference outside every definition still has no owner (emitReferences takes
+// findOwnedDef for those roles), and a corpus the mint never ran over must read the same as before.
 inline std::vector<std::uint64_t> topLevelCalleeNameHashes( const IngestResult& ing )
 {
+    const auto atFileScope = [ & ]( const Reference& r ) noexcept
+    {
+        return r.fromSymbol == kNoNode
+            || ( r.fromSymbol < ing.symbols.size() && ing.symbols[ r.fromSymbol ].kind == SymKind::ModuleScope );
+    };
     std::vector<std::uint64_t> hashes;
     for( const Reference& r : ing.references )
     {
-        if( r.fromSymbol != kNoNode || r.isInherit || r.isDocLink || r.isCompose
+        if( !atFileScope( r ) || r.isInherit || r.isDocLink || r.isCompose
             || ( r.role != RefRole::Call && r.role != RefRole::Macro ) )
         {
             continue;
@@ -656,9 +672,9 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
         *exemptedByRegisterMacro = false;
     }
     const Symbol& s = ing.symbols[i];
-    if( s.kind == SymKind::Section )
+    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
     {
-        return false; // markdown heading
+        return false; // markdown heading / a file's module scope (no body of its own)
     }
     if( s.sigEndByte >= s.endByte )
     {
@@ -1162,7 +1178,7 @@ inline std::vector<std::uint32_t> codeLocByNode( const IngestResult& ing )
     }
     forEachSymbolBody( ing, [ & ]( NodeId i, const Symbol& s, std::string_view body )
     {
-        if( s.kind == SymKind::Section )
+        if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
         {
             return;   // a markdown SECTION is prose: there is no code/comment line to separate, and counting
                       // its non-blank lines as "code" makes an in-place doc rewrite that swaps 5 blank lines
@@ -1973,7 +1989,11 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 24;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 118;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 119;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 119 = 2026-09-20 (T13/fix3): queries/java + queries/kotlin
+                                                          //    tags.scm import captures moved @reference.call ->
+                                                          //    @reference.import (RefRole::Import) — an import is a
+                                                          //    dependency edge, not a call-graph edge.
                                                           // 118 = 2026-09-19 (CodeRabbit follow-up, thread 4053600599:
                                                           //    isJsxIntrinsicTagIdentifier now tests ASCII-lowercase
                                                           //    directly, so `_Widget`/`$Widget` are components, not
@@ -3516,7 +3536,8 @@ inline RefSpec resolveRefSpec( const std::string& root, std::string_view spec )
 // Degrade (never throw): non-git root, no HEAD (unborn / detached with no committed tree), git unavailable, or
 // a failed archive/extract/ingest → returns {snapshot, false}. rootPath is shell-escaped (shSingleQuote) and
 // quotepath=false — no injection, deterministic path handling.
-inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root );   // fwd — defined below; computeHeadSnapshot reuses it
+inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root,
+                                 const std::vector<char>* fileInBaseline = nullptr );   // fwd — defined below; computeHeadSnapshot reuses it
 // `excludes` MUST mirror the working-tree side's cfg.excludes (A4-F5): the HEAD snapshot is compared key-for-key
 // against the working tree, and any in-edge-derived kind (dead-code, api-surface) diverges if one side honors
 // --exclude and the other does not — e.g. a helper called only from tests/ is dead on a --exclude=tests working
@@ -3956,7 +3977,88 @@ inline std::vector<std::vector<std::uint32_t>> gitCoChangeAndChurnCached(
 // `root` = the ingest root exactly as invoked (cfg.rootPath). It is folded into every baseline key via
 // baselineCanonId so the written sidecar is root-spelling-independent (S2). g.canonId is still consulted only
 // as the "has a canonical id" presence gate — the HASHED key is the root-relative baselineCanonId, never g's.
-inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root = {} )
+// ── computeSnapshot's BASELINE-MEMBERSHIP filter, in three named pieces ──────────────────────────────────
+//
+// `fileInBaseline`, when non-null, is a per-fileId flag: 0 means "this file is NOT part of the baseline the
+// snapshot stands for". The IDENTITY BASIS (computeHeadBasis, below) is its only caller — it builds the HEAD
+// baseline out of the WORKING TREE's own ingest and has to leave out the files HEAD does not track, so their
+// symbols stay ABSENT at baseline and keep reading as new. It is a MEMBERSHIP filter, never a metric change:
+// a file that is in the baseline contributes exactly the records it always did, computed from exactly the same
+// graph. A null filter is the pre-#228 behaviour, branch for branch, which is what lets computeHeadSnapshot
+// keep writing a cached Snapshot that means exactly what it always meant (see test/qschemetripcheck.sh).
+//
+// Out-of-range fileIds read as IN-baseline: a short or absent vector can then only ever widen the baseline,
+// never narrow it, so a plumbing mistake cannot invent a regression.
+inline bool fileIsInBaseline( const std::vector<char>* fileInBaseline, std::uint32_t fileId ) noexcept
+{
+    return fileInBaseline == nullptr || fileId >= fileInBaseline->size() || ( *fileInBaseline )[ fileId ] != 0;
+}
+
+// A clone group is a SET identity (see cloneGroupHash), so a member the baseline does not contain makes the
+// whole set something the baseline never held: the group is left out rather than re-hashed without it.
+inline bool cloneGroupIsInBaseline( const CloneGroup& cg, const IngestResult& ing, const std::vector<char>* fileInBaseline ) noexcept
+{
+    for( NodeId m : cg.members )
+    {
+        if( m < ing.symbols.size() && !fileIsInBaseline( fileInBaseline, ing.symbols[m].fileId ) )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// errorMaskCountsBySym and bodyHashesBySym walk EVERY symbol, so the membership filter reaches their results
+// here, on their keys. The key space is path-qualified (qualityKey), so a key belongs to exactly ONE file:
+// dropping a non-baseline file's key can never take a baseline file's record with it.
+inline void dropNonBaselineKeys( Snapshot& snap, const IngestResult& ing, std::string_view root,
+                                 const std::vector<char>* fileInBaseline )
+{
+    if( fileInBaseline == nullptr )
+    {
+        return;
+    }
+    std::vector<std::uint64_t> dropKeys;
+    for( NodeId i = 0; i < ing.symbols.size(); ++i )
+    {
+        if( !fileIsInBaseline( fileInBaseline, ing.symbols[i].fileId ) )
+        {
+            dropKeys.push_back( qualityKey( ing, i, root ) );
+        }
+    }
+    std::sort( dropKeys.begin(), dropKeys.end() );
+    const auto dropped = [ & ]( std::uint64_t k ) noexcept
+    { return std::binary_search( dropKeys.begin(), dropKeys.end(), k ); };
+    for( auto it = snap.maskBySym.begin(); it != snap.maskBySym.end(); )
+    {
+        it = dropped( it->first ) ? snap.maskBySym.erase( it ) : std::next( it );
+    }
+    for( auto it = snap.bodyHashBySym.begin(); it != snap.bodyHashBySym.end(); )
+    {
+        it = dropped( it->first ) ? snap.bodyHashBySym.erase( it ) : std::next( it );
+    }
+}
+
+// The duplication baseline = both exact (Type-1/2) AND gapped (Type-3) groups, folded into one set. A Type-3
+// pair hashes by its sorted member canonIds exactly like an exact group, so introducing a NEW near-clone
+// changes the set and the delta flags it. Both passes are deterministic, so the set is stable.
+inline std::vector<std::uint64_t> baselineCloneGroupHashes( const IngestResult& ing, std::string_view root,
+                                                            const std::vector<char>* fileInBaseline )
+{
+    std::vector<std::uint64_t> out;
+    for( const CloneGroup& cg : findClones( ing, int( kMinCloneTokens ) ) )
+    {
+        if( cloneGroupIsInBaseline( cg, ing, fileInBaseline ) ) { out.push_back( cloneGroupHash( cg, ing, root ) ); }
+    }
+    for( const CloneGroup& cg : findClonesType3( ing, int( kMinCloneTokens ) ) )
+    {
+        if( cloneGroupIsInBaseline( cg, ing, fileInBaseline ) ) { out.push_back( cloneGroupHash( cg, ing, root ) ); }
+    }
+    return out;
+}
+
+inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root,
+                                 const std::vector<char>* fileInBaseline )
 {
     Snapshot snap;
     const std::vector<std::uint32_t> codeLoc         = codeLocByNode( ing );                     // Q-DIAL-3: the verbosity kind's metric is CODE lines
@@ -3970,8 +4072,12 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
         {
             continue;
         }
+        const Symbol& s = ing.symbols[i];
+        if( !fileIsInBaseline( fileInBaseline, s.fileId ) )
+        {
+            continue;   // IDENTITY BASIS: not a baseline file — every record below would be a phantom
+        }
         const std::uint64_t key = qualityKey( ing, i, root );   // path-qualified ALWAYS — see qualityKey
-        const Symbol&       s   = ing.symbols[i];
         // overloads share a canonical id (scope+name) → keep the MAX of each per-symbol metric per id, not
         // last-writer-wins; otherwise a low-metric overload written last makes every later delta report a
         // phantom regression forever (THE trap). Every new per-symbol kind mirrors this MAX exactly.
@@ -3995,17 +4101,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
             snap.publicApi.push_back( key );
         }
     }
-    // duplication baseline = both exact (Type-1/2) AND gapped (Type-3) groups, folded into one set. A
-    // Type-3 pair hashes by its sorted member canonIds exactly like an exact group, so introducing a NEW
-    // near-clone changes the set ⇒ the delta flags it. Both passes are deterministic → the set is stable.
-    for( const CloneGroup& cg : findClones( ing, int( kMinCloneTokens ) ) )
-    {
-        snap.cloneGroups.push_back( cloneGroupHash( cg, ing, root ) );
-    }
-    for( const CloneGroup& cg : findClonesType3( ing, int( kMinCloneTokens ) ) )
-    {
-        snap.cloneGroups.push_back( cloneGroupHash( cg, ing, root ) );
-    }
+    snap.cloneGroups = baselineCloneGroupHashes( ing, root, fileInBaseline );
 
     // §D#4 error-masking baseline: per-canonId count of error-masking constructs (the SUM the delta compares).
     snap.maskBySym = errorMaskCountsBySym( ing, root );
@@ -4014,11 +4110,278 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
     // metric (a literal-only edit). Compared, never bar-checked — presence-or-difference IS the rewrite signal.
     snap.bodyHashBySym = bodyHashesBySym( ing, root );
 
+    dropNonBaselineKeys( snap, ing, root, fileInBaseline );   // IDENTITY BASIS membership, on the two key-built maps
+
     std::sort( snap.dead.begin(),        snap.dead.end() );
     std::sort( snap.cloneGroups.begin(), snap.cloneGroups.end() );
     std::sort( snap.publicApi.begin(),   snap.publicApi.end() );
     snap.publicApi.erase( std::unique( snap.publicApi.begin(), snap.publicApi.end() ), snap.publicApi.end() );  // overloads collapse to one canonId
     return snap;
+}
+
+// ─── THE IDENTITY BASIS — a no-op diff is empty BY CONSTRUCTION, not by luck (issue #228, part 1) ────────
+//
+// THE DEFECT. `--quality-delta`'s auto-baseline builds the HEAD side by `git archive HEAD` into a temp dir and
+// re-ingesting it (computeHeadSnapshot). That tree is NOT "the working tree with my changes undone" — it is a
+// DIFFERENT POPULATION, and a dead-code verdict is a property of the whole population, not of the symbol's own
+// file. So a file that exists on one side only moves a verdict on a symbol in a file both sides share. Measured
+// on a nine-file fixture whose working tree is identical to HEAD (this binary, before the fix):
+//
+//   shape                                            rows   exit   why the populations differ
+//   untracked file defining a same-named function     1     2      the archive cannot hold an untracked file
+//   an untracked nested git repo                      2     2      same, times every file under it
+//   a tracked file marked `export-ignore`             1     2      `git archive` applies export attributes
+//   sparse checkout hiding a tracked caller           2     2      the crawl cannot see it; the archive holds it
+//   `git update-index --skip-worktree` on a caller    1     2      the index says clean; the bytes are not
+//
+// That is the reporter's shape exactly: a Django monolith with untracked directories, `git status` clean of
+// modifications, 58 gating `preexisting-worse` dead-code rows, exit 2. A pre-commit hook that fires on an
+// unchanged tree is unusable, and the escape hatch is blocked too (`--quality-baseline` refuses to pin over a
+// tree that "already holds N gating findings"). NOT the cause, measured: a shallow clone (it reads 0 on its
+// own — the reporter's `+shallow` is a bystander), the caches (cold, warm and `--no-cache` runs were
+// byte-identical), and resolver tie-breaks (d9ad3e84 fixed the root-spelling half already).
+//
+// THE FIX. When the working tree's TRACKED files are identical to HEAD, stop materializing a second tree: the
+// working tree IS HEAD, so the baseline is the working tree's own snapshot, taken from the ingest and graph
+// the delta side is about to be computed from. The comparison is then a snapshot against ITSELF, and
+// computeDelta cannot find a regression in it — no metric can differ from itself, no key can be absent from a
+// map that contains every key, no clone group can be new. Empty by construction, and it costs a `git diff
+// --quiet` instead of an archive, a tar and a full re-ingest.
+//
+// WHAT THE BASELINE LEAVES OUT, and why it is not a fudge. Files the working tree holds that HEAD does not
+// TRACK — untracked files, an untracked nested repo, a checked-out submodule's contents — are still ingested
+// and still in the graph (they are part of the tree the user is asking about), but they are NOT in the
+// baseline: baselineFileMaskAtHead marks them, computeSnapshot's membership filter leaves their symbols out,
+// and they keep reading as NEW exactly as they do against an archived HEAD today. So the new-file debt the
+// verb has always reported is unchanged; only the PHANTOM rows on tracked symbols go away. The honest
+// statement of the basis is "HEAD's tracked content, read in this working tree, alongside the files you have
+// not added yet" — which is what a user comparing a clean tree actually means, and it is said on stderr
+// whenever the count is non-zero.
+//
+// WHY IT DOES NOT TOUCH THE CACHES. This path never probes and never writes the `qsnap`/`qheadsnap` blobs: it
+// has no archived tree to key them to. computeHeadSnapshot is untouched, so a blob written by any binary still
+// means exactly what it meant. That is also why this change needs no kQSnapCacheScheme bump.
+//
+// WHAT IT DOES NOT COVER, stated so the next reader does not mistake the scope: a tree that DOES carry tracked
+// modifications still takes the archive path, so a population divergence can still move a verdict there (the
+// reporter's second observation — 28 rows in unrelated files for a one-file commit — is that case). Making the
+// archive path's population equal by construction is the follow-on, and the starter kit
+// (prompts/help-wanted/quality-delta-unchanged-tree-zero.md) is where its per-class decisions live.
+
+// THE FAST PRE-CHECK, and ONLY that. `git diff --quiet HEAD -- .` answers staged and unstaged changes,
+// additions and deletions of tracked paths, in one exit code with no output to parse — but it is SPECIFIED to
+// be blind to two index bits, and being blind is the whole point of them:
+//
+//   * `git update-index --skip-worktree PATH`      — "the file on disk is not the file I committed; do not look"
+//   * `git update-index --assume-unchanged PATH`   — "trust the stat cache; do not read the bytes"
+//
+// A tracked file carrying either one can hold a REAL change — an edit that deletes a function's only caller,
+// or the file's outright DELETION — and `git diff` still exits 0. Trusting that exit code alone as "the working tree IS HEAD" turned a
+// genuine gating dead-code regression into `gating="0"` exit 0, silently: a false NEGATIVE, which is a worse
+// answer than the false positive the identity basis exists to remove. So this function is the cheap FIRST of
+// two conditions, and `indexHidesTrackedContent` below is the second; `computeHeadBasis` requires both.
+//
+// The `-- .` pathspec scopes the question to the crawl root when the root is a SUBDIRECTORY of the repository,
+// so an edit elsewhere in the repo cannot take the basis away from a root that never crawls it. Untracked
+// files are deliberately NOT a difference here — they are handled by the baseline mask below. Any git failure
+// (not a repo, unborn HEAD, git absent) reads as "not identical" and falls back to the archived baseline.
+inline bool workingTreeMatchesHead( const std::string& root )
+{
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " diff --quiet HEAD -- . >/dev/null 2>&1";
+    return os::system( cmd.c_str() ) == 0;
+}
+
+// Split one `sep`-separated git listing (NUL for a -z form, '\n' for a line one) into SORTED root-relative
+// views over it, dropping `prefix`
+// (the crawl root's position inside the repository) from each. The views alias `listing`, which therefore has
+// to outlive them — the one caller keeps it in scope for exactly that reason. A trailing newline is trimmed
+// because popenTrimmed re-joins its reads on '\n' and a -z listing carries none inside.
+inline std::vector<std::string_view> splitNulPaths( const std::string& listing, const std::string& prefix, char sep = '\0' )
+{
+    std::vector<std::string_view> out;
+    for( std::size_t start = 0; start < listing.size(); )
+    {
+        const std::size_t nul = listing.find( sep, start );
+        const std::size_t end = ( nul == std::string::npos ) ? listing.size() : nul;
+        std::string_view  p( listing.data() + start, end - start );
+        while( !p.empty() && ( p.back() == '\n' || p.back() == '\r' ) ) { p.remove_suffix( 1 ); }
+        if( !prefix.empty() && p.size() > prefix.size() && p.compare( 0, prefix.size(), prefix ) == 0 ) { p.remove_prefix( prefix.size() ); }
+        if( !p.empty() ) { out.push_back( p ); }
+        start = end + 1;
+    }
+    // rw::sortutil::svLess, not the default comparator: a string_view's operator< goes through
+    // char_traits::compare, whose libstdc++ implementation subtracts two size_t lengths and trips
+    // -fsanitize=integer on the Linux G1 leg the moment two compared views differ in length. Same total
+    // order, so nothing about the resulting sequence changes — and the binary_search over this exact
+    // vector in baselineFileMaskAtHead below MUST pass the same comparator, or the search is looking in
+    // an order the sort did not produce. test/portablebuildcheck.sh arm #6b holds both halves.
+    std::sort( out.begin(), out.end(), rw::sortutil::svLess );
+    return out;
+}
+
+// THE SECOND CONDITION: does any tracked path carry an index bit that hides it from the check above?
+//
+// `git ls-files -v` is the one command that reports the two bits git's own diff will never mention: an `S`
+// tag is skip-worktree, a LOWERCASE tag is assume-unchanged. A path carrying either can differ from HEAD in
+// ANY way — edited, or deleted outright — with `git status` and `git diff` both silent. So the answer here is
+// as blunt as it can be: **any flagged path at all, present or absent, means no identity basis.**
+//
+// IT TOOK THREE REVIEWS TO GET HERE, AND THE HISTORY IS THE ARGUMENT. Round 1 refused only when the flagged
+// path was still ON DISK; that was defeated by `rm`-ing it, because the bit hides a deletion exactly as it
+// hides an edit. Round 2 kept an exception for cone-mode sparse checkout — where git sets the same bit and
+// legitimately removes the file — by deciding for itself which paths the cone includes; that was defeated by
+// a file sitting in an ANCESTOR of a listed directory, which real cone mode materializes and this file's copy
+// of the rule did not know about. Each fix was defeated the first time it was attacked, in the same shape:
+// a real regression invisible, `head_basis="identity"` asserted over it, `--quality-baseline` pinning it.
+//
+// THE LESSON IS THE ONE THIS FILE ALREADY WROTE DOWN FOR THE NON-CONE CASE, then broke for the cone one:
+// re-implementing git's matcher to decide a correctness question is a second, unargued copy of git's rules,
+// and a partial copy is worse than none because it reads as complete. `git sparse-checkout check-rules` would
+// be authoritative, but it lands in git 2.42 and this tool still degrades gracefully on 2.31 (see
+// docs/SUBSTITUTION_METER.md), so on much of the supported range it would refuse anyway — the same outcome
+// as this rule, reached with a version gate, a temp file and a subprocess. So the exception is GONE, and with
+// it sparseConeDirs and sparseConeIncludes. There is nothing left here to model wrongly.
+//
+// WHAT A SPARSE-CHECKOUT USER GETS, stated plainly because it is a real cost and not a neutral one: the
+// archived-HEAD comparison, which is NOT sparse-aware — `git archive HEAD` materializes the excluded files —
+// so a cone-excluded caller can still read as vanished and gate. That is the SAME population divergence this
+// lane removes for untracked content, left in place for this one shape, and it is the pre-existing behaviour
+// on main rather than anything this lane introduces. It belongs to slice 2 of
+// prompts/help-wanted/quality-delta-unchanged-tree-zero.md, where making the archived side's population equal
+// by construction is the actual fix. `head_basis="archived-index-hidden"` on the root is how a user finds out
+// that this is the branch they are on, instead of guessing from silence.
+//
+// COST: one `git ls-files -v` on every identity attempt — one child, the same order as the crawl itself.
+inline bool isBlindIndexTag( char tag ) noexcept
+{
+    return tag == 'S' || ( tag >= 'a' && tag <= 'z' );   // skip-worktree; lowercase = assume-unchanged
+}
+
+// true = refuse the identity basis. A git failure returns true — "assume it hides something" — so an
+// unreadable index can only ever COST the identity basis, never grant it.
+inline bool indexHidesTrackedContent( const std::string& root )
+{
+    const std::string listing = gitOneLine( root, "ls-files -v -z -- . 2>/dev/null" );
+    if( listing.empty() )
+    {
+        return !gitOneLine( root, "ls-files -z -- . 2>/dev/null" ).empty();   // empty because nothing is tracked, or because git failed?
+    }
+    const std::vector<std::string_view> entries = splitNulPaths( listing, std::string{} );   // "<tag> <path>" — no prefix to strip
+    return std::any_of( entries.begin(), entries.end(), []( std::string_view e ) noexcept
+                        { return e.size() >= 3 && e[1] == ' ' && isBlindIndexTag( e[0] ); } );
+}
+
+// Per-fileId flags for computeSnapshot: 1 = this crawled file is TRACKED AT HEAD and therefore part of the
+// baseline, 0 = it is not. `outNotAtHead` receives the count of crawled files HEAD does not track — the number
+// the stderr disclosure reports. Returns false when git could not answer at all, in which case the caller MUST
+// fall back to the archived baseline: an empty answer here is indistinguishable from "HEAD tracks nothing",
+// and acting on it would report every symbol in the tree as new.
+inline bool baselineFileMaskAtHead( const std::string& root, const IngestResult& ing, std::string_view rootPath,
+                                    std::vector<char>& outMask, std::size_t& outNotAtHead )
+{
+    EXPECTS( outMask.empty(), "the mask is built here, never appended to a caller's" );
+
+    // -z: NUL-separated, so a path containing a newline or a quote arrives as its own bytes rather than as
+    // git's C-quoted rendering (core.quotepath=false alone does not stop ls-tree quoting those).
+    const std::string listing = gitOneLine( root, "ls-tree -r --name-only -z HEAD -- . 2>/dev/null" );
+    if( listing.empty() )
+    {
+        return false;   // no answer — NOT "HEAD is empty". The caller degrades to the archived baseline.
+    }
+    // A subdirectory root: ls-tree answers in REPOSITORY-relative paths while every ingest path is
+    // ROOT-relative, so the repo prefix comes off before the two are compared.
+    const std::vector<std::string_view> tracked = splitNulPaths( listing, gitOneLine( root, "rev-parse --show-prefix 2>/dev/null" ) );
+
+    outMask.assign( ing.files.size(), 0 );
+    outNotAtHead = 0;
+    for( std::size_t f = 0; f < ing.files.size(); ++f )
+    {
+        // relForHash is the SAME root-relative spelling every quality key is built from (qualityKey), so a
+        // file's membership here and its key there cannot drift apart.
+        const std::string_view rel = relForHash( ing.files[f], rootPath );
+        // The SAME comparator splitNulPaths sorted `tracked` with. A search under a different order than
+        // the sort produced is a silent wrong answer — here it would drop a tracked file out of the
+        // baseline mask and make its symbols read as new. Both are svLess; neither may change alone.
+        if( std::binary_search( tracked.begin(), tracked.end(), rel, rw::sortutil::svLess ) )
+        {
+            outMask[f] = 1;
+        }
+        else
+        {
+            ++outNotAtHead;
+        }
+    }
+    ENSURES( outMask.size() == ing.files.size(), "one flag per crawled file — computeSnapshot indexes it by fileId" );
+    return true;
+}
+
+// The HEAD baseline for a WORKING-TREE comparison, through ONE seam. Every surface that compares a working
+// tree with HEAD calls this — the CLI `--quality-delta`, the CLI `--quality-baseline` dirty-pin verdict and
+// the MCP `quality_delta` verb — so the three cannot answer the same tree differently in the same second,
+// which is the §B6 M5 / R3 lesson this file already carries twice.
+//
+// TWO CALLERS OF computeHeadSnapshot DELIBERATELY STAY ON IT, and the reason is stated so the next reader
+// cannot mistake it for an oversight: `--edit-check` (editcheck.h) asks a per-symbol contract question whose
+// answer on an unchanged tree is `status="unchanged"` either way — measured on the untracked-file shape,
+// identical on both bases — and its warm path is budgeted on the qsnap hit the identity basis does not take;
+// and the MCP qsnap PREFETCH worker (mcpindex.h) exists precisely to warm that archived blob and has no
+// working-tree ingest to build an identity basis from.
+// `basis` is the value of head_basis= on the root, or nullptr when the attribute is ABSENT. Three states, and
+// the absent one is deliberately the ordinary case so a normal run pays nothing:
+//   "identity"                — the baseline is this working tree's own snapshot (see above)
+//   "archived-index-hidden"   — the identity basis was REFUSED because a tracked path carries skip-worktree or
+//                               assume-unchanged, so the archived HEAD tree answered. A user whose fast path
+//                               vanished can read WHY off the answer instead of guessing from silence, and it
+//                               is the one refusal reason they can act on (clear the bit, or accept that a
+//                               sparse checkout's population differs from HEAD's).
+//   nullptr                   — the archived HEAD tree answered for the ordinary reason: the tree carries
+//                               tracked modifications, which is what every git-HEAD marker has always meant.
+struct HeadBasis
+{
+    Snapshot    snapshot;
+    bool        ok        = false;   // false: no HEAD tree to compare against at all (non-git, unborn, no tree)
+    bool        identity  = false;   // true: the baseline is this working tree's own snapshot (see above)
+    const char* basis     = nullptr; // static storage; head_basis= value, or nullptr when the attribute is absent
+    std::size_t notAtHead = 0;       // crawled files HEAD does not track (identity basis only); 0 = none
+};
+
+inline HeadBasis computeHeadBasis( const std::string& root, const IngestResult& ing, const Graph& g,
+                                   std::string_view rootPath, std::size_t maxFileBytes = kDefaultMaxFileBytes,
+                                   const std::vector<std::string>& excludes = {} )
+{
+    HeadBasis out;
+    // THREE conditions, cheapest first, and all three are required. The third — indexHidesTrackedContent — is
+    // not a refinement of the second: `git diff` is SPECIFIED to answer "clean" for a skip-worktree or
+    // assume-unchanged path, so without it a real change in such a file is compared against a baseline that
+    // already contains it, and vanishes. See the two functions' own comments.
+    const bool hasHistory = gitRepoHasHistory( root );
+    if( hasHistory && workingTreeMatchesHead( root ) )
+    {
+        if( indexHidesTrackedContent( root ) )
+        {
+            // The one refusal a user can act on, so it is named ON THE ANSWER rather than left to silence.
+            out.basis = "archived-index-hidden";
+        }
+        else
+        {
+            std::vector<char> mask;
+            if( baselineFileMaskAtHead( root, ing, rootPath, mask, out.notAtHead ) )
+            {
+                out.identity = true;
+                out.ok       = true;
+                out.basis    = "identity";
+                out.snapshot = computeSnapshot( ing, g, rootPath, out.notAtHead != 0 ? &mask : nullptr );
+                ENSURES( out.notAtHead <= ing.files.size(), "the not-at-HEAD count is a subset of the crawled files it was counted over" );
+                return out;
+            }
+            DISCLOSE( Diagnostics::answerUnchanged, "the archived HEAD baseline still answers, just without the identity guarantee",
+                      "quality: cannot list HEAD's tracked paths — falling back to the archived HEAD baseline" );
+        }
+    }
+    auto [ snap, ok ] = computeHeadSnapshot( root, nullptr, maxFileBytes, excludes );
+    out.snapshot      = std::move( snap );
+    out.ok            = ok;
+    return out;
 }
 
 // THE ONE PLACE THE QUALITY BASELINE SIDECAR IS OPENED, and the whole of its CWE-59/CWE-367 story.
@@ -7250,9 +7613,9 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                         continue;
                     }
                     const Symbol& s = ing.symbols[i];
-                    if( s.kind == SymKind::Section )
+                    if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
                     {
-                        continue; // doc sections churn by design (exempt)
+                        continue; // doc sections churn by design; a module scope has no body to churn (exempt)
                     }
                     if( s.fileId >= commitCounts.size() || commitCounts[s.fileId] < kShortHorizonMinCommits )
                     {
@@ -7325,14 +7688,35 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     {
         const auto* ro = g.inEdges.rowOffsets();
         gtl::btree_map<std::uint64_t, std::uint8_t> reuseSeen;   // clone-group count is not strictly bounded by symbol count, so keep the unbounded sorted map here
-        const auto reportReusedClones = [ & ]( const std::vector<CloneGroup>& cgs )
+        // T13/fix2: reportReusedClones read the SAME clone vectors as reportNewClones (duplication, above)
+        // but carried neither of its two demotions — the all-test-script skip and the idiom→minor demotion —
+        // so a clone group entirely composed of test SCRIPTS (sibling shell gates repeating the house
+        // mcp_call()-style boilerplate by convention) fired this kind even though `duplication` exempts the
+        // identical shape. Both demotions now mirror reportNewClones exactly: the skip continues outright
+        // (never a row), and the idiom verdict rides the row the same way (vd.demoted / cloneIdiomName).
+        const auto reportReusedClones = [ & ]( const std::vector<CloneGroup>& cgs, const std::vector<CloneIdiomVerdict>& vx )
         {
-            for( const CloneGroup& cg : cgs )
+            for( std::size_t ci = 0; ci < cgs.size(); ++ci )
             {
+                const CloneGroup&        cg = cgs[ci];
+                const CloneIdiomVerdict& vd = vx[ci];
                 const std::uint64_t h = cloneGroupHash( cg, ing, root );
                 if( std::binary_search( base.cloneGroups.begin(), base.cloneGroups.end(), h ) )
                 {
                     continue; // group already existed → not new
+                }
+                // B10.1a (mirrors reportNewClones): a clone group ENTIRELY composed of test-SCRIPT members
+                // is fixture-class noise — sibling shell test scripts repeat near-identical setup/ok/no
+                // boilerplate by convention (see isTestScriptPath). Exempt only when every member is a test
+                // script, so a real src/ ↔ test-script clone (still worth a look) is unaffected.
+                bool allTestScript = !cg.members.empty();
+                for( NodeId m : cg.members )
+                {
+                    if( m >= ing.symbols.size() || !isTestScriptPath( rootRelPath( ing, ing.symbols[m].fileId ) ) ) { allTestScript = false; break; }
+                }
+                if( allTestScript )
+                {
+                    continue;
                 }
                 // r27 SUSPICION-C FIX — "the reused helper is preexisting BY CONSTRUCTION" was asserted here
                 // (and in fbc527e's commit message) but never ENFORCED: fan-in ≥ 3 is trivially reached by a
@@ -7389,12 +7773,13 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                         joined += " | ";
                     }
                 }
-                regs.push_back( { "new-clone-of-reused-helper", joined, 0, maxFanin, h, false, {}, cloneGroupIsNew( cg ) } );   // now = the eroded helper's fan-in; ack identity = the member-set hash
+                regs.push_back( { "new-clone-of-reused-helper", joined, 0, maxFanin, h, vd.demoted,
+                                  std::string( cloneIdiomName( vd.idiom ) ), cloneGroupIsNew( cg ) } );   // now = the eroded helper's fan-in; ack identity = the member-set hash
                 stampCloneLoc( cg );
             }
         };
-        reportReusedClones( exactClones );
-        reportReusedClones( type3Clones );
+        reportReusedClones( exactClones, exactIdioms );
+        reportReusedClones( type3Clones, type3Idioms );
     }
 
     std::sort( regs.begin(), regs.end(), []( const Regression& a, const Regression& b )

@@ -94,9 +94,18 @@ budgetFor(){
         # tokens of slack under its 8000-token default budget) from going over a ceiling it would then have
         # had to disclose. Two earlier drafts that were UNCONDITIONAL, at 135 B and at 57 B folded into the
         # gauge sentence, both broke that fixture; the conditional form is why this one does not.
+        # RE-PINNED uses +81 (2026-09-20, issue #60): the in_id= clause CORRECTED a now-false sentence. It read
+        # "absent at file scope", which stopped being true when ingest_model.h mintModuleScopeOwners started
+        # giving a top-level statement and an anonymous callback body a caller node — those sites now carry
+        # in_id=<file-scope>, and a legend that says an attribute is absent where the document emits it is the
+        # same false claim as a legend defining one the document cannot emit. Measured 4035 B against 3979;
+        # 4060 leaves 25 B, the exact headroom the #66 re-pin left this verb. Same shape as every re-pin above:
+        # a correction stated in the shortest honest form (the clause that went is 22 B, the clause that came
+        # is 78 B), not the essay re-inflating — and 4060 still sits below the 4303 B pre-fix number cited at
+        # the top, so this gate is still RED on the 1dc7b01 binary.
         callers) echo 3429 ;;
         impact)  echo 3899 ;;
-        uses)    echo 3979 ;;
+        uses)    echo 4060 ;;
     esac
 }
 VERBS="callers impact uses"

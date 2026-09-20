@@ -57,6 +57,8 @@
 # Usage:  test/qsnapproducercheck.sh   |   RIPWIRE_BIN=build/ripwire test/qsnapproducercheck.sh
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
+. "$ROOT/test/lib/statcompat.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 QSRC="$ROOT/src/quality.h"
@@ -218,9 +220,6 @@ h=14695981039346656037
 for c in sys.argv[1].encode(): h=((h^c)*1099511628211)&((1<<64)-1)
 print("%016x"%h)' "$1"; }
 blob_for(){ find "$CACHEDIR" -maxdepth 2 -type f -name "ripwire-qsnap-*-$( shakey "$1" ).bin" 2>/dev/null | head -1; }
-if stat --version >/dev/null 2>&1; then inode_of(){ stat -c %i "$1" 2>/dev/null; }
-else                                    inode_of(){ stat -f %i "$1" 2>/dev/null; }
-fi
 
 # ── (D) the blob records this tree's identity ──────────────────────────────────────────────────────────────
 echo "// touch" >> "$REPO/src/use.cpp"                       # a working-tree change, HEAD untouched
@@ -298,8 +297,15 @@ int main() { return 1; }
 EOF
 git -C "$REPO" commit -qam "drop the call"
 SCRATCHSHA="$( git -C "$REPO" rev-parse HEAD )"
+# #228 part 1: the run that WARMS this scratch blob has to take the ARCHIVED-HEAD path, and that path is only
+# taken on a tree that DIFFERS from HEAD — a tree that already is HEAD is compared with itself (the identity
+# basis, src/quality.h) and never materializes, or caches, a HEAD snapshot. The marker below is a
+# working-tree-only edit, and the archived HEAD side never reads the working tree, so the blob it warms for
+# SCRATCHSHA is byte-for-byte the one this arm goes on to forge. It is removed again immediately.
+echo "// warm" >> "$REPO/src/use.cpp"
 run >/dev/null 2>&1
 SF="$( blob_for "$SCRATCHSHA" )"
+git -C "$REPO" checkout -q -- src/use.cpp                    # drop the marker; the index still holds the deletion
 git -C "$REPO" reset -q --soft HEAD~1                        # HEAD back to init; the working tree keeps the deletion
 rm -f "$QF"; run >/dev/null 2>&1; QF="$( blob_for "$HEADSHA" )"   # a fresh, valid HEAD blob to forge from
 NEWKEYS=""

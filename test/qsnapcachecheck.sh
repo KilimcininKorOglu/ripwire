@@ -28,6 +28,8 @@
 # Usage:  test/qsnapcachecheck.sh   |   RIPWIRE_BIN=build_r2a1/ripwire test/qsnapcachecheck.sh
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
+. "$ROOT/test/lib/statcompat.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 fail=0
@@ -41,22 +43,17 @@ REPO="$( mktemp -d )"; TMP="$( mktemp -d )"; trap 'rm -rf "$REPO" "$TMP"' EXIT
 XDG="$TMP/xdg"; mkdir -p "$XDG"
 CACHEDIR="$XDG/ripwire"
 
-# L3 (Linux probe): portable stat reader(s). GNU coreutils and BSD/macOS disagree on both the flag and the
-# format directives, and the `stat -f FMT ... || stat -c FMT ...` fallback this gate used is a TRAP. On GNU,
-# `-f` means FILESYSTEM status and takes NO format argument, so FMT is parsed as a second FILE: measured on
-# coreutils 9.11, `stat -f %i FILE` PRINTS a six-line filesystem block for FILE on stdout and exits 1. The
-# `||` arm then appends the right number under six lines of junk -- so a string compare fails, a numeric
-# compare dies with "integer expression expected", and a `|| echo MISSING` variant reports MISSING forever
-# (a gate that then passes by comparing nothing to nothing). Detect the flavour ONCE, use one form.
-if stat --version >/dev/null 2>&1; then inode_of(){ stat -c %i "$1" 2>/dev/null; }   # GNU coreutils
-else                                    inode_of(){ stat -f %i "$1" 2>/dev/null; }   # BSD / macOS
-fi
 # Y4: shard-aware lookup — a blob may be flat under $CACHEDIR or under $CACHEDIR/<xx>/ (2-hex shard).
 qsnapfiles(){ find "$CACHEDIR" -maxdepth 2 -type f -name 'ripwire-qsnap-*.bin' 2>/dev/null; }
 nqsnap(){ qsnapfiles | wc -l | tr -d ' '; }
 # --no-cache disables only the WORKING-tree auto-cache, never the HEAD-side qsnap cache — so the qsnap path is
 # exercised here, which is exactly what this gate needs.
-run(){ env -u TMPDIR XDG_CACHE_HOME="$XDG" "$BIN" "$REPO" --quality-delta "$@"; }
+# #228 part 1 — the IDENTITY BASIS (src/quality.h): a working tree that already IS HEAD is compared with
+# ITSELF and never materializes a HEAD tree, so it never reads or writes a qsnap/qheadsnap blob. That is the
+# right answer for that tree and the wrong FIXTURE for a CACHE gate, which needs the archived-HEAD path. The
+# marker below is a comment-only line appended to a comment-only TRACKED file: it makes `git diff HEAD`
+# non-empty (so the archived path runs) while adding no symbol, no row and no byte to the reported output.
+run(){ printf '// dirty marker\n' >> "$REPO/src/marker.cpp"; env -u TMPDIR XDG_CACHE_HOME="$XDG" "$BIN" "$REPO" --quality-delta "$@"; }
 
 mkdir -p "$REPO/src" "$REPO/tests"
 cat > "$REPO/src/lib.cpp" <<'EOF'
@@ -67,6 +64,7 @@ cat > "$REPO/tests/test_lib.cpp" <<'EOF'
 extern int helper( int x );
 int runTest() { return helper( 5 ) + 1; }
 EOF
+printf '// cache-gate dirty marker (see run() above)\n' > "$REPO/src/marker.cpp"   # comment-only, tracked: no symbols
 git -C "$REPO" init -q; git -C "$REPO" config user.email x@y; git -C "$REPO" config user.name x
 git -C "$REPO" add -A; git -C "$REPO" commit -qm init
 

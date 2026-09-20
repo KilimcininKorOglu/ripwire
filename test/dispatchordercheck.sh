@@ -35,6 +35,7 @@
 
 set -u
 
+. "$( cd "$( dirname "$0" )" && pwd )/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-./build/ripwire}}"   # CA4: this gate ignored $1, so a caller passing a binary
 SRCFIX="${FIX:-test/queryfix}"                 # positionally silently measured build/ripwire instead (trap #20)
 fails=0
@@ -61,8 +62,10 @@ fail() { echo "  FAIL  $1"; fails=$((fails + 1)); }
 # by this per-run root is left in the shared cache dir. Not --no-cache: that would hide a cache-dependent
 # difference instead of ruling one out.
 [ -d "$SRCFIX/src" ] || { echo "dispatchordercheck: no fixture at $SRCFIX"; exit 2; }
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE    # inherited from a hook running the suite, these would aim every git
-                                              # and ripwire call below at the caller's repository instead
+# The GIT_* clearing this gate used to hand-roll here (GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE — inherited
+# from a hook running the suite, they would aim every git and ripwire call below at the caller's
+# repository) now lives in test/lib/clean-env.sh, sourced at the top: pagingsweepcheck had independently
+# hand-rolled the same list plus GIT_COMMON_DIR, and neither copy had the object-directory names.
 GATETMP="$( mktemp -d )"; trap 'rm -rf "$GATETMP"' EXIT
 FIX="$GATETMP/queryfix"
 if ! ( fixgit(){ GIT_AUTHOR_DATE="$1" GIT_COMMITTER_DATE="$1" git -C "$FIX" -c user.name=ripwire -c user.email=ripwire@example.invalid \

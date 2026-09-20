@@ -42,7 +42,7 @@ template<class K, class V> using HashMap = ankerl::unordered_dense::map<K, V>;
 using NodeId = std::uint32_t;
 inline constexpr NodeId kNoNode = 0xFFFFFFFFu;
 
-// symbol kind → the terse XML attribute (t="fn|method|cls|struct|iface|var|sec|macro").
+// symbol kind → the terse XML attribute (t="fn|method|cls|struct|iface|var|sec|macro|modscope").
 // Macro (the macro-edges round) is APPENDED before Other so no existing kind renumbers: a preprocessor
 // `#define` definition (@definition.macro — C/C++ preproc_def/preproc_function_def, Rust macro_definition).
 // Previously the C/Rust captures mapped to Function, which read as a lie on every t= surface; the kind now
@@ -60,12 +60,16 @@ inline constexpr NodeId kNoNode = 0xFFFFFFFFu;
 // graph.h collectFieldUseSites. Static data members are NOT fields (a class-static CONSTANT keeps its t="var"
 // capture; a mutable static member is not extracted — disclosed). symTag("field") exists for the RawDef kind
 // and diagnostics; no map emitter ever reaches it.
-enum class SymKind : std::uint8_t { Function, Method, Class, Struct, Interface, Var, Section, Macro, Field, Other };
+// ModuleScope is SYNTHETIC — no tags.scm capture produces it and no cached record carries it. ingest_model.h
+// mintModuleScopeOwners() appends one per file that has a file-scope call, AFTER the parse cache is released,
+// so it is the owner a top-level statement or an anonymous callback body attributes to. It is a CALLER, never a
+// callee: nothing in any language can name `<file-scope>`, so it takes no in-edge and cannot become a rank hub.
+enum class SymKind : std::uint8_t { Function, Method, Class, Struct, Interface, Var, Section, Macro, Field, Other, ModuleScope };
 // The number of SymKind enumerators, and the bound a cached def's kind byte is VALIDATED against on the way
 // back in (ingest_cache.h ByteR::enumU8). The static_assert is not a restatement: enumCountIsExact asks the
-// compiler whether `Other` is the last NAMED value, so appending a kind without moving this is a build error
-// rather than a validator that silently refuses the new kind's every cached record.
-inline constexpr std::size_t kSymKindCount = static_cast<std::size_t>( SymKind::Other ) + 1;
+// compiler whether the last enumerator is the last NAMED value, so appending a kind without moving this is a
+// build error rather than a validator that silently refuses the new kind's every cached record.
+inline constexpr std::size_t kSymKindCount = static_cast<std::size_t>( SymKind::ModuleScope ) + 1;
 static_assert( enumCountIsExact<SymKind, kSymKindCount>(), "kSymKindCount must name the LAST SymKind enumerator — move it with the append" );
 
 inline const char* symTag( SymKind k ) noexcept
@@ -82,6 +86,7 @@ inline const char* symTag( SymKind k ) noexcept
         case SymKind::Macro:     return "macro";  // #define (disclosed-degraded: replacement text, not a parsed body)
         case SymKind::Field:     return "field";  // member variable (id=path::Owner::field; use-sites via --uses=Owner.field)
         case SymKind::Other:     return "other";
+        case SymKind::ModuleScope: return "modscope";   // the file's module scope: n="<file-scope>", no body to expand
     }
     return "other";   // a byte past the enum; a NEW SymKind is a -Werror=switch error above, never a silent "other"
 }
