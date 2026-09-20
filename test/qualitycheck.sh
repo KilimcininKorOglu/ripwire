@@ -442,8 +442,13 @@ fi
 # AND THE OTHER DIRECTION, which is why the (U5) family exists. `git diff --quiet HEAD` is SPECIFIED to be
 # blind to a `skip-worktree` or `assume-unchanged` path, so taking it as proof that the tree IS HEAD let a
 # REAL dead-code regression inside such a file report gating="0" exit 0. A false negative on the gate's
-# central promise is worse than the false positive this work set out to remove, so the identity basis is
-# refused whenever such a path is still on disk, and (U5)/(U5c) pin both halves of that.
+# central promise is worse than the false positive this work set out to remove. The first fix refused only
+# when such a path was still ON DISK, and that was defeated by DELETING it — the bit hides a deletion exactly
+# as it hides an edit. So the rule is now that a flagged path must be EXPLAINED: an active cone-mode sparse
+# checkout that excludes it, and it genuinely absent. (U5) runs both bits against both an edit and a deletion,
+# inside and outside a cone; (U4) is the positive half (a cone-excluded path keeps the identity basis); (U5c)
+# is the "refusal costs nothing" half. Every (U5) arm also asserts that --quality-baseline declines to pin,
+# because an escape hatch that launders the finding is the same bug with a different exit code.
 #
 # EVERY ARM HAS A SENSITIVITY CONTROL, because a delta that reports nothing would pass a zero-assertion for
 # the wrong reason (CONTRIBUTING §2, "empty equals agreement"): U7 makes a REAL edit in the hardest shape and
@@ -539,6 +544,15 @@ if ( cd "$UROOT/sparse" && ug sparse-checkout init --cone && ug sparse-checkout 
     # are absent from both sides of a self-comparison and can lie about nothing. Present-on-disk is what (U5)
     # tests, and the two arms together pin that the distinction is the one being made.
     uzero "sparse checkout hiding a tracked caller" "$UROOT/sparse"
+    # The POSITIVE half of the (U5) rule, stated where it is easy to check against its negative: the same bit,
+    # the same absent file, but the absence is EXPLAINED by the specification, so the identity basis is sound
+    # and is taken. Asserted on the flag actually being set, so the arm cannot pass because sparse silently
+    # did nothing.
+    if [ -n "$( cd "$UROOT/sparse" && ug ls-files -v | grep '^S ' )" ]; then
+        ok "(U4) the cone-excluded path really does carry the skip-worktree bit (the arm above is not vacuous)"
+    else
+        no "(U4) no skip-worktree bit in the sparse checkout — the arm above proves nothing about the bit"
+    fi
 else
     no "(U4) sparse-checkout is unavailable here — the arm would be vacuous"
 fi
@@ -550,27 +564,56 @@ fi
 # the false positive the identity basis exists to remove. So the identity basis is refused whenever such a
 # path is still ON DISK, and these arms are the proof. They must read exactly like the archived comparison,
 # because that is what answers them.
-ublind(){  # $1 = label, $2 = git update-index flag
-    local label="$1" flag="$2"
-    local d; d="$UROOT/blind$( printf '%s' "$flag" | tr -cd 'a-z' )"   # own dir per bit: one `local` cannot expand a name it is still assigning
+# $1 = label, $2 = git update-index flag, $3 = how the caller is made to vanish: `edit` or `delete`,
+# $4 = optional `cone:<dirs>` to run the same shape inside an ACTIVE cone-mode sparse checkout.
+ublind(){
+    local label="$1" flag="$2" how="$3" cone="${4:-}"
+    local d; d="$UROOT/blind$( printf '%s%s%s' "$flag" "$how" "$cone" | tr -cd 'a-z' )"   # own dir per shape: one `local` cannot expand a name it is still assigning
     umk "$d"
-    printf 'def driver():\n    return 0\n' > "$d/app/main.py"                 # a REAL edit: the only caller, gone
+    if [ -n "$cone" ]; then
+        ( cd "$d" && ug sparse-checkout init --cone && ug sparse-checkout set ${cone#cone:} ) >/dev/null 2>&1 \
+            || { no "(U5) $label: sparse-checkout is unavailable here — the arm would be vacuous"; return; }
+    fi
     ( cd "$d" && ug update-index "$flag" app/main.py ) >/dev/null 2>&1
+    case "$how" in
+        edit)   printf 'def driver():\n    return 0\n' > "$d/app/main.py" ;;   # a REAL edit: the only caller, gone
+        delete) rm -f "$d/app/main.py" ;;                                       # a REAL deletion: the file that held it, gone
+        *)      no "(U5) $label: unknown mode $how"; return ;;
+    esac
+    # The arm is only about the BIT if git itself reports nothing. If the change shows in `git status` the
+    # ordinary dirty path would catch it anyway and the arm proves nothing.
     if [ -n "$( cd "$d" && ug status --porcelain )" ]; then
-        no "(U5) $label: git status is NOT clean, so the arm does not test what it claims"
+        no "(U5) $label: git status is NOT clean, so the bit is not hiding the change and the arm is vacuous"
         return
     fi
     urun "$d"
     local dead; dead="$( printf '%s' "$UOUT" | grep -c 'kind="dead-code" sym="zeta_helper"' )"
     { [ "$URC" -eq 2 ] && [ "$( UATTR gating )" = "1" ] && [ "$dead" -eq 1 ]; } \
-        && ok "(U5) $label: the hidden edit STILL gates one dead-code row (exit 2)" \
+        && ok "(U5) $label: the hidden change STILL gates one dead-code row (exit 2)" \
         || no "(U5) $label: exit $URC gating=$( UATTR gating ) dead rows=$dead — a real regression was swallowed by an index bit"
     [ -z "$( UATTR head_basis )" ] \
         && ok "(U5) $label: head_basis is absent — the archived HEAD tree answered, and the root says so" \
-        || no "(U5) $label: head_basis=$( UATTR head_basis ) — the identity basis was taken over bytes git will not read"
+        || no "(U5) $label: head_basis=$( UATTR head_basis ) — the identity basis was claimed over a change git will not read"
+    # THE ESCAPE HATCH MUST NOT LAUNDER IT EITHER. --quality-baseline refuses to pin over a tree that already
+    # holds gating findings (H11), so a shape that gates must also be a shape the bare pin declines.
+    if ( cd "$d" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-baseline >/dev/null 2>&1 ); then
+        no "(U5) $label: --quality-baseline PINNED over the hidden regression — the floor was laundered"
+    else
+        ok "(U5) $label: --quality-baseline declines to pin over it"
+    fi
 }
-ublind "skip-worktree over an edited caller"     --skip-worktree
-ublind "assume-unchanged over an edited caller"  --assume-unchanged
+ublind "skip-worktree over an edited caller"          --skip-worktree    edit
+ublind "assume-unchanged over an edited caller"       --assume-unchanged edit
+# The DELETION half. `git update-index --skip-worktree PATH` followed by `rm PATH` hides a deletion exactly as
+# it hides an edit, and the deleted file held the only caller. Round 1 of the fix tested PRESENCE ON DISK and
+# was defeated here: the file is gone, so "not present" read as "nothing hidden" and the identity basis was
+# taken — reporting gating="0" and ASSERTING head_basis="identity" over a real regression.
+ublind "skip-worktree over a DELETED caller"          --skip-worktree    delete
+ublind "assume-unchanged over a DELETED caller"       --assume-unchanged delete
+# ...and the same deletion INSIDE an active cone-mode sparse checkout that INCLUDES the path. The sparse
+# specification says this file belongs here, so its absence is not explained by the spec and the basis must
+# still be refused: "a sparse checkout is on" is not by itself an explanation for any flagged path.
+ublind "skip-worktree over a DELETED caller inside the cone" --skip-worktree delete "cone:lib app"
 
 # U5c the refusal must not become its own source of noise: a flagged file whose content still IS HEAD's
 # reports zero through the archived comparison, and says so.

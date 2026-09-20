@@ -4155,11 +4155,11 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
 //   * `git update-index --skip-worktree PATH`      — "the file on disk is not the file I committed; do not look"
 //   * `git update-index --assume-unchanged PATH`   — "trust the stat cache; do not read the bytes"
 //
-// A tracked file carrying either one can hold a REAL edit — including one that deletes a function's only
-// caller — and `git diff` still exits 0. Trusting that exit code alone as "the working tree IS HEAD" turned a
+// A tracked file carrying either one can hold a REAL change — an edit that deletes a function's only caller,
+// or the file's outright DELETION — and `git diff` still exits 0. Trusting that exit code alone as "the working tree IS HEAD" turned a
 // genuine gating dead-code regression into `gating="0"` exit 0, silently: a false NEGATIVE, which is a worse
 // answer than the false positive the identity basis exists to remove. So this function is the cheap FIRST of
-// two conditions, and `indexHidesPresentContent` below is the second; `computeHeadBasis` requires both.
+// two conditions, and `indexHidesTrackedContent` below is the second; `computeHeadBasis` requires both.
 //
 // The `-- .` pathspec scopes the question to the crawl root when the root is a SUBDIRECTORY of the repository,
 // so an edit elsewhere in the repo cannot take the basis away from a root that never crawls it. Untracked
@@ -4171,16 +4171,17 @@ inline bool workingTreeMatchesHead( const std::string& root )
     return os::system( cmd.c_str() ) == 0;
 }
 
-// Split one NUL-separated `git ls-tree -z` listing into SORTED root-relative views over it, dropping `prefix`
+// Split one `sep`-separated git listing (NUL for a -z form, '\n' for a line one) into SORTED root-relative
+// views over it, dropping `prefix`
 // (the crawl root's position inside the repository) from each. The views alias `listing`, which therefore has
 // to outlive them — the one caller keeps it in scope for exactly that reason. A trailing newline is trimmed
 // because popenTrimmed re-joins its reads on '\n' and a -z listing carries none inside.
-inline std::vector<std::string_view> splitNulPaths( const std::string& listing, const std::string& prefix )
+inline std::vector<std::string_view> splitNulPaths( const std::string& listing, const std::string& prefix, char sep = '\0' )
 {
     std::vector<std::string_view> out;
     for( std::size_t start = 0; start < listing.size(); )
     {
-        const std::size_t nul = listing.find( '\0', start );
+        const std::size_t nul = listing.find( sep, start );
         const std::size_t end = ( nul == std::string::npos ) ? listing.size() : nul;
         std::string_view  p( listing.data() + start, end - start );
         while( !p.empty() && ( p.back() == '\n' || p.back() == '\r' ) ) { p.remove_suffix( 1 ); }
@@ -4192,53 +4193,131 @@ inline std::vector<std::string_view> splitNulPaths( const std::string& listing, 
     return out;
 }
 
-// THE SECOND CONDITION: does any crawled path carry an index bit that makes the check above blind, AND still
-// sit on disk for the crawl to read? `git ls-files -v` is the one command that reports both bits — a `S` tag
-// for skip-worktree, a LOWERCASE tag for assume-unchanged — and it is asked here explicitly rather than
-// inferred, because git's own diff will never mention them.
+// THE SECOND CONDITION: is any tracked path HIDDEN from the check above, and is that hiding EXPLAINED?
 //
-// PRESENT is half the test, and it is what keeps a sparse checkout on the identity basis. Cone-mode
-// `git sparse-checkout` sets skip-worktree on every excluded path and DELETES those files, so they are absent
-// from both sides of a self-comparison and cannot lie about anything; the identity basis is exactly right
-// there, and the gate arm for it stays green. A flagged file that is still on disk is the dangerous one: the
-// crawl reads bytes that `git diff` has promised not to look at.
+// `git ls-files -v` is the one command that reports the two bits git's own diff will never mention: an `S`
+// tag is skip-worktree, a LOWERCASE tag is assume-unchanged. A path carrying either can differ from HEAD in
+// any way at all — edited, or DELETED — with `git status` and `git diff` both silent.
 //
-// WHY REFUSAL AND NOT A CONTENT TEST. The reviewed alternative was to hash each flagged file
-// (`git hash-object`) against `git rev-parse HEAD:path` and keep the identity basis when they agree. That buys
-// back one case — a file someone flagged but never edited — at the cost of two git children per flagged path
-// and a new quoting/filter/gitlink surface, on a tree where the flag exists precisely BECAUSE the bytes
-// differ. Refusal is provable, costs nothing when no path is flagged (the overwhelming case), and its
-// fallback is the archived comparison that was in force before this lane and that the review confirmed gates
-// such a tree correctly. `head_basis=` on the root says which of the two answered.
+// ROUND 1 OF THIS FUNCTION TESTED PRESENCE ON DISK, AND THAT WAS WRONG. The argument was "a flagged file that
+// is gone is absent from both sides of a self-comparison, like a sparse exclusion, so it can lie about
+// nothing". False: `git update-index --skip-worktree PATH` followed by `rm PATH` hides a DELETION exactly as
+// it hides an edit, and the deleted file may have held a symbol's only caller. Measured on the review's
+// fixture at that revision: the regression vanished, `gating="0"`, and `head_basis="identity"` was asserted
+// over it — the same failure the bit caused when the file was present, reached by removing it instead.
 //
-// A git failure returns true — "assume it hides something" — so an unreadable index can only ever COST the
-// identity basis, never grant it.
-inline bool indexHidesPresentContent( const std::string& root )
+// ABSENCE HAS TO BE PROVED, NOT INFERRED. Cone-mode sparse checkout sets the SAME bit and also leaves the
+// file absent, so "absent" alone cannot tell "excluded from my checkout" from "deleted behind git's back" —
+// the two produce an identical index state and mean opposite things. The only thing that separates them is
+// whether the repository actually carries a sparse specification that EXCLUDES the path, so that is what is
+// asked. A flagged path is explained iff ALL THREE hold:
+//
+//   (1) a cone-mode sparse checkout is active   (core.sparseCheckout and core.sparseCheckoutCone are true);
+//   (2) the specification EXCLUDES that path    (sparseConeIncludes says no);
+//   (3) the path is indeed absent from disk     (the spec says absent, and absent is what is there).
+//
+// Anything else refuses the identity basis, and the archived comparison — the behaviour that predates this
+// lane, and that the review confirmed gates such a tree correctly — answers instead. (3) is what keeps round
+// 1's finding closed: a cone-excluded path that is nevertheless SITTING THERE is not explained by the spec
+// either, so an edited-and-flagged file still refuses even inside a sparse checkout.
+//
+// A NON-CONE sparse checkout refuses too, and deliberately. Its specification is a gitignore-style pattern
+// list, and re-implementing that matcher here to decide a correctness question would be a second, unargued
+// copy of git's rules. Cone mode is a prefix rule, which is checkable by reading; anything else is honest
+// only as a refusal. A user in that state loses the fast path and keeps the right answer — and `head_basis=`
+// is absent on the root, which is the root saying so.
+//
+// COST: `git ls-files -v` on every identity attempt (one child, the same order as the crawl), and the two
+// config probes plus `sparse-checkout list` ONLY when a flagged path actually exists — which, outside a
+// sparse checkout, is almost never.
+inline bool isBlindIndexTag( char tag ) noexcept
+{
+    return tag == 'S' || ( tag >= 'a' && tag <= 'z' );   // skip-worktree; lowercase = assume-unchanged
+}
+
+// The ACTIVE cone-mode sparse specification, exactly as git states it (`src/lib`, repository-relative, no
+// slashes at either end). Empty means "there is nothing here that could explain a flagged path": not a sparse
+// checkout at all, or a non-cone one whose pattern language this file deliberately does not re-implement.
+inline std::vector<std::string> sparseConeDirs( const std::string& root )
+{
+    if( gitOneLine( root, "config --get core.sparseCheckout 2>/dev/null" ) != "true"
+     || gitOneLine( root, "config --get core.sparseCheckoutCone 2>/dev/null" ) != "true" )
+    {
+        return {};
+    }
+    std::vector<std::string> dirs;
+    const std::string        listing = gitOneLine( root, "sparse-checkout list 2>/dev/null" );
+    for( std::string_view d : splitNulPaths( listing, std::string{}, '\n' ) )   // the same splitter, line-separated
+    {
+        while( !d.empty() && d.back()  == '/' ) { d.remove_suffix( 1 ); }
+        while( !d.empty() && d.front() == '/' ) { d.remove_prefix( 1 ); }
+        if( !d.empty() ) { dirs.emplace_back( d ); }
+    }
+    return dirs;
+}
+
+// Cone mode's rule, which is a PREFIX rule and nothing more: every FILE at the repository root is included,
+// and any path is included iff it is one of the listed directories or sits inside one. `repoRel` is
+// repository-relative with no trailing slash; `isDir` distinguishes a sparse-index directory entry (`app/`)
+// from a file, because the root-file clause is about files only.
+inline bool sparseConeIncludes( const std::vector<std::string>& coneDirs, std::string_view repoRel, bool isDir ) noexcept
+{
+    if( !isDir && repoRel.find( '/' ) == std::string_view::npos )
+    {
+        return true;   // cone mode always keeps the repository's own top-level files
+    }
+    for( const std::string& d : coneDirs )
+    {
+        if( repoRel == d || ( repoRel.size() > d.size() && repoRel.compare( 0, d.size(), d ) == 0 && repoRel[ d.size() ] == '/' ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// true = refuse the identity basis. A git failure returns true — "assume it hides something" — so an
+// unreadable index can only ever COST the identity basis, never grant it.
+inline bool indexHidesTrackedContent( const std::string& root )
 {
     const std::string listing = gitOneLine( root, "ls-files -v -z -- . 2>/dev/null" );
     if( listing.empty() )
     {
-        return !gitOneLine( root, "ls-files -z -- . 2>/dev/null" ).empty();   // empty because there is nothing, or because git failed?
+        return !gitOneLine( root, "ls-files -z -- . 2>/dev/null" ).empty();   // empty because nothing is tracked, or because git failed?
     }
-    for( std::string_view entry : splitNulPaths( listing, std::string{} ) )   // "<tag> <path>" — no prefix to strip
+    const std::vector<std::string_view> entries = splitNulPaths( listing, std::string{} );   // "<tag> <path>" — no prefix to strip
+    const auto isFlagged = []( std::string_view e ) noexcept
+    { return e.size() >= 3 && e[1] == ' ' && isBlindIndexTag( e[0] ); };
+    if( std::none_of( entries.begin(), entries.end(), isFlagged ) )
     {
-        if( entry.size() < 3 || entry[1] != ' ' )
+        return false;   // nothing is hidden, so there is nothing to explain — the overwhelming case, one git child
+    }
+    const std::vector<std::string> coneDirs = sparseConeDirs( root );
+    if( coneDirs.empty() )
+    {
+        return true;    // a flagged path with no active cone spec to explain it
+    }
+    const std::string prefix = gitOneLine( root, "rev-parse --show-prefix 2>/dev/null" );   // a subdirectory root
+    for( std::string_view e : entries )
+    {
+        if( !isFlagged( e ) )
         {
             continue;
         }
-        const char tag = entry[0];
-        if( tag != 'S' && !( tag >= 'a' && tag <= 'z' ) )
+        std::string_view  rel   = e.substr( 2 );
+        const bool        isDir = !rel.empty() && rel.back() == '/';
+        if( isDir ) { rel.remove_suffix( 1 ); }
+        if( sparseConeIncludes( coneDirs, prefix + std::string( rel ), isDir ) )
         {
-            continue;   // 'H' and the other uppercase tags are ordinary index states git's diff does read
+            return true;   // the spec says this path belongs here, so its flag is not explained by the spec
         }
-        std::error_code   ec;
-        const std::string abs = root + "/" + std::string( entry.substr( 2 ) );
-        if( std::filesystem::exists( std::filesystem::symlink_status( std::filesystem::path( abs ), ec ) ) )
+        std::error_code ec;
+        if( std::filesystem::exists( std::filesystem::symlink_status( std::filesystem::path( root + "/" + std::string( rel ) ), ec ) ) )
         {
-            return true;   // flagged AND on disk: the crawl reads bytes `git diff` promised not to look at
+            return true;   // the spec says absent, and it is not: whatever is on disk, git's diff will not read it
         }
     }
-    return false;
+    return false;          // every flagged path is a cone exclusion that is genuinely absent
 }
 
 // Per-fileId flags for computeSnapshot: 1 = this crawled file is TRACKED AT HEAD and therefore part of the
@@ -4306,11 +4385,11 @@ inline HeadBasis computeHeadBasis( const std::string& root, const IngestResult& 
                                    const std::vector<std::string>& excludes = {} )
 {
     HeadBasis out;
-    // THREE conditions, cheapest first, and all three are required. The third — indexHidesPresentContent — is
+    // THREE conditions, cheapest first, and all three are required. The third — indexHidesTrackedContent — is
     // not a refinement of the second: `git diff` is SPECIFIED to answer "clean" for a skip-worktree or
     // assume-unchanged path, so without it a real regression in such a file is compared against a baseline
     // that already contains the edit, and vanishes. See the two functions' own comments.
-    if( gitRepoHasHistory( root ) && workingTreeMatchesHead( root ) && !indexHidesPresentContent( root ) )
+    if( gitRepoHasHistory( root ) && workingTreeMatchesHead( root ) && !indexHidesTrackedContent( root ) )
     {
         std::vector<char> mask;
         if( baselineFileMaskAtHead( root, ing, rootPath, mask, out.notAtHead ) )
