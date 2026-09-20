@@ -16,6 +16,23 @@
 namespace
 {
 
+// #60: does THIS page of rows hold a module-scope owner? The condition graphlegend.h modScopeLegend( bool )
+// takes, shared by --callers/--callees and --impact so the two cannot disagree about when the kind's reading
+// is owed — and so neither verb's handler carries the loop (the same reason printJsonSymbolRows below was
+// extracted). Always the emitter's OWN shown rows, never a re-derivation over the whole corpus: a definition
+// that names an attribute the document did not emit is this header's mirror-image false claim.
+inline bool anyModuleScopeRow( const rw::IngestResult& ing, std::span<const rw::NodeId> rows ) noexcept
+{
+    for( const rw::NodeId id : rows )
+    {
+        if( id < ing.symbols.size() && ing.symbols[ id ].kind == rw::SymKind::ModuleScope )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // L2: the `[{"t":..,"n":..,"p":"file:line"},...]` JSON row array shared by --callers/--callees/--impact's
 // --json branches (identical shape, different surrounding header fields — see each call site). Avoids
 // carrying two copies of the same per-row loop (--quality-delta flagged the pre-extraction duplicate).
@@ -152,11 +169,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             // and, before this, disclosed nothing about the `<label>/` prefix every p= below carries.
             // #60: exactly when a module-scope owner is on THIS page — the emitter's own condition, so a
             // page without one pays 0 bytes for the clause.
-            bool chHasModScope = false;
-            for( std::size_t rowIndex = pw.begin; rowIndex < pw.end && !chHasModScope; ++rowIndex )
-            {
-                chHasModScope = ing.symbols[ result[ rowIndex ] ].kind == SymKind::ModuleScope;
-            }
+            const bool chHasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( result ).subspan( pw.begin, pw.end - pw.begin ) );
             rw::emitTo( stdout, "{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
@@ -2321,11 +2334,7 @@ std::optional<int> runImpact( const MainDispatch& d )
             // LB-H: the import-tier clause is the columnar variant under --format=columnar, because that
             // form carries the count without the rows and a reader must be told which shape they hold.
             // #60: exactly when a module-scope owner is one of the rows this answer prints.
-            bool imHasModScope = false;
-            for( const NodeId shownId : show )
-            {
-                if( ing.symbols[ shownId ].kind == SymKind::ModuleScope ) { imHasModScope = true; break; }
-            }
+            const bool imHasModScope = anyModuleScopeRow( ing, show );
             rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
                          cfg.columnar ? rw::kImpactImportTierColumnarLegend : rw::kImpactImportTierLegend,
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
