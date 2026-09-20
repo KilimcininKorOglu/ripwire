@@ -458,10 +458,24 @@ IMP_RAISED="$(  run --impact=escapeXml --limit=200 | grep -oE '<s t=' | wc -l | 
 { [ -n "$IMP_RAISED" ] && [ "$IMP_RAISED" -gt 40 ] 2>/dev/null; } \
     && ok "--impact --limit=200: emits $IMP_RAISED rows (> the historic 40 cap)" \
     || no "--impact --limit=200: emitted $IMP_RAISED rows — the 40-row cap is still not raisable"
-IMP_TOTAL="$( run --impact=escapeXml --limit=200 | grep -oE 'reaches="[0-9]+"' | head -1 | tr -dc 0-9 )"
-{ [ -n "$IMP_TOTAL" ] && [ "$IMP_RAISED" = "$IMP_TOTAL" ]; } \
-    && ok "--impact --limit=200: shows the WHOLE reaches=$IMP_TOTAL radius (limit above the total)" \
-    || no "--impact --limit=200: $IMP_RAISED rows vs reaches=$IMP_TOTAL — the window is not the full set"
+# The "whole set" claim needs a limit ABOVE the total, so it must READ the total rather than assume one.
+# This gate's corpus is the live tree and escapeXml's radius grows with it: a hard-coded 200 sat above
+# reaches=199 when the arm was written and below reaches=203 once src/legenddict.h landed, so a corpus that
+# gained one header failed a gate that named no defect. The claim is unchanged — a limit above the total
+# shows every row — and it is now stated over the total the binary itself reports.
+IMP_TOTAL="$( run --impact=escapeXml | grep -oE 'reaches="[0-9]+"' | head -1 | tr -dc 0-9 )"
+{ [ -n "$IMP_TOTAL" ] && [ "$IMP_TOTAL" -gt 50 ] 2>/dev/null; } \
+    || no "(J) --impact=escapeXml reports reaches=${IMP_TOTAL:-none} — this arm needs a radius past the 40-row default to prove anything"
+IMP_FULL="$( run --impact=escapeXml --limit=$(( IMP_TOTAL + 10 )) | grep -oE '<s t=' | wc -l | tr -d ' ' )"
+{ [ -n "$IMP_TOTAL" ] && [ "$IMP_FULL" = "$IMP_TOTAL" ]; } \
+    && ok "--impact --limit=$(( IMP_TOTAL + 10 )): shows the WHOLE reaches=$IMP_TOTAL radius (limit above the total)" \
+    || no "--impact --limit=$(( IMP_TOTAL + 10 )): $IMP_FULL rows vs reaches=$IMP_TOTAL — the window is not the full set"
+# …and a limit BELOW the total must still cut, or the arm above would also pass on a verb that ignored --limit
+# and simply printed everything.
+IMP_CUT="$( run --impact=escapeXml --limit=$(( IMP_TOTAL - 10 )) | grep -oE '<s t=' | wc -l | tr -d ' ' )"
+[ "$IMP_CUT" = "$(( IMP_TOTAL - 10 ))" ] \
+    && ok "--impact --limit=$(( IMP_TOTAL - 10 )): cuts to $IMP_CUT rows — the window is the limit, not the whole set" \
+    || no "--impact --limit=$(( IMP_TOTAL - 10 )): emitted $IMP_CUT rows — --limit is not shaping the window"
 
 # ── (K) G2: --limit/--offset REFUSED on a verb that does not honor them (the honesty hole) ────────────
 # Paging ~15 more report verbs was not the answer; the answer is that accept-and-ignore must stop. The
