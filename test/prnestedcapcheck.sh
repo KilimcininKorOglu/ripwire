@@ -64,7 +64,8 @@ done
 printf '// final uncommitted edit\n' >> "$REPO/src/base.cpp"
 
 OUT="$TMP/out.xml"
-"$BIN" "$REPO" --pr-context --no-cache >"$OUT" 2>"$TMP/err.txt"
+# L1 (2026-09-19): the CLI default legend is compact; the legend arms read the FULL legend's cap clauses, so this run asks for it.
+"$BIN" "$REPO" --pr-context --no-cache --legend=full >"$OUT" 2>"$TMP/err.txt"
 RC=$?
 [ "$RC" = 0 ] || { no "--pr-context exited $RC: $( cat "$TMP/err.txt" )"; echo "FAILURES ABOVE"; exit 1; }
 [ -s "$OUT" ]  || { no "--pr-context produced empty output"; echo "FAILURES ABOVE"; exit 1; }

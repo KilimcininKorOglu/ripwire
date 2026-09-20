@@ -3309,10 +3309,23 @@ struct TmpTreeGuard
 };
 
 // Materialize `committish`'s committed tree into a fresh pid-suffixed temp dir under the hardened cache
-// ladder (per-user; never the repo) via `git archive | tar -x`. Returns the temp root, or "" on any failure
-// (degrade-alerted; a half-made dir is cleaned up here — on success the CALLER owns cleanup via TmpTreeGuard).
+// ladder (per-user; never the repo) via `git archive` followed by `tar -x`. Returns the temp root, or "" on
+// any failure (degrade-alerted; a half-made dir is cleaned up here — on success the CALLER owns cleanup via
+// TmpTreeGuard).
 // What materializeCommitTree hands back: the temp root, or EMPTY — the one field every caller reads as "no tree". It is
-// the DISCLOSE sink for the three ways the tree is not made; each caller then refuses, or marks its own answer.
+// the DISCLOSE sink for the four ways the tree is not made; each caller then refuses, or marks its own answer.
+//
+// ARCHIVE AND EXTRACT ARE TWO SEPARATE COMMANDS, EACH CHECKED ON ITS OWN EXIT STATUS — not one shell pipeline
+// (mergescout.h's own commitTreeIsEmpty comment first named the ambiguity this closes). `git archive … | tar -x …`
+// piped straight through reports the PIPELINE's exit status as `tar`'s alone (no `pipefail`): that reads 0
+// whether the tar stream had zero entries because the tree is genuinely empty OR because `git archive` failed
+// upstream and piped nothing downstream at all — `tar -x` on an empty stream is not itself an error. Writing the
+// archive to a file first, then extracting that file as its own command, makes ArchiveFailed mean what it says:
+// git's own exit status, independent of whatever tar does with the result. A caller can then trust that a
+// materialize which returns a non-empty root really READ the tree, so an ingest of that root coming back empty is
+// the tree's own content (no supported files, every path excluded, or a genuinely empty commit), never a masked
+// archive failure — indexCommittish no longer needs a second, indirect signal (the removed commitTreeIsEmpty) to
+// tell the two apart.
 struct MaterializedTree
 {
     enum class DisclosureWhy : std::uint8_t
@@ -3320,6 +3333,7 @@ struct MaterializedTree
         RevisionUnresolved,
         TempDirUnavailable,
         ArchiveFailed,
+        ExtractFailed,
     };
     std::string root;
     void disclose( DisclosureWhy ) noexcept
@@ -3356,15 +3370,38 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
         return tree.root;
     }
 
-    const std::string extract = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                              + " archive --format=tar " + shSingleQuote( rev ) + " -- 2>/dev/null | tar -x -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null";
-    if( os::system( extract.c_str() ) != 0 )
+    // Two SEPARATE commands, each checked on its own exit status (see the struct comment above for why: a
+    // piped `archive | tar -x` masks a failed archive behind tar's own, unrelated, successful exit on an
+    // empty stream). The intermediate .tar is a sibling of tmpRoot under the same cache ladder, named off the
+    // same tag+pid tmpRoot already is (so it inherits the same per-process uniqueness contract §3619 documents
+    // for tmpRoot itself), and is removed here regardless of outcome — it is never part of what the caller's
+    // TmpTreeGuard owns.
+    const std::string archiveFile = tmpRoot + ".tar";
+    const std::string archiveCmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
+                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " -- 2>/dev/null";
+    if( os::system( archiveCmd.c_str() ) != 0 )
     {
         DISCLOSE( tree, MaterializedTree::DisclosureWhy::ArchiveFailed, "quality: git archive failed — committed tree unavailable" );
         std::error_code e;
         fs::remove_all( fs::path( tmpRoot ), e );
+        fs::remove( fs::path( archiveFile ), e );
         return tree.root;
     }
+
+    const std::string extractCmd = "tar -x -f " + shSingleQuote( archiveFile ) + " -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null";
+    const int         extractRc  = os::system( extractCmd.c_str() );
+    std::error_code   rmEc;
+    fs::remove( fs::path( archiveFile ), rmEc );   // never leave the intermediate .tar behind, success or failure
+    if( extractRc != 0 )
+    {
+        DISCLOSE( tree, MaterializedTree::DisclosureWhy::ExtractFailed, "quality: tar extract failed — committed tree unavailable" );
+        std::error_code e;
+        fs::remove_all( fs::path( tmpRoot ), e );
+        return tree.root;
+    }
+    // The intermediate .tar this function wrote is never handed back — `rmEc` above already removed it
+    // (best-effort; a leftover .tar sibling is cache-ladder litter the sweep still reclaims, never something
+    // a caller reads: ingest() below only ever walks `tmpRoot`, a directory, not a `.tar` sibling of it).
     return tmpRoot;
 }
 

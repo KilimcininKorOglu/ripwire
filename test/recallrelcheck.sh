@@ -104,7 +104,8 @@ ZN="$( relevant_n "$Z" )"
 # markdown-only tree (where the predicates coincide), and the two verbs no longer share a word.
 docs_of(){ printf '%s' "$1" | grep -oE '[0-9]+ document files,' | grep -oE '^[0-9]+'; }
 RECALL_N="$( docs_of "$K" )"
-DD="$( "$BIN" "$R" --doc-drift --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact, whose root leads with schema=; DRIFT_N reads docs= as the root's first attribute, so it asks for the full legend.
+DD="$( "$BIN" "$R" --doc-drift --no-cache --legend=full 2>/dev/null )"
 DRIFT_N="$( printf '%s' "$DD" | grep -oE '<doc-drift docs="[0-9]+"' | grep -oE '"[0-9]+"' | tr -d '"' )"
 { [ -n "$RECALL_N" ] && [ -n "$DRIFT_N" ] && [ "$RECALL_N" = "$DRIFT_N" ] && [ "$RECALL_N" = 3 ]; } \
     && ok "§A8.2: --recall's denominator ($RECALL_N document files) == --doc-drift's docs= ($DRIFT_N) on a markdown-only tree" \

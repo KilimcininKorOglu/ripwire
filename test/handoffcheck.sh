@@ -212,13 +212,15 @@ cp -R "$WORK" "$NOTEREPO"
 # the note index actually keys on.
 "$BIN" "$NOTEREPO" --no-cache --note-add="src/engine.cpp:engineRun: the +2 is deliberate, do not revert" >/dev/null 2>&1
 "$BIN" "$NOTEREPO" --no-cache --note-add="schedRun: this caller assumes engineRun is pure" >/dev/null 2>&1
-NOTES_XML="$( "$BIN" "$NOTEREPO" --no-cache --notes 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and spells <target id=>/<heuristic n= candidates=> inside its comment; M4(a)
+# counts real elements, so these runs ask for the full legend.
+NOTES_XML="$( "$BIN" "$NOTEREPO" --no-cache --notes --legend=full 2>/dev/null )"
 DANGLING_BEFORE="$( printf '%s' "$NOTES_XML" | grep -c 'dangling="1"' )"
 TARGETS_BEFORE="$( printf '%s' "$NOTES_XML" | grep -o '<target ' | wc -l | tr -d ' ' )"
 { [ "$DANGLING_BEFORE" = "0" ] && [ "$TARGETS_BEFORE" = "2" ]; } \
     && ok "M4(a): both fixture notes were written and are non-dangling (the arm is not measuring dead notes)" \
     || no "M4(a): expected 2 non-dangling fixture notes, got targets=$TARGETS_BEFORE dangling=$DANGLING_BEFORE — the arms below would be vacuous"
-"$BIN" "$NOTEREPO" --no-cache --handoff >"$TMP/note.xml" 2>/dev/null
+"$BIN" "$NOTEREPO" --no-cache --handoff --legend=full >"$TMP/note.xml" 2>/dev/null
 NOTE_ROWS="$( grep -o '<note ' "$TMP/note.xml" | wc -l | tr -d ' ' )"
 [ "$NOTE_ROWS" -ge 1 ] \
     && ok "M4(a): the packet carries the note on the CHANGED file's symbol ($NOTE_ROWS <note> row(s))" \

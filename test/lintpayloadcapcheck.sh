@@ -103,7 +103,9 @@ int compute()
 }
 EOF
 
-DEFAULT_OUT="$( "$BIN" "$CORPUS" --lint 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and spells a <f row shape inside its comment; arm3a counts
+# real rows, so this run (and its determinism twin) ask for the full legend, the pre-change default.
+DEFAULT_OUT="$( "$BIN" "$CORPUS" --lint --legend=full 2>/dev/null )"
 DEFAULT_BYTES="${#DEFAULT_OUT}"
 TAG="$( printf '%s' "$DEFAULT_OUT" | grep -o '<lint [^>]*>' | head -1 )"
 FINDINGS="$( printf '%s' "$TAG" | sed -n 's/.*findings="\([0-9]*\)".*/\1/p' )"
@@ -183,7 +185,7 @@ if command -v xmllint >/dev/null 2>&1; then
 else
     no "arm6: xmllint is required for the G4 arm (install libxml2) — the gate does not skip"
 fi
-REPEAT_OUT="$( "$BIN" "$CORPUS" --lint 2>/dev/null )"
+REPEAT_OUT="$( "$BIN" "$CORPUS" --lint --legend=full 2>/dev/null )"
 if [ "$REPEAT_OUT" = "$DEFAULT_OUT" ]; then ok "arm6: output is byte-identical run-to-run"; else no "arm6: output is not deterministic"; fi
 
 # ── wave-4 item 12: recorded liability 1 from the six-smalls round (docs/EVALS.md) — the root's shown=/

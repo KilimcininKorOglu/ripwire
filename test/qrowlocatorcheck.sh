@@ -73,7 +73,8 @@ cat >> "$REPO/inc/api.h" <<'EOF'
 int addedExport( int a );
 EOF
 
-run >"$TMP/x" 2>"$TMP/xerr"; rc=$?
+# L1 (2026-09-19): the CLI default legend is compact and spells `<r kind= sym= p= …>` inside its comment; this counts real rows, so it asks for the full legend.
+run --legend=full >"$TMP/x" 2>"$TMP/xerr"; rc=$?
 ROWS="$( tr '<' '\n' < "$TMP/x" | grep '^r kind=' )"
 NROWS="$( printf '%s\n' "$ROWS" | grep -c . )"
 [ "$NROWS" -gt 3 ] && ok "fixture produced $NROWS rows across several kinds (non-vacuous)" \

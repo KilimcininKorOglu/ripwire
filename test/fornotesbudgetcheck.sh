@@ -366,9 +366,24 @@ fi
 rm -f "$CORPUS/.ripwire_notes"
 bare="$( "$BIN" "$CORPUS" --for="$TASK" --token-budget=800 2>/dev/null )"
 case "$bare" in *"<note "*) no "a tree with no .ripwire_notes still emitted a <note> element";; *) ok "a tree with no notes emits none (L3 inertness)";; esac
-bareEst="$( printf '%s' "$bare" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
-if [ -n "$bareEst" ] && [ "$bareEst" -le 800 ]; then ok "no-notes tree also fits the ceiling (est_tokens=$bareEst)"
-else no "no-notes tree reports est_tokens='$bareEst' against a budget of 800"; fi
+# L1 (2026-09-19): the 800-token fit was calibrated in the full legend, the default when it was written, and is asked
+# for by name. The DEFAULT (compact) answer on this tree carries more rows and lands over 800 at this one budget; that is
+# the --for sig ledger's exemption design (disclosure clauses exempt from the sig charge, recovered by rung zero, which
+# the compact dialect's shorter clauses rarely pay for). RE-MEASURED in the L1 fix round with a script, not a count typed
+# here: 66 budgets (300..3550 step 50) on the P4-shape fixtures, the default is over on 15 (72 functions) and 15 (12
+# functions), --legend=full on 11 and 12; the earlier "8 of 66 vs 2, 55 before" did not reproduce. What the default MUST do
+# there is say so — asserted below.
+bareFull="$( "$BIN" "$CORPUS" --for="$TASK" --token-budget=800 --legend=full 2>/dev/null )"
+bareEst="$( printf '%s' "$bareFull" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
+if [ -n "$bareEst" ] && [ "$bareEst" -le 800 ]; then ok "no-notes tree also fits the ceiling in the full legend (est_tokens=$bareEst)"
+else no "no-notes tree reports est_tokens='$bareEst' against a budget of 800 (full legend)"; fi
+defEst="$( printf '%s' "$bare" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
+if [ -z "$defEst" ]; then no "no-notes tree at the default posture carries no est_tokens="
+elif [ "$defEst" -le 800 ]; then ok "no-notes tree at the default posture fits (est_tokens=$defEst)"
+else
+    case "$bare" in *'over_ceiling="1"'*) ok "no-notes tree at the default posture is over 800 (est_tokens=$defEst) and SAYS so (over_ceiling=\"1\")" ;;
+                    *) no "no-notes tree at the default posture is over 800 (est_tokens=$defEst) in SILENCE" ;; esac
+fi
 
 # ── arm 5: still deterministic and well-formed after the accounting change ─────────────────────────
 if [ "$( "$BIN" "$CORPUS" --for="$TASK" --token-budget=800 2>/dev/null )" = "$bare" ]; then ok "output is byte-identical run-to-run"

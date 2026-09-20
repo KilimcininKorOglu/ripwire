@@ -516,6 +516,15 @@ struct ForLensHeaderParts
                                             // note names sc= only when it had something to define. Defaults TRUE —
                                             // an over-approximation costs a reader nothing but a clause, while an
                                             // under-approximation is an undefined first-screen attribute.
+    bool             composePresent = false;  // L1 fix: may a <compose><field> row ride this bundle? The compact dialect defines
+                                            // <field> present-only on it; the same over-approximation as scPresent (an edge
+                                            // touching a ranked symbol), decided before the header is built.
+    bool             legoPresent = false;    // TRAIN 9: may an <iface implementors=> row ride this bundle? Same
+                                            // over-approximation and same timing as composePresent: a ranked symbol
+                                            // with implementors, asked before the header is built rather than after
+                                            // the section is rendered (the header is priced, and re-priced, from here).
+    bool             layerPresent = false;   // TRAIN 9: does any ranked row's file sit under a built-in arch layer
+                                            // directory, so its <d> row carries layer=? Same over-approximation again.
 
     // ── THE DROPPABLE LEGEND, as ONE bit ──────────────────────────────────────────────────────────────
     // confidenceNote / tailLegend / idRouteLegend moved in lock step at every read and every write, and the
@@ -717,6 +726,24 @@ inline constexpr std::string_view kForCompactLegendRows =
 inline constexpr std::string_view kForCompactLegendRowsNoScope =
     "d: cx= ccx= complexity, in= callers, churn= amp= change, clone= tested= 1; "
     "total= shown= capped=1 if cut";
+// L1 fix round (2026-09-19, rv-r1-L1 HIGH-1): task= (the root's echo of the query), next= (the follow-up on a <d> row), pure=
+// (a <d> row flag) and the <compose><field> rows rode every default answer with no reading in either dialect;
+// legendcoveragecheck's default rows now fail on that. Charged like the rows clause; runForLens caps the compact charge at
+// the full dialect's, so defining them never costs the default a row (compactlegendcheck (P1)).
+inline constexpr std::string_view kForCompactLegendFacts =
+    "; task= the query; d pure=1 const/constexpr sig, next= the follow-up to paste";
+// The <compose> block's rows (serialize.h packCompose), present-only on composePresent.
+inline constexpr std::string_view kForCompactLegendCompose =
+    "; field name= type= owner= rel=: a member of owner=, rel=creates held by value, uses by reference/pointer";
+// TRAIN 9: two attributes the merged stack put on a DEFAULT --for first screen that neither member saw alone.
+// L2's --sections=lego,compose serves the lego section WHOLE, so <iface implementors=> reaches the rows; and a
+// query that ranks a file under a built-in arch layer dir (test/, bench/, infra/, render/ …) puts layer= on its
+// <d> row. Both present-only, on the same terms as the compose clause above: absent, they cost nothing.
+inline constexpr std::string_view kForCompactLegendLego =
+    "; iface implementors=N: types implementing it, m= its method contract";
+inline constexpr std::string_view kForCompactLegendLayer =
+    "; d layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=";
+
 // ONE spelling for both dialects (graphlegend.h kForRouteCodeLegend): the compact dialect and the default one
 // say the same thing about route=, so they cannot drift into two readings of one code.
 inline constexpr std::string_view kForCompactLegendRoute = rw::kForRouteCodeLegend;
@@ -788,12 +815,13 @@ inline bool forCoverageAttrPresent( const ForLensHeaderParts& p ) noexcept
 
 inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p, bool withRouteAttr, std::string_view extraNotes )
 {
-    h += "<!-- ripwire for ripwire.for/v1: ";
+    h += "<!-- ripwire for schema=ripwire.for/v1: ";
     h += kForCompactLegendRoot;
     // PR #215 review: the rows clause is present-only on sc= like every other clause in this dialect. Its 22 B of
     // "sc= scope, id=p::sc::n" rode a bundle whose rows carried no scope at all (a corpus of free functions) —
     // a present-only dialect that defines an attribute nothing printed is the same waste it exists to remove.
     h += p.scPresent ? kForCompactLegendRows : kForCompactLegendRowsNoScope;
+    h += kForCompactLegendFacts;
     // the ceiling-droppable trio — rung zero clears confidenceNote/tailLegend/idRouteLegend together and splices the note below
     if( p.idRouteLegend && forRouteAttrPresent( p, withRouteAttr ) )
     {
@@ -815,13 +843,21 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     {
         h += kForCompactLegendBodies;
     }
-    if( p.tailLegend )
+    // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
+    // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
+    // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
+    // next one is a row, not another block. hdr is never ceiling-dropped (R2-AF round 2, S4); tail is.
+    const struct { bool on; std::string_view clause; } kPresentOnly[] = {
+        { p.tailLegend, kForCompactLegendTail },         { p.hdrLegend, kForCompactLegendHdr },
+        { p.composePresent, kForCompactLegendCompose },  { p.legoPresent, kForCompactLegendLego },
+        { p.layerPresent, kForCompactLegendLayer },
+    };
+    for( const auto& [ on, clause ] : kPresentOnly )
     {
-        h += kForCompactLegendTail;
-    }
-    if( p.hdrLegend )
-    {
-        h += kForCompactLegendHdr;   // R2-AF (round 2, S4): present-only, never ceiling-dropped
+        if( on )
+        {
+            h += clause;
+        }
     }
     if( p.legendDropped )
     {
@@ -1969,6 +2005,22 @@ inline ForEnrichmentPlan planForEnrichment( bool autoBundleMode, bool conceptual
     return ForEnrichmentPlan{ false, true, kForAutoBundleLegend.size(), kAutoAttrReserve };
 }
 
+// L1 (2026-09-19): the enrichment legend THIS DIALECT puts on the header — appendCompactForLegend's hops/bodies clause
+// under --legend=compact, the plan's full enrichment legend otherwise. The sig ledger subtracts it from the emitted
+// header as an exemption, and it used plan.legendBytes (the FULL size) in both dialects — so under compact it
+// subtracted ~450 B the header never carried, handed them to <sigs>, and a budgeted compact bundle shipped over its
+// ceiling with over_ceiling="1" (fornotesbudgetcheck at --token-budget=1100: est_tokens=1272; forrootlegendcheck at
+// 850: 1120). Latent while compact was opt-in; the default since L1. The same rule the confidence/tail/route
+// exemptions already follow: subtract what was EMITTED.
+inline std::size_t enrichmentLegendBytesEmitted( const ForEnrichmentPlan& plan, bool compactLegendOn ) noexcept
+{
+    if( !compactLegendOn || ( !plan.compact && !plan.autoBodies ) )
+    {
+        return plan.legendBytes;
+    }
+    return plan.compact ? kForCompactLegendHops.size() : kForCompactLegendBodies.size();
+}
+
 ForAutoBodiesResult buildForCompactHops( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
                                           const std::vector<rw::NodeId>& lensSurfaceIds, const std::vector<float>& lensRank,
                                           std::size_t committedBytes, std::size_t bundleBudget, rw::RedactCounts* redactPtr )
@@ -2451,12 +2503,37 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             forScPresent = lensRank[i] > 0 && rw::hasScopeAttr( ing.symbols[i] );
         }
+        // packCompose emits an edge whose owner or member type is on the lens surface, a subset of the ranked set.
+        const auto isRanked = [ & ]( rw::NodeId id ) noexcept { return id < lensRank.size() && lensRank[ id ] > 0; };
+        const bool forComposePresent = std::ranges::any_of( g.composeEdges, [ & ]( const rw::ComposeEdge& ce )
+                                                            { return isRanked( ce.ownerSym ) || isRanked( ce.typeSym ); } );
+        // TRAIN 9: the same shape for the two attributes the merged stack put on a default first screen. Both are
+        // over-approximations by design — a clause with nothing to define costs a reader one clause, an undefined
+        // first-screen attribute costs them the meaning (the scPresent note above states the trade).
+        bool forLegoPresent  = false;
+        bool forLayerPresent = false;
+        for( std::size_t i = 0; i < ing.symbols.size() && !( forLegoPresent && forLayerPresent ); ++i )
+        {
+            if( lensRank[i] <= 0 )
+            {
+                continue;
+            }
+            if( i < g.implementors.size() && !g.implementors[i].empty() )
+            {
+                forLegoPresent = true;
+            }
+            if( *rw::builtinLayer( rw::rootRelPath( ing, ing.symbols[i].fileId ) ) != '\0' )
+            {
+                forLayerPresent = true;
+            }
+        }
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,
                                         cfg.anchor, plan.autoBodies, plan.compact, cfg.legend == "compact",
                                         /*tailLegend=*/true, /*idRouteLegend=*/true, /*legendDropped=*/false, flRootArg,
-                                        /*hdrLegend=*/!forHdrRows.empty(), forScPresent };
+                                        /*hdrLegend=*/!forHdrRows.empty(), forScPresent, forComposePresent,
+                                        forLegoPresent, forLayerPresent };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
@@ -2683,7 +2760,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         // COMPACT: the same exemption, for whichever of the two legends is actually on the header — the
         // contract "the ranked map is byte-identical with and without the enrichment" has to hold for the
         // compact shape too, or the round would be changing signatures while claiming to change only bodies.
-        const std::size_t autoLegendBytes = plan.legendBytes;
+        const std::size_t autoLegendBytes = enrichmentLegendBytesEmitted( plan, cfg.legend == "compact" );
         // CONFIDENCE: the same exemption a third time, for the same reason as D2's adaptiveNote — the
         // disclosure's contract is DISCLOSURE ONLY, and charging its bytes made the default-budget compact
         // bundle drop a tail <d> row (measured on this repo's own src, the "rank symbols by pagerank"
@@ -2728,8 +2805,26 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             DISCLOSE( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
         }
-        const std::size_t fixedBytes = ( exemptBytes > headerStr.size() ? headerStr.size() : headerStr.size() - exemptBytes )
-                                     + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
+        std::size_t chargedHeaderBytes = exemptBytes > headerStr.size() ? headerStr.size() : headerStr.size() - exemptBytes;
+        // L1 fix round (rv-r1-L1 HIGH-1 / MED-5): THE DEFAULT NEVER CHARGES ITS SIGNATURES MORE HEADER THAN --legend=full WOULD.
+        // The compact header now defines task=/next=/pure=/<field> (kForCompactLegendFacts), and charging those bytes cost the
+        // default a signature row --legend=full carried (compactlegendcheck (P1): 19 vs 20 rows at --token-budget=3000); making
+        // them exempt instead bought the default rows it could not pay for (over its budget where full fit, 72 functions at 850
+        // tokens: 995 vs 816). So the compact charge is capped at the FULL dialect's charge for the same header, computed by the
+        // same rule: rows(default) ⊇ rows(full) by construction, and a default that pays more header than full never gets more
+        // room for rows than full had.
+        if( compactLegendOn )
+        {
+            ForLensHeaderParts fullParts = headerParts;
+            fullParts.compactLegend = false;
+            const std::size_t fullHeaderBytes = forLensHeaderText( fullParts, /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} ).size();
+            const std::size_t fullExempt      = adaptiveNote.size() + enrichmentLegendBytesEmitted( plan, false )
+                                              + confidenceEarlyAttrsBytes + confidenceEarlyNoteBytes + forAtAttrStr.size()
+                                              + rw::kForFileTailLegend.size() + idRouteParts.bytes();
+            const std::size_t fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
+            chargedHeaderBytes = std::min( chargedHeaderBytes, fullCharged );
+        }
+        const std::size_t fixedBytes = chargedHeaderBytes + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
         // the auto bundle's SECTION SPLIT — the sig side's claim is capped so an explicit ceiling wider
         // than the default cannot re-inflate the trimmed sig tail at the bodies' expense (the rule, its
         // measured defect and the invariant: forSigSideCeiling above; gate: forbudgetmonotoncheck).
@@ -2751,7 +2846,16 @@ std::optional<int> runForLens( const MainDispatch& d )
         // exact-counted below. over_ceiling="1" and ITS clause are not reserved here: F2 made them reachable from
         // every rung, so their bytes are not a constant — the ladder prices them per shape (PR #135,
         // finishForLensHeader). Reserved on the last rung only, they let a bundle ship 70 B past its allowance.
-        constexpr std::string_view kForEstTokensLegend = " est_tokens= prices this bundle in tokens";
+        // L1 fix round (rv-r1-L1 HIGH-1): the compact dialect never defined the ceilings the root names — budget_tokens= /
+        // max_tokens= rode every budgeted default answer undefined (the full dialect's confidence clause carries them). The
+        // compact clause names the ones THIS root carries; the full dialect's bytes are unchanged (compactlegendcheck A-PIN).
+        const bool compactEstLegend = cfg.legend == "compact";
+        const std::string_view kForEstTokensLegend =
+            !compactEstLegend                   ? std::string_view( " est_tokens= prices this bundle in tokens" )
+            : forGateBudget && forBodyCeiling   ? std::string_view( " est_tokens= prices this bundle in tokens; budget_tokens=/max_tokens= the token budget/body ceiling asked" )
+            : forGateBudget                     ? std::string_view( " est_tokens= prices this bundle in tokens; budget_tokens= the token budget asked" )
+            : forBodyCeiling                    ? std::string_view( " est_tokens= prices this bundle in tokens; max_tokens= the body ceiling asked" )
+                                                : std::string_view( " est_tokens= prices this bundle in tokens" );
         // F2: spliced ONLY onto a document that actually carries over_ceiling="1" (the attribute is now
         // reachable from every rung, not just the ladder's last), so a bundle inside its budget keeps every
         // byte it had. Defines the attribute in the same unit the root prints both numbers in.
@@ -3564,6 +3668,7 @@ std::optional<int> runPackTask( const MainDispatch& d )
 
     PackTaskInputs in;
     in.budgetTokens         = cfg.tokenBudget;        // F5: stays std::size_t end-to-end (0 ⇒ the shared default)
+    in.compactLegend        = cfg.legend == "compact" && !cfg.json;   // L1 fix round: the ladder prices what the compact layer delivers
     in.sigLadderBudgetBytes = cfg.packBudgetBytes;
     in.compress             = cfg.compress;
     in.fanIn                = d.fanInPtr;

@@ -22,9 +22,20 @@
 #   - an arm forked off CURRENT HEAD reports head_conflicts="0" and costs no extra tree (the lane is skipped)
 #   - determinism (byte-identical run-to-run) and xmllint-clean output
 #
+# T9 (2026-09-19, CodeRabbit thread 4054594304, queued from train-8): a base whose git TREE is non-empty but
+# contributes ZERO files to the ingest — every path excluded, or none has a supported extension — used to be
+# indistinguishable from a real git-archive/ingest FAILURE (both left SymTreeIndex::isIndexed=false via the
+# removed commitTreeIsEmpty heuristic). quality::materializeCommitTree now checks git archive's own exit
+# status separately from tar's, so a materialize that truly succeeds is trusted, and an empty ingest of it is
+# a real empty index. Arms T9(a)/(b) cover the two routes (no supported extension, all-excluded); T9(c)
+# reuses the PATH-shim technique below to prove a GENUINE archive failure still refuses, now with an in-band
+# reason= (T9(c)/(d)); T9(e) proves that disclosure survives a Release (NDEBUG) build.
+#
 # Usage:
 #   test/scoutheadconflictcheck.sh                            # uses build/ripwire
 #   RIPWIRE_BIN=asan/ripwire test/scoutheadconflictcheck.sh
+#   RIPWIRE_RELEASE_BIN=relbuild/ripwire test/scoutheadconflictcheck.sh   # T9(e); else it looks for
+#                                                                          # relbuild/ripwire or build_release/ripwire next to ROOT
 #
 # Exits non-zero on any failure; prints PASS/FAIL per check and ALL PASS on success.
 
@@ -141,10 +152,10 @@ if [ "$rcC" = 0 ] && armAttrs "$TMP/uc.xml" armB | grep -q 'head_conflicts="0">'
     armAttrs "$TMP/um.xml" armB | grep -q 'head_conflicts="0" head_conflicts_ok="0"' \
         && ok "UNAVAIL: an unavailable HEAD tree leaves armB's head conflicts UNKNOWN (head_conflicts_ok=\"0\"), not a false beta row" \
         || no "UNAVAIL: head-conflict lane diffed an unavailable HEAD as empty (exit $rcM): $( armAttrs "$TMP/um.xml" armB )"
-    armAttrs "$TMP/um.xml" "$WTREF" | grep -q 'ok="0" changed="0"' \
-        && ok "UNAVAIL: the working-tree arm refuses an unavailable HEAD (ok=\"0\" changed=\"0\"), not every symbol as new work" \
+    armAttrs "$TMP/um.xml" "$WTREF" | grep -q 'ok="0" reason="tree_unavailable" changed="0"' \
+        && ok "UNAVAIL: the working-tree arm refuses an unavailable HEAD (ok=\"0\" reason=\"tree_unavailable\" changed=\"0\"), not every symbol as new work" \
         || no "UNAVAIL: working-tree arm diffed against an unavailable HEAD: $( armAttrs "$TMP/um.xml" "$WTREF" )"
-    grep -q 'head_conflicts_ok="0" (absent' "$TMP/um.xml" \
+    grep -qE 'head_conflicts_ok="0" \(absent|head_conflicts_ok=0: ' "$TMP/um.xml" \
         && ok "UNAVAIL: the legend defines head_conflicts_ok=" || no "UNAVAIL: head_conflicts_ok= emitted with no definition in the legend"
 else
     no "UNAVAIL control: the pass-through shim run is not the healthy answer (exit $rcC) — the mutation is void: $( armAttrs "$TMP/uc.xml" armB ) / ${WTREF:-no working-tree arm}"
@@ -194,6 +205,142 @@ fi
 armAttrs "$EOUT" armE | grep -q 'head_conflicts_ok="0"' \
     && no "empty-base: head_conflicts_ok=\"0\" still leaks from the SAME isIndexed check on a legal empty base: $( armAttrs "$EOUT" armE )" \
     || ok "empty-base: head_conflicts_ok stays correct (absent = held) — the empty base did not poison the head-conflict lane either"
+
+# ── T9: A NON-EMPTY TREE WITH NOTHING TO INGEST IS NOT AN UNAVAILABLE ONE ──────────────────────────────
+# The empty-base fixture above covers a GIT TREE that is itself empty (the well-known empty-tree hash). The
+# bug this lane closes (CodeRabbit thread 4054594304, queued from train-8) is narrower and was NOT covered by
+# that fixture: a tree that is NOT empty in git's eyes — it holds real bytes — but contributes zero files to
+# the ingest, either because every path the base touched is excluded, or because none of its files has a
+# supported extension. commitTreeIsEmpty (removed) only asked "is the git tree object the empty-tree hash",
+# so both shapes below used to answer "no" and fall through to a real-failure refusal (ok="0" changed="0",
+# indistinguishable from a genuine git-archive failure). Fixture: mainline holds only README.txt (unsupported
+# extension); armF branches off it and adds a real body symbol in a.cc.
+REPO4="$TMP/repo4"
+mkdir -p "$REPO4"
+git -C "$REPO4" init -q
+git -C "$REPO4" config user.email "dev@x.com"
+git -C "$REPO4" config user.name  "Dev"
+printf 'hello\n' >"$REPO4/README.txt"
+git -C "$REPO4" add -A
+GIT_AUTHOR_DATE="2026-06-01T10:00:00" GIT_COMMITTER_DATE="2026-06-01T10:00:00" \
+    git -C "$REPO4" commit -qm "mainline: README.txt only, no supported extension"
+git -C "$REPO4" checkout -qb armF
+printf 'int main(){return 0;}\n' >"$REPO4/a.cc"
+git -C "$REPO4" add -A
+GIT_AUTHOR_DATE="2026-06-01T11:00:00" GIT_COMMITTER_DATE="2026-06-01T11:00:00" \
+    git -C "$REPO4" commit -qm "armF adds a.cc"
+git -C "$REPO4" checkout -q master 2>/dev/null || git -C "$REPO4" checkout -q main
+
+# (a) no-supported-files base: the merge-base's own tree (README.txt only) is non-empty but has nothing this
+#     tool can parse — ok="1" and armF's own symbol counts as added against it.
+NSOUT="$TMP/no-supported.xml"
+"$BIN" "$REPO4" --merge-scout=armF --no-cache >"$NSOUT" 2>/dev/null
+armAttrs "$NSOUT" armF | grep -q 'ok="1"' \
+    && ok "T9(a) no-supported-files base: armF reports ok=\"1\", not refused as unavailable" \
+    || no "T9(a) no-supported-files base: armF wrongly refused: $( armAttrs "$NSOUT" armF )"
+grep -q '<arm ref="armF"[^>]*changed="1"[^>]*><sym p="a\.cc" id="main"/>' "$NSOUT" \
+    && ok "T9(a) armF's own main() counts as added against the no-supported-files base" \
+    || no "T9(a) armF's symbol did not surface as changed: $( armAttrs "$NSOUT" armF )"
+
+# (b) all-excluded base: the merge-base's tree holds a SUPPORTED file, but --exclude drops every path in it —
+#     same shape by a different route (the excludes config, not the language grammar), same required answer.
+REPO5="$TMP/repo5"
+mkdir -p "$REPO5"
+git -C "$REPO5" init -q
+git -C "$REPO5" config user.email "dev@x.com"
+git -C "$REPO5" config user.name  "Dev"
+printf 'def vendored():\n    return 1\n' >"$REPO5/vendor.py"
+git -C "$REPO5" add -A
+GIT_AUTHOR_DATE="2026-06-01T10:00:00" GIT_COMMITTER_DATE="2026-06-01T10:00:00" \
+    git -C "$REPO5" commit -qm "mainline: one file, entirely under --exclude"
+git -C "$REPO5" checkout -qb armG
+printf 'def new_thing():\n    return 2\n' >"$REPO5/g.py"
+git -C "$REPO5" add -A
+GIT_AUTHOR_DATE="2026-06-01T11:00:00" GIT_COMMITTER_DATE="2026-06-01T11:00:00" \
+    git -C "$REPO5" commit -qm "armG adds g.py"
+git -C "$REPO5" checkout -q master 2>/dev/null || git -C "$REPO5" checkout -q main
+
+EXOUT="$TMP/all-excluded.xml"
+"$BIN" "$REPO5" --merge-scout=armG --exclude=vendor.py --no-cache >"$EXOUT" 2>/dev/null
+armAttrs "$EXOUT" armG | grep -q 'ok="1"' \
+    && ok "T9(b) all-excluded base: armG reports ok=\"1\", not refused as unavailable" \
+    || no "T9(b) all-excluded base: armG wrongly refused: $( armAttrs "$EXOUT" armG )"
+grep -q '<arm ref="armG"[^>]*changed="1"[^>]*><sym p="g\.py" id="new_thing"/>' "$EXOUT" \
+    && ok "T9(b) armG's own new_thing() counts as added against the all-excluded base" \
+    || no "T9(b) armG's symbol did not surface as changed: $( armAttrs "$EXOUT" armG )"
+
+# (c) A GENUINE materialize failure must still refuse — and now DISCLOSE why, in-band, on the row itself. Reuse
+#     the PATH-shim technique from the UNAVAIL section above, this time failing the ARM's own tip (not HEAD),
+#     so this exercises computeNamedArm's own tree-unavailable path rather than the head-conflict lane's.
+ARMFSHA="$( git -C "$REPO4" rev-parse armF )"
+FAILOUT="$TMP/tree-unavailable.xml"
+PATH="$SHIM:$PATH" RW_SHIM_FAIL_ARCHIVE="$ARMFSHA" "$BIN" "$REPO4" --merge-scout=armF --no-cache >"$FAILOUT" 2>/dev/null
+armAttrs "$FAILOUT" armF | grep -q 'ok="0" reason="tree_unavailable"' \
+    && ok "T9(c) a genuine git-archive failure still refuses (ok=\"0\") AND now names reason=\"tree_unavailable\" in-band" \
+    || no "T9(c) expected ok=\"0\" reason=\"tree_unavailable\"; got: $( armAttrs "$FAILOUT" armF )"
+# TRAIN 9: the default posture is the COMPACT legend, so (d) now asserts BOTH dialects — the compact one on the
+# answer the arm above already produced (the default), and the full prose on a second run with the posture flag.
+# Each dialect is checked in its OWN wording: a reading that exists only in the one nobody gets by default is the
+# failure this arm is for.
+grep -q 'reason=no_merge_base (no merge base with HEAD' "$FAILOUT" \
+    && ok "T9(d) compact: the legend defines reason=no_merge_base verbatim" \
+    || no "T9(d) compact: the legend does not define reason=\"no_merge_base\""
+grep -q 'reason=tree_unavailable (a side' "$FAILOUT" \
+    && ok "T9(d) compact: the legend defines reason=tree_unavailable verbatim" \
+    || no "T9(d) compact: the legend does not define reason=\"tree_unavailable\""
+grep -q 'ok=1 on an arm row means the comparison RAN' "$FAILOUT" \
+    && ok "T9(d) compact: the legend defines ok= for the ok=\"1\" posture" \
+    || no "T9(d) compact: the legend does not define the ok=\"1\" posture"
+grep -q 'ok=0 means it did not run at all' "$FAILOUT" \
+    && ok "T9(d) compact: the legend defines ok= for the ok=\"0\" posture" \
+    || no "T9(d) compact: the legend does not define the ok=\"0\" posture"
+FULLOUT="$TMP/tree-unavailable-full.xml"
+PATH="$SHIM:$PATH" RW_SHIM_FAIL_ARCHIVE="$ARMFSHA" "$BIN" "$REPO4" --merge-scout=armF --no-cache --legend=full >"$FULLOUT" 2>/dev/null
+grep -q 'reason="no_merge_base" (no merge base with HEAD' "$FULLOUT" \
+    && ok "T9(d) full: the legend defines both reason= values (no_merge_base spelled verbatim)" \
+    || no "T9(d) full: the legend does not define reason=\"no_merge_base\""
+grep -q 'reason="tree_unavailable" (a side' "$FULLOUT" \
+    && ok "T9(d) full: the legend defines reason=\"tree_unavailable\" verbatim" \
+    || no "T9(d) full: the legend does not define reason=\"tree_unavailable\""
+grep -q 'ok="1" on an arm row means' "$FULLOUT" \
+    && ok "T9(d) full: the legend defines ok= for the ok=\"1\" posture" \
+    || no "T9(d) full: the legend does not define the ok=\"1\" posture"
+grep -q 'ok="0" means it did not run at all' "$FULLOUT" \
+    && ok "T9(d) full: the legend defines ok= for the ok=\"0\" posture" \
+    || no "T9(d) full: the legend does not define the ok=\"0\" posture"
+
+# (e) RELEASE LEG: the reason must survive an NDEBUG build. DISCLOSE( sink, why ) writes the sink field (what
+#     reason= reads) in EVERY build — only its accompanying debug TRACE is compiled out under NDEBUG — so this
+#     asserts the field, not the trace, still reaches the answer when built with -DCMAKE_BUILD_TYPE=Release.
+RELBIN="${RIPWIRE_RELEASE_BIN:-}"
+# TRAIN 9: CI builds its Release flavour into build/ and sets no env var, so the two fallback paths below
+# exist on a developer's machine and nowhere else. The binary under test IS the Release binary on that leg —
+# ask --version (the forautobodycheck/kotlincheck reading) before looking for a second one. And when no
+# Release build exists anywhere, this arm SKIPs with its reason named: an arm that cannot run is not a
+# failure, and the plain-flavour legs still prove (a)-(d).
+SHC_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
+case "$SHC_FLAVOUR" in
+    Release|RelWithDebInfo|MinSizeRel) [ -z "$RELBIN" ] && RELBIN="$BIN" ;;
+esac
+if [ -z "$RELBIN" ]; then
+    for cand in "$ROOT/relbuild/ripwire" "$ROOT/build_release/ripwire"; do
+        [ -x "$cand" ] && RELBIN="$cand" && break
+    done
+fi
+if [ -n "$RELBIN" ] && [ -x "$RELBIN" ]; then
+    RELOUT="$TMP/tree-unavailable-release.xml"
+    PATH="$SHIM:$PATH" RW_SHIM_FAIL_ARCHIVE="$ARMFSHA" "$RELBIN" "$REPO4" --merge-scout=armF --no-cache >"$RELOUT" 2>"$TMP/release.stderr"
+    armAttrs "$RELOUT" armF | grep -q 'ok="0" reason="tree_unavailable"' \
+        && ok "T9(e) RELEASE: reason=\"tree_unavailable\" still reaches the answer under NDEBUG" \
+        || no "T9(e) RELEASE: reason= missing/wrong under NDEBUG: $( armAttrs "$RELOUT" armF )"
+    if [ -s "$TMP/release.stderr" ]; then
+        no "T9(e) RELEASE: expected the debug trace to be silent (NDEBUG strips it), but stderr was non-empty: $( head -c 200 "$TMP/release.stderr" )"
+    else
+        ok "T9(e) RELEASE: the debug trace is silent, as NDEBUG demands — reason= is carrying the disclosure now, not stderr"
+    fi
+else
+    printf '  SKIP  T9(e) RELEASE: this binary is a %s build and no Release one is available (set RIPWIRE_RELEASE_BIN, or build one at $ROOT/relbuild); the Release CI leg runs this arm\n' "${SHC_FLAVOUR:-dev}"
+fi
 
 [ "$fail" = 0 ] && { echo "ALL PASS"; exit 0; }
 echo "FAILURES"; exit 1

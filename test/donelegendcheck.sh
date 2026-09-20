@@ -140,7 +140,8 @@ echo "=== (a) THE RATCHET — absolute legend bytes per shape ==================
 # for one honest future addition, and no more; the pre-fix column is what the ratchet is holding back)
 run_budget(){
     local name="$1" budget="$2" pre="$3"; shift 3
-    "$BIN" "$@" >"$WORK/$name.xml" 2>/dev/null
+    # L1 (2026-09-19): the CLI default legend is compact; this gate budgets and reads the FULL legend (the ratchet was set on it), so every probe asks for it.
+    "$BIN" "$@" --legend=full >"$WORK/$name.xml" 2>/dev/null
     [ -s "$WORK/$name.xml" ] || { no "(a) $name produced NO output — the probe is broken, fix it before trusting any row"; return; }
     read -r total legend payload <<EOF
 $( split "$WORK/$name.xml" )
@@ -213,7 +214,7 @@ present qd_dirty_scope 'SCOPE, present only when the scope flag was given'
 absent  qd_dirty_scope 'foreign-acks= is a SEPARATE axis'
 # test-gate's row contract governs rows; the empty-obligation case has none.
 absent  tg_empty 'REPEAT VERBATIM'
-"$BIN" "$ROOT" --test-gate=src/model.h >"$WORK/tg_rows.xml" 2>/dev/null
+"$BIN" "$ROOT" --test-gate=src/model.h --legend=full >"$WORK/tg_rows.xml" 2>/dev/null
 present tg_rows 'REPEAT VERBATIM'
 # the ref-pair form lights its own marker, omits at=, and omits the four working-tree markers.
 present qd_refpair 'baseline="ref-pair" means neither a sidecar nor the working tree'
@@ -275,7 +276,7 @@ for n in qd_clean qd_dirty qd_dirty_scope qd_refpair sd_uses sd_none tg_empty; d
 done
 # The ref-pair form is the one re-run that is safe HERE: the fixture's working tree was committed above
 # for the qd_refpair probe, so a working-tree shape would legitimately report something else now.
-"$BIN" "$FX" --quality-delta=HEAD~1..HEAD >"$WORK/qd_twice.xml" 2>/dev/null
+"$BIN" "$FX" --quality-delta=HEAD~1..HEAD --legend=full >"$WORK/qd_twice.xml" 2>/dev/null
 diff -q "$WORK/qd_refpair.xml" "$WORK/qd_twice.xml" >/dev/null \
     && ok "(e) quality-delta deterministic (byte-identical twice on the same fixture state)" \
     || no "(e) quality-delta differs across two runs on an unchanged fixture"

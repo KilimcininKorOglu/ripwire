@@ -126,8 +126,11 @@ fi
 #        (reason="file 48222B &lt; bundle 1054283B", mode="whole-file"); GREEN once the estimator is
 #        guarded exactly like its two siblings at the ceiling verdict and the topK>0 emission gate
 #        (`mapTopK > 0 ? measureEmittedMapBytes(...) : 0`).
-"$BIN" "$ROOT" --expand=endsWithView --no-cache >"$TMP/real_default.xml" 2>"$TMP/real_default.err"
-"$BIN" "$ROOT" --expand=endsWithView --no-cache --top-k=0 >"$TMP/real_tk0.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact. (G-b)'s identity — reason='s bundle price IS the served byte count —
+# is priced by chooseExpandServe in the FULL dialect (expandmodecheck (4) states why); under the compact default the
+# reason= numbers stay the full-dialect candidate prices, a found item in the L1 lane report. Both runs ask for full.
+"$BIN" "$ROOT" --expand=endsWithView --no-cache --legend=full >"$TMP/real_default.xml" 2>"$TMP/real_default.err"
+"$BIN" "$ROOT" --expand=endsWithView --no-cache --top-k=0 --legend=full >"$TMP/real_tk0.xml" 2>/dev/null
 realTk0Bytes=$( wc -c < "$TMP/real_tk0.xml" | tr -d ' ' )
 
 if grep -q 'mode="whole-file"' "$TMP/real_default.xml"; then

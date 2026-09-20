@@ -590,6 +590,9 @@ static_assert( rw::langreg::firstLangLintCannotName() == rw::kLangCount,
 static_assert( std::string_view( rw::langTag( rw::Lang( rw::kLangCount ) ) ) == "?",
                "an enumerator was appended after the one kLangCount names — move kLangCount to the new last enumerator" );
 
+// L1: defined with the compact-legend layer below; the --token-budget gate prices a compact-posture map with it.
+static std::string_view compactLegendHint( const rw::Config& c, std::string_view doc );
+
 namespace
 {
 
@@ -1059,9 +1062,30 @@ inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, TokenBudgetSt
 // way; this one holds the map itself, rendered once, and nothing can render it again. So a buffer that did not finish
 // whole (rw::MemoryStream::finish: a write lost inside it, or the close failed) is not printed short. The run says so
 // on stderr in every build and exits 1, the exit code main's own A4-F18 check gives a short write to stdout.
-inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, TokenBudgetStream& sink, std::FILE* real,
-                                                 std::size_t mapEstTokens, std::size_t tokenBudget, bool asJson )
+// L1: the PRICE a compact-posture run will actually print for this body. The budget gate decides BEFORE the compact
+// layer (runWithCompactLegend) rewrites stdout, so without this it withheld a map on its FULL-dialect price — a map the
+// caller would have received inside the budget, lost to prose it was never going to be sent. The body is compacted
+// here the same way the layer will compact it and repriced by the same rule (compactlegend.h compactRepricedTokens),
+// so the number decided on is the number the root prints. A body the dialect cannot shape keeps its own price — an
+// empty one (the map streamed unbuffered) and a --json one (no posture) included.
+static std::size_t compactPostureMapPrice( const rw::Config& cfg, std::string_view body, std::size_t fullEstTokens )
 {
+    if( cfg.legend != "compact" || fullEstTokens == 0 )
+    {
+        return fullEstTokens;
+    }
+    std::string compacted( body );
+    if( rw::applyCompactDialect( compacted, compactLegendHint( cfg, compacted ) ) != rw::CompactOutcome::Rewritten )
+    {
+        return fullEstTokens;
+    }
+    return static_cast<std::size_t>( rw::compactRepricedTokens( static_cast<long long>( fullEstTokens ), body.size(), compacted.size() ) );
+}
+
+inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, TokenBudgetStream& sink, std::FILE* real,
+                                                 std::size_t fullEstTokens, std::size_t tokenBudget, const rw::Config& cfg )
+{
+    const bool                  asJson     = cfg.json;
     const bool                  isBuffered = stream.isOpen();
     const rw::MemoryStreamBytes body       = isBuffered ? stream.finish() : rw::MemoryStreamBytes{};
     if( isBuffered && !body.isWhole )
@@ -1073,6 +1097,7 @@ inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, Token
         rw::emitRaw( stderr, "ripwire: write error — the --token-budget buffer lost bytes; the map is withheld, not printed short\n" );
         return 1;
     }
+    const std::size_t mapEstTokens = compactPostureMapPrice( cfg, body.bytes, fullEstTokens );
     if( tokenBudget > 0 && mapEstTokens > tokenBudget && sink.isUnbuffered )
     {
         // The map above went straight to stdout: it carries its own est_tokens=, and it was NOT withheld. Say that, and
@@ -1498,6 +1523,11 @@ struct ExpandServeDocument
     std::size_t rootAttrBytes = 0;     // <ctx> attributes only this mode carries (root=, topk_default=, a payload-priced est_tokens=)
     std::size_t legendBytes   = 0;     // legend comments only this mode emits
     double      selfPriceRate = 0.0;   // >0: this mode prices ITSELF on its <ctx> root (est_tokens=), at this B/token rate
+    std::ptrdiff_t compactDeltaBytes = 0; // L1 fix round (rv-r1-L1 MED-7): under the compact posture, how many bytes the compact
+                                        // layer ADDS to this candidate (negative: takes out) — its prose legend out, the compact
+                                        // legend and schema= in (the whole-file legend GROWS: a longer compact legend),
+                                        // measured on the candidate itself — so the choice and the reason= figures are the
+                                        // DELIVERED sizes. 0 in the full posture: nothing moves.
 };
 
 // The whole served document, envelope included. `disclosureBytes` is the mode=/reason= attribute pair the
@@ -1514,7 +1544,8 @@ inline std::size_t priceExpandServeDocument( const ExpandServeDocument& doc, std
         std::size_t estTokens = 0;
         total += rw::pricedRootAttr( total, doc.selfPriceRate, 0, &estTokens ).size();
     }
-    return total;
+    const std::ptrdiff_t delivered = static_cast<std::ptrdiff_t>( total ) + doc.compactDeltaBytes;
+    return delivered > 0 ? static_cast<std::size_t>( delivered ) : total;
 }
 
 inline ExpandServeChoice chooseExpandServe( const ExpandServeDocument& bundleDoc, const ExpandServeDocument& fileDoc,
@@ -1845,6 +1876,20 @@ int runDefaultMap( const MainDispatch& d )
     //
     // DEGRADE: open_memstream failure returns 0, which reads as "fits" — the pre-§F5 behaviour, and the safe
     // direction here: a size this path could not measure must not mint an over_ceiling label it cannot support.
+    // L1 fix round: the map's TEXT, for the one caller that must compact a candidate to price what it delivers (--expand's
+    // serving choice under the compact posture). The same render measureMapBytes measures; empty when the buffer failed.
+    const auto renderMapText = [ & ]( int k, std::size_t extraPayloadTokens ) -> std::string
+    {
+        rw::MemoryStream probe;
+        std::FILE* const m = rw::openChargeStream( probe );
+        if( !m )
+        {
+            return {};
+        }
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
+        const rw::MemoryStreamBytes measured = probe.finish();
+        return measured.isWhole ? std::string( measured.bytes ) : std::string();
+    };
     const auto measureMapBytes = [ & ]( int k, std::size_t extraPayloadTokens ) -> std::size_t
     {
         rw::MemoryStream probe;
@@ -2369,9 +2414,53 @@ int runDefaultMap( const MainDispatch& d )
         fileDoc.rootAttrBytes = ctxRootAttr.size() + topkDefaultBytes + ctxNotesDegradedBytes;   // whole-file mode always carries root= (no <r root=> rides with it) and, when degraded, the marker too
         fileDoc.legendBytes   = kExpandWholeFileLegend.size();
         fileDoc.selfPriceRate = rw::kBytesPerTokenBody;
+        // L1 fix round (rv-r1-L1 MED-7): under the compact posture each candidate is priced as the compact layer will deliver
+        // it — the two documents, assembled with the same parts the fields above describe, compacted, and the difference
+        // taken off each price. reason= then names the sizes of documents that exist, and the choice is made on them.
+        // MED-7 of rv-r1-L1-2: the two postures price differently, so they can serve differently — the compact default a
+        // BUNDLE (a body plus sibs= names) where --legend=full serves the whole FILE (every sibling's source). The choice is
+        // right for the bytes each delivers, but the default then carries less source with no way to get the rest. So when
+        // the full dialect's own comparison would serve the file, the default's bundle root carries next= naming the call
+        // that serves it; its bytes are priced into the bundle before the choice (it rides only if the bundle wins).
+        std::string wholeFileNext;
+        if( cfg.legend == "compact" && !cfg.json && chooseExpandServe( bundleDoc, fileDoc, ctxUnprovenBytes, wholeFile, cfg.packBudgetBytes ).serveWholeFile )
+        {
+            std::string expandArg;
+            for( const std::string& e : cfg.expand )
+            {
+                expandArg += ( expandArg.empty() ? "" : "," ) + e;
+            }
+            wholeFileNext = rw::nextAttrXml( "--expand=" + expandArg + " --legend=full" );
+            bundleDoc.rootAttrBytes += wholeFileNext.size();
+        }
+        if( cfg.legend == "compact" && !cfg.json )
+        {
+            const auto deltaOf = []( const std::string& candidate ) -> std::ptrdiff_t
+            {
+                const std::size_t delivered = rw::compactDeliveredBytes( candidate, "expand" );
+                return delivered > 0 ? static_cast<std::ptrdiff_t>( delivered ) - static_cast<std::ptrdiff_t>( candidate.size() ) : 0;
+            };
+            const std::string mapText = mapTopK > 0 ? renderMapText( mapTopK, payloadTokens ) : std::string();
+            // the ROOT ATTRIBUTES ride too: the compact legend reads root=/est_tokens=/topk_default= etc. present-only, so a
+            // candidate without them would price a legend shorter than the one delivered. The est_tokens= values are the
+            // candidates' own prices (the layer reprices them, and a placeholder of another digit count would move the delta).
+            const std::string topk       = exactNameExpandDefault ? " topk_default=\"0\"" : "";
+            const std::string fileEst    = std::to_string( static_cast<std::size_t>( double( wholeFile.xml.size() + kExpandWholeFileLegend.size() + ctxRootAttr.size() ) / rw::kBytesPerTokenBody ) + 1 );
+            const std::string bundleRoot = "<ctx" + ctxUnprovenAttr + ( mapTopK == 0 ? ctxRootAttr + " est_tokens=\"" + std::to_string( payloadTokens ) + "\"" : std::string() ) + topk + noteBuf + wholeFileNext + " mode=\"bundle\">";
+            const std::string fileRoot   = "<ctx" + ctxUnprovenAttr + ctxRootAttr + topk + " mode=\"whole-file\" est_tokens=\"" + fileEst + "\">";
+            // in the order the bundle is EMITTED — the bodies first, the ride-along map after them: the layer reads its
+            // head terms off the root's first child, so a map-first candidate priced a different legend (rv-r1-L1-2: 107 B)
+            bundleDoc.compactDeltaBytes = deltaOf( bundleRoot + ctxUnprovenLegend + bodiesSection.xml + mapText + "</ctx>" );
+            fileDoc.compactDeltaBytes   = deltaOf( fileRoot + ctxUnprovenLegend + std::string( kExpandWholeFileLegend ) + wholeFile.xml + "</ctx>" );
+        }
         ExpandServeChoice choice = chooseExpandServe( bundleDoc, fileDoc, ctxUnprovenBytes, wholeFile, cfg.packBudgetBytes );
         serveWholeFile = choice.serveWholeFile;
         ctxOpenStr     = std::move( choice.ctxOpen );
+        if( !serveWholeFile && !wholeFileNext.empty() )
+        {
+            ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
+            ctxOpenStr.insert( 4, wholeFileNext );
+        }
         if( exactNameExpandDefault )
         {
             // chooseExpandServe's four formatted opens all start "<ctx mode=\"...\" reason=\"...\">" — insert
@@ -2623,7 +2712,7 @@ int runDefaultMap( const MainDispatch& d )
     // (composes freely with --max-tokens, which SHAPES the map to hit a target instead). §P6.8: closes the
     // buffer, and on exit 3 the buffered body never reaches stdout (finishTokenBudgetGate's own comment has
     // the full reasoning) — a small refusal record instead, shaped to match --json.
-    if( std::optional<int> gated = finishTokenBudgetGate( tbStream, tbSink, stdout, mapEstTokens, cfg.tokenBudget, cfg.json ) )
+    if( std::optional<int> gated = finishTokenBudgetGate( tbStream, tbSink, stdout, mapEstTokens, cfg.tokenBudget, cfg ) )
     {
         return *gated;
     }
@@ -3253,7 +3342,7 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     // asserted here: the router composes the directory scope only on a binary that has the row for it.
     rw::taskroute::RouterCaps caps;
     caps.dirScope = rw::shipsViewFlag( rw::taskroute::kDirScopeFlag );
-    const rw::taskroute::TaskRouteResult route = rw::taskroute::classify( cfg.helpTask, root, ing, git, dirty, caps );
+    const rw::taskroute::TaskRouteResult route = rw::taskroute::classifyRoutes( cfg.helpTask, root, ing, git, dirty, caps );
 
     std::vector<char> esc;
     const auto ex = [&]( std::string_view s ) { return std::string( rw::escapeXml( s, esc ) ); };
@@ -3679,12 +3768,96 @@ static std::string_view compactLegendHint( const rw::Config& c, std::string_view
 // legends are pure prose — the layer restates them as its own compact legend and keeps their schema id.
 static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
 {
-    return !c.forTask.empty();
+    // L1 fix round (rv-r1-L1 LOW-1): --batch outranks --for in dispatch, so `--for=X --batch=F` answers the batch envelope —
+    // an answer this layer shapes. Only a run --for actually answers is skipped.
+    const bool batchAnswers = !c.batchFile.empty();   // the batch envelope answers, and this layer shapes it
+    return !batchAnswers && !c.forTask.empty();
+}
+
+// L1 fix round (rv-r1-L1 LOW-3): a DEFAULTED posture captured every run through a tmpfile, a 1.28 MB `--lint --sarif`
+// included, so stdout stopped streaming for answers the layer then passed through untouched. Dispatch precedence decides
+// the answering verb (`--callers=X --lint --sarif` answers --callers, in XML), so the capture is skipped only where the
+// answer is CERTAINLY not XML: SARIF, with nothing on the command line but the flags that shape a lint run. Anything
+// else is captured, which is the safe direction — a capture of a non-XML answer passes it through unchanged.
+static bool certainlyNonXmlAnswer( const rw::Config& cfg, char** argv ) noexcept
+{
+    if( !cfg.legendDefaulted || !cfg.sarif || argv == nullptr || argv[ 0 ] == nullptr )
+    {
+        return false;
+    }
+    static constexpr std::string_view kLintShaping[] = { "--lint", "--sarif", "--lint-rules=", "--no-cache", "--exclude=", "--include=", "--no-redact" };
+    for( char** a = argv + 1; *a != nullptr; ++a )
+    {
+        const std::string_view arg( *a );
+        if( !arg.starts_with( "-" ) )
+        {
+            continue;   // a root operand
+        }
+        const bool shapesLint = std::ranges::any_of( kLintShaping, [ & ]( std::string_view f )
+                                                     { return f.ends_with( '=' ) ? arg.starts_with( f ) : arg == f; } );
+        if( !shapesLint )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// L1 (2026-09-19): compact is the CLI DEFAULT (cli.h kDefaultLegendPosture, resolved in validateLegendModifier), so this
+// layer now runs on every XML run that does not ask for --legend=full. cfg.legendDefaulted separates the two callers:
+// an ASKED --legend=compact that meets an answer the dialect cannot shape refuses (exit 1, as before); the DEFAULT
+// posture passes that answer through unchanged at the run's own exit code — a default must never be the reason a run
+// fails. A capture that cannot be set up degrades to the full legend in both cases, disclosed on stderr.
+static_assert( rw::kCompactRepriceDensestBytesPerToken == rw::kMinBytesPerToken, "the compact reprice prices added markup at the densest rate the estimator knows" );
+
+// The captured run's answer, compacted and written — or, when the dialect cannot shape it, passed through (the DEFAULT
+// posture) or refused (an ASKED --legend=compact). `rc` is the run's own exit code, returned unchanged on every path that
+// emits the answer.
+static int finishCompactCapture( const rw::Config& cfg, std::string& doc, int rc )
+{
+    EXPECTS( cfg.legend == "compact", "only a compact-posture run is captured" );
+    if( doc.empty() )
+    {
+        return rc;   // a refusal (or an empty answer) — nothing to rewrite, the exit code says what happened
+    }
+    const auto emitCaptured = [&doc, rc]()
+    {
+        std::fwrite( doc.data(), 1, doc.size(), stdout );
+        std::fflush( stdout );
+        return rc;
+    };
+    // the DEFAULT posture shapes what it can and leaves the rest exactly as it was emitted (cfg.legendDefaulted);
+    // only an ASKED --legend=compact refuses an answer the dialect cannot shape
+    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ) ) )
+    {
+        case rw::CompactOutcome::Rewritten:
+        case rw::CompactOutcome::AlreadyCompact:
+            return emitCaptured();
+        case rw::CompactOutcome::NotXml:
+            if( cfg.legendDefaulted )
+            {
+                return emitCaptured();
+            }
+            std::fputs( "ripwire: --legend=compact applies to the XML verbs only — this run's output carries no XML legend to compact "
+                        "(text/JSON/markdown); rerun with --legend=full (e.g. ripwire <dir> --callers=SYM --legend=compact)\n", stderr );
+            return 1;
+        case rw::CompactOutcome::UnknownRoot:
+            if( cfg.legendDefaulted )
+            {
+                return emitCaptured();
+            }
+            break;
+    }
+    const rw::CompactRootInfo root = rw::findCompactRoot( doc );
+    rw::emitTo( stderr, "ripwire: --legend=compact has no compact legend for this verb's root element <{}> yet — rerun with "
+                          "--legend=full (the full legend is the documented form; add the root to kCompactLegendSpecs to extend the dialect)\n", std::string_view( root.tag.data(), root.tag.size() ) );
+    return 1;
 }
 
 static int runWithCompactLegend( const rw::Config& cfg, char** argv )
 {
-    if( cfg.legend != "compact" || nativeCompactLegendVerb( cfg ) )
+    EXPECTS( !cfg.legendDefaulted || cfg.legend == rw::kDefaultLegendPosture, "a defaulted posture is the registered default" );
+    if( cfg.legend != "compact" || nativeCompactLegendVerb( cfg ) || certainlyNonXmlAnswer( cfg, argv ) )
     {
         return dispatchMain( cfg, argv );
     }
@@ -3694,7 +3867,7 @@ static int runWithCompactLegend( const rw::Config& cfg, char** argv )
     {
         DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one, and stderr says so: only the cost grows",
                   "runWithCompactLegend: tmpfile() failed — the FULL legend is emitted where compact was asked for" );
-        std::fputs( "ripwire: --legend=compact: could not open a capture buffer — emitting the full legend instead\n", stderr );
+        std::fputs( "ripwire: compact legend: could not open a capture buffer — emitting the full legend instead\n", stderr );
         return dispatchMain( cfg, argv );
     }
     const int savedStdout = rw::os::dup( STDOUT_FILENO );
@@ -3702,7 +3875,7 @@ static int runWithCompactLegend( const rw::Config& cfg, char** argv )
     {
         DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one, and stderr says so: only the cost grows",
                   "runWithCompactLegend: dup/dup2 failed — the FULL legend is emitted where compact was asked for" );
-        std::fputs( "ripwire: --legend=compact: could not redirect stdout — emitting the full legend instead\n", stderr );
+        std::fputs( "ripwire: compact legend: could not redirect stdout — emitting the full legend instead\n", stderr );
         if( savedStdout >= 0 ) { rw::os::close( savedStdout ); }
         std::fclose( capture );
         return dispatchMain( cfg, argv );
@@ -3720,28 +3893,7 @@ static int runWithCompactLegend( const rw::Config& cfg, char** argv )
         doc.append( buf, got );
     }
     std::fclose( capture );
-    if( doc.empty() )
-    {
-        return rc;   // a refusal (or an empty answer) — nothing to rewrite, the exit code says what happened
-    }
-    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ) ) )
-    {
-        case rw::CompactOutcome::Rewritten:
-        case rw::CompactOutcome::AlreadyCompact:
-            std::fwrite( doc.data(), 1, doc.size(), stdout );
-            std::fflush( stdout );
-            return rc;
-        case rw::CompactOutcome::NotXml:
-            std::fputs( "ripwire: --legend=compact applies to the XML verbs only — this run's output carries no XML legend to compact "
-                        "(text/JSON/markdown); rerun without --legend (e.g. ripwire <dir> --callers=SYM --legend=compact)\n", stderr );
-            return 1;
-        case rw::CompactOutcome::UnknownRoot:
-            break;
-    }
-    const rw::CompactRootInfo root = rw::findCompactRoot( doc );
-    rw::emitTo( stderr, "ripwire: --legend=compact has no compact legend for this verb's root element <{}> yet — rerun without "
-                          "--legend (the full legend is the documented form; add the root to kCompactLegendSpecs to extend the dialect)\n", std::string_view( root.tag.data(), root.tag.size() ) );
-    return 1;
+    return finishCompactCapture( cfg, doc, rc );
 }
 
 int main( int argc, char** argv )

@@ -120,7 +120,8 @@ fi
     || no "--for=Inner no longer routes name-exact"
 
 # ── (g) SYMBOL-COUNT DELTA ────────────────────────────────────────────────────────────────────────
-symcount="$( "$BIN" nestedqualfix 2>/dev/null | grep -o 'symbols=[0-9]*' | head -1 | tr -dc 0-9 )"
+# L1 (2026-09-19): the CLI default legend is compact and spells symbols= inside its comment; this arm reads the real header, so it asks for the full legend.
+symcount="$( "$BIN" nestedqualfix --legend=full 2>/dev/null | grep -o 'symbols=[0-9]*' | head -1 | tr -dc 0-9 )"
 [ "$symcount" = "12" ] \
     && ok "fixture symbol count is exactly 12 (10 pre-fix + the two out-of-line definitions)" \
     || no "fixture symbol count is $symcount, expected 12 — an extraction change touched more than the two golds"

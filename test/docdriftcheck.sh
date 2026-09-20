@@ -46,9 +46,11 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 echo "docdriftcheck: BIN=$BIN  CORPUS=$CORPUS"
 
-"$BIN" "$CORPUS" --doc-drift --no-cache >"$TMP/a" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; $TMP/a is compared to a golden recorded from the full default, and its
+# row count greps '<a k=' which the compact legend spells inside its comment, so these runs ask for the full legend.
+"$BIN" "$CORPUS" --doc-drift --no-cache --legend=full >"$TMP/a" 2>/dev/null
 rc=$?
-"$BIN" "$CORPUS" --doc-drift --no-cache >"$TMP/b" 2>/dev/null
+"$BIN" "$CORPUS" --doc-drift --no-cache --legend=full >"$TMP/b" 2>/dev/null
 if cmp -s "$TMP/a" "$TMP/b"; then ok "determinism (byte-identical)"; else no "--doc-drift is non-deterministic"; fi
 if [ "$rc" = "0" ]; then ok "exits 0 (a report, not a gate)"; else no "--doc-drift exited $rc, expected 0"; fi
 F="$( cat "$TMP/a" )"
@@ -324,7 +326,8 @@ fi
 #    (gitoracle.h kHistoryProbeLegend), present ONLY when --with-history made <history> reachable. The
 #    golden comparison above already proves a PLAIN --doc-drift run pays nothing for it (no clause = no
 #    byte drift on the golden); this checks the --with-history run gains it.
-"$BIN" "$CORPUS" --doc-drift --with-history --no-cache >"$TMP/wh.xml" 2>/dev/null
+# L1 (2026-09-19): L10b reads the FULL legend's prose, so it asks for it.
+"$BIN" "$CORPUS" --doc-drift --with-history --no-cache --legend=full >"$TMP/wh.xml" 2>/dev/null
 grep -q 'history probed="1" means the git-log name-history walk ran' "$TMP/wh.xml" \
     && ok "L10b: --doc-drift --with-history legend now DEFINES the <history> element" \
     || no "L10b: --doc-drift --with-history legend still does not define <history>"

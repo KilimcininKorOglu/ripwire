@@ -186,7 +186,9 @@ C5="$( G "$A" rev-parse HEAD )"
 # (6) a VALUE-only edit: the def stays a def, the uses stay uses — correct answer is EMPTY
 sed -i.bak 's/int v = 111;/int v = 222;/' "$A/src/a.cpp"; rm -f "$A/src/a.cpp.bak"
 commitall "$A" "change the literal"
-out="$( "$BIN" "$A" --slice=src/a.cpp:worker:v --since="$C5" --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; (6b)/(10c)/(13) read the FULL legend prose and (18a) names its
+# baseline cfull, so those documents ask for the full legend.
+out="$( "$BIN" "$A" --slice=src/a.cpp:worker:v --since="$C5" --no-cache --legend=full 2>/dev/null )"
 if empty_diff "$out"
 then ok '(6) a value-only edit of the def is an EMPTY dependence diff'
 else no '(6) a value-only edit moved a dependence edge'; fi
@@ -354,7 +356,7 @@ int later( int limit )
 }
 EOF
 commitall "$D" "a whole new file"
-out="$( "$BIN" "$D" --slice=src/later.cpp:later:l --since="$BASE_D" --no-cache 2>/dev/null )"
+out="$( "$BIN" "$D" --slice=src/later.cpp:later:l --since="$BASE_D" --no-cache --legend=full 2>/dev/null )"
 case "$out" in
   *'status="file_absent_at_rev"'*'comparable="0"'*) ok '(10) a path absent at REV: status="file_absent_at_rev" comparable="0"' ;;
   *) no '(10) a path absent at REV was not disclosed with comparable="0"' ;;
@@ -401,7 +403,7 @@ if [ $rc -ne 0 ] && [ ! -s "$WORK/o12b" ] && grep -qi 'git' "$WORK/e12b"; then
 else no '(12b) --since on a non-git root did not refuse'; fi
 
 # (13) the legend restates the slice's own limits inside the --since block
-out="$( "$BIN" "$A" --slice=src/a.cpp:worker:v --since="$C6" --no-cache 2>/dev/null )"
+out="$( "$BIN" "$A" --slice=src/a.cpp:worker:v --since="$C6" --no-cache --legend=full 2>/dev/null )"
 leg="${out%%<slice *}"
 miss=""
 for phrase in 'no alias analysis' 'reach=' 'STATEMENT' 'comparable="0"'; do
@@ -434,7 +436,7 @@ case "$out" in
 esac
 
 # (18) the compact legend tier: shorter block, byte-identical element
-cfull="$( "$BIN" "$A" --slice=src/a.cpp:worker:v --since="$BASE_A" --no-cache 2>/dev/null )"
+cfull="$( "$BIN" "$A" --slice=src/a.cpp:worker:v --since="$BASE_A" --no-cache --legend=full 2>/dev/null )"
 ccomp="$( "$BIN" "$A" --slice=src/a.cpp:worker:v --since="$BASE_A" --legend=compact --no-cache 2>/dev/null )"
 [ "${#ccomp}" -lt "${#cfull}" ] && ok "(18a) --legend=compact shrinks the since block (${#ccomp} B vs ${#cfull} B)" \
                                || no '(18a) --legend=compact did not shrink the since block'

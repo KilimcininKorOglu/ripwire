@@ -127,7 +127,9 @@ Compile-dark features are `#ifndef F / #define F 0` header gates, CMake `option(
     #endif
 EOF
 
-"$BIN" "$FIX" --flags --no-cache >"$TMP/o" 2>/dev/null
+# L1 (2026-09-19): the CLI default is the compact posture, whose root leads with schema=; arm 3 reads the
+# full-posture `<flags gates=` shape, so this run (and its determinism twin) asks for --legend=full.
+"$BIN" "$FIX" --flags --no-cache --legend=full >"$TMP/o" 2>/dev/null
 rc=$?
 if [ "$rc" = "0" ]; then ok "exits 0 (a report, not a gate)"; else no "--flags exited $rc, expected 0"; fi
 
@@ -170,7 +172,7 @@ envcount="$( sed -n 's/.*<flags [^>]*env="\([0-9]*\)".*/\1/p' "$TMP/o" )"
                       || no "env=\"$envcount\", expected 5 (the five real reads in the fixture)"
 
 # ── 4) determinism + G4 ───────────────────────────────────────────────────────────────────────────────
-"$BIN" "$FIX" --flags --no-cache >"$TMP/o2" 2>/dev/null
+"$BIN" "$FIX" --flags --no-cache --legend=full >"$TMP/o2" 2>/dev/null
 if cmp -s "$TMP/o" "$TMP/o2"; then ok "byte-identical run to run"; else no "--flags is non-deterministic"; fi
 if command -v xmllint >/dev/null 2>&1; then
     if xmllint --noout "$TMP/o" 2>/dev/null; then ok "G4 xmllint clean"; else no "output is not well-formed XML"; fi

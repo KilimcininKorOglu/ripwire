@@ -140,13 +140,14 @@ for bad in '"limit":0|0' '"limit":-1|-1' '"limit":"abc"|abc' '"limit":3.9|3.9' '
 done
 # absent stays the default: the un-paged answer must be byte-identical to the CLI's un-paged answer.
 IMP_MCP="$( mcp_text "$( call impact '{"path":"'"$ROOT"'","symbol":"escapeXml"}' )" | tr '<' '\n' | grep '^impact ' | head -1 )"
-IMP_CLI="$( "$BIN" "$ROOT" --impact=escapeXml 2>/dev/null | tr '<' '\n' | grep '^impact ' | head -1 )"
+# L1 (2026-09-19): the CLI default legend is compact; the MCP twin asks legend:"full", so the CLI operand does too.
+IMP_CLI="$( "$BIN" "$ROOT" --impact=escapeXml --legend=full 2>/dev/null | tr '<' '\n' | grep '^impact ' | head -1 )"
 { [ -n "$IMP_CLI" ] && [ "$IMP_MCP" = "$IMP_CLI" ]; } \
     && ok "N2: an ABSENT limit/offset still gives the byte-identical un-paged answer (no over-refusal)" \
     || no "N2: the un-paged answer moved — CLI [$IMP_CLI] vs MCP [$IMP_MCP]"
 # a VALID window still works on both arms (the refusal must not have eaten the feature M4 shipped).
 V_LIVE="$( mcp_text "$( call impact '{"path":"'"$ROOT"'","symbol":"escapeXml","limit":3,"offset":2}' )" | tr '<' '\n' | grep '^impact ' | head -1 )"
-V_CLI="$( "$BIN" "$ROOT" --impact=escapeXml --limit=3 --offset=2 2>/dev/null | tr '<' '\n' | grep '^impact ' | head -1 )"
+V_CLI="$( "$BIN" "$ROOT" --impact=escapeXml --limit=3 --offset=2 --legend=full 2>/dev/null | tr '<' '\n' | grep '^impact ' | head -1 )"
 [ -n "$V_CLI" ] && [ "$V_LIVE" = "$V_CLI" ] \
     && ok "N2: a VALID limit/offset still pages byte-identically to the CLI" \
     || no "N2: a valid window regressed — CLI [$V_CLI] vs MCP [$V_LIVE]"

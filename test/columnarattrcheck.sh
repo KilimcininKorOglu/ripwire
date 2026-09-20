@@ -125,7 +125,9 @@ done
 # (the whole graph's resolver gauge; its VALUES are the sandbox's, split around like root=). Moved ONCE, deliberately.
 # RE-PINNED 2026-09-05 (capture-audit P3, lane L7): the header gained next="--uses=beta" between counts_floor= and
 # format= — the one pasteable follow-up every callers root carries (nextverb.h; the SITES of the selector). Moved ONCE.
-short="$( "$BIN" "$SBX" --callers=beta --format=columnar --limit=1 --offset=0 2>/dev/null )"
+# L1 (2026-09-19): the CLI default is the compact posture, whose root leads with schema=; this pin was recorded
+# from the full default, so the run asks for --legend=full (the pin stays byte-exact; rows identical across postures).
+short="$( "$BIN" "$SBX" --callers=beta --format=columnar --limit=1 --offset=0 --legend=full 2>/dev/null )"
 case "$short" in
     *'<callers of="beta" defs="1" count="1" hop_tested="0" hop_untested="1" root="'*'" shown="1" capped="0" total="1" has_more="0" next_offset="1" offset="0" limit="1" graph_ambiguous="'*'" graph_unresolved="'*'" counts_floor="1" next="--uses=beta" format="columnar">'*)
         ok "short-name columnar header byte-identical to the pre-fix shape (+ counts_floor, root and the hop_tested pair)" ;;

@@ -175,7 +175,9 @@ echo "=== 2. IMPORTS: Lua HAS them, as of kParserVer 81 ==="
 #
 # The fixture spells two cross-file requires (main -> greeter, greeter -> util; guarded in §0), so these
 # are real measurements and not a tautology: `<deps files="2">` names the two files that HAVE a directive.
-DEPS="$( "$BIN" "$FIX" --deps --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and hoists schema= into the root element; these arms pin the
+# full-default root prefix `<deps files=`, so this run asks for the full legend.
+DEPS="$( "$BIN" "$FIX" --deps --no-cache --legend=full 2>/dev/null )"
 echo "$DEPS" | grep -q '<deps files="2"' && ok '--deps: files="2" — require("greeter")/require("util") are Include records' \
     || no "--deps: expected files=2 on the Lua fixture: $( echo "$DEPS" | grep -o '<deps [^>]*>' )"
 echo "$DEPS" | grep -q 'dep_files="3"' && ok '--deps health: dep_files="3" — Lua IS dependency-capable (all 3 fixture files count)' \

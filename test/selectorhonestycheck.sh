@@ -166,7 +166,8 @@ grep -q -- '--edit-check=.*h\.h:helper' "$TMP/ecerr" \
     && ok "§A6a: the refusal gives one spelling as a ready-to-run example" || { no "§A6a: refusal has no runnable example"; cat "$TMP/ecerr"; }
 
 # the qualified form still WORKS, and answers about that file's contract only.
-ECQ="$( "$BIN" "$R" --edit-check=one/h.h:helper --no-cache 2>/dev/null )"; ECQ_RC=$?
+# L1 (2026-09-19): the CLI default legend is compact, whose root leads with schema=; this reads sym= as the root's first attribute, so it asks for the full legend.
+ECQ="$( "$BIN" "$R" --edit-check=one/h.h:helper --no-cache --legend=full 2>/dev/null )"; ECQ_RC=$?
 { [ "$ECQ_RC" -eq 0 ] && printf '%s' "$ECQ" | grep -q '<edit-check sym="helper"'; } \
     && ok "GUARD §A6a: the qualified file:name form proceeds (exit 0) exactly as before" \
     || { no "§A6a: --edit-check=one/h.h:helper failed (exit $ECQ_RC)"; printf '%s\n' "$ECQ" | head -c 400; }

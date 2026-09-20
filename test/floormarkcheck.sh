@@ -139,6 +139,10 @@ sys.stdout.write(m.group(0) if m else "")
 
 echo
 echo "=== (1) PRESENCE — the marker on all SEVEN graph-count roots, XML form ==="
+# L1 (2026-09-19): the CLI default legend is compact. (3) reads the FULL legend's sentences and (4) compares full with
+# full across transports, so these seven captures ask for the full legend by name; (3c) below reads the same seven at
+# the DEFAULT posture, where the floor anchor must hold too.
+cap(){ local name="$1"; shift; "$BIN" "$@" --legend=full >"$TMP/$name" 2>"$TMP/$name.err"; }
 cap callers.xml     src --callers="$SYM"
 cap callees.xml     src --callees="$SYMC"
 cap uses.xml        src --uses="$SYM"
@@ -154,6 +158,7 @@ cap graphquery.xml  src --graph-query="callers(name(\"$SYM\"),1)"
 # Pinned to HEAD~1 for the same reason legendcoveragecheck's roster is: the bare working-tree form's element
 # set depends on whether the agent running the suite has uncommitted edits, which is a flake.
 cap prcontext.xml   .   --pr-context=HEAD~1
+cap(){ local name="$1"; shift; "$BIN" "$@" >"$TMP/$name" 2>"$TMP/$name.err"; }   # back to the caller's own posture
 
 for v in callers callees uses impact editcheck graphquery prcontext; do
     ROOTTAG="$( grep -o "<[a-z-]*[^>]*$MARK_XML[^>]*>" "$TMP/$v.xml" | head -1 )"
@@ -241,6 +246,30 @@ case "$( leadComment "$TMP/impact.xml" )" in
     *"$UNIT_REACH"*) ok "(3b) impact: its unit is named as the transitive reach SET, not rows and not pairs" ;;
     *)               no "(3b) impact: the reach-SET unit is not stated" ;;
 esac
+
+# (3c) THE DEFAULT POSTURE (L1): the same seven verbs with no --legend flag. The compact dialect keeps the floor anchor
+# verbatim (compactlegend.h's counts_floor reading), so a reader of the DEFAULT answer is told the counts are floors
+# wherever the root says counts_floor="1". Red on a binary whose compact reading loses the anchor; the full-dialect
+# clauses (cause, counting unit) are --legend=full's and are asserted in (3) above.
+for v in callers callees uses impact editcheck graphquery prcontext; do
+    case "$v" in
+        callers)    set -- src --callers="$SYM" ;;
+        callees)    set -- src --callees="$SYMC" ;;
+        uses)       set -- src --uses="$SYM" ;;
+        impact)     set -- src --impact="$SYM" ;;
+        editcheck)  set -- . --edit-check="$SYM" ;;
+        graphquery) set -- src --graph-query="callers(name(\"$SYM\"),1)" ;;
+        prcontext)  set -- . --pr-context=HEAD~1 ;;
+    esac
+    cap "$v.def.xml" "$@"
+    if ! grep -q "$MARK_XML" "$TMP/$v.def.xml"; then
+        no "(3c) $v at the default posture carries no $MARK_XML — the marker must not depend on the legend posture"
+    elif grep -o '<!--.*-->' "$TMP/$v.def.xml" | grep -qF "$FLOOR_ANCHOR"; then
+        ok "(3c) $v at the default posture: $MARK_XML rides with its reading '$FLOOR_ANCHOR'"
+    else
+        no "(3c) $v at the default posture carries $MARK_XML with NO legend saying '$FLOOR_ANCHOR'"
+    fi
+done
 
 echo
 echo "=== (4) CLI ≡ MCP — the shared disclosure tail is byte-identical across transports ==="
@@ -519,8 +548,10 @@ else
         git add -A >/dev/null 2>&1
         git -c commit.gpgsign=false commit -q -m "widen every module" >/dev/null 2>&1
     )
-    FIXFULL="$( "$BIN" "$FIX" --pr-context=HEAD~1 2>/dev/null | wc -c | tr -d ' ' )"
-    "$BIN" "$FIX" --pr-context=HEAD~1 --max-tokens=600 >"$TMP/fix600.xml" 2>/dev/null
+    # L1 (2026-09-19): the fixture's size bar (> 15,000 B un-budgeted) was measured in the full legend, the old default;
+    # both sides of the shrink comparison ask for it, so the budget is judged against the same dialect it trims.
+    FIXFULL="$( "$BIN" "$FIX" --pr-context=HEAD~1 --legend=full 2>/dev/null | wc -c | tr -d ' ' )"
+    "$BIN" "$FIX" --pr-context=HEAD~1 --max-tokens=600 --legend=full >"$TMP/fix600.xml" 2>/dev/null
     FIX600="$( wc -c <"$TMP/fix600.xml" | tr -d ' ' )"
     FIXFILES="$( grep -oE '<pr-context [^>]*files="[0-9]+"' "$TMP/fix600.xml" | grep -oE 'files="[0-9]+"' | head -1 )"
 

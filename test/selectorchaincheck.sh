@@ -72,12 +72,13 @@ esac
 # ── (b) the CANONICAL CHAIN: --callers=X → pick a row (n= + p="path:line") → --expand=<p>:<n> ─────────
 # Exactly what §P8 says is impossible today. The row's p= carries a LINE, so this also exercises the
 # path:line strip inside the selector's file half.
-C="$( run --callers=rankGraphTeleport 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and spells row shapes (`<s t= n= p=>`, `<b t= …>`) inside its comment; (b)/(b2)/(b3) read/count real rows, so they ask for the full legend.
+C="$( run --callers=rankGraphTeleport --legend=full 2>/dev/null )"
 ROW="$( printf '%s' "$C" | tr '<' '\n' | grep -m1 -E '^s t=' )"
 RN="$( printf '%s' "$ROW" | grep -oE 'n="[^"]*"' | head -1 | sed 's/n="//;s/"//' )"
 RP="$( printf '%s' "$ROW" | grep -oE 'p="[^"]*"' | head -1 | sed 's/p="//;s/"//' )"
 if [ -n "$RN" ] && [ -n "$RP" ]; then
-    CH="$( run --top-k=0 "--expand=$RP:$RN" 2>/dev/null )"
+    CH="$( run --top-k=0 "--expand=$RP:$RN" --legend=full 2>/dev/null )"
     RPF="${RP%:*}"                                   # the row locator minus its :line
     { [ "$( bcnt "$CH" )" = 1 ] && printf '%s' "$CH" | grep -q "p=\"$RPF\"" && printf '%s' "$CH" | grep -q "n=\"$RN\""; } \
       && ok "(b) chain --callers=rankGraphTeleport → --expand=$RP:$RN → exactly that one def" \
@@ -87,8 +88,8 @@ else
 fi
 
 # ── (b2) an OVERLOADED name: `empty` has 3 defs; the selector must pick exactly one ───────────────────
-E_ALL="$( run --top-k=0 --expand=empty              2>/dev/null )"
-E_ONE="$( run --top-k=0 --expand=src/notes.h:empty  2>/dev/null )"
+E_ALL="$( run --top-k=0 --expand=empty --legend=full 2>/dev/null )"
+E_ONE="$( run --top-k=0 --expand=src/notes.h:empty --legend=full 2>/dev/null )"
 # RE-PINNED 2026-08-19 (R-E CORRECTION): p= is root-relative, so the "./" the crawl root used to carry
 # is gone from the row spelling. The selector passed on the command line is unchanged.
 { [ "$( bcnt "$E_ALL" )" -ge 3 ] && [ "$( bcnt "$E_ONE" )" = 1 ] && printf '%s' "$E_ONE" | grep -q 'p="src/notes.h"'; } \
@@ -96,7 +97,7 @@ E_ONE="$( run --top-k=0 --expand=src/notes.h:empty  2>/dev/null )"
   || no "(b2) overload disambiguation wrong (bare=$( bcnt "$E_ALL" ) qualified=$( bcnt "$E_ONE" ))"
 
 # ── (b3) FILE:NAME:START-END — selector AND slice compose ────────────────────────────────────────────
-S_Q="$( run --top-k=0 --expand=src/notes.h:empty:1-1 2>/dev/null )"
+S_Q="$( run --top-k=0 --expand=src/notes.h:empty:1-1 --legend=full 2>/dev/null )"
 S_P="$( run --top-k=0 --expand=empty:1-1             2>/dev/null )"
 { [ "$( bcnt "$S_Q" )" = 1 ] && printf '%s' "$S_Q" | grep -q 'lines="1-1' ; } \
   && ok "(b3) --expand=FILE:NAME:START-END slices the SELECTED def (lines=1-1, 1 body)" \
@@ -171,10 +172,14 @@ if [ -n "$BASE" ] && [ -x "$BASE" ]; then
                 "--affected=./src/graph.h" \
                 "--situ=src/graph.h"
     do
+        # L1 (2026-09-19): compare like with like. The CLI default legend became compact, so a pre-L1 base binary's
+        # default is the FULL legend: both sides ask for --legend=full on the XML forms (a pre-L1 binary accepts the
+        # flag and prints its default bytes). --situ is prose and refuses an asked posture, so it runs bare on both.
+        posture="--legend=full"; case "$args" in --situ*) posture="" ;; esac
         # shellcheck disable=SC2086
-        run     $args >"$TMP/new.out" 2>"$TMP/new.err"; nrc=$?
+        run     $args $posture >"$TMP/new.out" 2>"$TMP/new.err"; nrc=$?
         # shellcheck disable=SC2086
-        runbase $args >"$TMP/old.out" 2>"$TMP/old.err"; orc=$?
+        runbase $args $posture >"$TMP/old.out" 2>"$TMP/old.err"; orc=$?
         if ! cmp -s "$TMP/new.out" "$TMP/old.out" || [ "$nrc" != "$orc" ]; then
             no "(f) NOT byte-identical to the pre-change binary: ripwire . $args (exit $nrc vs $orc)"; bid=1
         fi

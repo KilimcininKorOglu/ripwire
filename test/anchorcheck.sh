@@ -108,7 +108,8 @@ QUERY="frobnicate widget cache"
 # ladder trimmed used to appear in neither section), and the clause defining the tail says so. Verified before
 # re-pinning: with every comment and est_tokens= normalized out, old and new documents are byte-identical —
 # this fixture's head covers every file, so its tail is unchanged and every ranking byte is unmoved.
-"$BIN" anchorfix --no-cache --for="$QUERY" --no-route >"$TMP/plain_full.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; this arm compares against a golden recorded from the full default, so it asks for it.
+"$BIN" anchorfix --no-cache --for="$QUERY" --no-route --legend=full >"$TMP/plain_full.xml" 2>/dev/null
 diff -q "$TMP/plain_full.xml" "$ROOT/test/anchorfix/golden_for.xml" >/dev/null \
     && ok "golden-neutral: plain --for --no-route byte-identical to the pre---anchor golden" \
     || no "plain --for --no-route drifted from test/anchorfix/golden_for.xml (--anchor leaked into the default lens)"
@@ -136,8 +137,9 @@ printf '%s' "$ANCH_SIGS" | grep -q 'frobnicateWidgetCache' \
     || no "anchored rank drowned the top lexical anchor — blend is broken"
 
 # ── 3) determinism + well-formed XML on the anchored bundle ───────────────────────────────────────────
-"$BIN" anchorfix --no-cache --for="$QUERY" --anchor >"$TMP/a1" 2>/dev/null
-"$BIN" anchorfix --no-cache --for="$QUERY" --anchor >"$TMP/a2" 2>/dev/null
+# L1 (2026-09-19): the EXPERIMENTAL marker below is FULL-legend prose, so both runs ask for the full legend.
+"$BIN" anchorfix --no-cache --for="$QUERY" --anchor --legend=full >"$TMP/a1" 2>/dev/null
+"$BIN" anchorfix --no-cache --for="$QUERY" --anchor --legend=full >"$TMP/a2" 2>/dev/null
 if diff -q "$TMP/a1" "$TMP/a2" >/dev/null; then ok "determinism (--for --anchor byte-identical run-to-run)"; else no "non-deterministic --anchor output"; fi
 if command -v xmllint >/dev/null 2>&1; then
     if xmllint --noout "$TMP/a1" 2>/dev/null; then ok "xml well-formed (--for --anchor)"; else no "xml malformed (--for --anchor)"; fi

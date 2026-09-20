@@ -70,7 +70,9 @@ cd "$ROOT"
 
 echo "narrowcheck: BIN=$BIN  CORPUS=test/narrowfix"
 
-"$BIN" "$FIX" --no-cache >"$TMP/map" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and spells a bare ambiguous= in its comment, which the first-match grep
+# below would read; this run (and the (25f) legend-prose run) asks for the full legend.
+"$BIN" "$FIX" --no-cache --legend=full >"$TMP/map" 2>/dev/null
 
 # ── 1) headline: exactly ONE ambiguous call remains — the untyped control. The two local-var callers
 #       (cpp g, py g) narrowed away their ambiguity entirely. ─────────────────────────────────────────
@@ -101,7 +103,7 @@ nruncpp="$( printf '%s' "$ce" | grep -o 'n="run"[^>]*cpp/recv.cpp:[0-9]*' | sort
     || { no "cpp g() has $nruncpp distinct run targets (want 2: Foo::run + Bar::run)"; printf '%s\n' "$ce" | tr '>' '\n' | grep run; }
 
 # ── 5) determinism — the binding capture + narrow must be byte-stable run-to-run. ───────────────────────
-"$BIN" "$FIX" --no-cache >"$TMP/map2" 2>/dev/null
+"$BIN" "$FIX" --no-cache --legend=full >"$TMP/map2" 2>/dev/null
 diff -q "$TMP/map" "$TMP/map2" >/dev/null \
     && ok "deterministic (narrowfix map byte-identical across two runs)" \
     || { no "non-deterministic narrowfix map"; diff "$TMP/map" "$TMP/map2" | head -6; }
@@ -320,7 +322,7 @@ expectNarrow "(24)" lookupExternal "find@lib/map.h:1"
 #        as uniquely resolved. Each carries prov="final-segment"; arm 18's unqualified narrow and a uniquely named call
 #        carry no prov=; the map legend and the compact legend define the value on the document that carries it. RED
 #        before the attribute existed: (25) rows a, b, c and both legend rows. ─────────────────────────────────────────
-"$BIN" "$VFIX" --no-cache >"$TMP/vis.map" 2>/dev/null
+"$BIN" "$VFIX" --no-cache --legend=full >"$TMP/vis.map" 2>/dev/null
 "$BIN" "$VFIX" --no-cache --legend=compact >"$TMP/vis.compact" 2>/dev/null
 provOf(){   # the prov= of caller $1's <c n="$2"> edge in map $3 (default: the VFIX map): a word, "none" when absent, NO-EDGE when missing
     local row

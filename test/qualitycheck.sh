@@ -22,7 +22,8 @@ printf 'int simple(){ return 1; }\nint useit(){ return simple(); }\n' > "$WORK/s
 cd "$WORK"                                            # so .ripwire_quality_baseline is written HERE, not in the repo
 echo "qualitycheck: BIN=$BIN  (temp corpus)"
 
-dq(){ "$BIN" . --quality-delta --no-cache 2>/dev/null; }
+# L1 (2026-09-19): the CLI default legend is compact and spells `<r kind= sym= …>` inside its comment; this reads real rows, so it asks for the full legend.
+dq(){ "$BIN" . --quality-delta --no-cache --legend=full 2>/dev/null; }
 ec(){ "$BIN" . --quality-delta --no-cache >/dev/null 2>&1; echo $?; }
 
 # ── 1) snapshot the clean state ───────────────────────────────────────────────────────────────────────

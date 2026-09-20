@@ -32,7 +32,8 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 # regardless of the caller's own working-tree dirtiness, which a bare `--test-gate` does not — this repo's
 # own worktree may carry uncommitted work while this gate runs. src/model.h is chosen because it is stable,
 # widely depended on, and unrelated to this lane's own edits (src/graphlegend.h, src/situ.h).
-"$BIN" "$ROOT" --test-gate=src/model.h >"$TMP/tg.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; every arm here budgets and reads the FULL legend, so the runs ask for it.
+"$BIN" "$ROOT" --test-gate=src/model.h --legend=full >"$TMP/tg.xml" 2>/dev/null
 grep -q '<test-gate ' "$TMP/tg.xml" || { echo "no <test-gate> in output — cannot measure"; exit 1; }
 
 read -r total legend payload <<EOF
@@ -145,7 +146,7 @@ done
 if command -v xmllint >/dev/null 2>&1; then
     if xmllint --noout "$TMP/tg.xml" 2>/dev/null; then ok "(c) well-formed XML"; else no "(c) fails xmllint"; fi
 fi
-"$BIN" "$ROOT" --test-gate=src/model.h >"$TMP/tg2.xml" 2>/dev/null
+"$BIN" "$ROOT" --test-gate=src/model.h --legend=full >"$TMP/tg2.xml" 2>/dev/null
 if diff -q "$TMP/tg.xml" "$TMP/tg2.xml" >/dev/null; then ok "(c) deterministic (byte-identical twice)"; else no "(c) differs across two runs"; fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

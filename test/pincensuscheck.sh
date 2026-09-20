@@ -48,7 +48,9 @@ echo "pincensuscheck: BIN=$BIN  CORPUS=$CORPUS"
 # This arm is deliberately about CURRENT behaviour: the locality pin emits one confident edge and does
 # not raise `amb=`. It is the documented S6-C contract; a change that alters it must come with its own
 # registered justification, and this arm is where that shows up.
-MAP="$( "$BIN" "$CORPUS" --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and its prose spells "symbols=:"; (K) reads the header
+# count by first match, so this map asks for the full legend (rows are byte-identical across postures).
+MAP="$( "$BIN" "$CORPUS" --no-cache --legend=full 2>/dev/null )"
 
 # ── THE LOOKUP IS BOUND TO ITS FILE (PR #215 review, CodeRabbit 5191303552) ────────────────────────
 # Row 6 (2026-09-12) replaced the row's path-repeating id="PATH::SCOPE::NAME" with sc="SCOPE" alone, and

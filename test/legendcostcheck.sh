@@ -3,8 +3,8 @@
 #
 # WHY. A third-party evaluation (callstack/agent-device #2400, 2026-09-08) measured ripwire as spending
 # ~10% MORE tokens than grep-and-read, and traced it to "a fixed per-call preamble, 62% of --callers'
-# whole response". That preamble is the legend, `--legend=compact` removes it, and the CLI defaults to
-# full. The information was already in --help — buried four lines into a schema description, in KB, after
+# whole response". That preamble is the legend, `--legend=compact` removes it, and the CLI defaulted to
+# full (compact is the default since L1, 2026-09-19; the saving is still measured against the full legend). The information was already in --help — buried four lines into a schema description, in KB, after
 # an MCP digression — so nobody extracted it. It now LEADS that entry, with a percentage and a claim that
 # the payload is byte-identical.
 #
@@ -58,7 +58,9 @@ for v in $VERBS; do
         affected) arg="--affected=src/wrap.h" ;;
         *)        arg="--$v=$SEL" ;;
     esac
-    "$BIN" "$ROOT" "$arg"                   >"$TMP/full" 2>/dev/null
+    # L1 (2026-09-19): the CLI default is compact now, so the saving --help advertises is measured against the full
+    # legend by name (it was the default when this gate was written).
+    "$BIN" "$ROOT" "$arg" --legend=full     >"$TMP/full" 2>/dev/null
     "$BIN" "$ROOT" "$arg" --legend=compact  >"$TMP/comp" 2>/dev/null
     [ -s "$TMP/full" ] && [ -s "$TMP/comp" ] || { fail "(0) '$arg' produced no output in one posture"; continue; }
     seen=$(( seen + 1 ))

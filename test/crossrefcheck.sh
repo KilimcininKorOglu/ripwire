@@ -314,7 +314,9 @@ if [ "$( grep -c '' "$TMP/a" )" -le 1 ]; then ok "output is minified (no stray n
 # second cap they must page past or the same fact from the other end. The legend now says which.
 legend_of(){ printf '%s' "$1" | grep -oE '<!--.*?-->' | head -1; }
 
-W1="$( "$BIN" "$R" --whereis=computeBudget --limit=1 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; §B8.2/§B12.2/§B11.2 read the FULL legend prose and count real <hit> rows
+# (the compact legend spells row shapes inside its comment), so these documents ask for the full legend.
+W1="$( "$BIN" "$R" --whereis=computeBudget --limit=1 --legend=full 2>/dev/null )"
 WLEG="$( legend_of "$W1" )"
 { printf '%s' "$WLEG" | grep -q 'TRUNCATION' && printf '%s' "$WLEG" | grep -q 'more hits=N'; } \
     && ok "§B8.2 whereis: the legend DEFINES its own <more hits=> remainder" \
@@ -347,7 +349,7 @@ g checkout -qb feat-wide
 i=1; while [ $i -le 15 ]; do printf 'int wideOnly%02d( int v ) { return v + %d; }\n' "$i" "$i" > "$R/wide$i.cpp"; i=$(( i + 1 )); done
 g add -A; g commit -qm "15 files only this branch has"
 g checkout -q main
-SW="$( "$BIN" "$R" --stray-content 2>/dev/null )"
+SW="$( "$BIN" "$R" --stray-content --legend=full 2>/dev/null )"
 SLEG="$( legend_of "$SW" )"
 { printf '%s' "$SLEG" | grep -q 'TRUNCATION' && printf '%s' "$SLEG" | grep -q 'more files=N'; } \
     && ok "§B8.2 stray-content: the legend DEFINES its own <more files=> remainder" \
@@ -372,8 +374,8 @@ fi
 # clone — all work under refs/remotes/origin/*, the standard CI and agent shape — that covers ~nothing.
 # The behavioural half is asserted first, so the clause is pinned to a FACT and not merely to its own words.
 g update-ref refs/remotes/origin/ghost-branch "$( git -C "$R" rev-parse feat-unmerged )"
-SR="$( "$BIN" "$R" --stray-content 2>/dev/null )"
-WR="$( "$BIN" "$R" --whereis=reliefFirstContourIndex 2>/dev/null )"
+SR="$( "$BIN" "$R" --stray-content --legend=full 2>/dev/null )"
+WR="$( "$BIN" "$R" --whereis=reliefFirstContourIndex --legend=full 2>/dev/null )"
 { printf '%s' "$SR" | grep -q 'ghost-branch' || printf '%s' "$WR" | grep -q 'ghost-branch'; } \
     && no "§B12.2 premise broken: a refs/remotes ref WAS scanned — the finding's factual basis changed" \
     || ok "§B12.2 behaviour: a refs/remotes/* ref is invisible to both verbs (the fact the clause discloses)"
@@ -399,7 +401,7 @@ fi
 # literal, found it nowhere, and answered hits="0" — true, useless, and byte-identical to the answer for a
 # name this repo never had. The whole point is that the two zeros must now differ; the arms below assert
 # BOTH directions, because a guard that fires on everything is as useless as one that fires on nothing.
-qz(){ "$BIN" "$R" --whereis="$1" 2>/dev/null; }
+qz(){ "$BIN" "$R" --whereis="$1" "${@:2}" 2>/dev/null; }
 note_of(){ printf '%s' "$1" | grep -oE '<selector-note [^>]*/>'; }
 
 Q="$( qz "engine.cpp:computeBudget" )"
@@ -426,7 +428,7 @@ done
 # a REAL hit must never carry the note, even when the spelling is qualified-looking.
 [ -z "$( note_of "$( qz "computeBudget" )" )" ] && ok "§B11.2 a nonzero answer never carries the note" \
                                                 || no "§B11.2 the note appeared beside real hits"
-printf '%s' "$( qz "engine.cpp:computeBudget" )" | grep -oE '<!--.*?-->' | head -1 | grep -q 'SELECTOR:' \
+printf '%s' "$( qz "engine.cpp:computeBudget" --legend=full )" | grep -oE '<!--.*?-->' | head -1 | grep -q 'SELECTOR:' \
     && ok "§B11.2 the legend defines the selector-note element it emits" \
     || no "§B11.2 selector-note is emitted and defined nowhere in the legend"
 

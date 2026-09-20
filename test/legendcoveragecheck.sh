@@ -221,6 +221,124 @@ ROSTER = [
     ("help-task",          [SMALL, "--help-task=find the code responsible for this retry timeout bug"]),
 ]
 
+# L1 (round 1 of the answer-size loop, 2026-09-19): THE CLI DEFAULT BECAME COMPACT, so a roster row that names no
+# posture would silently have become a compact row and the FULL dialect — every row this ratchet has ever recorded,
+# test/legendcoverage_baseline.txt line for line — would have lost its ratchet. So every row above is re-spelled as a
+# FULL row (the name unchanged, `--legend=full` appended: the baseline's lines keep meaning exactly what they meant,
+# and that file did not gain a line), and gets a DEFAULT TWIN, `<name>-default`, run with no posture flag at all —
+# whatever the default is today (compact) and whatever round 2 makes it.
+# THE DEFAULT TWINS HAVE NO FLOOR (L1 fix round, rv-r1-L1 HIGH-1). L1 seeded one — 269 "<row>-default" lines, called
+# descriptive attributes the compact dialect "leaves to --legend=full" — and ~25 of them were cut/floor/cap terms
+# (renames_window_truncated=, script_gates_unmodelled=, more files=, hcut=/rcut= …): the ratchet RATIFIED the gap instead
+# of closing it. Owner ruling: compact shortens the dictionary, never a meaning, so the default answer defines every
+# attribute it emits. Arm (G) below holds that with the DEFINITIONAL predicate (`name=`, arm (B)'s), not the generous
+# one, and with an empty floor: a default first screen that emits one attribute its own legend does not define fails.
+# Two kinds of row keep their spelling: a row that already names a posture (the *-compact rows, whose own lines stay theirs), and a run with
+# no XML legend (--report), which refuses an ASKED posture and has no default twin to take.
+NON_XML_ROWS = { "report" }
+def withPostureTwins( roster ):
+    out = []
+    for name, args in roster:
+        if name in NON_XML_ROWS or any( a.startswith( "--legend=" ) for a in args ):
+            out.append( ( name, args ) )
+            continue
+        out.append( ( name, args + [ "--legend=full" ] ) )
+        out.append( ( name + "-default", args ) )
+    return out
+ROSTER = withPostureTwins( ROSTER )
+
+# L1 fix round: DEFAULT-ONLY rows — verbs outside the roster above, run in the default posture alone and judged by arm (G) alone
+# (every attribute defined, no floor). They have no full twin because the full dialect's floor for them was never recorded and a
+# ratchet may only shrink; arm (G) is the contract the default owes, and these widen its reach to every verb class the review
+# probed (the expand servings, the envelopes, the trace lens, the reports with their own roots).
+open( os.path.join( TMP, "trace.txt" ), "w" ).write( "#0 0x1 in escapeXml serialize.h:147\n#1 0x2 in main main.cpp:10\n" )
+open( os.path.join( TMP, "batch.txt" ), "w" ).write( "callers escapeXml\nuses escapeXml\n" )
+# …and the STATES a clean checkout reaches that a developer's does not (rv-r1-L1-2): a DETACHED HEAD (how CI checks out:
+# --handoff says detached=), a trace whose frames are stale or outside every root, an older --pr-context base with
+# author/partner/caller rows, a --quality-delta ref pair. The detached repo is built here, so the row does not depend on
+# how this tree happens to be checked out.
+DET = os.path.join( TMP, "detached" )
+os.makedirs( os.path.join( DET, "src" ), exist_ok = True )
+open( os.path.join( DET, "src", "a.c" ), "w" ).write( "int alpha( int n ) { return n + 1; }\n" )
+gitc = [ "git", "-c", "user.email=g@example.invalid", "-c", "user.name=g" ]
+subprocess.run( [ "git", "init", "-q", DET ], capture_output = True )
+subprocess.run( gitc + [ "-C", DET, "add", "-A" ], capture_output = True )
+subprocess.run( gitc + [ "-C", DET, "commit", "-qm", "one" ], capture_output = True )
+open( os.path.join( DET, "src", "a.c" ), "a" ).write( "int beta( int n ) { return alpha( n ) * 2; }\n" )
+subprocess.run( gitc + [ "-C", DET, "commit", "-qam", "two" ], capture_output = True )
+subprocess.run( [ "git", "-C", DET, "checkout", "-q", "--detach", "HEAD" ], capture_output = True )
+CYC = os.path.join( TMP, "cycle", "src" )
+os.makedirs( CYC, exist_ok = True )
+open( os.path.join( CYC, "a.h" ), "w" ).write( '#include "b.h"\nint fa();\n' )
+open( os.path.join( CYC, "b.h" ), "w" ).write( '#include "a.h"\nint fb();\n' )
+open( os.path.join( CYC, "c.py" ), "w" ).write( 'def f():\n    import json\n    return json\n' )
+open( os.path.join( TMP, "stale.txt" ), "w" ).write( "#0 0x1 in escapeXml serialize.h:900\n#1 0x2 in emitTo main.cpp:3\n#2 0x3 in nosuch /usr/lib/x.so:1\n" )
+ROSTER += [
+    ( "handoff-detached-default", [ DET,   "--handoff" ] ),
+    ( "deps-cycle-default",       [ CYC,   "--deps" ] ),
+    ( "pr-context-wide-default",  [ ROOT,  "--pr-context=HEAD~30", "--token-budget=60000" ] ),
+    ( "stale-line-trace-default", [ SMALL, "--from-trace=" + os.path.join( TMP, "stale.txt" ), "--token-budget=4000" ] ),
+    ( "from-trace-stale-default", [ SMALL, "--from-trace=" + os.path.join( TMP, "stale.txt" ) ] ),
+    ( "pr-context-old-default",   [ ROOT,  "--pr-context=HEAD~30" ] ),
+    ( "quality-delta-refs-default", [ ROOT, "--quality-delta=HEAD~5..HEAD" ] ),
+    ( "doctor-root-default",      [ ROOT,  "--doctor" ] ),
+    ( "quality-panel-default",    [ SMALL, "--quality-panel" ] ),
+    ( "comment-coherence-default",[ SMALL, "--comment-coherence" ] ),
+    ( "dmm-default",              [ ROOT,  "--dmm=HEAD~5" ] ),
+    ( "naming-calibration-default", [ SMALL, "--naming-calibration" ] ),
+    ( "query-default",            [ SMALL, "--query=rank symbols" ] ),
+    ( "regex-default",            [ SMALL, "--regex=esc.*Xml" ] ),
+    ( "expand-split-default",     [ os.path.join( ROOT, "test", "zoomfix" ), "--expand=mathStepF1" ] ),
+]
+# TRAIN 9 (rv-r1-L1-3's LOW): six more states an all-instances probe reached and the rows above do not. Each one
+# was RED here before the readings that close it. A LAYERED tree (a directory component matching a built-in arch
+# layer) is what puts layer= on a from-trace <d> row and on the ride-along map's <f> rows; ambiguity plus a tiny
+# pack budget is the cheapest way to make --expand serve a bundle WITH that map. --handoff needs a budget that
+# actually cuts heuristic rows before budget=/withheld_rows= exist, --run-trace's <run>/<lines> record is a whole
+# element family the compact posture answers for under from-trace's key, and --field-affinity's per-cause refusals
+# and --external-surface's builtins_excluded= are nonzero only on a corpus the size of this repository.
+LAY = os.path.join( TMP, "layered" )
+for d, f, body in [ ( "render", "engine.h", '#include "math/tick.h"\nint ambFn(){ return utilTick(); }\nint engineStep(){ return ambFn(); }\n' ),
+                    ( "math",   "tick.h",   'int utilTick(){ return 1; }\nint ambFn(){ return 2; }\n' ),
+                    ( "game",   "main.cc",  '#include "render/engine.h"\nint appMain(){ return engineStep(); }\n' ) ]:
+    os.makedirs( os.path.join( LAY, d ), exist_ok = True )
+    open( os.path.join( LAY, d, f ), "w" ).write( body )
+open( os.path.join( TMP, "layered.txt" ), "w" ).write( "#0 0x1 in utilTick math/tick.h:1\n#1 0x2 in engineStep render/engine.h:3\n" )
+ROSTER += [
+    ( "handoff-budget-default",     [ ROOT, "--handoff", "--token-budget=800" ] ),
+    ( "run-trace-default",          [ SMALL, "--run-trace=echo ripwire-legend-probe" ] ),
+    ( "field-affinity-root-default",[ ROOT, "--field-affinity" ] ),
+    ( "external-surface-root-default", [ ROOT, "--external-surface" ] ),
+    ( "from-trace-layered-default", [ LAY,  "--from-trace=" + os.path.join( TMP, "layered.txt" ) ] ),
+    ( "expand-layered-map-default", [ LAY,  "--expand=ambFn", "--pack-budget-bytes=80" ] ),
+]
+ROSTER += [
+    ( "expand-bundle-default",    [ SMALL, "--expand=pageWindow" ] ),
+    ( "expand-file-default",      [ SMALL, "--expand=emitTo" ] ),
+    ( "lego-default",             [ SMALL, "--lego=Config" ] ),
+    ( "slice-default",            [ SMALL, "--slice=escapeXml" ] ),
+    ( "flags-default",            [ SMALL, "--flags" ] ),
+    ( "doctor-default",           [ ROOT,  "--doctor" ] ),
+    ( "partition-default",        [ SMALL, "--pack-task=estimate tokens", "--partition=2" ] ),
+    ( "pack-task-budget-default", [ SMALL, "--pack-task=rank symbols by pagerank", "--token-budget=1200" ] ),
+    ( "from-trace-default",       [ SMALL, "--from-trace=" + os.path.join( TMP, "trace.txt" ) ] ),
+    ( "from-trace-budget-default",[ SMALL, "--from-trace=" + os.path.join( TMP, "trace.txt" ), "--token-budget=600" ] ),
+    ( "batch-default",            [ SMALL, "--batch=" + os.path.join( TMP, "batch.txt" ) ] ),
+    ( "withheld-map-default",     [ SMALL, "--token-budget=50" ] ),
+    ( "pack-signatures-default",  [ SMALL, "--pack-signatures" ] ),
+    ( "pack-top-n-default",       [ SMALL, "--pack-top-n=2" ] ),
+    ( "lint-catalog-default",     [ SMALL, "--lint-catalog" ] ),
+    ( "skipped-default",          [ SMALL, "--skipped" ] ),
+    ( "nonlocal-state-default",   [ SMALL, "--nonlocal-state" ] ),
+    ( "field-affinity-default",   [ SMALL, "--field-affinity" ] ),
+    ( "safe-delete-default",      [ SMALL, "--safe-delete=escapeXml" ] ),
+    ( "handoff-default",          [ ROOT,  "--handoff" ] ),
+    ( "graph-query-default",      [ SMALL, "--graph-query=all" ] ),
+    ( "match-default",            [ SMALL, "--match=(function_definition)" ] ),
+    ( "verify-default",           [ SMALL, "--verify=calls(main,escapeXml)" ] ),
+    ( "impact-columnar-default",  [ SMALL, "--impact=escapeXml", "--format=columnar" ] ),
+]
+
 # the v1 core row keys, defined verbatim in every map legend and re-stated in the row dictionaries — excluded
 # so the report is about the attributes that genuinely have no home, not about the seven everyone knows.
 CORE = { "p", "n", "t", "id", "l", "k", "c" }
@@ -228,11 +346,16 @@ CORE = { "p", "n", "t", "id", "l", "k", "c" }
 LEAD = re.compile( rb'\A(?:\s*<!--.*?-->)+', re.S )
 ATTR = re.compile( rb'<([a-zA-Z][\w-]*)((?:\s+[\w:.-]+="[^"]*")*)\s*/?>' )
 
-def legendOf( doc ):
+def legendOf( doc, anyRoot = False ):
     m    = LEAD.match( doc )
     lead = m.group( 0 ) if m else b""
     rest = doc[ len( lead ): ]
-    m2   = re.match( rb'\A\s*<(?:ctx|files)\b[^>]*>((?:\s*<!--.*?-->)+)', rest, re.S )   # <ctx …><!-- legend --> wrappers; <files> = the --for file page (forpage.h)
+    # <ctx …><!-- legend --> wrappers; <files> = the --for file page (forpage.h). The DEFAULT rows (arm G) read the comments
+    # right after ANY root's open tag — where the compact layer writes the legend of a verb whose full dialect put its prose
+    # inside the root (--batch): the first thing a reader meets either way. The full rows keep the narrower read their floor
+    # was recorded with.
+    wrap = rb'[\w-]+' if anyRoot else rb'(?:ctx|files)'
+    m2   = re.match( rb'\A\s*<' + wrap + rb'\b[^>]*>((?:\s*<!--.*?-->)+)', rest, re.S )
     if m2: lead += m2.group( 1 )
     return lead.decode( 'utf-8', 'replace' )
 
@@ -249,11 +372,20 @@ for name, args in ROSTER:
     doc = subprocess.run( [ BIN ] + args, capture_output = True ).stdout
     if not doc.strip():
         silent.append( name );  table.append( ( name, 0, [], [] ) );  continue
-    legend, seen, order = legendOf( doc ), {}, []
-    for m in ATTR.finditer( doc ):
+    isDefault = name.endswith( "-default" )
+    legend, seen, order = legendOf( doc, anyRoot = isDefault ), {}, []
+    # A DEFAULT row reads EVERY instance of every element (rv-r1-L1-2: a rare conditional attribute on the second <c> row, or
+    # a row only a detached HEAD prints, escaped a first-instance sample), outside comments and CDATA. The full rows keep the
+    # first-instance window their floor was recorded with.
+    scan = re.sub( rb'<!--.*?-->', b'', re.sub( rb'<!\[CDATA\[.*?\]\]>', b'', doc, flags = re.S ), flags = re.S ) if isDefault else doc
+    for m in ATTR.finditer( scan ):
         tag = m.group( 1 ).decode()
-        if tag in seen: continue
-        seen[ tag ] = [ a.decode() for a in re.findall( rb'\s([\w:.-]+)="', m.group( 2 ) ) ]
+        attrs = [ a.decode() for a in re.findall( rb'\s([\w:.-]+)="', m.group( 2 ) ) ]
+        if tag in seen:
+            if isDefault:
+                seen[ tag ] += [ a for a in attrs if a not in seen[ tag ] ]
+            continue
+        seen[ tag ] = attrs
         order.append( tag )
     keys = sorted( { f"{tag}@{a}" for tag in order for a in seen[ tag ] if a not in CORE } )
     gm   = [ k for k in keys if not mentioned( k.split( '@', 1 )[1], legend ) ]
@@ -268,6 +400,17 @@ for name, args in ROSTER:
 
 base = { l.strip() for l in open( BASELINE, encoding = 'utf-8' )
          if l.strip() and not l.startswith( '#' ) }
+# L1 fix round: the DEFAULT rows are judged by arm (G) alone — every attribute defined (`name=`), no floor. They leave the
+# ratchet's sets, so (A)/(B) keep meaning exactly what they meant for the full dialect's rows.
+isDefaultRow  = lambda line: line.split( ' | ', 1 )[ 0 ].endswith( '-default' )
+defaultGaps   = { g for g in gapsDefined if isDefaultRow( g ) }
+defaultRows   = { e.split( ' | ', 1 )[ 0 ] for e in emitted if isDefaultRow( e ) }
+defaultKeys   = sum( 1 for e in emitted if isDefaultRow( e ) )
+gapsMentioned = { g for g in gapsMentioned if not isDefaultRow( g ) }
+gapsDefined   = { g for g in gapsDefined if not isDefaultRow( g ) }
+emitted       = { e for e in emitted if not isDefaultRow( e ) }
+if any( isDefaultRow( l ) for l in base ):
+    print( "the full dialect's floor holds <row>-default lines — the default posture has no floor", file = sys.stderr )
 
 # every list is written LINE-TERMINATED: a final line with no "\n" makes `wc -l` under-count by one, and
 # the first draft of this gate reported "0 NEW" while printing one (its own §B12.10, one file over).
@@ -280,6 +423,8 @@ writeLines( "definedby", ( base & emitted ) - gapsDefined )       # (B1) the leg
 writeLines( "gone",      base - emitted )                         # (B2) the verb no longer emits it
 writeLines( "notnested", gapsMentioned - gapsDefined )            # (D) must be empty by construction
 writeLines( "silent",    silent )
+writeLines( "defaultgaps", defaultGaps )                          # (G) fails
+with open( os.path.join( TMP, "defaultcount" ), "w" ) as f: f.write( f"{len( defaultRows )} {defaultKeys}\n" )
 closed = len( ( base & emitted ) - gapsDefined ) + len( base - emitted )
 print( f"COUNTS live={len(gapsMentioned)} baseline={len(base)} new={len(gapsMentioned-base)} "
        f"closed={closed} grey={len(grey)} silent={len(silent)}" )
@@ -315,6 +460,20 @@ if [ -s "$TMP/gone" ]; then
 fi
 if [ ! -s "$TMP/definedby" ] && [ ! -s "$TMP/gone" ]; then
     ok "(B) every baseline line still reproduces (the floor is not stale)"
+fi
+
+# (G) THE DEFAULT POSTURE DEFINES EVERYTHING IT EMITS (L1 fix round, rv-r1-L1 HIGH-1). Every <row>-default twin — the answer
+#     a caller gets without asking for a posture — must define, in its own leading legend and in the `name=` form, every
+#     attribute its first screen carries (the root and the first instance of every element). No floor. Guarded against
+#     passing emptily: the default twins must have run and emitted attributes.
+read -r nDefRows nDefKeys < "$TMP/defaultcount" 2>/dev/null || { nDefRows=0; nDefKeys=0; }
+if [ "${nDefRows:-0}" -lt 40 ] || [ "${nDefKeys:-0}" -lt 400 ]; then
+    no "(G) only ${nDefRows:-0} default rows / ${nDefKeys:-0} attributes were read — the default twins did not run, so (G) proves nothing"
+elif [ -s "$TMP/defaultgaps" ]; then
+    no "(G) $( wc -l < "$TMP/defaultgaps" | tr -d ' ' ) attribute(s) a DEFAULT answer emits with no definition (name=) in its own legend — define each in src/compactlegend.h (kCompactCompletenessTerms, key-qualified) or the verb's native compact legend:"
+    sed 's/^/          /' "$TMP/defaultgaps"
+else
+    ok "(G) every attribute the default posture emits is defined in its own legend: $nDefKeys attributes over $nDefRows default rows, no floor"
 fi
 
 # (C) the one way (A) could pass without the property holding: a roster verb that emits nothing has no
@@ -402,8 +561,12 @@ CORE = { "p", "n", "t", "id", "l", "k", "c" }
 # floor that outlives its findings is a floor nobody reads. They are gone because this dialect's rung zero no
 # longer fires on these documents: it is taken only when the drop PAYS (verbs_for.h), and in the compact dialect
 # the note was longer than the clauses it replaced, so the readings ride and close their own attributes.
-FLOOR = { "default": { "sigs@capped", "sigs@shown", "sigs@total", "tail@capped", "tail@shown", "tail@total" },
-          "compact": set() }
+# L1: "default" named the FULL dialect until the CLI default became compact; the dialect is now asked for by name, and
+# its floor moved with it unchanged. The default posture is checked as its own row with the floor of the dialect it
+# resolves to (compact today), so a default that changes cannot inherit a floor written for another dialect.
+FLOOR = { "full":    { "sigs@capped", "sigs@shown", "sigs@total", "tail@capped", "tail@shown", "tail@total" },
+          "compact": set(),
+          "default": set() }
 
 LEAD = re.compile( rb'\A(?:\s*<!--.*?-->)+', re.S )
 ATTR = re.compile( rb'<([a-zA-Z][\w-]*)((?:\s+[\w:.-]+="[^"]*")*)\s*/?>' )
@@ -431,7 +594,7 @@ def attrsOf( d ):
     return order, seen
 
 bad, checked, entered, left, census = [], 0, [], [], []
-for dialect, extra in ( ( "default", [] ), ( "compact", [ "--legend=compact" ] ) ):
+for dialect, extra in ( ( "full", [ "--legend=full" ] ), ( "compact", [ "--legend=compact" ] ), ( "default", [] ) ):
     dt          = doc( [ SMALL, QUERY, TIGHT ] + extra )
     tight, wide = legendOf( dt ), legendOf( doc( [ SMALL, QUERY, WIDE ] + extra ) )
     mt, mw      = NOTE.search( tight ), NOTE.search( wide )

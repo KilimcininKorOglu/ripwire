@@ -121,7 +121,9 @@ runw --note-add="$PID: watch integer overflow when raw is INT_MAX" >/dev/null
 GIT_DATE="$( cd "$WORK" && git log -1 --format=%cs HEAD )"
 
 BUN="$TMP/bundle.xml"
-runw --pack-task="parse budget planner decoy" > "$BUN"
+# L1 (2026-09-19): the CLI default legend is compact — it spells <callers ...>/<sigs ...> inside its comment and omits the full
+# legend's per-section truncation prose; the bundle/tiny/lens arms read real sections and that prose, so they ask for the full legend.
+runw --pack-task="parse budget planner decoy" --legend=full > "$BUN"
 
 # section presence
 for tag in "<sigs" "<bodies " "<callers " "<notes " "<tests "; do
@@ -208,7 +210,7 @@ if { [ "$D1" = "$D2" ] && [ "$D2" = "$D3" ]; }; then ok "bundle is deterministic
 # still degrade to fully absent (that is THEIR own, separately-scoped defect — not this item), so this arm
 # only tightens the <bodies> assertion, from "absent" to "present with shown=0/capped=1/the true total".
 TINY="$TMP/tiny.xml"
-"$BIN" "$ROOT/src" --no-cache --pack-task="serialize signatures budget" --token-budget=50 > "$TINY" 2>/dev/null
+"$BIN" "$ROOT/src" --no-cache --pack-task="serialize signatures budget" --token-budget=50 --legend=full > "$TINY" 2>/dev/null
 if grep -qF '<sigs' "$TINY" \
    && grep -qE '<bodies shown="0" total="[1-9][0-9]*" capped="1"></bodies>' "$TINY" \
    && ! grep -qF '<callers ' "$TINY" && ! grep -qF '<tests ' "$TINY" \
@@ -270,7 +272,7 @@ lens_evidence(){                               # the four-way discriminator, pri
     return 0
 }
 FOR_RC="$(  run_lens forlens  --for="$Q" )"
-PACK_RC="$( run_lens packlens --pack-task="$Q" )"
+PACK_RC="$( run_lens packlens --pack-task="$Q" --legend=full )"
 FOR_TOPF="$(  top_file "$TMP/forlens.xml" )"
 PACK_TOPF="$( top_file "$TMP/packlens.xml" )"
 if [ "$FOR_RC" -ne 0 ] || [ "$PACK_RC" -ne 0 ]; then

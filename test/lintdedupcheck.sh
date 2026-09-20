@@ -32,7 +32,8 @@ echo "lintdedupcheck: BIN=$BIN  FIXTURE=$FIXTURE"
 # ── 1) minimal fixture: the repeated-value line must yield exactly ONE row, not two ─────────────
 # cd into the fixture/root so p= comes out root-relative ("./dup.cpp", "./bench/...") — matches
 # the shape the reported bug was described in, and keeps this script location-independent.
-( cd "$FIXTURE" && "$BIN" . --lint --no-cache >"$TMP/fixture_out" 2>"$TMP/fixture_err" )
+# L1 (2026-09-19): the CLI default legend is compact and spells row shapes (<f rule=) inside its comment; arm 3 counts real rows, so this run asks for the full legend.
+( cd "$FIXTURE" && "$BIN" . --lint --no-cache --legend=full >"$TMP/fixture_out" 2>"$TMP/fixture_err" )
 FIX_RC=$?
 if [ "$FIX_RC" -eq 0 ]; then ok "--lint exits 0 on fixture"; else no "--lint exited $FIX_RC on fixture"; fi
 

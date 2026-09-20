@@ -308,8 +308,10 @@ for V in pack-task; do
     SEEN=0
     BAD=0
     for B in 1200 1600 2000; do
-        "$BIN" "$CORPUS" --no-cache "--$V=shape the bundle"          --token-budget=$B >"$TMP/p.s" 2>/dev/null
-        "$BIN" "$CORPUS" --no-cache "--$V=$( cat "$TMP/task.long" )" --token-budget=$B >"$TMP/p.l" 2>/dev/null
+        # L1 (2026-09-19): the CLI default legend is compact; the binding test below reads the full header's cut notes
+        # ("ranking: capped", "kept N of", "omitted (budget)"), which the compact dialect does not print, so it asks for them.
+        "$BIN" "$CORPUS" --no-cache "--$V=shape the bundle"          --token-budget=$B --legend=full >"$TMP/p.s" 2>/dev/null
+        "$BIN" "$CORPUS" --no-cache "--$V=$( cat "$TMP/task.long" )" --token-budget=$B --legend=full >"$TMP/p.l" 2>/dev/null
         # BINDING = the short task's own header already discloses a cut. Without that, this budget proves
         # nothing: an uncapped bundle has no payload to repay the header's growth from.
         hdr "$TMP/p.s" | grep -qE 'ranking: capped|kept [0-9]+ of|omitted \(budget\)' || continue
@@ -384,7 +386,9 @@ ECHO_RUNG_SEEN=0
 ECHO_RUNG_BAD=0
 for B in 900 1100 1200 1400 1600 1800 2000; do
     for V in for pack-task; do
-        "$BIN" "$CORPUS" --no-cache "--$V=$T" --token-budget=$B >"$TMP/l.out" 2>/dev/null
+        # L1: the task_echo rung drops the header COMMENT's echo of the task, which only the full legend prints (the compact
+        # dialect never echoes it), so the rung is observable — and this arm meaningful — in the full dialect.
+        "$BIN" "$CORPUS" --no-cache "--$V=$T" --token-budget=$B --legend=full >"$TMP/l.out" 2>/dev/null
         hdr "$TMP/l.out" | grep -q 'task_echo: dropped' || continue
         ECHO_RUNG_SEEN=$(( ECHO_RUNG_SEEN + 1 ))
         # the verbatim copy must survive the drop of its scrubbed twin

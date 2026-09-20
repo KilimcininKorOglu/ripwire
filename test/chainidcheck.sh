@@ -53,8 +53,9 @@ else no "id + range did not slice (the :: was probably eaten as a range separato
 
 # 4) consumer -> producer: the pre-existing forms are untouched (this change must be purely additive).
 NAME="${ID##*::}"
-if "$BIN" . "--callers=$NAME"  2>/dev/null | grep -q "<callers of=\"$NAME\""; then ok "bare name still resolves"; else no "bare-name resolution regressed"; fi
-if "$BIN" . --callers="serialize.h:$NAME" 2>/dev/null | grep -q '<callers of='; then ok "file:name still resolves"; else no "file:name disambiguation regressed"; fi
+# L1 (2026-09-19): the CLI default legend is compact, whose root tag leads with schema=; these arms pin the full default's `<callers of=` spelling, so they ask for it.
+if "$BIN" . "--callers=$NAME" --legend=full 2>/dev/null | grep -q "<callers of=\"$NAME\""; then ok "bare name still resolves"; else no "bare-name resolution regressed"; fi
+if "$BIN" . --callers="serialize.h:$NAME" --legend=full 2>/dev/null | grep -q '<callers of='; then ok "file:name still resolves"; else no "file:name disambiguation regressed"; fi
 
 # 5) a malformed range on a NON-id token must still degrade loudly to whole-body (the old contract).
 #    REPINNED (§P8 seam 1, 2026-07-28): a tail that does NOT start with a digit is now a file:name selector

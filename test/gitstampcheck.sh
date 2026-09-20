@@ -170,7 +170,9 @@ case "$rroot" in
 esac
 
 # --map-diff DOES stamp <r>: it already shells out to git for the diff itself
-out="$( "$BIN" "$R" --map-diff --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default is the compact posture, whose root leads with schema=; this arm reads the
+# full-posture `<r at=` shape positionally, so it asks for --legend=full (rows identical across postures).
+out="$( "$BIN" "$R" --map-diff --no-cache --legend=full 2>/dev/null )"
 case "$out" in
     *"<r at=\"$SHA9"*) ok "map-diff: <r at=\"$SHA9...\"> stamped" ;;
     *)                 no "map-diff: <r> was not stamped"; echo "$out" | grep -o '<r[^>]*>' ;;

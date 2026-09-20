@@ -285,6 +285,10 @@ def run_verb_suite(binary_path, corpus_path):
 
     all_legends = []
     for verb_args in verbs_to_test:
+        # L1 (2026-09-19): the CLI default legend is compact (it spells attribute shapes like defs=N); this suite reads
+        # the FULL legend's prose, so each XML verb asks for it. --situ is prose and refuses --legend=full.
+        if verb_args != ["--situ"]:
+            verb_args = verb_args + ["--legend=full"]
         xml_output, err = run_ripwire_verb(binary_path, corpus_path, verb_args)
         if err:
             # Non-fatal: some verbs might fail, continue with others

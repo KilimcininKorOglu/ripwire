@@ -116,7 +116,9 @@ while IFS='|' read -r label elem cliargs mcpcall batchq; do
     [ -z "$label" ] && continue
     # eval, not word-splitting: one of these probes passes a task STRING with spaces, and $cliargs
     # unquoted would split it into three arguments and silently probe something else.
-    eval "\"$BIN\" \"$ROOT\" $cliargs" 2>/dev/null >"$TMP/$label.cli"
+    # L1 (2026-09-19): the CLI default legend is compact (a schema= root attr, and pseudo-tags like <iface n= p=> in
+    # its comment); every MCP twin here asks legend:"full", so the CLI operand asks for the full legend too.
+    eval "\"$BIN\" \"$ROOT\" $cliargs --legend=full" 2>/dev/null >"$TMP/$label.cli"
     mcp_text "$mcpcall" >"$TMP/$label.live"
     A_CLI="$( attrs "$elem" "$TMP/$label.cli" )"
     A_LIVE="$( attrs "$elem" "$TMP/$label.live" )"
@@ -229,7 +231,7 @@ PY
 
 # grep: the CLI's XML root attributes vs the MCP JSON's header keys. The two spellings are deliberately
 # different in FORM (attributes vs keys) but must cover the same FACTS, so the comparison is over names.
-"$BIN" "$ROOT" --grep=pageDisclosure >"$TMP/grep.cli" 2>/dev/null
+"$BIN" "$ROOT" --grep=pageDisclosure --legend=full >"$TMP/grep.cli" 2>/dev/null
 mcp_text "$( call grep '{"path":"'"$ROOT"'","pattern":"pageDisclosure"}' )" >"$TMP/grep.mcp"
 python3 - "$TMP/grep.cli" "$TMP/grep.mcp" <<'PY' >"$TMP/grep.res" 2>&1
 import json, re, sys
@@ -258,7 +260,7 @@ echo "=== LENS 3 — shared-legend clauses present on BOTH surfaces ==="
 # The phrase is quoted from the CLI, so the gate can never pass because BOTH surfaces lost the clause.
 while IFS='|' read -r label phrase cliargs mcpcall; do
     [ -z "$label" ] && continue
-    eval "\"$BIN\" \"$ROOT\" $cliargs" 2>/dev/null >"$TMP/l3.cli"
+    eval "\"$BIN\" \"$ROOT\" $cliargs --legend=full" 2>/dev/null >"$TMP/l3.cli"
     mcp_text "$mcpcall" >"$TMP/l3.mcp"
     grep -qF "$phrase" "$TMP/l3.cli" || { no "LENS3 $label: the CLI itself no longer states \"$phrase\" — the gate's anchor moved, re-derive it"; continue; }
     grep -qF "$phrase" "$TMP/l3.mcp" \
@@ -303,7 +305,9 @@ echo "=== LENS 4 — hedges present in the CLI legend must appear (reworded) in 
 while IFS='|' read -r verb corpus cliargs cliphrase descphrase; do
     [ -z "$verb" ] && continue
     case "$corpus" in .) corpusDir="$ROOT" ;; SFIX) corpusDir="$SFIX" ;; *) no "LENS4 $verb: unknown corpus column '$corpus'"; continue ;; esac
-    eval "\"$BIN\" \"$corpusDir\" $cliargs" 2>/dev/null >"$TMP/l4.cli"
+    # the anchor phrase lives in the FULL legend; --recall is prose and refuses --legend=full.
+    case "$cliargs" in --recall=*) lf="" ;; *) lf="--legend=full" ;; esac
+    eval "\"$BIN\" \"$corpusDir\" $cliargs $lf" 2>/dev/null >"$TMP/l4.cli"
     grep -qF "$cliphrase" "$TMP/l4.cli" || { no "LENS4 $verb: the CLI itself no longer states \"$cliphrase\" — the gate's anchor moved, re-derive it"; continue; }
     D="$( desc_of "$verb" )"
     printf '%s' "$D" | grep -qF "$descphrase" \

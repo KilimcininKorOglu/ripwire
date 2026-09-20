@@ -39,7 +39,9 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 echo "gateabilitycheck: BIN=$BIN  CORPUS=$CORPUS"
 
 # ── plain --doc-drift: no gateability block at all, and the repo-wide tallies are what the fixture pins ──
-plain="$( "$BIN" "$CORPUS" --doc-drift --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default is the compact posture, whose root leads with schema=; the tallies pin below
+# reads the full-posture `<doc-drift docs=` shape, so this run asks for --legend=full (rows identical).
+plain="$( "$BIN" "$CORPUS" --doc-drift --no-cache --legend=full 2>/dev/null )"
 case "$plain" in
     *'<gateability'*) no "bare --doc-drift emitted a <gateability> block — should require the flag" ;;
     *)                ok "bare --doc-drift: no <gateability> block" ;;

@@ -95,7 +95,8 @@ int orphan( void ) { return 3; }
 EOF
 
 echo "== P2.1 silent truncation: --impact =="
-"$BIN" "$SRC" --impact=leaf > "$TMP/impact.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; these arms count real rows ('<s ', '<m ', '<hit '), and the compact legend spells those row shapes inside its comment, so they ask for the full legend.
+"$BIN" "$SRC" --impact=leaf --legend=full > "$TMP/impact.xml" 2>/dev/null
 rch="$( attr "$TMP/impact.xml" reaches )"; shw="$( attr "$TMP/impact.xml" shown )"; cap="$( attr "$TMP/impact.xml" capped )"
 rows="$( grep -o '<s ' "$TMP/impact.xml" | wc -l | tr -d ' ' )"
 if [ "$rch" = "60" ]; then ok "--impact reaches=60 (true blast radius)"; else no "--impact reaches='$rch' (want 60)"; fi
@@ -121,14 +122,14 @@ if has "$TMP/impact.col" 'shown="40"'; then ok "--impact --format=columnar carri
 if has "$TMP/impact.col" 'capped="1"'; then ok "--impact --format=columnar carries capped"; else no "--impact columnar lost capped"; fi
 
 echo "== P2.1 silent truncation: --match / --grep / --seams / --external-surface =="
-"$BIN" "$SRC" --match='(call_expression function: (identifier) @f)' --pack-top-n=5 > "$TMP/match.xml" 2>/dev/null
+"$BIN" "$SRC" --match='(call_expression function: (identifier) @f)' --pack-top-n=5 --legend=full > "$TMP/match.xml" 2>/dev/null
 mh="$( attr "$TMP/match.xml" hits )"; ms="$( attr "$TMP/match.xml" shown )"; mc="$( attr "$TMP/match.xml" capped )"
 mrows="$( grep -o '<m ' "$TMP/match.xml" | wc -l | tr -d ' ' )"
 [ -n "$mh" ] && [ "$ms" = "5" ] && [ "$mc" = "1" ] && [ "$mrows" = "5" ] \
     && ok "--match hits=$mh shown=5 capped=1 over 5 rows" || no "--match hits='$mh' shown='$ms' capped='$mc' rows=$mrows"
 if has "$TMP/match.xml" 'hits_capped='; then ok "--match reports hits_capped (hits= floor vs total)"; else no "--match has no hits_capped"; fi
 
-"$BIN" "$SRC" --grep=leaf --pack-top-n=4 > "$TMP/grep.xml" 2>/dev/null
+"$BIN" "$SRC" --grep=leaf --pack-top-n=4 --legend=full > "$TMP/grep.xml" 2>/dev/null
 gh="$( attr "$TMP/grep.xml" hits )"; gs="$( attr "$TMP/grep.xml" shown )"; gc="$( attr "$TMP/grep.xml" capped )"
 grows="$( grep -o '<hit ' "$TMP/grep.xml" | wc -l | tr -d ' ' )"
 [ "$gs" = "4" ] && [ "$gc" = "1" ] && [ "$grows" = "4" ] \
@@ -366,7 +367,8 @@ if grep -q '<r[ >]' "$TMP/def1.xml"; then ok "default map still the bare, UNWRAP
 
 # the hard G5 proof: the committed golden for test/fixture must still match byte-for-byte.
 if [ -f "$ROOT/test/golden.xml" ]; then
-    ( cd "$ROOT" && "$BIN" test/fixture --no-cache > "$TMP/gold.now" 2>/dev/null )
+    # L1 (2026-09-19): the CLI default legend is compact; test/golden.xml was recorded from the full default, so this run asks for it.
+    ( cd "$ROOT" && "$BIN" test/fixture --no-cache --legend=full > "$TMP/gold.now" 2>/dev/null )
     cmp -s "$TMP/gold.now" "$ROOT/test/golden.xml" && ok "test/golden.xml still byte-identical (default output unchanged)" \
                                                   || no "test/golden.xml DIFFERS — the default map changed"
 fi
@@ -415,6 +417,7 @@ cli.h|always carries|1
 cli.h|never dropped|2
 cli.h|never suppressed|1
 cli.h|prints even at 0|1
+compactlegend.h|never dropped|1
 handoff.h|never dropped|1
 ingest_astquery.h|never suppressed|1
 landingplan.h|always printed|1
@@ -492,14 +495,15 @@ else
     fi
 fi
 # the claim itself must still be printed, or (Z2a) is asserting against nothing
-"$BIN" "$ZSB" --grep=ZEROMARK_probe --no-cache 2>/dev/null | grep -q 'always EMITTED, never suppressed' \
+# L1 (2026-09-19): the CLI default legend is compact; the (Z2a)/(Z2h) presence guards read the FULL legend's prose, so they ask for it.
+"$BIN" "$ZSB" --grep=ZEROMARK_probe --no-cache --legend=full 2>/dev/null | grep -q 'always EMITTED, never suppressed' \
     && ok "(Z2a) presence guard: the legend clause under test is still printed by the verb" \
     || no "(Z2a) presence guard: --grep no longer prints the 'always EMITTED, never suppressed' clause"
 
 # ── (Z2h) regex_lines_skipped= — "(regex only, always present)" ─────────────────────────────────────
 # The long-line count is the proof that no line was kept from the regex engine, so "0" must ride; absence would read
 # equally as "none skipped" and "the emitter dropped it".
-"$BIN" "$ZSB" --regex='ZEROMARK_probe' --no-cache >"$TMP/z2h.xml" 2>/dev/null
+"$BIN" "$ZSB" --regex='ZEROMARK_probe' --no-cache --legend=full >"$TMP/z2h.xml" 2>/dev/null
 zRegexRoot="$( grep -o '<grep [^>]*>' "$TMP/z2h.xml" | head -1 )"
 if [ -z "$zRegexRoot" ]; then
     no "(Z2h) presence guard: --regex produced no <grep> root on the zero corpus — the probe is inert"
@@ -603,6 +607,29 @@ for k in lego_total compose_total routes_total; do
 done
 [ -z "$zMissing" ] && ok "(Z2f) --for --json: lego_total/compose_total/routes_total all ride at 0" \
                    || no "(Z2f) --for --json dropped at zero:$zMissing"
+
+# ── (Z2i) --handoff verified rows — "verified rows are never dropped" (handoff.h, and TRAIN 9's compact
+#     reading of withheld_rows= in compactlegend.h, which restates the same promise in the DEFAULT posture) ──
+# The claim is about what a BUDGET may not take, so the probe has to make the budget bite: an unbudgeted run
+# gives the verified row count, and a budget small enough to set withheld="1" must leave that count identical.
+# Asserted in the default posture, which is where a reader now meets the claim.
+"$BIN" "$ROOT" --handoff --no-cache > "$TMP/zho.xml" 2>/dev/null
+"$BIN" "$ROOT" --handoff --token-budget=400 --no-cache > "$TMP/zhb.xml" 2>/dev/null
+zHoV="$( tr '<' '\n' < "$TMP/zho.xml" | sed -n '/^verified/,/^\/verified/p' | grep -c '^[a-z]' )"
+zHbV="$( tr '<' '\n' < "$TMP/zhb.xml" | sed -n '/^verified/,/^\/verified/p' | grep -c '^[a-z]' )"
+zHbRoot="$( grep -o '<handoff [^>]*>' "$TMP/zhb.xml" | head -1 )"
+if [ -z "$zHbRoot" ] || [ "$zHoV" -lt 2 ]; then
+    no "(Z2i) presence guard: --handoff produced no root or no verified rows here — the probe is inert"
+elif ! printf '%s' "$zHbRoot" | grep -q 'withheld="1"'; then
+    no "(Z2i) presence guard: --token-budget=400 did not make the budget bite (no withheld=\"1\") — the probe proves nothing"
+elif [ "$zHoV" = "$zHbV" ]; then
+    ok "(Z2i) --handoff: the budget withheld heuristic rows and left all $zHoV verified rows, as both legends promise"
+else
+    no "(Z2i) --handoff DROPPED verified rows under a budget ($zHoV -> $zHbV) while its legend says they are never dropped"
+fi
+grep -q 'verified rows are never dropped' "$TMP/zhb.xml" \
+    && ok "(Z2i) presence guard: the default posture still prints the clause under test" \
+    || no "(Z2i) presence guard: the default --handoff legend no longer prints the never-dropped clause"
 
 [ "$fail" = "0" ] && { echo "ALL PASS"; exit 0; }
 echo "FAILURES PRESENT"; exit 1

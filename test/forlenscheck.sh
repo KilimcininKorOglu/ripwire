@@ -44,7 +44,8 @@ LEAK="$( printf '%s' "$PS" | grep -oE ' (churn|clone|amp|tested)="[^"]*"' | head
 if [ -z "$LEAK" ]; then ok "golden-neutral: --pack-signatures carries no lens attr (lens is --for-only)"; else no "lens attr leaked into --pack-signatures: $LEAK"; fi
 # the default map must be byte-identical to the committed golden (the authoritative golden-neutral check).
 if [ -f "$ROOT/test/golden.xml" ]; then
-    "$BIN" test/fixture --no-cache 2>/dev/null | diff -q - "$ROOT/test/golden.xml" >/dev/null \
+    # L1 (2026-09-19): the CLI default legend is compact; test/golden.xml was recorded from the full default, so this arm asks for it.
+    "$BIN" test/fixture --no-cache --legend=full 2>/dev/null | diff -q - "$ROOT/test/golden.xml" >/dev/null \
         && ok "golden-neutral: default map byte-identical to test/golden.xml" \
         || no "default map drifted from golden.xml (Q3 leaked into the default map)"
 else

@@ -131,7 +131,9 @@ grep -q '<ctx [^>]*margin_pct="[0-9]*"' "$TMP/for_p.xml" \
 grep -Eq 'confidence=[^"]' "$TMP/for_p.xml" && grep -Eq 'margin_pct=[^"]' "$TMP/for_p.xml" \
     && ok "the legend defines confidence=/margin_pct= (name-followed-by-= house shape)" \
     || no "the legend does not define confidence=/margin_pct="
-grep -q 'starting point, not an answer' "$TMP/for_p.xml" \
+# L1 (2026-09-19): the CLI default legend is compact; this arm reads the FULL legend's honesty sentence, so it asks for it.
+"$BIN" "$CORPUS" --for=computeArea --no-cache --legend=full >"$TMP/for_p_full.xml" 2>/dev/null
+grep -q 'starting point, not an answer' "$TMP/for_p_full.xml" \
     && ok "the legend says what LOW means (flat ranking, starting point not answer)" \
     || no "the legend is missing the low-confidence honesty sentence"
 

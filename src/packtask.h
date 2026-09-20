@@ -18,6 +18,7 @@
 #include "graph.h"
 #include "graphlegend.h"   // R-E fix (2026-08-19): rw::rootRelPathsLegend — the ONE root= definition
 #include "lexical.h"       // RouteAnchorDef — the resolved form of the route's own `anchors:` clause
+#include "compactlegend.h"   // L1 fix round: compactDeliveredBytes — the ceiling ladder at the delivered price
 #include "serialize.h"     // packSignatures / packBodies / escapeXml / kMinBytesPerToken / kBudgetHeadroom
 #include "redact.h"
 #include "notes.h"
@@ -545,6 +546,12 @@ struct PackTaskInputs
     // Where this bundle's section renders record a failure (see PackTaskRenderFaults). packTaskBundleText points it at
     // its own local; nullptr ⇒ a render failure is still returned as empty text, just not recorded.
     PackTaskRenderFaults*              renderFaults         = nullptr;
+
+    // L1 fix round (rv-r1-L1 MED-4): the run's legend posture is compact, so the ceiling ladder's rungs (drop the task echo,
+    // then route=, then label over_ceiling) are judged on the bytes the compact layer DELIVERS — the task echo lives in the
+    // prose the layer strips, and dropping it for a full-dialect price cut a fact the compact answer had room for. The
+    // section shares are unchanged (their reserve is posture-free), so rows(default) == rows(full) here.
+    bool                               compactLegend = false;
 
     // R-E (2026-08-17 harvest): the single-root run's OWN root argument — same convention serialize()'s
     // rootArg takes (empty ⇒ multi-root, or a caller that never resolved one, e.g. an MCP call against a
@@ -2005,7 +2012,27 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
             return attrs;
         };
         const std::size_t             rootAttrsBound = rootAttrsFor( whole, /*lastRungFired=*/true ).size();
-        const rw::CeilingLadderChoice chosen = climbCeilingLadder( buildHeader, headerStr,
+        // L1 fix round: under the compact posture a rung fits when the DELIVERED document does — the candidate header plus
+        // the rendered sections, its widest root attributes spliced, compacted by the layer that will print it.
+        const std::string restOfWhole = in.compactLegend ? whole.substr( headerStr.size() ) : std::string();
+        const auto deliveredFits = [ & ]( std::size_t ceiling )
+        {
+            return [ &, ceiling ]( std::string_view header )
+            {
+                std::string candidate = std::string( header ) + restOfWhole;
+                rw::spliceRootAttrs( candidate, rootAttrsFor( candidate, /*lastRungFired=*/true ) );
+                const std::size_t delivered = rw::compactDeliveredBytes( candidate, "pack-task" );
+                return ( delivered > 0 ? delivered : candidate.size() ) + in.trailingSectionBytes <= ceiling;
+            };
+        };
+        // The FREE rung (drop the task echo) buys nothing here: the echo lives in prose the compact layer never delivers, so
+        // judging the as-built header at the exact ceiling would take a rung whose note claims a drop the reader cannot
+        // see. Under the compact posture the as-built answer stands when it fits the allowance; route= (a delivered root
+        // attribute) and the over_ceiling rung keep their meaning (compactlegendcheck (FX4)).
+        const rw::CeilingLadderChoice chosen = in.compactLegend && !in.innerBundle
+            ? rw::climbCeilingLadderBy( buildHeader, headerStr, deliveredFits( rw::ceilingAllowanceBytes( budgetTokens ) ),
+                                        deliveredFits( rw::ceilingAllowanceBytes( budgetTokens ) ), /*hasRouteAttr=*/!lr.routeNote.empty(), kNotes )
+            : climbCeilingLadder( buildHeader, headerStr,
                                                                    whole.size() - headerStr.size() + in.trailingSectionBytes + rootAttrsBound,
                                                                    // TWO CEILINGS (PR #215 review item 1). This root labels itself
                                                                    // over_ceiling="1" on `estTokens > budgetTokens` — priced at

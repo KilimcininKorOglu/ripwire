@@ -216,7 +216,8 @@ printf '%s' "$graph_out" | grep -q 'mermaid' \
 # M16 — the honouring side of the four. --lint --naming-locals still fires AND the modifier is STAMPED on the
 # root (naming_locals="1"), the way --lint-select stamps selected=/select=: lens 0 measured 3717 -> 4898
 # findings with no attribute saying why. Plain --lint must not carry the stamp.
-"$BIN" "$SRC" --lint --naming-locals --no-cache >"$TMP/nl.xml" 2>"$TMP/nl.err"; rcNL=$?
+# L1 (2026-09-19): the CLI default legend is compact; the legend arm below reads the FULL legend's naming_locals= clause, so it asks for it.
+"$BIN" "$SRC" --lint --naming-locals --no-cache --legend=full >"$TMP/nl.xml" 2>"$TMP/nl.err"; rcNL=$?
 { [ "$rcNL" -eq 0 ] && grep -qE '<lint [^>]*naming_locals="1"' "$TMP/nl.xml"; } \
     && ok "--lint --naming-locals: exits 0 and the <lint> root carries naming_locals=\"1\"" \
     || no "--lint --naming-locals: exit $rcNL, or the root does not stamp naming_locals=\"1\": $( grep -oE '<lint [^>]*>' "$TMP/nl.xml" | head -c 200 ) $( head -1 "$TMP/nl.err" )"

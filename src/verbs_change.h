@@ -569,7 +569,7 @@ std::optional<int> runChangeViews( const MainDispatch& d )
         // P4 (L7): budgeted BY DEFAULT (kPrDefaultBudgetTokens); --token-budget / --max-tokens set the ceiling explicitly.
         const rw::PrBudget prBudget{ cfg.tokenBudget > 0 ? std::size_t( cfg.tokenBudget )
                                    : cfg.maxTokens > 0  ? std::size_t( cfg.maxTokens ) : rw::kPrDefaultBudgetTokens,
-                                     cfg.tokenBudget == 0 && cfg.maxTokens == 0, cfg.pageLimit, cfg.pageOffset };
+                                     cfg.tokenBudget == 0 && cfg.maxTokens == 0, cfg.pageLimit, cfg.pageOffset, cfg.legend == "compact" };
         return rw::writePrContext( stdout, root, ing, g, pcm.mask, baseLabel, pcm.skippedModeOnly, prBudget,
                                     UINT32_MAX, std::string_view(), pcm );
     }
@@ -677,6 +677,7 @@ std::optional<int> runFromTrace( const MainDispatch& d )
     in.bundleBudgetBytes = cfg.tokenBudget > 0 ? rw::budgetBytesForTokens( std::size_t( cfg.tokenBudget ) )
                                                : rw::kForPayloadBudgetBytes;
     in.budgetTokens      = cfg.tokenBudget > 0 ? std::size_t( cfg.tokenBudget ) : 0;   // M11: budget_tokens= on the root
+    in.compactLegend     = cfg.legend == "compact";                                   // L1 fix round: trim at the delivered price
     in.sigLadderBudgetBytes = cfg.packBudgetBytes;
     in.bodyBudgetBytes      = cfg.maxTokens > 0 ? rw::budgetBytesForTokens( std::size_t( cfg.maxTokens ) )
                                                 : cfg.packBudgetBytes;
@@ -1132,6 +1133,7 @@ std::optional<int> runRunTrace( const MainDispatch& d )
     in.bundleBudgetBytes = cfg.tokenBudget > 0 ? rw::budgetBytesForTokens( std::size_t( cfg.tokenBudget ) )
                                                : rw::kForPayloadBudgetBytes;
     in.budgetTokens      = cfg.tokenBudget > 0 ? std::size_t( cfg.tokenBudget ) : 0;   // M11: budget_tokens= on the root
+    in.compactLegend     = cfg.legend == "compact";                                   // L1 fix round: trim at the delivered price
     in.sigLadderBudgetBytes = cfg.packBudgetBytes;
     in.bodyBudgetBytes      = cfg.packBudgetBytes;
     in.compress = cfg.compress;

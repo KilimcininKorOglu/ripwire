@@ -41,7 +41,9 @@ echo "grepcontextcheck: BIN=$BIN  CORPUS=$CORPUS"
 
 # ── (1) --grep-context=2 on the mid-file hit: exactly 2 before + 2 after ───────────────────────────
 
-"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_MID_ONCE --grep-context=2 >"$TMP/mid" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and spells <b>/<a> inside its comment; arms (1)-(5) grep for real
+# <b>/<a> children (and (4) compares the <b>/<a> spans of mid vs before/after-only), so those runs ask for the full legend.
+"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_MID_ONCE --grep-context=2 --legend=full >"$TMP/mid" 2>/dev/null
 
 grep -q '<hit l="16" in="widget">' "$TMP/mid" \
     && ok "mid-file hit is non-self-closing <hit ...> (context present)" \
@@ -64,7 +66,7 @@ xmllint --noout "$TMP/mid" 2>/dev/null \
 
 # ── (2) clamp at file start: --grep-before near line 1 gives 0 before-lines ────────────────────────
 
-"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_TOP --grep-before=5 >"$TMP/top" 2>/dev/null
+"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_TOP --grep-before=5 --legend=full >"$TMP/top" 2>/dev/null
 e_top=$?
 [ "$e_top" -lt 128 ] \
     && ok "hit on line 1 with --grep-before=5 does not crash (exit $e_top)" \
@@ -110,8 +112,8 @@ perl -0777 -ne 'exit( /<a><!\[CDATA\[    int z = y \+ 1;.*\n    return z;\n\}\]\
 
 # ── (4) --grep-before / --grep-after independently match the halves of --grep-context ─────────────
 
-"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_MID_ONCE --grep-before=2 >"$TMP/before_only" 2>/dev/null
-"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_MID_ONCE --grep-after=2  >"$TMP/after_only"  2>/dev/null
+"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_MID_ONCE --grep-before=2 --legend=full >"$TMP/before_only" 2>/dev/null
+"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_MID_ONCE --grep-after=2 --legend=full >"$TMP/after_only"  2>/dev/null
 
 grep -q '<b>' "$TMP/before_only" && ! grep -q '<a>' "$TMP/before_only" \
     && ok "--grep-before=2 alone emits only <b>, no <a>" \
@@ -136,7 +138,7 @@ a_context="$(    grep -o '<a>.*</a>' "$TMP/mid" )"
 
 # ── (5) --grep without a context flag emits the matched line and NOTHING else (context stays opt-in) ──
 
-"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_MID_ONCE >"$TMP/nocontext" 2>/dev/null
+"$BIN" "$CORPUS" --no-cache --grep=NEEDLE_MID_ONCE --legend=full >"$TMP/nocontext" 2>/dev/null
 
 grep -q '<hit l="16" in="widget"><!\[CDATA\[    int hitline = NEEDLE_MID_ONCE;\]\]></hit>' "$TMP/nocontext" \
     && ok "--grep with no context flag emits exactly <hit ...>matched line</hit> (P12: no <m> wrapper)" \

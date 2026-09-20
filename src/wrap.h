@@ -579,11 +579,11 @@ inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
         "# nothing until you invoke it, and it reads {}, so the paste block below IS the wiring:\n"
         "{} . --for=\"<your task>\" --token-budget=2000\n"
         "#\n"
-        "# ...then add --legend=compact to every FOLLOW-UP call: the legend is a small share of a --for\n"
-        "# bundle but most of a --callers/--uses/--impact answer, and the payload is byte-identical either\n"
-        "# way. `ripwire --help` carries the measured range (one place, gate-held) -- this line does not\n"
-        "# repeat it, because two copies of a number is one copy that goes stale:\n"
-        "#   ripwire . --callers=SYM --legend=compact\n", std::string_view( row.contextFile.data(), static_cast<int>( row.contextFile.size() ) ), token.c_str() );
+        "# ...every follow-up call answers with the compact legend by default (terse definitions of only the\n"
+        "# attributes the answer carries; the payload is byte-identical either way). Add --legend=full when a\n"
+        "# definition's reasoning is needed -- `ripwire --help` carries the measured saving (one place,\n"
+        "# gate-held) -- this line does not repeat it, because two copies of a number is one that goes stale:\n"
+        "#   ripwire . --callers=SYM --legend=full\n", std::string_view( row.contextFile.data(), static_cast<int>( row.contextFile.size() ) ), token.c_str() );
     if( !row.contextNote.empty() )
     {
         rw::emitTo( stdout, "#        ({})\n", std::string_view( row.contextNote.data(), static_cast<int>( row.contextNote.size() ) ) );

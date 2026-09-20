@@ -37,7 +37,9 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 echo "lpincheck: BIN=$BIN  CORPUS=$CORPUS"
 
-"$BIN" "$CORPUS" --pin-census="$TMP/c.tsv" --no-cache >"$TMP/map.xml" 2>"$TMP/err" || { no "the map run exited non-zero"; sed 's/^/          /' "$TMP/err"; }
+# L1 (2026-09-19): the CLI default legend is compact; (F) reads the FULL legend's lpin=/locality_pinned= clauses, so the
+# census run asks for it (--pin-census writes beside the map and takes a posture since L1).
+"$BIN" "$CORPUS" --pin-census="$TMP/c.tsv" --no-cache --legend=full >"$TMP/map.xml" 2>"$TMP/err" || { no "the map run exited non-zero"; sed 's/^/          /' "$TMP/err"; }
 MAP="$( cat "$TMP/map.xml" )"
 # row 6 (2026-09-12): a scoped row prints n= then sc= (the short id); the canonical id composes as <f p=>::sc::n
 row(){ _n="${1##*::}"; _r="${1#*::}"; _s="${_r%::*}"; printf '%s' "$MAP" | tr '<' '\n' | grep "n=\"$_n\" sc=\"$_s\"" | head -1; }
@@ -79,7 +81,8 @@ HDR_LP="$( printf '%s' "$HDR" | grep -o 'locality_pinned=[0-9]*' | cut -d= -f2 )
     || no "(D) locality_pinned='$HDR_LP' but the census holds $N_LOC locality rows"
 
 # ── (E) zero bytes where nothing fires (the dropped_positive= rule) ───────────────────────────────
-( cd "$ROOT" && "$BIN" test/fixture --no-cache >"$TMP/fix.xml" 2>/dev/null )   # repo-relative, exactly how the golden is derived
+# L1 (2026-09-19): the CLI default legend is compact; test/golden.xml was recorded from the full default, so this run asks for it.
+( cd "$ROOT" && "$BIN" test/fixture --no-cache --legend=full >"$TMP/fix.xml" 2>/dev/null )   # repo-relative, exactly how the golden is derived
 grep -q 'lpin=' <( grep -v '^<!-- ripwire v1' "$TMP/fix.xml" ) && no "(E) test/fixture emits lpin= — it has no locality pin" \
     || ok "(E) test/fixture: no lpin= outside the legend"
 grep -q 'locality_pinned=[0-9]' "$TMP/fix.xml" && no "(E) test/fixture header carries locality_pinned= — want absent when 0" \
@@ -158,7 +161,8 @@ printf '%s' "$RESH" | grep -q ' edges=0 ' \
     || no "(I) the tier-1 residual moved — update this arm AND src/graph.h's stated floor: $RESH"
 
 # ── (H) determinism + well-formedness ─────────────────────────────────────────────────────────────
-"$BIN" "$CORPUS" --no-cache >"$TMP/map2.xml" 2>/dev/null
+# L1 (2026-09-19): the --pin-census run above asks for the full legend; the rerun it is compared to asks for the same.
+"$BIN" "$CORPUS" --no-cache --legend=full >"$TMP/map2.xml" 2>/dev/null
 if cmp -s "$TMP/map.xml" "$TMP/map2.xml"; then ok "(H) two runs byte-identical"; else no "(H) the map is not deterministic"; fi
 if command -v xmllint >/dev/null 2>&1; then
     if xmllint --noout "$TMP/map.xml" 2>/dev/null; then ok "(H) well-formed XML"; else no "(H) xmllint rejects the map"; fi

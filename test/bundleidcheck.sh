@@ -49,7 +49,9 @@ cat > "$TMP/trace.txt" <<'EOF'
 EOF
 
 "$BIN" "$FIX" --no-cache --for="$TASK"        >"$TMP/for.xml"   2>/dev/null
-"$BIN" "$FIX" --no-cache --pack-task="$TASK"  >"$TMP/task.xml"  2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and spells `<sigs><d n= sc= l= p=>` inside its comment, which
+# drows() reads as a row; the --pack-task runs ask for the full legend (rows identical across postures).
+"$BIN" "$FIX" --no-cache --pack-task="$TASK" --legend=full >"$TMP/task.xml"  2>/dev/null
 "$BIN" "$FIX" --no-cache --from-trace="$TMP/trace.txt" >"$TMP/trace.xml" 2>/dev/null
 "$BIN" "$FIX" --no-cache                      >"$TMP/map.xml"   2>/dev/null
 
@@ -160,7 +162,8 @@ fi
 # ── 5) budget accounting survives the added attributes ────────────────────────────────────────────────
 # the header states its own byte budget + ceiling; the delivered document must fit BOTH.
 for B in 600 1200 6000; do
-    "$BIN" "$FIX" --no-cache --pack-task="$TASK" --token-budget=$B >"$TMP/b.$B" 2>/dev/null
+    # L1 (2026-09-19): the budget=/ceiling ledger is prose in the FULL legend's header comment; this arm reads it.
+    "$BIN" "$FIX" --no-cache --pack-task="$TASK" --token-budget=$B --legend=full >"$TMP/b.$B" 2>/dev/null
     BYTES="$( wc -c < "$TMP/b.$B" | tr -d ' ' )"
     BUDGET="$( grep -o 'budget=[0-9]* bytes' "$TMP/b.$B" | head -1 | tr -dc '0-9' )"
     CEIL="$( grep -o 'ceiling [0-9]*' "$TMP/b.$B" | head -1 | tr -dc '0-9' )"
@@ -217,7 +220,7 @@ if [ -z "$LONGTASK" ]; then
     no "5b: python3 unavailable — the long-task ceiling arm could not build its 320-byte task"
 else
     for B in 600 1200; do
-        "$BIN" "$FIX" --no-cache --pack-task="$LONGTASK" --token-budget=$B >"$TMP/lt.$B" 2>/dev/null
+        "$BIN" "$FIX" --no-cache --pack-task="$LONGTASK" --token-budget=$B --legend=full >"$TMP/lt.$B" 2>/dev/null
         LT_BYTES="$( wc -c < "$TMP/lt.$B" | tr -d ' ' )"
         LT_CEIL="$( grep -o 'ceiling [0-9]*' "$TMP/lt.$B" | head -1 | tr -dc '0-9' )"
         # the disclosure lives in the header COMMENT — read only up to the first "-->" so a body cannot supply it
@@ -256,7 +259,7 @@ fi
 
 # ── 6) determinism + well-formed XML on all three verbs ───────────────────────────────────────────────
 "$BIN" "$FIX" --no-cache --for="$TASK" >"$TMP/for2.xml" 2>/dev/null
-"$BIN" "$FIX" --no-cache --pack-task="$TASK" >"$TMP/task2.xml" 2>/dev/null
+"$BIN" "$FIX" --no-cache --pack-task="$TASK" --legend=full >"$TMP/task2.xml" 2>/dev/null
 "$BIN" "$FIX" --no-cache --from-trace="$TMP/trace.txt" >"$TMP/trace2.xml" 2>/dev/null
 for v in for task trace; do
     diff -q "$TMP/$v.xml" "$TMP/${v}2.xml" >/dev/null \

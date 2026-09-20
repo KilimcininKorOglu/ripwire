@@ -78,7 +78,9 @@ echo "narrowlangcheck: BIN=$BIN  CPPFIX=test/importnarrowfix  PYFIX=test/narrowl
 echo
 echo "=== CONTROL: C++ Rule-3 narrowing still works (importnarrowcheck.sh's own headline check) ==="
 # ═══════════════════════════════════════════════════════════════════════════
-CPP_MAP="$( "$BIN" "$CPPFIX" --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and its prose spells "ambiguous= calls split"; the
+# ambiguous= reads take the first match, so these maps ask for the full legend (rows identical across postures).
+CPP_MAP="$( "$BIN" "$CPPFIX" --no-cache --legend=full 2>/dev/null )"
 CPP_AMB="$( printf '%s' "$CPP_MAP" | grep -o 'ambiguous=[0-9]*' | head -1 | grep -o '[0-9]*' )"
 [ "$CPP_AMB" = "2" ] && ok "C++ control: ambiguous=2 (Rule 3 narrows the positive caller, controls stay split)" \
                      || no "C++ control regressed: ambiguous=$CPP_AMB (want 2) — this should be unrelated to this gate; if it fails, importnarrowcheck.sh should ALSO be failing"
@@ -113,7 +115,7 @@ fi
 echo
 echo "=== Rule-3 narrowing on Python: same positive/negative pattern as the C++ control ==="
 # ═══════════════════════════════════════════════════════════════════════════
-PY_MAP="$( "$BIN" "$PYFIX" --no-cache 2>/dev/null )"
+PY_MAP="$( "$BIN" "$PYFIX" --no-cache --legend=full 2>/dev/null )"
 PY_AMB="$( printf '%s' "$PY_MAP" | grep -o 'ambiguous=[0-9]*' | head -1 | grep -o '[0-9]*' )"
 echo "  (Python ambiguous=$PY_AMB — a WORKING Rule 3 would give 2 [both.py + neither.py stay split, like the C++ control]; a NON-firing Rule 3 gives 3 [caller.py ALSO stays split])"
 

@@ -101,14 +101,16 @@ echo "dispatchordercheck: BIN=$BIN"
 # reads that clone's branch count instead (refs_scanned="317" where this was found, "0" on a CI checkout) and
 # reds. Control: a branch created in the private repo must CHANGE the bytes and deleting it must restore them,
 # so the copy is load-bearing — ref motion reaches the precedence pair, and only this gate can cause it.
-wh0="$( "$BIN" "$FIX" --whereis=d2 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact, whose root also carries schema=; this guard greps the
+# full-default root start-tag byte for byte, so it (and its control twins) ask for --legend=full.
+wh0="$( "$BIN" "$FIX" --whereis=d2 --legend=full 2>/dev/null )"
 if ! printf '%s' "$wh0" | grep -q '<whereis sym="d2" on-head="1" refs_scanned="1" '; then
     fail "fixture refs: --whereis=d2 is not scanning only the private fixture's one side branch — the arms below would read a ref namespace this gate does not own (got: $( printf '%s' "$wh0" | grep -o '<whereis [^>]*>' | head -c 160 ))"
 else
     git -C "$FIX" branch -q control side >/dev/null 2>&1
-    wh1="$( "$BIN" "$FIX" --whereis=d2 2>/dev/null )"
+    wh1="$( "$BIN" "$FIX" --whereis=d2 --legend=full 2>/dev/null )"
     git -C "$FIX" branch -q -D control >/dev/null 2>&1
-    wh2="$( "$BIN" "$FIX" --whereis=d2 2>/dev/null )"
+    wh2="$( "$BIN" "$FIX" --whereis=d2 --legend=full 2>/dev/null )"
     if [ "$wh1" = "$wh0" ]; then
         fail "fixture refs (control): a branch created in the private fixture repo did not change --whereis=d2 — ref motion cannot reach the pair there, so this isolation proves nothing"
     elif [ "$wh2" != "$wh0" ]; then

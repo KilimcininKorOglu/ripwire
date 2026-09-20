@@ -146,14 +146,25 @@ struct Arm
         TreeUnavailable,       // a side's tree could not be materialized or ingested: arm ok="0", empty changed set
         HeadTreeUnavailable,   // the head-conflict lane's base-vs-HEAD diff had no tree: head_conflicts_ok="0"
     };
-    void disclose( DisclosureWhy why ) noexcept
+    // The refusal cause, meaningful only when ok==false (set alongside it in the same disclose() call) — the
+    // row's `reason=` (writeScoutArm) reads this, never the debug trace text disclose() also emits, so the
+    // cause survives a Release build exactly like `ok=` itself already does (the DISCLOSE sink write is
+    // unconditional in every build; only the trace string is NDEBUG'd out). Default value is never read: it
+    // is overwritten by every call that can set ok=false before anything prints it.
+    DisclosureWhy           why = DisclosureWhy::NoMergeBase;
+    void disclose( DisclosureWhy w ) noexcept
     {
-        switch( why )
+        switch( w )
         {
             case DisclosureWhy::NoMergeBase:
-            case DisclosureWhy::TreeUnavailable:     ok = false; break;
+            case DisclosureWhy::TreeUnavailable:     ok = false; why = w; break;
             case DisclosureWhy::HeadTreeUnavailable: headLaneOk = false; break;
         }
+        // ENSURES, not ASSUME: this is the postcondition every caller of disclose() relies on without
+        // re-checking — writeScoutArm reads arm.ok and arm.why together, never one without the other, so the
+        // two must never be able to drift apart (an ok==false row with a stale/default `why` would print the
+        // wrong reason=).
+        ENSURES( ( w == DisclosureWhy::HeadTreeUnavailable ) || ( !ok && why == w ) );
     }
 };
 
@@ -243,32 +254,30 @@ inline std::string msCachePath( const std::string& repoHex, const std::string& e
 }
 
 // Materialize + ingest one committish (git-archive, read-only, TEMP copy) into a SymTreeIndex. Empty
-// committish, a failed archive, or an empty ingest degrades to an empty (still valid) index — never
-// throws, never crashes (mirrors quality.h's own archive/ingest degrade contract).
+// committish or a failed materialize degrades to an empty, UNINDEXED index (isIndexed stays false — never
+// throws, never crashes, mirrors quality.h's own archive/ingest degrade contract).
 //
 // Previously this handed ingest() an EMPTY cacheFile, forcing a full cold tree-sitter PARSE of every
 // arm's tree on EVERY run despite the header comment above claiming cache reuse — the audited 9.15 s /
 // 967 MB, 6-cold-ingest finding (mergescout.h:115). `repoHex`/`exclHex` are computed once by the caller
 // (TreeIndexMemo) and threaded through so this per-committish call is a single hash-format + lookup, not
 // a repeated realpath/hash-config cost per tree.
-// Is `committish`'s tree independently VERIFIED empty by git itself — not merely "the materialize/ingest
-// pipeline produced no files"? materializeCommitTree's own success check cannot tell those apart: its
-// `git archive … | tar -x …` pipeline's exit status is `tar`'s (no `pipefail`), which reads 0 whether the
-// tar stream had zero entries because the tree is genuinely empty OR because `git archive` failed upstream
-// and piped nothing at all — `tar -x` on an empty stream is not itself an error. Comparing the commit's own
-// tree object against the empty-tree hash `git` computes for THIS repo (sha1 or sha256, never hardcoded) is
-// a second, independent signal that does not go through that pipeline at all.
-inline bool commitTreeIsEmpty( const std::string& root, const std::string& committish )
-{
-    const std::string emptyTree = quality::gitOneLine( root, "hash-object -t tree /dev/null 2>/dev/null" );
-    if( emptyTree.empty() )
-    {
-        return false;   // could not even ask git — never claim "verified empty" on a query that itself failed
-    }
-    const std::string thisTree = quality::gitOneLine( root, "rev-parse " + shSingleQuote( committish + "^{tree}" ) + " 2>/dev/null" );
-    return !thisTree.empty() && thisTree == emptyTree;
-}
-
+//
+// MATERIALIZE FAILURE vs. A REAL BUT EMPTY INGEST — this distinction used to be made HERE, indirectly, by
+// asking git whether committish's tree object equals the empty-tree hash (the removed commitTreeIsEmpty):
+// that answered "is the git TREE itself empty", which is a different question from "did this run's excludes
+// or unsupported-file filter leave nothing to ingest" — a base whose only file is excluded, or whose only
+// file has no supported extension, has a NON-empty git tree, so that check answered "not verified empty" and
+// this function refused it exactly like a real archive failure (CodeRabbit review, src/mergescout.h:245-267,
+// queued as its own lane 2026-09-18). The fix is upstream, not a second local heuristic:
+// quality::materializeCommitTree now checks `git archive`'s own exit status separately from `tar -x`'s (its
+// own comment says why the piped form could not tell a masked archive failure from a genuinely empty
+// stream), so `tmpRoot.empty()` here is now a TRUSTWORTHY signal of "the tree could not be read" and nothing
+// else. Once materialize has verifiably succeeded, an ingest that comes back with zero files/symbols is
+// simply what THIS tree, under THESE excludes, contains — a real, indexed, empty SymTreeIndex — for any of
+// three legal causes (a fresh root commit, every path excluded, or no file with a supported extension), and
+// there is no reason left to tell them apart: diffTreeIndex against it correctly reads every symbol on the
+// OTHER side as added, the right answer for a genuinely empty base in all three cases.
 inline SymTreeIndex indexCommittish( const std::string& root, const std::string& committish,
                                      const std::vector<std::string>& excludes, std::size_t maxFileBytes,
                                      const std::string& repoHex, const std::string& exclHex )
@@ -280,24 +289,13 @@ inline SymTreeIndex indexCommittish( const std::string& root, const std::string&
     const std::string tmpRoot = quality::materializeCommitTree( root, committish, "qms" );
     if( tmpRoot.empty() )
     {
-        return {};   // materialize genuinely failed — isIndexed stays false, the arm refuses (below)
+        return {};   // materialize genuinely failed (git archive / tar extract / temp dir / revision) — isIndexed stays false, the arm refuses (below)
     }
     quality::TmpTreeGuard guard{ tmpRoot };
     const std::string cachePath = msCachePath( repoHex, exclHex, committish );
     IngestResult ing = ingest( tmpRoot.c_str(), excludes, std::string_view( cachePath ), maxFileBytes, /*captureValueUses=*/false );
-    // `ing.files`/`ing.symbols` empty means either (a) a LEGAL empty tree (a fresh root commit, or an arm
-    // that deleted everything) or (b) the archive/extract pipeline silently produced nothing on a REAL
-    // failure (commitTreeIsEmpty's comment). The previous `-> isIndexed=false` for BOTH conflated them, so
-    // computeNamedArm (and, through the same isIndexed check, headChangedKeysSince's head-conflict lane)
-    // refused a legal empty base as though its tree could not be read at all (CodeRabbit review,
-    // src/mergescout.h:245-267). Ask git directly, independent of the pipeline, to tell them apart.
-    if( ing.symbols.empty() && ing.files.empty() && !commitTreeIsEmpty( root, committish ) )
-    {
-        return {};   // not verified empty — a real materialize/ingest failure, isIndexed stays false
-    }
-    // buildTreeIndex on an empty IngestResult already produces an empty-but-valid SymTreeIndex —
-    // diffTreeIndex against it correctly reads every symbol on the OTHER side as added, the right answer
-    // for a genuinely empty base.
+    // buildTreeIndex on an empty IngestResult already produces an empty-but-valid SymTreeIndex — see the
+    // function comment above for why an empty `ing` here is trusted rather than re-checked.
     SymTreeIndex index = buildTreeIndex( ing, tmpRoot );
     index.isIndexed    = true;
     return index;
@@ -827,8 +825,15 @@ inline void writeScoutArm( std::FILE* out, const Arm& arm, const XmlEscaper& ex 
     // §A10.4: base= is display-only here — 9-hex-char width, matching the at=/head= convention
     // (gitstamp.h) every other sha-bearing attribute in the tool uses. arm.baseSha itself stays full-length
     // (it is still used as a TreeIndexMemo key elsewhere); only the printed attribute is truncated.
-    rw::emitTo( out, "<arm ref=\"{}\" base=\"{}\" ok=\"{}\" changed=\"{}\" head_conflicts=\"{}\"{}>",
-                  ex( arm.ref ).c_str(), ex( arm.baseSha.substr( 0, 9 ) ).c_str(), arm.ok ? 1 : 0, arm.changed.size(), arm.headConflicts.size(),
+    //
+    // reason= — present only when ok="0" (absent otherwise, the same convention head_conflicts_ok= and
+    // landingplan.h/crossref.h's refs_dropped= already use): the arm's own DisclosureWhy, set on `arm.why` by
+    // Arm::disclose() in EVERY build (never only the debug trace disclose() also emits, which NDEBUG strips) —
+    // so a Release binary's reader is told WHY, not just THAT, an arm was refused.
+    const std::string reasonAttr = arm.ok ? std::string()
+        : ( std::string( " reason=\"" ) + ( arm.why == Arm::DisclosureWhy::NoMergeBase ? "no_merge_base" : "tree_unavailable" ) + "\"" );
+    rw::emitTo( out, "<arm ref=\"{}\" base=\"{}\" ok=\"{}\"{} changed=\"{}\" head_conflicts=\"{}\"{}>",
+                  ex( arm.ref ).c_str(), ex( arm.baseSha.substr( 0, 9 ) ).c_str(), arm.ok ? 1 : 0, reasonAttr.c_str(), arm.changed.size(), arm.headConflicts.size(),
                   arm.headLaneOk ? "" : " head_conflicts_ok=\"0\"" );
     // §P11.13: a changed="0" arm has no divergent work to LAND — it used to get a landing slot anyway
     // (landingOrder() below drops it now, see there), with nothing on this row saying why it's absent from
@@ -895,7 +900,13 @@ inline void writeMergeScout( std::FILE* out, const ScoutResult& result )
     // their leading dashes (the same constraint crossref.h's own comments call out). Keep it that way.
     rw::emitTo( out, "<!-- ripwire merge-scout: read-only cross-branch overlap for {} arm(s) — same-symbol change "
                        "on two arms = conflict, same-file/different-symbol = textual risk. landing = "
-                       "fewest-conflicts-first greedy (ties: ref name asc). Every tree is a git-archive TEMP COPY "
+                       "fewest-conflicts-first greedy (ties: ref name asc). ok=\"1\" on an arm row means the "
+                       "comparison actually ran, so changed=/head_conflicts= are real counts and may legitimately "
+                       "be zero (a materialized tree holding no supported files, or whose paths were all "
+                       "excluded, is still a real empty index, not a refusal); ok=\"0\" means it did not run at "
+                       "all, and reason= (present only then) says why: reason=\"no_merge_base\" (no merge base "
+                       "with HEAD, e.g. unrelated histories) or reason=\"tree_unavailable\" (a side's tree could "
+                       "not be materialized or ingested, a real git-archive/tar failure). Every tree is a git-archive TEMP COPY "
                        "(read-only); the real working tree/refs are never touched. ANCHORING: every arm is diffed "
                        "against its OWN merge base with HEAD (the working tree arm against HEAD itself), never "
                        "against live HEAD — so a file an arm never opened can never appear here just because the "

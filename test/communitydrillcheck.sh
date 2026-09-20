@@ -30,7 +30,9 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 echo "communitydrillcheck: BIN=$BIN"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
-run(){ perl -e 'alarm 30; exec @ARGV' "$BIN" "$CORPUS" "$@" --no-cache 2>/dev/null; }
+# L1 (2026-09-19): the CLI default legend is compact and spells <member >/size= inside its comment; these arms count real
+# rows and read real header attrs, so the fixture runs (and the repo-scale drill in arm 8) ask for the full legend.
+run(){ perl -e 'alarm 30; exec @ARGV' "$BIN" "$CORPUS" "$@" --no-cache --legend=full 2>/dev/null; }
 attr(){ printf '%s' "$2" | grep -oE " $1=\"[^\"]*\"" | head -1 | sed "s/ $1=\"//;s/\"//"; }
 
 C="$( run --communities )"
@@ -151,7 +153,7 @@ fi
 RC="$( perl -e 'alarm 120; exec @ARGV' "$BIN" "$ROOT" --communities 2>/dev/null )"
 RID="$(  printf '%s' "$RC" | grep -oE '<community id="[0-9]+" size="[0-9]+"' | head -1 | grep -oE 'id="[0-9]+"'   | grep -oE '[0-9]+' )"
 RSIZE="$( printf '%s' "$RC" | grep -oE '<community id="[0-9]+" size="[0-9]+"' | head -1 | grep -oE 'size="[0-9]+"' | grep -oE '[0-9]+' )"
-RD="$( perl -e 'alarm 120; exec @ARGV' "$BIN" "$ROOT" --community="$RID" --limit=100000 2>/dev/null )"
+RD="$( perl -e 'alarm 120; exec @ARGV' "$BIN" "$ROOT" --community="$RID" --limit=100000 --legend=full 2>/dev/null )"
 rrows="$( printf '%s' "$RD" | grep -o '<member ' | wc -l | tr -d ' ' )"
 { [ "$rrows" = "$RSIZE" ] && [ "$( attr size "$RD" )" = "$RSIZE" ]; } \
     && ok "repo: --community=$RID emits exactly the $RSIZE members --communities claimed" \

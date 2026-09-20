@@ -223,8 +223,10 @@ def measure(n):
     sels = ["%s:%s" % (f["p"], s["n"]) for f in data.get("r", []) for s in f.get("s", [])]
     if not sels:
         return None, "empty top-%d symbol set" % n
-    sig_xml  = run(["--pack-signatures", "--pack-top-n=%d" % n, "--top-k=0"])
-    body_xml = run(["--expand=" + ",".join(sels), "--top-k=0"])
+    # L1 (2026-09-19): the CLI default legend is compact, and its legend spells row shapes (<d r=N>, <b t= n= p= l=>)
+    # inside its comment, which the element regexes below would count; the caption was measured in the full legend.
+    sig_xml  = run(["--pack-signatures", "--pack-top-n=%d" % n, "--top-k=0", "--legend=full"])
+    body_xml = run(["--expand=" + ",".join(sels), "--top-k=0", "--legend=full"])
     d_elems = re.findall(r"<d [^>]*>.*?</d>|<d [^>]*/>", sig_xml,  re.S)
     b_elems = re.findall(r"<b .*?</b>|<b [^>]*/>",       body_xml, re.S)
     # root-neutralised: strip the corpus-root prefix from every element before counting BYTES (not chars --

@@ -144,13 +144,16 @@ grep -oE '<tests[^>]*>.*</tests>' "$B2000" | grep -qF 'test/test_budget.cpp' \
 
 # ── 4) the disclosure reflects the NEW policy: the header legend names fixed per-section quotas and the
 #    roll-forward rule, not just the old "sections in FIXED order" cascade description on its own. ────────────
-if grep -qE 'quotas per section are FIXED' "$B2000" && grep -qE 'ROLLS FORWARD' "$B2000"; then
+# L1 (2026-09-19): the CLI default legend is compact; arms 4/4b read the FULL legend's policy prose, so they read a full-legend run of the same bundle.
+B2000F="$TMP/b2000full.xml"
+runw --pack-task="$TASK" --token-budget=2000 --legend=full > "$B2000F"
+if grep -qE 'quotas per section are FIXED' "$B2000F" && grep -qE 'ROLLS FORWARD' "$B2000F"; then
     ok "header legend states the fixed-quota + roll-forward policy"
 else
     no "header legend does not name the new quota policy — a reader can't tell WHY a starved section still got something"
 fi
 # the percentages named in the legend must match src/packtask.h's own constants (a hand-edited legend can drift)
-grep -qE 'rank40/body30/caller15/note5/test10' "$B2000" \
+grep -qE 'rank40/body30/caller15/note5/test10' "$B2000F" \
     && ok "header legend's stated percentages match the source constants (40/30/15/5/10)" \
     || no "header legend's percentages don't match — the disclosure has drifted from the code"
 

@@ -131,7 +131,9 @@ bod()
 # and it must be a REAL zero, not the same 0 a broken computation would print for the corpora above).
 { printf 'def solo():\n'; bod 20; printf '    return v0\n'; } > "$W2/noclone/one.py"
 
-cl(){ "$BIN" "$1" --clones --no-cache 2>"$W2/err"; }
+# L1 (2026-09-19): the CLI default legend is compact and spells <group ...> inside its comment; arm F counts real rows and arm J2
+# reads the FULL legend's dup_pct prose, so cl() asks for the full legend.
+cl(){ "$BIN" "$1" --clones --no-cache --legend=full 2>"$W2/err"; }
 attr(){ printf '%s' "$2" | grep -oE "$1=\"[^\"]*\"" | head -1 | sed "s/^$1=\"//;s/\"$//"; }
 
 G="$( cl "$W2/grp" )"

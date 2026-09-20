@@ -358,7 +358,10 @@ else
     while read -r label o200k cl100k pinned_est rest; do
         case "$label" in ""|\#*) continue ;; esac
         # shellcheck disable=SC2086  # $rest is the pinned argv: deliberately word-split, never quoted
-        EST_OUT="$( cd "$EST_TMP" && "$BIN" f $rest 2>/dev/null )"
+        # L1 (2026-09-19): the o200k/cl100k counts were pinned (bench/tokenaudit/pin.py, needs tiktoken) on the FULL-legend
+        # documents, the default when they were taken; the CLI default is compact now, so the pinned argv asks for the
+        # document the counts describe. Re-pinning the default posture needs tiktoken — recorded in the L1 lane report.
+        EST_OUT="$( cd "$EST_TMP" && "$BIN" f $rest --legend=full 2>/dev/null )"
         EST_GOT="$( printf '%s' "$EST_OUT" | grep -oE 'est_tokens="[0-9]+"' | head -1 | grep -oE '[0-9]+' )"
         if [ -z "$EST_GOT" ]; then
             no "#18 $label: no est_tokens in the output — the pin says this verb prices itself"

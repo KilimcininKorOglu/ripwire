@@ -67,13 +67,15 @@
 #   (k) A LONG LINE ANSWERS OR SAYS IT WAS SKIPPED — libstdc++'s matcher recurses once per state it visits, and
 #       `--regex='a*b'` died with SIGSEGV on a ~26–45 KB matching line on Linux. A 300 KB matching line now exits 0: matched
 #       in full where the engine does not recurse (libc++), or skipped and disclosed (regex_lines_skipped=, regex_line_max=,
-#       counts_floor, the LONG LINES legend clause) where it does. A 2 MB line with no 'b' is ruled out by the required
+#       counts_floor, and the legend definition of both IN THE DIALECT THAT ANSWER CARRIES — the default posture's compact
+#       readings, the `LONG LINES:` block under --legend=full) where it does. A 2 MB line with no 'b' is ruled out by the required
 #       literal on every engine (it crashed libstdc++ and ran quadratic on libc++), a literal alternation over a 3 MB line
 #       never reaches the engine, and a literal --grep answer is unchanged.
 #   (l) THE BOUND HOLDS WHERE IT EXISTS — on a recursing engine, for three shapes (a plain repeat, an alternation loop, a
 #       loop before a lookahead), a line of exactly regex_line_max bytes is matched at exit 0 and one byte more is skipped.
 #   (m) THE SKIP PATH ON EVERY ENGINE — the non-NDEBUG fault switch RIPWIRE_FAULT_REGEX_LINE_BOUND=1 caps the bound at 64
-#       bytes: a 104-byte line is skipped, counted and floored, and the compact legend reads both attributes; a literal
+#       bytes: a 104-byte line is skipped, counted and floored, and the DEFAULT, compact and full legends each define both
+#       attributes in their own wording (the only place a libc++ host checks them, since (k) never skips there); a literal
 #       pattern and a line lacking the required literal are never skipped; the exact-"1" control changes nothing.
 #   (n) ONE STACK FOR THE WHOLE SCAN — the scan threads settle one size (the smallest any got) before a single file is
 #       read, so no file's skip-or-match depends on which thread took it. The fault switch RIPWIRE_FAULT_SCAN_STACK_MIXED=1
@@ -605,6 +607,15 @@ fi
 
 # ── (k) a long line answers or says it was skipped — never a signal death, never a silent zero ─────────────────────
 attrOf(){ grep -o "<grep [^>]*>" "$2" | head -1 | grep -o " $1=\"[^\"]*\"" | head -1 | sed -e 's/.*="//' -e 's/"$//'; }
+# THE LONG-LINE DISCLOSURE IS READ IN EACH DIALECT'S OWN WORDING. Since train 9 the DEFAULT posture is the
+# compact dialect, which reads the two attributes as `regex_lines_skipped=N: ` and `regex_line_max=: `, while
+# `--legend=full` carries the prose `LONG LINES:` block defining the same two. This arm used to pin the FULL
+# spelling against a DEFAULT answer, so it went red on every libstdc++ CI leg while every macOS run stayed
+# green: libc++ does not recurse per character, its 300 KB line is never skipped, and the branch below is
+# never entered there. The disclosure was complete throughout — only the gate was reading for the other
+# dialect's words. (m) asserts the same two readings through the fault bound, so a libc++ host reaches them.
+defReadsLongLines(){ grep -q 'regex_lines_skipped=N: ' "$1" && grep -q 'regex_line_max=: ' "$1"; }
+yn(){ if "$@"; then echo 1; else echo 0; fi; }
 FIXL="$TMP/longfix"; FIXN="$TMP/nobfix"; FIXP="$TMP/litfix"
 mkdir -p "$FIXL" "$FIXN" "$FIXP"
 python3 - "$FIXL" "$FIXN" "$FIXP" <<'PY'
@@ -629,10 +640,17 @@ elif [ "$skipped" = 0 ]; then
 else
     lineMax="$( attrOf regex_line_max "$TMP/k1.out" )"
     if [ "$skipped" = 1 ] && [ -n "$lineMax" ] && grep -q 'counts_floor="1"' "$TMP/k1.out" && grep -q '<f p="long.md"><hit l="2"' "$TMP/k1.out" \
-       && grep -q 'LONG LINES:' "$TMP/k1.out"; then
-        ok "(k) the 300 KB line is skipped and disclosed (regex_lines_skipped=\"1\" regex_line_max=\"$lineMax\" counts_floor=\"1\", legend defines both), line 2 still answered"
+       && defReadsLongLines "$TMP/k1.out"; then
+        ok "(k) the 300 KB line is skipped and disclosed (regex_lines_skipped=\"1\" regex_line_max=\"$lineMax\" counts_floor=\"1\", the DEFAULT legend reads both), line 2 still answered"
     else
-        no "(k) a skipped line is not fully disclosed: skipped=$skipped line_max=[$lineMax] floor=$( grep -c 'counts_floor="1"' "$TMP/k1.out" )"
+        # Name the conjunct that failed: the CI red this replaces printed only the three that had passed.
+        no "(k) a skipped line is not fully disclosed: skipped=$skipped line_max=[$lineMax] floor=$( grep -c 'counts_floor="1"' "$TMP/k1.out" ) line2=$( yn grep -q '<f p="long.md"><hit l="2"' "$TMP/k1.out" ) default_legend_reads_both=$( yn defReadsLongLines "$TMP/k1.out" )"
+    fi
+    capRun 60 "$TMP/k1f.out" /dev/null "$FIXL" --no-cache --regex='a*b' --legend=full >/dev/null
+    if grep -q 'LONG LINES:' "$TMP/k1f.out" && grep -q 'regex_line_max=' "$TMP/k1f.out"; then
+        ok "(k) --legend=full defines the same two in its own wording (the LONG LINES block)"
+    else
+        no "(k) --legend=full dropped the LONG LINES block on an answer that skipped a line"
     fi
 fi
 rc="$( capRun 30 "$TMP/k2.out" "$TMP/k2.err" "$FIXN" --no-cache --regex='a*b' )"
@@ -648,7 +666,7 @@ else
     no "(k) --regex='needle|pin' over a 3 MB line: exit $rc, regex_lines_skipped=[$( attrOf regex_lines_skipped "$TMP/k3.out" )]"
 fi
 "$BIN" "$FIXP" --no-cache --grep=needle >"$TMP/k4.out" 2>/dev/null
-if grep -q '<grep ' "$TMP/k4.out" && ! grep -q 'regex_lines_skipped\|LONG LINES:' "$TMP/k4.out"; then ok "(k) a literal --grep answer carries no long-line attribute or clause"
+if grep -q '<grep ' "$TMP/k4.out" && ! grep -q 'regex_lines_skipped\|regex_line_max\|LONG LINES:' "$TMP/k4.out"; then ok "(k) a literal --grep answer carries no long-line attribute or clause, in either dialect"
 else no "(k) a literal --grep answer changed: $( grep -o '<grep [^>]*>' "$TMP/k4.out" | head -c 300 )"; fi
 
 # ── (l) the bound holds on the engine it protects: exactly at regex_line_max the engine runs, one byte past it skips ───
@@ -697,8 +715,18 @@ if [ "$FAULTS" -eq 1 ]; then
     else
         no "(m) fault bound: $( grep -o '<grep [^>]*>' "$TMP/m1.out" | head -c 300 )"
     fi
+    # m1 is the DEFAULT posture, and the fault bound reaches the skip path on EVERY engine — which is what
+    # makes this the platform-independent twin of (k)'s disclosure assertion. (k) can only enter that branch
+    # where the engine recurses per character (libstdc++), so on a libc++ host this is the only place the
+    # default dialect's long-line readings are checked at all. Both dialects are asserted, each in its own
+    # wording, on the same fixture.
+    if defReadsLongLines "$TMP/m1.out"; then ok "(m) the DEFAULT legend reads both long-line attributes on a skipped line (every engine, via the fault bound)"
+    else no "(m) the DEFAULT legend does not read regex_lines_skipped=N: / regex_line_max=: on a skipped line: $( head -c 300 "$TMP/m1.out" )"; fi
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIXF" --no-cache --regex='a+b' --legend=full >"$TMP/m1f.out" 2>/dev/null
+    if grep -q 'LONG LINES:' "$TMP/m1f.out"; then ok "(m) --legend=full carries the LONG LINES block on the same answer"
+    else no "(m) --legend=full dropped the LONG LINES block on a skipped line: $( head -c 300 "$TMP/m1f.out" )"; fi
     RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIXF" --no-cache --regex='a+b' --legend=compact >"$TMP/m2.out" 2>/dev/null
-    if grep -q 'regex_lines_skipped=N: ' "$TMP/m2.out" && grep -q 'regex_line_max=: ' "$TMP/m2.out"; then ok "(m) the compact legend reads both long-line attributes"
+    if defReadsLongLines "$TMP/m2.out"; then ok "(m) the compact legend reads both long-line attributes"
     else no "(m) the compact legend does not read regex_lines_skipped=/regex_line_max=: $( head -c 300 "$TMP/m2.out" )"; fi
     RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIXF" --no-cache --regex='aab' >"$TMP/m3.out" 2>/dev/null
     if [ "$( attrOf regex_lines_skipped "$TMP/m3.out" )" = 0 ] && grep -q '<hit l="1"' "$TMP/m3.out" && grep -q 'hits="2"' "$TMP/m3.out"; then
