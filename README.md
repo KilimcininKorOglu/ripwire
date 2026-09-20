@@ -1879,16 +1879,16 @@ ripwire wrap --all       # detect every installed agent and emit each one's conf
 ```
 
 <details>
-<summary><b>One stdio server, 31 verbs</b> — 16 read, 12 flagship-reflex, 3 span-addressed edit</summary>
+<summary><b>One stdio server, 33 verbs</b> — 17 read, 13 flagship-reflex, 3 span-addressed edit</summary>
 
-**One stdio server, 31 verbs** — 16 read, 12 flagship-reflex, 3 span-addressed edit — and a client
+**One stdio server, 33 verbs** — 17 read, 13 flagship-reflex, 3 span-addressed edit — and a client
 that isn't one of the six above can be pointed at the same process by hand.
 </details>
 
 <details>
-<summary>What the 31 verbs are — lazy body handles, the edit verbs' safety contract, the pre-print skill scan, and the hand-written stanza for any other MCP client</summary>
+<summary>What the 33 verbs are — lazy body handles, the edit verbs' safety contract, the pre-print skill scan, and the hand-written stanza for any other MCP client</summary>
 
-That registers one stdio server — `ripwire --mcp` — exposing **31 verbs**: 16 read verbs, 12
+That registers one stdio server — `ripwire --mcp` — exposing **33 verbs**: 17 read verbs, 13
 flagship-reflex verbs, and 3 span-addressed edit verbs. Read verbs mirror the CLI (`analyze`, `for`,
 `grep`, `cochange`, `fetch_body`, `lego`, `mentions`, `owners`, `memory_recall`,
 `situational_awareness`, `batch`, …); `find_symbol` and `find_referencing_symbols` attach a stable
@@ -1923,7 +1923,7 @@ socket instead of stdio, `ripwire --listen=HOST:PORT` serves the same verbs.
 
 `skills/` ships **seventeen task-shaped skills** that tell an agent *which* verb answers the moment it
 is in — orienting cold, tracing a call, sizing a refactor, checking a diff, hunting a bug, writing
-tests, reviewing security. Without them an agent has 31 verbs and no map of when each applies; the skills name the moment
+tests, reviewing security. Without them an agent has 33 verbs and no map of when each applies; the skills name the moment
 each verb is for. Install as symlinks back into this repo, so edits here take effect
 immediately:
 
@@ -2298,7 +2298,7 @@ it finds a CRITICAL, unless you pass `--force`.
 #### 3.4 Register the MCP server (optional)
 
 The command line is the primary interface. The MCP server is the optional second interface. The MCP
-server exposes 31 MCP verbs. The verb schemas reside in the agent context for every session. For
+server exposes 33 MCP verbs. The verb schemas reside in the agent context for every session. For
 this reason, register the MCP server only when you need it.
 
 `ripwire wrap <agent>` prints the recipe for one agent — `claude`, `cursor`, `codex`, `aider` and
