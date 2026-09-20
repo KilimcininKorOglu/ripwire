@@ -53,6 +53,7 @@ sys.path.insert( 0, str( HERE ) )
 sys.path.insert( 0, str( REPO / "bench" / "arb" ) )
 
 import run_locbench as LB                                   # split, gold, parse, path normalisation
+import run_arb                                              # run_bin: the same invocation the ARB adapter makes
 from score_abstention_calibration import auroc, confusion, prf, sweep_thresholds   # the registered statistics
 
 FROZEN_ROWS = "rows_czlll__Loc-Bench_V1_test_560.json"
@@ -160,13 +161,20 @@ RIPWIRE_EXTENSIONS = frozenset( ( ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".
 RunConfig = collections.namedtuple( "RunConfig", "binary cache_dir query_chars limit verbose" )
 
 
-def ripwire( cfg, repo_dir, flags, timeout = 1800 ):
-    """(stdout, returncode) from one binary invocation. Returns the pair rather than the
-    CompletedProcess so that every caller below has to look at the return code to reach the output —
-    a run whose rc nobody read is how an empty answer becomes a measured zero."""
-    done = subprocess.run( [ cfg.binary, str( repo_dir ) ] + flags,
-                           capture_output=True, text=True, timeout=timeout, errors="replace" )
-    return done.stdout, done.returncode
+def ripwire( cfg, repo_dir, flags ):
+    """(stdout, returncode), or (None, None) when the invocation timed out.
+
+    The invocation itself is `run_arb.run_bin` — the ARB adapter's own helper, imported rather than
+    re-typed. Its 600 s ceiling is therefore this harness's ceiling too, which is the right coupling:
+    a LocBench row and an ARB row are then produced by literally the same call, and a LocBench number
+    cannot drift from an ARB number through a private copy of "how we run the binary". A timeout is
+    handed back as a NAMED outcome instead of an exception so one slow repository buckets itself
+    rather than ending a 92-instance run."""
+    try:
+        code, out, _err = run_arb.run_bin( cfg.binary, str( repo_dir ), flags )
+    except subprocess.TimeoutExpired:
+        return None, None
+    return out, code
 
 
 def load_rows( assets ):
@@ -212,9 +220,9 @@ def instance_index( inst, repo_dir, cfg ):
     rich = pathlib.Path( str( base ) + ".rich.ripwirecache" )
     if rich.exists():
         return rich
-    _out, rc = ripwire( cfg, repo_dir, [ "--index-out=%s" % base, "--top-k=1", "--no-cache" ], timeout=3600 )
+    _out, rc = ripwire( cfg, repo_dir, [ "--index-out=%s" % base, "--top-k=1", "--no-cache" ] )
     if rc != 0 or not rich.exists():
-        print( "# INDEX FAIL %s rc=%d" % ( inst["instance_id"], rc ), file=sys.stderr )
+        print( "# INDEX FAIL %s rc=%s" % ( inst["instance_id"], rc ), file=sys.stderr )
         return None
     return rich
 
@@ -260,6 +268,9 @@ def measure_instance( inst, repo_dir, gold, cfg ):
     t0 = time.perf_counter()
     out, rc = ripwire( cfg, repo_dir, [ "--for=%s" % query, "--cache=%s" % rich ] )
     wall = time.perf_counter() - t0
+    if rc is None:
+        print( "# TIMEOUT %s" % inst["instance_id"], file=sys.stderr )
+        return None, "timeout"
     if rc != 0:
         print( "# FOR FAIL %s rc=%d" % ( inst["instance_id"], rc ), file=sys.stderr )
         return None, "for_fail"
@@ -284,7 +295,7 @@ def scored_instances( assets, split, cfg ):
     """The scored rows and the named skip buckets. Every instance in the dataset lands in exactly one
     of the two."""
     skips = dict( wrong_split=0, no_snapshot=0, non_ripwire_language=0, index_fail=0, for_fail=0,
-                  parse_fail=0, no_gold=0 )
+                  parse_fail=0, no_gold=0, timeout=0 )
     out = []
     for inst in load_rows( assets ):
         repo_dir, verdict = eligibility( inst, assets, split )
