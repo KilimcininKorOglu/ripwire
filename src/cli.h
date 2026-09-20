@@ -2463,6 +2463,16 @@ inline constexpr char kHelpTail[] =
         "                               --mermaid --html --plan-lanes --sarif --eval* --json), where --legend=full is a no-op,\n"
         "                               and the writers and servers (edit verbs, --note-add, --quality-baseline/--quality-ack,\n"
         "                               --index-out, --export, the server transports), which refuse either posture.\n"
+        "                               ref is the MCP server's SESSION posture, not a CLI one: once a session reads the\n"
+        "                               resource ripwire://legend-dict, answers list rows first, carry each definition once\n"
+        "                               per session and end with <about legend=\"ref\" dict= dictv=/>. A CLI run has no\n"
+        "                               session to hold a definition, so --legend=ref refuses; --legend-dict prints them all.\n"
+        "    --legend-dict[=roster]     print the session legend dictionary; =roster: the completeness attributes it defines\n"
+        "                               print the dictionary the MCP server serves as ripwire://legend-dict/full: one\n"
+        "                               definition per line, headed by its dictv= (FNV-1a 64 of the lines, the version a\n"
+        "                               ref answer's <about dictv=> names). =roster lists the completeness attributes it\n"
+        "                               defines (attr, element, source), the roster test/legendrefcheck.sh reads. Answered\n"
+        "                               wherever it stands on the command line; nothing else runs.\n"
         "    --json                     emit JSON instead of XML; keys mirror the XML attribute names one to one\n"
         "                               machine-parseable JSON instead of XML, keys mirror the XML attr names 1:1. Every\n"
         "                               ROOT attribute survives; a verb that serves fewer SECTIONS than its XML form NAMES\n"
@@ -4154,6 +4164,17 @@ static inline void validateLegendModifier( Config& c ) noexcept
             c.legend          = kDefaultLegendPosture;
             c.legendDefaulted = true;
         }
+        return;
+    }
+    // r2-LO: legend=ref is a SESSION posture — definitions sent once per server process, after the session read the
+    // dictionary (legenddict.h). A CLI run is one answer with no session to have been served anything, so a ref answer
+    // here would point at definitions its reader never received. Refused, naming both places ref and the dictionary live.
+    if( c.legend == "ref" )
+    {
+        rw::emitRaw( stderr, "ripwire: --legend=ref is the MCP server's session posture (a session that read ripwire://legend-dict gets "
+                             "each definition once); a CLI run has no session to hold it — use --legend=compact, and ripwire --legend-dict "
+                             "prints every definition\n" );
+        c.ok = false;
         return;
     }
     if( !isLegendPosture( c.legend ) )
