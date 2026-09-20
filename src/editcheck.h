@@ -766,6 +766,32 @@ inline void editCheckPriceRoot( std::string& doc )
     const std::string priced    = pricedRootAttr( doc.size(), kBytesPerTokenDefault, /*bodyBytes=*/0, &estTokens );
     doc.insert( close, priced );
 }
+// #60: will this receipt PRINT a <c n="<file-scope>"> caller row? The kind's legend clause is owed exactly
+// then — not when the corpus holds an owner, and not when one is merely a caller the window cut. rowWindow's
+// own holds() is the single row-membership test the emitter's row loop uses, so asking it here means the
+// clause and the rows cannot disagree about which callers the document carries. A flagged (incompatible)
+// caller is always printed, whatever the window says, which is why it short-circuits the same way there.
+inline bool editCheckShowsModuleScope( const IngestResult& ing, const std::vector<NodeId>& callerIds,
+                                       const std::vector<char>& callerIncompatible, const EditCheckRowWindow& rowWindow ) noexcept
+{
+    std::size_t unflaggedIndex = 0;
+    for( const NodeId caller : callerIds )
+    {
+        if( caller >= ing.symbols.size() )
+        {
+            continue;
+        }
+        const bool flagged = caller < callerIncompatible.size() && callerIncompatible[ caller ] != 0;
+        const bool printed = flagged || rowWindow.holds( unflaggedIndex );
+        unflaggedIndex += flagged ? 0u : 1u;
+        if( printed && ing.symbols[ caller ].kind == SymKind::ModuleScope )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 
 // THE bundle assembler for an ALREADY-RESOLVED `focus` symbol: builds the <edit-check>…</edit-check> XML
 // (status + was/now on contract-change + the flagged 1-hop callers) and returns it as a string — never
@@ -933,26 +959,7 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     // caller is the exact shape §H4 measured, and this legend's own "the tree as it stands" paragraph reads
     // as if the caller SET were complete.
     out += graphCountDisclosure( g.unindexedFiles > 0 );
-    // #60: exactly when a <c n="<file-scope>"> caller row is one of the rows this receipt prints. The window
-    // is already fixed above, so this reads the rows the document will actually carry, never the corpus.
-    {
-        // rowWindow.holds() is the ONE row-membership test this emitter's own loop uses, so asking it here
-        // means the clause and the rows cannot disagree about which callers the document carries.
-        bool        ecHasModScope  = false;
-        std::size_t unflaggedIndex = 0;
-        for( const NodeId caller : callerIds )
-        {
-            if( caller >= ing.symbols.size() )
-            {
-                continue;
-            }
-            const bool flagged = caller < callerIncompatible.size() && callerIncompatible[ caller ] != 0;
-            const bool printed = flagged || rowWindow.holds( unflaggedIndex );
-            unflaggedIndex += flagged ? 0u : 1u;
-            ecHasModScope = ecHasModScope || ( printed && ing.symbols[ caller ].kind == SymKind::ModuleScope );
-        }
-        out += modScopeLegend( ecHasModScope );   // #60
-    }
+    out += modScopeLegend( editCheckShowsModuleScope( ing, callerIds, callerIncompatible, rowWindow ) );   // #60
     // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker, spelled identically on every notes-surfacing
     // emitter — absent on a clean read (no sidecar, every line parsed, or `ni` itself null, as the MCP verb
     // passes today), so the L3 inertness contract holds.

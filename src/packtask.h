@@ -948,6 +948,22 @@ struct RankingSection
 // document holding an owner). The lesson generalises past this one legend — a document that can carry a
 // tag-like NAME in prose can never be parsed by matching punctuation — so this skips comment nodes
 // explicitly and then takes the '>' that closes the element it actually found.
+// #60: how many of these candidates have NO BODY BY CONSTRUCTION — a module-scope owner, whose Symbol
+// extent is empty (ingest_model.h assignSymbols). Such a candidate can never be in `emitted.kept`, so
+// counting it as an over-budget omission is the same false cap --expand was fixed for, one verb over: the
+// wrapper below used to write `<!-- body omitted (over budget): <file-scope> -->` and restamp capped="1"
+// over a body that never existed. The ledger and the monotone roll read this same count, so the document
+// cannot say capped="0" bodyless="1" in the tag and "(capped)" in its own ledger.
+inline std::size_t countBodylessCandidates( const IngestResult& ing, const std::vector<NodeId>& bodyIds ) noexcept
+{
+    std::size_t n = 0;
+    for( NodeId id : bodyIds )
+    {
+        n += ( id < ing.symbols.size() && ing.symbols[id].kind == SymKind::ModuleScope ) ? 1u : 0u;
+    }
+    return n;
+}
+
 struct SectionOpenTag
 {
     std::size_t start = std::string::npos;   // offset of the element's '<'
@@ -1186,16 +1202,7 @@ inline std::string restatePackTaskBodiesWrapper( const IngestResult& ing, const 
                                                   const std::vector<NodeId>& bodyIds, EmittedBodies& emitted, EscFn&& ex,
                                                   bool compress = false )
 {
-    // #60: a module-scope owner has NO BODY BY CONSTRUCTION, so it is never in emitted.kept and never will
-    // be. Counting it as an over-budget omission is the same false cap --expand was fixed for, one verb
-    // over: it produced `<!-- body omitted (over budget): <file-scope> -->` and a restated capped="1" over
-    // a body that never existed. It is accounted for here instead, and packBodies' own honest
-    // `bodyless=N` is restated beside shown=/total=.
-    std::size_t bodylessOwners = 0;
-    for( NodeId id : bodyIds )
-    {
-        bodylessOwners += ( id < ing.symbols.size() && ing.symbols[id].kind == SymKind::ModuleScope ) ? 1u : 0u;
-    }
+    const std::size_t bodylessOwners = countBodylessCandidates( ing, bodyIds );   // #60
     if( bodiesXml.empty() || emitted.kept.size() + bodylessOwners >= bodyIds.size() )
     {
         return bodiesXml;   // nothing was actually dropped: packBodies' own tag already says so
@@ -1532,11 +1539,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     // #60: candidates that have NO BODY BY CONSTRUCTION (a module-scope owner). They can never be `kept`,
     // so without this the ledger below reads "kept 1 of 2 (capped)" and the roll reads "capped" on a bundle
     // the budget did not cut — contradicting the <bodies capped="0" bodyless="1"> the same document emits.
-    std::size_t        bodiesBodyless = 0;
-    for( NodeId id : bodyIds )
-    {
-        bodiesBodyless += ( id < ing.symbols.size() && ing.symbols[id].kind == SymKind::ModuleScope ) ? 1u : 0u;
-    }
+    const std::size_t  bodiesBodyless = countBodylessCandidates( ing, bodyIds );
     std::size_t        bodiesKept  = 0;
 
     // ── section 3 — d1: the anchors' 1-hop callers+callees (computed above), each shown with its OWN one-line
