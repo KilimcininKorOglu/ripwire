@@ -2535,12 +2535,31 @@ std::optional<int> runForLens( const MainDispatch& d )
                 forLayerPresent = true;
             }
         }
-        // #60: the same shape again. A module-scope owner reaches this bundle as a <d> row and, more often,
-        // as a <h n="<file-scope>"> hop of one — the hop rows are why the ranked-set test is the right one:
-        // a hop's owner need not be ranked itself, so this reads the whole symbol table's kinds and lets the
-        // over-approximation fall the safe way (a clause with nothing to define, never an undefined row).
-        const bool forModScopePresent = std::ranges::any_of( ing.symbols, []( const rw::Symbol& sym ) noexcept
-                                                             { return sym.kind == rw::SymKind::ModuleScope; } );
+        // #60: the same shape again, and READ FROM THE RANKED SET like its three siblings above. The first
+        // draft tested the whole symbol table on the theory that a <h> hop's owner need not be ranked; that
+        // was simply wrong — the compact bundle's hop candidates ARE the positive-score head of the ranked
+        // surface (buildForCompactHops), so an owner reaches this document as a <d> row or as a <h> row of
+        // one, and both are ranked. Corpus-wide cost ~40 tokens of clause on EVERY --for answer from any
+        // tree holding one top-level call (this repo; 72% of vue-core's files), which is the mirror-image
+        // waste of the rule this header states: a legend that defines something the document did not emit.
+        // #60: THE ROW SET, not the ranked set — and this one is deliberately NOT its siblings' shape.
+        // `scPresent`/`legoPresent`/`layerPresent` test rank>0 corpus-wide and let the over-approximation
+        // fall the safe way, which costs a clause nobody needed. This clause is ~154 B (compact) / ~250 B
+        // (full) on the tool's most-used verb, and rank>0 is true for a module-scope owner on any tree
+        // holding one top-level call — every --for answer on THIS repository paid it, with no owner row in
+        // any of them (measured over six queries). So it reads the rows the document can actually carry:
+        // `lensSurfaceIds` is the rank-ordered surface, `<d>` rows are its top-forTopN head (the adaptive
+        // cut has already narrowed forTopN here, "so the emitted set is exactly the kept head") and the
+        // compact `<hops>` rows are its rank>0 head capped at kPackTaskBodyCandidates — so the union is one
+        // head walk. What is left over-approximating is only the H1 BYTE ladder trimming inside that head,
+        // which is the residual a header built before its payload cannot avoid.
+        const std::size_t forRowHead = std::max( std::size_t( forTopN > 0 ? forTopN : 0 ), rw::kPackTaskBodyCandidates );
+        bool              forModScopePresent = false;
+        for( std::size_t i = 0; i < lensSurfaceIds.size() && i < forRowHead && !forModScopePresent; ++i )
+        {
+            const rw::NodeId sid = lensSurfaceIds[i];
+            forModScopePresent = lensRank[sid] > 0.0f && ing.symbols[sid].kind == rw::SymKind::ModuleScope;
+        }
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,

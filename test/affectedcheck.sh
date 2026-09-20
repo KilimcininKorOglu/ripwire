@@ -465,6 +465,38 @@ for L in compact full; do
         || ok "(8e) --for --legend=$L: no owner ⇒ no clause (0 bytes when inert)"
 done
 
+# ── 8f) #60 LOW-2: --for's clause rides on the ROW SET, not on the corpus ─────────────────────────────
+# The first cut of this bit tested the whole symbol table, so a corpus holding ONE top-level call paid the
+# clause on every --for answer — ~154 B compact / ~250 B full on the most-used verb, in front of the rows.
+# It now reads the head of the rank-ordered surface the <d> and <hops> rows are drawn from, so it rides
+# when an owner can actually be in the answer and costs nothing when it cannot. The corpus below has an
+# owner (index.ts's top-level call) AND a query that ranks nowhere near it: that combination is the arm.
+echo "=== (8f) #60: --for pays for the clause only when an owner row can be in the answer ==="
+for L in compact full; do
+    OWNED="$( "$BIN" "$TMP/issue60prod" --no-cache --for='module scope of a file' --legend=$L 2>/dev/null )"
+    printf '%s' "$OWNED" | grep -q 'modscope\|MODULE SCOPE' \
+        && ok "(8f) --for --legend=$L on a query that reaches the owner: the clause is present" \
+        || no "(8f) --for --legend=$L: an owner row is reachable and the clause is missing"
+done
+# THE NEGATIVE HALF NEEDS A REAL CORPUS: on a two-file fixture every symbol ranks, so an owner is always in
+# the head and the corpus-wide bug would hide. This repository has owners (704 shell files hold top-level
+# calls) and enough symbols that a technical query's ranked head reaches none of them — which is exactly
+# the shape that paid ~154 B on every answer before this fix.
+for L in compact full; do
+    for Q in "rank the graph with pagerank" "crawl the directory tree" "emit xml attributes"; do
+        AWAY="$( "$BIN" "$ROOT" --no-cache --for="$Q" --legend=$L 2>/dev/null )"
+        if printf '%s' "$AWAY" | grep -q '&lt;file-scope&gt;'; then
+            printf '%s' "$AWAY" | grep -q 'modscope\|MODULE SCOPE' \
+                && ok "(8f) --for --legend=$L '$Q': shows an owner row and defines it" \
+                || no "(8f) --for --legend=$L '$Q': shows an owner row with no definition"
+        else
+            printf '%s' "$AWAY" | grep -q 'modscope\|MODULE SCOPE' \
+                && no "(8f) --for --legend=$L '$Q': NO owner row in the answer, yet the clause still rides — the bit is corpus-wide again" \
+                || ok "(8f) --for --legend=$L '$Q': no owner row ⇒ no clause, on a corpus that HAS owners"
+        fi
+    done
+done
+
 # ── 8d) #60 MED-2: the legend says the owner has no body, and --expand agrees ──────────────────────────
 # Every clause naming this kind says "no body to expand". --expand used to answer either the WHOLE FILE
 # (the whole-file serving always undercuts an empty bundle) or shown="0" capped="1" — a cap over a body
