@@ -44,7 +44,7 @@
 #   RIPWIRE=<path to binary> is honored (same env var as run_locbench.py).
 #
 # Deterministic given (asset tree, split, binary): no LLM, no RNG, stable instance order.
-import argparse, hashlib, json, os, pathlib, re, subprocess, sys, time
+import argparse, collections, hashlib, json, os, pathlib, subprocess, sys, time
 import xml.etree.ElementTree as ET
 
 HERE = pathlib.Path( __file__ ).resolve().parent
@@ -152,19 +152,21 @@ RIPWIRE_EXTENSIONS = frozenset( ( ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".
                                   ".bash", ".md" ) )
 
 
-class RunConfig:
-    """The five knobs every per-instance step needs, carried as one object. Split out of a seven-
-    parameter function signature: the three measuring functions below each need a different subset,
-    and threading five positionals through all of them is how the cache dir and the asset dir end up
-    swapped at one call site and nowhere else."""
+# The five knobs every per-instance step needs, carried as one value. A namedtuple rather than a
+# class with an __init__: the five-positional signature it replaces is how a cache dir and an asset
+# dir get swapped at one call site and nowhere else, and a hand-written __init__ that only assigns
+# its arguments is a body this repository already has one copy of (bench/recalleval's Label) — its
+# own --quality-delta said so, which is the check working.
+RunConfig = collections.namedtuple( "RunConfig", "binary cache_dir query_chars limit verbose" )
 
-    def __init__( self, binary, cache_dir, query_chars, limit, verbose ):
-        self.binary, self.cache_dir = binary, cache_dir
-        self.query_chars, self.limit, self.verbose = query_chars, limit, verbose
 
-    def run( self, repo_dir, flags, timeout = 1800 ):
-        return subprocess.run( [ self.binary, str( repo_dir ) ] + flags,
-                               capture_output=True, text=True, timeout=timeout )
+def ripwire( cfg, repo_dir, flags, timeout = 1800 ):
+    """(stdout, returncode) from one binary invocation. Returns the pair rather than the
+    CompletedProcess so that every caller below has to look at the return code to reach the output —
+    a run whose rc nobody read is how an empty answer becomes a measured zero."""
+    done = subprocess.run( [ cfg.binary, str( repo_dir ) ] + flags,
+                           capture_output=True, text=True, timeout=timeout, errors="replace" )
+    return done.stdout, done.returncode
 
 
 def load_rows( assets ):
@@ -210,9 +212,9 @@ def instance_index( inst, repo_dir, cfg ):
     rich = pathlib.Path( str( base ) + ".rich.ripwirecache" )
     if rich.exists():
         return rich
-    r = cfg.run( repo_dir, [ "--index-out=%s" % base, "--top-k=1", "--no-cache" ], timeout=3600 )
-    if r.returncode != 0 or not rich.exists():
-        print( "# INDEX FAIL %s rc=%d" % ( inst["instance_id"], r.returncode ), file=sys.stderr )
+    _out, rc = ripwire( cfg, repo_dir, [ "--index-out=%s" % base, "--top-k=1", "--no-cache" ], timeout=3600 )
+    if rc != 0 or not rich.exists():
+        print( "# INDEX FAIL %s rc=%d" % ( inst["instance_id"], rc ), file=sys.stderr )
         return None
     return rich
 
@@ -222,10 +224,10 @@ def universe( repo_dir, query, rich, cfg ):
     WHOLE index. It answers a question the served head cannot — was the gold indexed at all — because
     a miss on a gold symbol the parser never emitted is a parser limit, and folding the two together
     would let a parse gap masquerade as a calibration gap."""
-    uni = cfg.run( repo_dir, [ "--query=%s" % query, "--format=candidates", "--top-k=1000000000",
-                               "--cache=%s" % rich ] )
+    out, rc = ripwire( cfg, repo_dir, [ "--query=%s" % query, "--format=candidates",
+                                        "--top-k=1000000000", "--cache=%s" % rich ] )
     try:
-        return LB.parse_candidates( uni.stdout, str( repo_dir ) )
+        return LB.parse_candidates( out, str( repo_dir ) ) if rc == 0 else []
     except Exception:                                            # noqa: BLE001 — an empty universe is
         return []                                                # reported as 0 coverage, never as a hit
 
@@ -256,14 +258,14 @@ def measure_instance( inst, repo_dir, gold, cfg ):
         return None, "index_fail"
     query = " ".join( inst.get( "problem_statement", "" ).split() )[:cfg.query_chars]
     t0 = time.perf_counter()
-    r = cfg.run( repo_dir, [ "--for=%s" % query, "--cache=%s" % rich ] )
+    out, rc = ripwire( cfg, repo_dir, [ "--for=%s" % query, "--cache=%s" % rich ] )
     wall = time.perf_counter() - t0
-    if r.returncode != 0:
-        print( "# FOR FAIL %s rc=%d" % ( inst["instance_id"], r.returncode ), file=sys.stderr )
+    if rc != 0:
+        print( "# FOR FAIL %s rc=%d" % ( inst["instance_id"], rc ), file=sys.stderr )
         return None, "for_fail"
     try:
-        attrs = root_attrs( r.stdout )
-        head, tail, hops = served_head( r.stdout )
+        attrs = root_attrs( out )
+        head, tail, hops = served_head( out )
     except Exception as e:                                       # noqa: BLE001 — bucketed, never silent
         print( "# PARSE FAIL %s: %s" % ( inst["instance_id"], e ), file=sys.stderr )
         return None, "parse_fail"
