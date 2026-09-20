@@ -11,19 +11,10 @@ oracle in full, because that residue is the only part that is evidence about the
 Usage: python3 bench/slice/inspect_slice_misses.py --results results.json --gold gold.json
 """
 
-import argparse, io, json, subprocess, tokenize
+import argparse, json
 from pathlib import Path
 
-
-def name_lines( source ):
-    out = {}
-    try:
-        for tok in tokenize.generate_tokens( io.StringIO( source ).readline ):
-            if tok.type == tokenize.NAME:
-                out.setdefault( tok.string, set() ).add( tok.start[ 0 ] )
-    except Exception:
-        return None
-    return out
+from _common import git, name_lines                    # one definition, shared across bench/slice
 
 
 def main():
@@ -39,8 +30,7 @@ def main():
     def source_of( iid ):
         if iid not in src_cache:
             g = gold[ iid ]
-            r = subprocess.run( [ "git", "-C", g[ "repo_dir" ], "show", f"{g['base_commit']}:{g['path']}" ],
-                                capture_output=True, text=True, errors="replace" )
+            r = git( g[ "repo_dir" ], "show", f"{g['base_commit']}:{g['path']}", ok_fail=True )
             src_cache[ iid ] = r.stdout if r.returncode == 0 else ""
         return src_cache[ iid ]
 

@@ -21,8 +21,10 @@ Usage:
       --work DIR [--json results.json] [--limit N]
 """
 
-import argparse, io, json, random, re, statistics, subprocess, sys, time, tokenize
+import argparse, json, random, re, statistics, subprocess, sys, time
 from pathlib import Path
+
+from _common import git, line_text, name_lines         # one definition, shared across bench/slice
 
 S_ROW   = re.compile( r'<s\b([^>]*)>' )
 ATTR    = re.compile( r'(\w+)="([^"]*)"' )
@@ -37,25 +39,6 @@ SHUFFLES = 200
 
 def attrs( s ):
     return dict( ATTR.findall( s ) )
-
-
-def name_lines( source ):
-    """{identifier: {line numbers where it occurs as a NAME token}} — the strict relevance oracle.
-
-    AMENDMENT 2026-09-20 (b), taken AFTER inspecting the registered oracle's misses and reported
-    BESIDE it, never instead of it: the registered oracle is a word regex over the line text, so it
-    counts a variable's name inside a docstring, a comment or a string literal as an occurrence the
-    slice ought to have rowed. Python's own tokenizer settles which occurrences are identifiers.
-    A file the tokenizer refuses (py2 syntax, decode trouble) yields None and that instance is
-    reported only under the registered oracle."""
-    out = {}
-    try:
-        for tok in tokenize.generate_tokens( io.StringIO( source ).readline ):
-            if tok.type == tokenize.NAME:
-                out.setdefault( tok.string, set() ).add( tok.start[ 0 ] )
-    except Exception:
-        return None
-    return out
 
 
 def run( binary, tree, args ):
@@ -111,6 +94,153 @@ def pack( numbered, budget ):
     return got
 
 
+def measure_instance( binary, tree, r, rng, skips, varinst, timings, acc, tag ):
+    """measure ONE carried row; return its instance row, or None when a stage disqualifies it.
+
+    `skips` and `acc` are the disclosure counters (why a row dropped out, and the per-gold-line
+    reachability cascade); `varinst` and `timings` collect the per-variable rows and the wall
+    clock. Every early return is a counted skip, never a silent one."""
+    src = tree / Path( r[ "path" ] ).name
+    show = git( r[ "repo_dir" ], "show", f"{r['base_commit']}:{r['path']}", ok_fail=True )
+    if show.returncode != 0:
+        skips[ "no_body" ] += 1; return None
+    src.write_text( show.stdout )
+    lines = show.stdout.splitlines()
+
+    sel = r[ "selector" ]
+    rc_inv, inv_out, inv_bytes, inv_ms = run( binary, tree, [ f"--slice={sel}" ] )
+    if rc_inv != 0:
+        skips[ "selector_scoped_refused" if r[ "scoped" ] else "selector_refused" ] += 1
+        return None
+    head = attrs( SLICE_H.search( inv_out ).group( 1 ) )
+    start = int( head[ "p" ].rsplit( ":", 1 )[ 1 ] )
+    invent = [ attrs( m.group( 1 ) )[ "n" ] for m in V_ROW.finditer( inv_out ) ]
+
+    rc_exp, exp_out, exp_bytes, exp_ms = run( binary, tree, [ f"--expand={sel}" ] )
+    # the body CDATA is followed by </b> only when the definition has no callees; with callees a
+    # <calls> element sits between, so anchor on the CDATA close, never on </b>.
+    body = re.search( r"<b\b[^>]*><!\[CDATA\[(.*?)\]\]>", exp_out, re.S )
+    if rc_exp != 0 or not body:
+        skips[ "no_body" ] += 1; return None
+    span_end = start + len( body.group( 1 ).splitlines() ) - 1
+    span = list( range( start, span_end + 1 ) )
+    gold_all = set( r[ "gold" ] )
+    acc[ "resolved" ] += len( gold_all )
+    gold = { n for n in gold_all if start <= n <= span_end }
+    acc[ "in_span" ] += len( gold )
+    if not gold:
+        skips[ "gold_all_outside_span" ] += 1; return None
+    if not invent:
+        skips[ "empty_inventory" ] += 1
+        # still counted in the reachability cascade above; no v1/v2 arm exists for it
+        return { "instance_id": r[ "instance_id" ], "empty_inventory": True,
+                 "gold_total": len( gold_all ), "gold_in_span": len( gold ),
+                 "span_lines": len( span ) }
+
+    # ---- arms, seed-free: every inventory variable, v1 and v2 ------------------------------
+    v1_by_var, v2_by_var, v1_bytes, v2_bytes = {}, {}, [], []
+    for var in invent:
+        rc1, o1, b1, ms1 = run( binary, tree, [ f"--slice={sel}:{var}" ] )
+        rc2, o2, b2, ms2 = run( binary, tree, [ f"--slice={sel}:{var}", "--slice-flow=both" ] )
+        timings.append( ( "v1", ms1 ) ); timings.append( ( "v2", ms2 ) )
+        if rc1 == 0:
+            v1_by_var[ var ] = slice_rows( o1 ); v1_bytes.append( b1 )
+        if rc2 == 0:
+            v2_by_var[ var ] = slice_rows( o2 ); v2_bytes.append( b2 )
+    timings.append( ( "inv", inv_ms ) ); timings.append( ( "expand", exp_ms ) )
+
+    def text_of( n ): return line_text( lines, n )
+    names = name_lines( show.stdout )
+    touched = sorted( { v for n in gold for v in WORD.findall( text_of( n ) ) if v in v1_by_var } )
+    if touched:
+        acc[ "naming_local" ] += len( { n for n in gold
+                                        if any( re.search( r"\b%s\b" % re.escape( v ), text_of( n ) ) for v in touched ) } )
+
+    # (a) set recall, per (instance, variable)
+    for var in touched:
+        rel = [ n for n in sorted( gold ) if re.search( r"\b%s\b" % re.escape( var ), text_of( n ) ) ]
+        if not rel:
+            continue                                   # this variable contributes no (instance, var) pair
+        l1 = { ln for ln, _, _ in v1_by_var[ var ] }
+        l2 = { ln for ln, _, _ in v2_by_var.get( var, [] ) }
+        hit1 = sum( 1 for n in rel if n in l1 )
+        hit2 = sum( 1 for n in rel if n in l2 )
+        rel_s = [ n for n in rel if n in names.get( var, () ) ] if names is not None else None
+        varinst.append( {
+            "instance_id": r[ "instance_id" ], "var": var, "relevant": len( rel ),
+            "v1_line_recall": hit1 / len( rel ), "v1_hit_all": hit1 == len( rel ),
+            "v2_line_recall": hit2 / len( rel ),
+            "v1_overinclusion": len( l1 ) / len( rel ), "v2_overinclusion": len( l2 ) / len( rel ),
+            "v1_missed": [ { "line": n, "text": text_of( n ).strip()[ :160 ] } for n in rel if n not in l1 ],
+            "relevant_strict": ( len( rel_s ) if rel_s is not None else None ),
+            "v1_line_recall_strict": ( ( sum( 1 for n in rel_s if n in l1 ) / len( rel_s ) ) if rel_s else None ),
+            "v1_hit_all_strict": ( all( n in l1 for n in rel_s ) if rel_s else None ),
+        } )
+
+    # (b) rank: R1 coverage, R2 flow depth, R2-oracle, random control
+    cover = { n: 0 for n in span }
+    for var, rr in v1_by_var.items():
+        for ln in { x[ 0 ] for x in rr }:
+            if ln in cover:
+                cover[ ln ] += 1
+    depth = { n: 10 ** 6 for n in span }
+    for var, rr in v2_by_var.items():
+        for ln, _, d in rr:
+            if ln in depth:
+                depth[ ln ] = min( depth[ ln ], d )
+    depth_o = { n: 10 ** 6 for n in span }
+    for var in touched:
+        for ln, _, d in v2_by_var.get( var, [] ):
+            if ln in depth_o:
+                depth_o[ ln ] = min( depth_o[ ln ], d )
+
+    r0_order = list( span )                                # plain source order: read the function top-down
+    r1_order = sorted( span, key=lambda n: ( -cover[ n ], n ) )
+    r2_order = sorted( span, key=lambda n: ( depth[ n ], -cover[ n ], n ) )
+    ro_order = sorted( span, key=lambda n: ( depth_o[ n ], -cover[ n ], n ) )
+    ctl, ctl_mrr = control_curve( span, gold, rng )
+
+    row = { "instance_id": r[ "instance_id" ], "repo": r[ "repo" ], "scoped": r[ "scoped" ],
+            "span_lines": len( span ), "gold_total": len( gold_all ), "gold_in_span": len( gold ),
+            "inventory": len( invent ), "touched_vars": len( touched ),
+            "inv_bytes": inv_bytes, "expand_bytes": exp_bytes,
+            "v1_bytes_mean": statistics.mean( v1_bytes ) if v1_bytes else None,
+            "v2_bytes_mean": statistics.mean( v2_bytes ) if v2_bytes else None,
+            "covered_lines": sum( 1 for n in span if cover[ n ] > 0 ),
+            "flow_lines": sum( 1 for n in span if depth[ n ] < 10 ** 6 ),
+            "mrr_r0": mrr( r0_order, gold ),
+            "mrr_r1": mrr( r1_order, gold ), "mrr_r2": mrr( r2_order, gold ),
+            "mrr_oracle": mrr( ro_order, gold ), "mrr_ctl": ctl_mrr }
+    for k in KS:
+        row[ f"r0@{k}" ] = recall_at_k( r0_order, gold, k )
+        row[ f"r1@{k}" ] = recall_at_k( r1_order, gold, k )
+        row[ f"r2@{k}" ] = recall_at_k( r2_order, gold, k )
+        row[ f"oracle@{k}" ] = recall_at_k( ro_order, gold, k )
+        row[ f"ctl@{k}" ] = ctl[ k ]
+
+    # (d) §5 fixed-budget granularity comparison — all three payloads line-numbered, so the
+    # score is by line number and the numbering cost is identical in every arm.
+    mid = ( start + span_end ) // 2
+    half = sorted( range( 1, len( lines ) + 1 ), key=lambda n: ( abs( n - mid ), n ) )
+    file_head   = [ ( n, text_of( n ) ) for n in range( 1, len( lines ) + 1 ) ]
+    file_window = [ ( n, text_of( n ) ) for n in sorted( half[ : min( len( lines ), 4 * len( span ) + 200 ) ] ) ]
+    # the window is centred on the function, so pack it outward from the centre
+    file_window = sorted( file_window, key=lambda t: ( abs( t[ 0 ] - mid ), t[ 0 ] ) )
+    symbol      = [ ( n, text_of( n ) ) for n in span ]
+    line_level  = [ ( n, text_of( n ) ) for n in r2_order ]
+    covered_src = [ n for n in span if cover[ n ] > 0 ] + [ n for n in span if cover[ n ] == 0 ]
+    line_filt   = [ ( n, text_of( n ) ) for n in covered_src ]
+    for b in BUDGETS:
+        for name, payload in ( ( "file_head", file_head ), ( "file_window", file_window ),
+                               ( "symbol", symbol ), ( "line_filtered", line_filt ), ( "line", line_level ) ):
+            got = set( pack( payload, b ) )
+            row[ f"budget{b}_{name}" ] = len( got & gold ) / len( gold )
+        row[ f"budget{b}_symbol_fits" ] = sum( len( f"{n}: {t}\n".encode() ) for n, t in symbol ) <= b
+    print( f"[{tag}] {r['instance_id']} span={len(span)} gold={len(gold)}/{len(gold_all)} "
+           f"inv={len(invent)} touched={len(touched)}", file=sys.stderr )
+    return row
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument( "--gold", required=True )
@@ -132,153 +262,15 @@ def main():
               "gold_all_outside_span": 0, "empty_inventory": 0 }
     inst, varinst, timings = [], [], []
     gold_carried = sum( len( x[ "gold" ] ) for x in rows )
-    gold_resolved = gold_in_span = gold_naming_local = 0
+    acc = { "resolved": 0, "in_span": 0, "naming_local": 0 }
 
     for i, r in enumerate( rows ):
         tree = work / f"i{i:04d}"
         tree.mkdir( exist_ok=True )
-        src = tree / Path( r[ "path" ] ).name
-        show = subprocess.run( [ "git", "-C", r[ "repo_dir" ], "show", f"{r['base_commit']}:{r['path']}" ],
-                               capture_output=True, text=True, errors="replace" )
-        if show.returncode != 0:
-            skips[ "no_body" ] += 1; continue
-        src.write_text( show.stdout )
-        lines = show.stdout.splitlines()
-
-        sel = r[ "selector" ]
-        rc_inv, inv_out, inv_bytes, inv_ms = run( binary, tree, [ f"--slice={sel}" ] )
-        if rc_inv != 0:
-            skips[ "selector_scoped_refused" if r[ "scoped" ] else "selector_refused" ] += 1
-            continue
-        head = attrs( SLICE_H.search( inv_out ).group( 1 ) )
-        start = int( head[ "p" ].rsplit( ":", 1 )[ 1 ] )
-        invent = [ attrs( m.group( 1 ) )[ "n" ] for m in V_ROW.finditer( inv_out ) ]
-
-        rc_exp, exp_out, exp_bytes, exp_ms = run( binary, tree, [ f"--expand={sel}" ] )
-        # the body CDATA is followed by </b> only when the definition has no callees; with callees a
-        # <calls> element sits between, so anchor on the CDATA close, never on </b>.
-        body = re.search( r"<b\b[^>]*><!\[CDATA\[(.*?)\]\]>", exp_out, re.S )
-        if rc_exp != 0 or not body:
-            skips[ "no_body" ] += 1; continue
-        span_end = start + len( body.group( 1 ).splitlines() ) - 1
-        span = list( range( start, span_end + 1 ) )
-        gold_all = set( r[ "gold" ] )
-        gold_resolved += len( gold_all )
-        gold = { n for n in gold_all if start <= n <= span_end }
-        gold_in_span += len( gold )
-        if not gold:
-            skips[ "gold_all_outside_span" ] += 1; continue
-        if not invent:
-            skips[ "empty_inventory" ] += 1
-            # still counted in the reachability cascade above; no v1/v2 arm exists for it
-            inst.append( { "instance_id": r[ "instance_id" ], "empty_inventory": True,
-                           "gold_total": len( gold_all ), "gold_in_span": len( gold ),
-                           "span_lines": len( span ) } )
-            continue
-
-        # ---- arms, seed-free: every inventory variable, v1 and v2 ------------------------------
-        v1_by_var, v2_by_var, v1_bytes, v2_bytes = {}, {}, [], []
-        for var in invent:
-            rc1, o1, b1, ms1 = run( binary, tree, [ f"--slice={sel}:{var}" ] )
-            rc2, o2, b2, ms2 = run( binary, tree, [ f"--slice={sel}:{var}", "--slice-flow=both" ] )
-            timings.append( ( "v1", ms1 ) ); timings.append( ( "v2", ms2 ) )
-            if rc1 == 0:
-                v1_by_var[ var ] = slice_rows( o1 ); v1_bytes.append( b1 )
-            if rc2 == 0:
-                v2_by_var[ var ] = slice_rows( o2 ); v2_bytes.append( b2 )
-        timings.append( ( "inv", inv_ms ) ); timings.append( ( "expand", exp_ms ) )
-
-        def text_of( n ): return lines[ n - 1 ] if 0 < n <= len( lines ) else ""
-        names = name_lines( show.stdout )
-        touched = sorted( { v for n in gold for v in WORD.findall( text_of( n ) ) if v in v1_by_var } )
-        if touched:
-            gold_naming_local += len( { n for n in gold
-                                        if any( re.search( r"\b%s\b" % re.escape( v ), text_of( n ) ) for v in touched ) } )
-
-        # (a) set recall, per (instance, variable)
-        for var in touched:
-            rel = [ n for n in sorted( gold ) if re.search( r"\b%s\b" % re.escape( var ), text_of( n ) ) ]
-            if not rel:
-                continue
-            l1 = { ln for ln, _, _ in v1_by_var[ var ] }
-            l2 = { ln for ln, _, _ in v2_by_var.get( var, [] ) }
-            hit1 = sum( 1 for n in rel if n in l1 )
-            hit2 = sum( 1 for n in rel if n in l2 )
-            rel_s = [ n for n in rel if n in names.get( var, () ) ] if names is not None else None
-            varinst.append( {
-                "instance_id": r[ "instance_id" ], "var": var, "relevant": len( rel ),
-                "v1_line_recall": hit1 / len( rel ), "v1_hit_all": hit1 == len( rel ),
-                "v2_line_recall": hit2 / len( rel ),
-                "v1_overinclusion": len( l1 ) / len( rel ), "v2_overinclusion": len( l2 ) / len( rel ),
-                "v1_missed": [ { "line": n, "text": text_of( n ).strip()[ :160 ] } for n in rel if n not in l1 ],
-                "relevant_strict": ( len( rel_s ) if rel_s is not None else None ),
-                "v1_line_recall_strict": ( ( sum( 1 for n in rel_s if n in l1 ) / len( rel_s ) ) if rel_s else None ),
-                "v1_hit_all_strict": ( all( n in l1 for n in rel_s ) if rel_s else None ),
-            } )
-
-        # (b) rank: R1 coverage, R2 flow depth, R2-oracle, random control
-        cover = { n: 0 for n in span }
-        for var, rr in v1_by_var.items():
-            for ln in { x[ 0 ] for x in rr }:
-                if ln in cover:
-                    cover[ ln ] += 1
-        depth = { n: 10 ** 6 for n in span }
-        for var, rr in v2_by_var.items():
-            for ln, _, d in rr:
-                if ln in depth:
-                    depth[ ln ] = min( depth[ ln ], d )
-        depth_o = { n: 10 ** 6 for n in span }
-        for var in touched:
-            for ln, _, d in v2_by_var.get( var, [] ):
-                if ln in depth_o:
-                    depth_o[ ln ] = min( depth_o[ ln ], d )
-
-        r0_order = list( span )                                # plain source order: read the function top-down
-        r1_order = sorted( span, key=lambda n: ( -cover[ n ], n ) )
-        r2_order = sorted( span, key=lambda n: ( depth[ n ], -cover[ n ], n ) )
-        ro_order = sorted( span, key=lambda n: ( depth_o[ n ], -cover[ n ], n ) )
-        ctl, ctl_mrr = control_curve( span, gold, rng )
-
-        row = { "instance_id": r[ "instance_id" ], "repo": r[ "repo" ], "scoped": r[ "scoped" ],
-                "span_lines": len( span ), "gold_total": len( gold_all ), "gold_in_span": len( gold ),
-                "inventory": len( invent ), "touched_vars": len( touched ),
-                "inv_bytes": inv_bytes, "expand_bytes": exp_bytes,
-                "v1_bytes_mean": statistics.mean( v1_bytes ) if v1_bytes else None,
-                "v2_bytes_mean": statistics.mean( v2_bytes ) if v2_bytes else None,
-                "covered_lines": sum( 1 for n in span if cover[ n ] > 0 ),
-                "flow_lines": sum( 1 for n in span if depth[ n ] < 10 ** 6 ),
-                "mrr_r0": mrr( r0_order, gold ),
-                "mrr_r1": mrr( r1_order, gold ), "mrr_r2": mrr( r2_order, gold ),
-                "mrr_oracle": mrr( ro_order, gold ), "mrr_ctl": ctl_mrr }
-        for k in KS:
-            row[ f"r0@{k}" ] = recall_at_k( r0_order, gold, k )
-            row[ f"r1@{k}" ] = recall_at_k( r1_order, gold, k )
-            row[ f"r2@{k}" ] = recall_at_k( r2_order, gold, k )
-            row[ f"oracle@{k}" ] = recall_at_k( ro_order, gold, k )
-            row[ f"ctl@{k}" ] = ctl[ k ]
-
-        # (d) §5 fixed-budget granularity comparison — all three payloads line-numbered, so the
-        # score is by line number and the numbering cost is identical in every arm.
-        mid = ( start + span_end ) // 2
-        half = sorted( range( 1, len( lines ) + 1 ), key=lambda n: ( abs( n - mid ), n ) )
-        file_head   = [ ( n, text_of( n ) ) for n in range( 1, len( lines ) + 1 ) ]
-        file_window = [ ( n, text_of( n ) ) for n in sorted( half[ : min( len( lines ), 4 * len( span ) + 200 ) ] ) ]
-        # the window is centred on the function, so pack it outward from the centre
-        file_window = sorted( file_window, key=lambda t: ( abs( t[ 0 ] - mid ), t[ 0 ] ) )
-        symbol      = [ ( n, text_of( n ) ) for n in span ]
-        line_level  = [ ( n, text_of( n ) ) for n in r2_order ]
-        covered_src = [ n for n in span if cover[ n ] > 0 ] + [ n for n in span if cover[ n ] == 0 ]
-        line_filt   = [ ( n, text_of( n ) ) for n in covered_src ]
-        for b in BUDGETS:
-            for name, payload in ( ( "file_head", file_head ), ( "file_window", file_window ),
-                                   ( "symbol", symbol ), ( "line_filtered", line_filt ), ( "line", line_level ) ):
-                got = set( pack( payload, b ) )
-                row[ f"budget{b}_{name}" ] = len( got & gold ) / len( gold )
-            row[ f"budget{b}_symbol_fits" ] = sum( len( f"{n}: {t}\n".encode() ) for n, t in symbol ) <= b
-        inst.append( row )
-        print( f"[{i+1}/{len(rows)}] {r['instance_id']} span={len(span)} gold={len(gold)}/{len(gold_all)} "
-               f"inv={len(invent)} touched={len(touched)}", file=sys.stderr )
-
+        row = measure_instance( binary, tree, r, rng, skips, varinst, timings, acc,
+                                f"{i+1}/{len(rows)}" )
+        if row is not None:
+            inst.append( row )
     # ---- summary -------------------------------------------------------------------------------
     scored = [ x for x in inst if not x.get( "empty_inventory" ) ]
     def m( key, src=None ):
@@ -289,9 +281,9 @@ def main():
         "binary": binary, "gold_file": a.gold,
         "rows_in": len( rows ), "scored_instances": len( scored ), "skips": skips,
         "var_instances": len( varinst ),
-        "gold_lines_carried": gold_carried, "gold_lines_after_resolve": gold_resolved,
-        "gold_lines_in_span": gold_in_span,
-        "gold_lines_naming_a_sliceable_local": gold_naming_local,
+        "gold_lines_carried": gold_carried, "gold_lines_after_resolve": acc[ "resolved" ],
+        "gold_lines_in_span": acc[ "in_span" ],
+        "gold_lines_naming_a_sliceable_local": acc[ "naming_local" ],
         "v1_line_recall_mean": statistics.mean( [ x[ "v1_line_recall" ] for x in varinst ] ) if varinst else None,
         "v1_hit_all_rate": ( sum( 1 for x in varinst if x[ "v1_hit_all" ] ) / len( varinst ) ) if varinst else None,
         "v1_line_recall_strict_mean": ( statistics.mean( [ x[ "v1_line_recall_strict" ] for x in varinst if x[ "v1_line_recall_strict" ] is not None ] )

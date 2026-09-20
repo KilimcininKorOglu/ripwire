@@ -15,6 +15,8 @@ Usage:
 import argparse, json, shutil, subprocess, sys, time
 from pathlib import Path
 
+from _common import git                                # one definition, shared across bench/slice
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -37,7 +39,7 @@ def main():
         tree = work / r[ "instance_id" ]
         shutil.rmtree( tree, ignore_errors=True ); tree.mkdir( parents=True )
         tar = subprocess.run( [ "git", "-C", r[ "repo_dir" ], "archive", r[ "base_commit" ] ],
-                              capture_output=True )
+                              capture_output=True )                 # bytes, not text: git() decodes
         if tar.returncode != 0:
             continue
         subprocess.run( [ "tar", "-x", "-C", str( tree ) ], input=tar.stdout, check=True )

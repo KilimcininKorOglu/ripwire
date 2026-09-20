@@ -21,17 +21,12 @@ Usage:
 repository checkouts named `owner__repo`. Every directory directly under DIR is scanned for those.
 """
 
-import argparse, json, os, re, subprocess, sys
+import argparse, json, os, re, sys
 from pathlib import Path
 
+from _common import git                                # one definition, shared across bench/slice
+
 HUNK = re.compile( r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@" )
-
-
-def git( repo, *args, ok_fail=False ):
-    r = subprocess.run( [ "git", "-C", str( repo ) ] + list( args ), capture_output=True, text=True, errors="replace" )
-    if r.returncode != 0 and not ok_fail:
-        raise RuntimeError( f"git {' '.join(args)} in {repo}: rc={r.returncode}\n{r.stderr[:400]}" )
-    return r
 
 
 def index_checkouts( assets ):
@@ -98,6 +93,39 @@ def selector_for( path, fn ):
     return f"{base}::" + "::".join( fn.split( "." ) ) if "." in fn else f"{base}:{fn}"
 
 
+def carry_row( r, idx, census ):
+    """the carried instance for one dataset row, or None — every None bumps a census counter.
+
+    Qualification stages 1, 2, 4, 6 of docs/research/slice-line-recall.md §2; stages 3 (single
+    function) and 5/7 (selector, inventory) are handled by the caller and by the runner, so that
+    nothing here needs the binary."""
+    efs = r[ "edit_functions" ]
+    slug = r[ "repo" ].replace( "/", "__" )
+    if slug not in idx:
+        census[ "no_checkout" ] += 1; return None
+    repo = idx[ slug ]
+    if git( repo, "cat-file", "-e", r[ "base_commit" ] + "^{commit}", ok_fail=True ).returncode != 0:
+        census[ "no_commit" ] += 1; return None
+    path, _, fn_name = efs[ 0 ].rpartition( ":" )
+    if not path.endswith( ".py" ):
+        census[ "not_python" ] += 1; return None
+    if git( repo, "show", f"{r['base_commit']}:{path}", ok_fail=True ).returncode != 0:
+        census[ "file_missing_at_base" ] += 1; return None
+    secs = file_sections( r[ "patch" ] )
+    if path not in secs:
+        census[ "no_patch_section" ] += 1; return None
+    gold, deleted, anchors = gold_pre_lines( secs[ path ] )
+    if not gold:
+        census[ "no_gold_line" ] += 1; return None
+    return {
+        "instance_id": r[ "instance_id" ], "repo": r[ "repo" ], "repo_dir": repo,
+        "base_commit": r[ "base_commit" ], "path": path, "fn": fn_name,
+        "selector": selector_for( path, fn_name ), "scoped": "." in fn_name,
+        "gold": gold, "gold_deleted": deleted, "gold_anchor": anchors,
+        "patch_files": len( secs ), "category": r.get( "category" ),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument( "--assets", required=True, help="directory holding datasets/ and the repo checkouts" )
@@ -130,38 +158,16 @@ def main():
         efs = r[ "edit_functions" ]
         if len( efs ) != 1:
             census[ "multi_function" if len( efs ) > 1 else "zero_function" ] += 1
-            # gold-line accounting for the unreachable population: count its patch lines too
             if len( efs ) > 1:
                 for sec in file_sections( r[ "patch" ] ).values():
                     gold_lines_multi += len( gold_pre_lines( sec )[ 0 ] )
             continue
-        slug = r[ "repo" ].replace( "/", "__" )
-        if slug not in idx:
-            census[ "no_checkout" ] += 1; continue
-        repo = idx[ slug ]
-        if git( repo, "cat-file", "-e", r[ "base_commit" ] + "^{commit}", ok_fail=True ).returncode != 0:
-            census[ "no_commit" ] += 1; continue
-        path, _, fn = efs[ 0 ].rpartition( ":" )
-        if not path.endswith( ".py" ):
-            census[ "not_python" ] += 1; continue
-        show = git( repo, "show", f"{r['base_commit']}:{path}", ok_fail=True )
-        if show.returncode != 0:
-            census[ "file_missing_at_base" ] += 1; continue
-        secs = file_sections( r[ "patch" ] )
-        if path not in secs:
-            census[ "no_patch_section" ] += 1; continue
-        gold, deleted, anchors = gold_pre_lines( secs[ path ] )
-        if not gold:
-            census[ "no_gold_line" ] += 1; continue
+        got = carry_row( r, idx, census )
+        if got is None:
+            continue
         census[ "carried" ] += 1
-        gold_lines_total += len( gold )
-        carried.append( {
-            "instance_id": r[ "instance_id" ], "repo": r[ "repo" ], "repo_dir": repo,
-            "base_commit": r[ "base_commit" ], "path": path, "fn": fn,
-            "selector": selector_for( path, fn ), "scoped": "." in fn,
-            "gold": gold, "gold_deleted": deleted, "gold_anchor": anchors,
-            "patch_files": len( secs ), "category": r.get( "category" ),
-        } )
+        gold_lines_total += len( got[ "gold" ] )
+        carried.append( got )
 
     out = { "dataset": str( ds ), "checkout_dirs": len( idx ), "census": census,
             "gold_lines_carried": gold_lines_total, "gold_lines_multi_function": gold_lines_multi,
