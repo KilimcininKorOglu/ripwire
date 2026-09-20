@@ -357,10 +357,10 @@ printf '%s' "$CA" | grep -q '<s t="modscope" n="&lt;file-scope&gt;" p="src/index
 # HONESTY, IN EVERY POSTURE. The default CLI legend is compact and the clause is a present-only term
 # (compactlegend.h, keyed on the t= VALUE); --legend=full takes the conditional clause in graphlegend.h.
 # Both must define the kind, and the two must be asserted separately — a reader holds one or the other.
-printf '%s' "$CA" | grep -q 't=modscope n=<file-scope>' \
+printf '%s' "$CA" | grep -q '(t=modscope)' \
     && ok "(8b) the compact callers legend defines t=\"modscope\" in the document that emits it" \
     || no "(8b) --callers emits t=\"modscope\" and its compact legend never defines it"
-printf '%s' "$IM" | grep -q 't=modscope n=<file-scope>' \
+printf '%s' "$IM" | grep -q '(t=modscope)' \
     && ok "(8b) the compact impact legend defines t=\"modscope\" too" \
     || no "(8b) --impact emits t=\"modscope\" and its compact legend never defines it"
 for v in callers impact; do
@@ -382,6 +382,78 @@ LON="$( "$BIN" "$R" --no-cache --callers=lonely 2>/dev/null )"
 MIDC="$( "$BIN" "$R" --no-cache --callers=leaf 2>/dev/null )"
 [ "$( attr count "$MIDC" )" = 2 ] && ok "(8b) control: --callers=leaf still count=\"2\" (mid + test_leaf)" \
     || no "(8b) control: --callers=leaf is now count=\"$( attr count "$MIDC" )\", expected 2"
+
+# ── 8c) #60 honesty: the kind is defined in every POSTURE and SURFACE that shows it ────────────────────
+# The first round defined t="modscope" only on the default <s> rows of --callers/--impact. The kind reaches
+# a reader through a dozen spellings — a columnar <kind> array item, <h n=>, <edge caller=>, <u sym=>,
+# <c n=> — and "a definition where the reader meets it" is the whole contract. The compact dialect now keys
+# the reading on the NAME (compactlegend.h kModScopeEscapedName), which every surface escapes identically;
+# the full dialect takes graphlegend.h modScopeLegend( bool ) at each verb, on that verb's own row set.
+echo "=== (8c) #60: t=\"modscope\" defined in every posture that shows it ==="
+sawmod(){ printf '%s' "$2" | grep -q '&lt;file-scope&gt;'; }                       # does this document SHOW one?
+defmod(){ printf '%s' "$2" | grep -qE 't=modscope|modscope" is a row'; }           # …and define it?
+for POSTURE in default compact full columnar; do
+    case "$POSTURE" in
+        default)  EXTRA="" ;;
+        compact)  EXTRA="--legend=compact" ;;
+        full)     EXTRA="--legend=full" ;;
+        columnar) EXTRA="--format=columnar" ;;
+    esac
+    for V in "--callers=setPhase" "--impact=setPhase"; do
+        O="$( "$BIN" "$TMP/issue60prod" --no-cache $V $EXTRA 2>/dev/null )"
+        if sawmod "$V" "$O"; then
+            defmod "$V" "$O" && ok "(8c) $V $POSTURE: row shown AND kind defined" \
+                || no "(8c) $V $POSTURE: shows <file-scope> with NO definition anywhere in the document"
+        else
+            no "(8c) $V $POSTURE: no <file-scope> row at all — the posture arm proves nothing"
+        fi
+    done
+done
+# the surfaces beyond <s> rows: a graph-query row, a safe-delete caller row, a callees selector
+for PAIR in "--graph-query=all()|full" "--graph-query=all()|compact" "--safe-delete=setPhase|full" "--safe-delete=setPhase|compact"; do
+    V="${PAIR%|*}"; L="${PAIR#*|}"
+    O="$( "$BIN" "$TMP/issue60prod" --no-cache "$V" --legend=$L 2>/dev/null )"
+    if sawmod "$V" "$O"; then
+        defmod "$V" "$O" && ok "(8c) $V --legend=$L: row shown AND kind defined" \
+            || no "(8c) $V --legend=$L: shows <file-scope> with NO definition"
+    else
+        no "(8c) $V --legend=$L: no <file-scope> row — the arm proves nothing"
+    fi
+done
+# …and 0 bytes on a corpus with NO file-scope call at all, in every one of those postures (the placement
+# rule). The control corpus has to be built for it: every other fixture in this gate holds a top-level shell
+# command or a node:test call, which is exactly the shape that mints an owner.
+NOMS="$TMP/noms/src"; mkdir -p "$NOMS"
+printf 'int leafy() { return 1; }\nint stalk() { return leafy(); }\n' > "$NOMS/tree.cpp"
+for L in compact full; do
+    for V in "--callers=leafy" "--graph-query=all()"; do
+        O="$( "$BIN" "$TMP/noms" --no-cache "$V" --legend=$L 2>/dev/null )"
+        printf '%s' "$O" | grep -q 'modscope' \
+            && no "(8c) $V --legend=$L pays for the clause with no modscope row in the document" \
+            || ok "(8c) $V --legend=$L: no row ⇒ no clause (0 bytes when inert)"
+    done
+done
+
+# ── 8d) #60 MED-2: the legend says the owner has no body, and --expand agrees ──────────────────────────
+# Every clause naming this kind says "no body to expand". --expand used to answer either the WHOLE FILE
+# (the whole-file serving always undercuts an empty bundle) or shown="0" capped="1" — a cap over a body
+# that does not exist, and "a false _capped is a wrong answer". Both now answer bodyless, capped="0", with
+# the count named and defined.
+echo "=== (8d) #60: --expand on a module-scope owner is bodyless, not capped, not the file ==="
+EX="$( "$BIN" "$TMP/issue60prod" --no-cache --expand='<file-scope>' 2>/dev/null )"
+printf '%s' "$EX" | grep -q 'capped="0"' && printf '%s' "$EX" | grep -q 'bodyless="1"' \
+    && ok '(8d) --expand=<file-scope> answers capped="0" bodyless="1"' \
+    || no "(8d) --expand=<file-scope>: $( printf '%s' "$EX" | grep -oE '<bodies [^>]*>' )"
+printf '%s' "$EX" | grep -q 'mode="whole-file"' \
+    && no "(8d) --expand=<file-scope> served the WHOLE FILE — the legend says it has no body" \
+    || ok "(8d) --expand=<file-scope> did not fall back to serving the file"
+printf '%s' "$EX" | grep -q 'bodyless=N' \
+    && ok "(8d) bodyless= is defined in the document that emits it" \
+    || no "(8d) --expand emits bodyless= and never defines it"
+EXN="$( "$BIN" "$T60/named" --no-cache --expand=bounded 2>/dev/null )"
+printf '%s' "$EXN" | grep -q 'bodyless=' \
+    && no "(8d) an ordinary body's answer carries bodyless= (absent-at-zero broken)" \
+    || ok "(8d) control: an ordinary --expand carries no bodyless= and no clause"
 
 # ── 6) xml well-formed ───────────────────────────────────────────────────────────────────────────────
 if command -v xmllint >/dev/null 2>&1; then

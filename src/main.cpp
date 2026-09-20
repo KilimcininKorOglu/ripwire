@@ -1454,12 +1454,17 @@ inline ChurnRanking churnRankedGraph( const MainDispatch& d )
 // disabling it: renderWholeFiles compresses the whole-file candidate, chooseExpandServe holds the
 // whole-file candidate to the same pack budget packBodies enforces on the bundle, and the reason=
 // disclosure compares the shaped candidates. Gates: compresscheck / overbudgetcommentcheck.
-inline bool expandAutoServeScope( const rw::Config& cfg, bool anyExpandRange, bool bodiesRendered )
+// #60: …and NOT when every expanded symbol is a module-scope owner. Such a symbol is bodyless by
+// construction (its Symbol extent is empty — ingest_model.h assignSymbols), so the bundle costs almost
+// nothing and the whole file always undercuts it. Serving the file would answer a question nobody asked:
+// the module scope is the statements OUTSIDE every definition, and the file is mostly the definitions.
+// Every legend that names this kind says it has no body to expand, so the verb must not hand back one.
+inline bool expandAutoServeScope( const rw::Config& cfg, bool anyExpandRange, bool bodiesRendered, bool allModuleScope )
 {
     return !cfg.expand.empty() && !cfg.topKExplicit && !cfg.json
         && cfg.outline.empty() && !cfg.packSignatures && cfg.packTopN == 0
         && cfg.query.empty() && !cfg.adaptive && cfg.maxTokens == 0
-        && !anyExpandRange && bodiesRendered;
+        && !anyExpandRange && bodiesRendered && !allModuleScope;
 }
 
 // THE CHOICE: whole-file when the served file bytes undercut the measured bundle, else bundle; ties go
@@ -2384,7 +2389,10 @@ int runDefaultMap( const MainDispatch& d )
         rw::formatTo( noteBuf, sizeof( noteBuf ), kMapRidesAlongFmt, mapTopK );
         noteBytes = std::strlen( noteBuf );
     }
-    if( expandAutoServeScope( cfg, !expandRanges.empty(), bodiesSection.isRendered ) )
+    const bool expandAllModuleScope = !expandNodes.empty()
+        && std::all_of( expandNodes.begin(), expandNodes.end(),
+                        [ & ]( rw::NodeId n ) { return n < ing.symbols.size() && ing.symbols[ n ].kind == rw::SymKind::ModuleScope; } );
+    if( expandAutoServeScope( cfg, !expandRanges.empty(), bodiesSection.isRendered, expandAllModuleScope ) )
     {
         // Bundle total = "<ctx>" + the map as it would actually be emitted (payload token digits included)
         // + the pre-rendered <bodies> + "</ctx>". Rendering-and-measuring beats arithmetic here: the map's

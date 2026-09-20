@@ -282,6 +282,13 @@ struct CompactCompletenessTerm
                                           // element means different things on two verbs (<f files=> on context-ratio vs ensemble)
 };
 
+// #60: the escaped spelling of the module-scope owner's name, as it reaches a rendered document, and the
+// compact reading it pulls in. One constant each so the scan and the sentence cannot drift apart.
+inline constexpr std::string_view kModScopeEscapedName = "&lt;file-scope&gt;";
+inline constexpr std::string_view kCompactModScopeReading =
+    "<file-scope> (t=modscope): a file's MODULE SCOPE — where a top-level call and an anonymous callback "
+    "body's calls live; a CALLER, never a callee, with no body to expand";
+
 inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
 {
     { "counts_floor",      "counts_floor=1: every count is a FLOOR, never a total" },
@@ -303,11 +310,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
     { "declined_calls",    "declined_calls=K: K call sites left unbound (several defs, none chosen), in no count or row" },
-    // Issue #60: the module-scope owner's kind, and the first term keyed on a VALUE rather than on an
-    // attribute's presence — `t=` is on every <s> row, so only `t="modscope"` may pull this reading in.
-    // Present-only like the rest: a corpus with no file-scope call emits no such row and pays 0 bytes, which
-    // is what keeps the three graphlegendbudgetcheck pins and every compact byte ceiling where they were.
-    { "t",                 "t=modscope n=<file-scope>: a row for the file's MODULE SCOPE, where a top-level call and an anonymous callback body's calls live; a CALLER, never a callee, with no body to expand", false, "s", MapHeaderRead::No, "modscope" },
+    // #60: <bodies bodyless=N> — requested symbols with no body BY CONSTRUCTION (a module-scope owner), so
+    // capped= stays 0. Absent at zero, like every term here.
+    { "bodyless",          "bodyless=N of total=: requested symbols with NO body by construction (t=modscope), never in shown=, never raising capped=", true },
     // --uses=Owner.field's member form (fielduses.h appends kUsesFieldLegend to that answer alone). owner_candidates= is a
     // row attribute that exists only beside member=, so one head term defines the whole form.
     { "member",            "member=Owner.field: rows use that field; pinned=/amb_sites= rows with one owner/with owner_candidates=K; owners_of_name= fields so named" },
@@ -1585,6 +1590,18 @@ inline std::string compactLegendText( const CompactLegendSpec& spec, std::string
     };
     std::ranges::for_each( kCompactCompletenessTerms, appendPresent );
     std::ranges::for_each( kCompactAttributeReadings, appendPresent );
+    // #60: the module-scope owner is the one kind that arrives under a dozen different spellings —
+    // <s t="modscope">, a columnar <kind> array item, <h n=>, <edge caller=>, <u sym=>, <c n=>, <t t=> —
+    // so keying this reading on an element or an attribute would have to enumerate them and would miss the
+    // next one. It keys on the NAME instead, which every surface escapes identically and which no source
+    // identifier can collide with (angle brackets are not a legal identifier in any indexed language).
+    // Present-only like every term above: a document without such a row pays 0 bytes.
+    if( doc.find( kModScopeEscapedName ) != std::string_view::npos )
+    {
+        out += ' ';
+        out.append( kCompactModScopeReading );
+        out += '.';
+    }
     out += " -->";
     return out;
 }

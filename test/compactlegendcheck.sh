@@ -2044,7 +2044,19 @@ for f in leak_anon.cpp leak_plain.cpp leak_lambda.cpp leak_c.c leak_objc.m leak_
 done
 "$BIN" "$XHOT"  --skipped --legend=compact >"$TMP/s.hot"  2>/dev/null </dev/null
 "$BIN" "$XLEAK" --skipped --legend=compact >"$TMP/s.leak" 2>/dev/null </dev/null
-liveDoc(){ case "$1" in extent_suspect_files|extent_suspect_syms) printf '%s' "$TMP/s.hot" ;; macro_blanked_files|macro_blanked) printf '%s' "$TMP/s.leak" ;; *) printf '' ;; esac; }
+# #60: graphlegend.h kModScopeLegend is conditional and its clause opens with `t="modscope"`, so the source
+# reader above asks for a `t` term. It deliberately has none. `t=` is not an absent-at-zero attribute like
+# the rest of this population — it is on EVERY <s> row of every ranked answer, and a term keyed on it would
+# print its reading on documents that hold no owner at all. The compact dialect defines this kind by the one
+# thing every surface spells identically (the NAME, compactlegend.h kModScopeEscapedName → the reading it
+# pulls in), which also covers the columnar <kind> array, <h n=>, <edge caller=> and <u sym=> that a term
+# keyed on an element never would. So it takes this arm's OTHER route — proven live, never on trust: the
+# document below must CARRY t= in its payload and DEFINE it in its legend.
+MODS="$TMP/modscope/src"; mkdir -p "$MODS"
+printf 'export function setPhase(p: string): void { console.log(p) }\n' > "$MODS/lifecycle.ts"
+printf "import { setPhase } from './lifecycle'\nsetPhase('starting')\n"  > "$MODS/index.ts"
+"$BIN" "$TMP/modscope" --no-cache --callers=setPhase --legend=compact >"$TMP/s.mods" 2>/dev/null </dev/null
+liveDoc(){ case "$1" in extent_suspect_files|extent_suspect_syms) printf '%s' "$TMP/s.hot" ;; macro_blanked_files|macro_blanked) printf '%s' "$TMP/s.leak" ;; t) printf '%s' "$TMP/s.mods" ;; *) printf '' ;; esac; }
 while IFS='|' read -r kind name where <&3; do
     case "$kind" in
         PASS) ok "(S) $name" ;;
@@ -2055,7 +2067,7 @@ while IFS='|' read -r kind name where <&3; do
             if [ -z "$doc" ]; then
                 no "(S) $name= ($where) has NO kCompactCompletenessTerms row — under --legend=compact it reaches the reader undefined"
             elif [ "$( ca carries "$doc" "$name" )" = 1 ] && [ "$( ca defines "$doc" "$name" )" = 1 ]; then
-                ok "(S) $name= ($where) needs no term: its --skipped clause is a comment compact KEEPS, verified live (carried and defined)"
+                ok "(S) $name= ($where) needs no term: the compact dialect defines it another way, verified live (carried and defined)"
             else
                 no "(S) $name= ($where) has no term, and its live --skipped compact document does not carry and define it (carried=$( ca carries "$doc" "$name" ) defined=$( ca defines "$doc" "$name" ))"
             fi ;;

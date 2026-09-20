@@ -175,6 +175,39 @@ printf '%s' "$OTL" | grep -q 'sym="helper_called"' \
     && { no "shell toplevel: helper_called() wrongly flagged dead (fn→fn edge — always worked)"; printf '%s\n' "$OTL" | tr '>' '\n' | grep '<r '; } \
     || ok "shell toplevel: helper_called() silent (called from inside runner — control)"
 
+# ── 2c) A DECLINED TOP-LEVEL CALL STILL KEEPS ITS CALLEE ALIVE (issue #60 regression fence) ─────────────
+#   Arm 2b's top-level calls each name ONE definition, so they resolve and the callee has an in-edge —
+#   which is why 2b stayed green when the file-scope evidence source went empty. The uncovered shape is a
+#   top-level call the resolver DECLINES: two same-named definitions, neither in the caller's file or
+#   directory, so tier 3 picks none and mints NO edge. Before #60 `topLevelCalleeNameHashes` caught it via
+#   fromSymbol == kNoNode; the module-scope owner made that predicate select nothing, and --quality-delta
+#   then GATED dead-code on pkg1/mod1.py::setup — untouched by the commit and genuinely called from
+#   run/run.py. Commit 2 adds the second definition and touches nothing else, so a gating finding on the
+#   FIRST one can only come from evidence the change lost.
+DC="$WORK/declined"; mkdir -p "$DC/pkg1" "$DC/run"
+( cd "$DC" && git init -q && git config user.email t@t && git config user.name t )
+printf 'def setup():\n    return 1\n' > "$DC/pkg1/mod1.py"
+printf 'setup()\n'                    > "$DC/run/run.py"
+( cd "$DC" && git add -A >/dev/null 2>&1 && git commit -qm one >/dev/null 2>&1 )
+mkdir -p "$DC/pkg2"
+printf 'def setup():\n    return 2\n' > "$DC/pkg2/mod2.py"
+( cd "$DC" && git add -A >/dev/null 2>&1 && git commit -qm two >/dev/null 2>&1 )
+# premise: the call really is DECLINED, so no in-edge exists and only the file-scope evidence can save it
+ODC_C="$( cd "$DC" && "$BIN" . --no-cache --callers=setup 2>/dev/null )"
+printf '%s' "$ODC_C" | grep -q 'declined_calls="1"' && printf '%s' "$ODC_C" | grep -q 'count="0"' \
+    && ok "declined toplevel: premise holds — --callers=setup count=\"0\" declined_calls=\"1\" (no in-edge to lean on)" \
+    || { no "declined toplevel: premise broken, the arms below would prove nothing: $ODC_C"; }
+( cd "$DC" && "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache >"$WORK/dc.xml" 2>/dev/null ); DCRC=$?
+[ "$DCRC" = 0 ] \
+    && ok "declined toplevel: --quality-delta exits 0 — an untouched, genuinely-called setup() is not gated" \
+    || { no "declined toplevel: --quality-delta exited $DCRC on a commit that only ADDED a file"; tr '>' '\n' < "$WORK/dc.xml" | grep '<r '; }
+grep -q 'kind="dead-code" sym="setup" p="pkg1/mod1.py' "$WORK/dc.xml" \
+    && { no "declined toplevel: pkg1/mod1.py::setup flagged dead — its top-level call site IS a use"; tr '>' '\n' < "$WORK/dc.xml" | grep '<r '; } \
+    || ok "declined toplevel: pkg1/mod1.py::setup is not in the dead set"
+grep -oE 'gating="[0-9]+"' "$WORK/dc.xml" | head -1 | grep -q 'gating="0"' \
+    && ok "declined toplevel: gating=\"0\"" \
+    || { no "declined toplevel: $( grep -oE 'gating="[0-9]+"' "$WORK/dc.xml" | head -1 )"; }
+
 # ── 3) ACK RATCHET ──────────────────────────────────────────────────────────────────────────────────────
 #   A real complexity regression fires; --quality-ack records it with a reason; the re-run suppresses it
 #   (exit 0, acked="1"); worsening it PAST the acked magnitude makes it reappear (the ratchet).

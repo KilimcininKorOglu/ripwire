@@ -362,7 +362,7 @@ inline constexpr const char* kUsesLegendOpen =
     // defining it — a reader had to guess it was the CALLER's canonical id from shape alone. Written to the
     // shortest honest form, deliberately: test/graphlegendbudgetcheck.sh's ratchet exists to stop the shared
     // prose essay re-inflating, and a missing honesty fact is not a licence to spend 370 B stating it.
-    "in_id=canonical id (root-relative path::scope::name) of the symbol the site sits INSIDE; a scope-less enclosing symbol degrades to its bare name; <file-scope> is the file's MODULE SCOPE (top level or an anonymous callback), a caller with no body. "; // LB-G, #60
+    "in_id=canonical id (root-relative path::scope::name) of the symbol the site sits INSIDE; a scope-less enclosing symbol degrades to its bare name; <file-scope> is the file's MODULE SCOPE, owning a top-level or anonymous-callback CALL; absent for other roles there. "; // LB-G, #60
 
 // The member-variable round (card A3): the clause the `Owner.field` answer appends to the opener above — ONLY
 // on that answer, so the name-matched --uses legend keeps its byte budget (test/graphlegendbudgetcheck.sh) and

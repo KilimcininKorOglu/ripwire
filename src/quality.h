@@ -557,12 +557,28 @@ inline bool startsWithRegisteredMacro( std::string_view region, const std::vecto
 // mark a symbol live) with only the fromSymbol test inverted. NAME-level matching, not per-target resolution
 // — the same heuristic level as the resolver's bare-name spray, and a collision errs in the safe direction
 // (false-live, never false-dead). Sorted + deduped for binary_search; deterministic (reference order is).
+//
+// ISSUE #60 — "FILE SCOPE" IS NOW A SYMBOL, AND THIS SET MUST STILL SEE IT. ingest_model.h
+// mintModuleScopeOwners gives a top-level call an owner, so `fromSymbol == kNoNode` alone stopped selecting
+// anything on a code corpus and this evidence source silently went EMPTY. What that costs is not
+// hypothetical: a file-scope call the resolver DECLINES (tier 3 — several same-named defs, none in the
+// caller's file or directory) mints no in-edge either, so its callee had no evidence left at all and
+// --quality-delta gated dead-code on an untouched, genuinely-called function (measured: +154 dead keys on
+// vue-core, +98 on django, +64 here). The mint only ever ADDS a caller, so this predicate widens to match:
+// a reference owned BY a module-scope owner is exactly the file-scope reference it used to be. kNoNode is
+// kept beside it — a non-call reference outside every definition still has no owner (emitReferences takes
+// findOwnedDef for those roles), and a corpus the mint never ran over must read the same as before.
 inline std::vector<std::uint64_t> topLevelCalleeNameHashes( const IngestResult& ing )
 {
+    const auto atFileScope = [ & ]( const Reference& r ) noexcept
+    {
+        return r.fromSymbol == kNoNode
+            || ( r.fromSymbol < ing.symbols.size() && ing.symbols[ r.fromSymbol ].kind == SymKind::ModuleScope );
+    };
     std::vector<std::uint64_t> hashes;
     for( const Reference& r : ing.references )
     {
-        if( r.fromSymbol != kNoNode || r.isInherit || r.isDocLink || r.isCompose
+        if( !atFileScope( r ) || r.isInherit || r.isDocLink || r.isCompose
             || ( r.role != RefRole::Call && r.role != RefRole::Macro ) )
         {
             continue;

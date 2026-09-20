@@ -117,7 +117,13 @@ enum class CallDisposition : std::uint8_t
     QualifiedExternal = 6,   // a Rust `Scope::name()` call no in-repo member of `Scope` can answer (the H4 W3 guard)
     Declined          = 7,   // tier 3: two or more same-language candidates, none in the caller's file or directory, none
                              // pinned by a qualifier or a receiver rule — header declined=, answers' declined_calls=
-    FileScope         = 8,   // a call outside every symbol (module / file scope): there is no caller node to hang an edge on
+    FileScope         = 8,   // a call outside every symbol with no caller node to hang an edge on. Since issue #60
+                             // ingest_model.h mintModuleScopeOwners gives every such call a module-scope owner over
+                             // exactly isResolvableCallReference's population below, so on a code corpus this bucket
+                             // is UNREACHABLE and a non-zero count means the mint and this loop have drifted apart
+                             // (test/declinecheck.sh arm (F) asserts the zero). Kept, not deleted: it stays the honest
+                             // answer if a lane ever emits a call reference for a non-code language, and a 0 here
+                             // reads "none found", never "none exists".
     Unaccounted       = 9    // an exit that named no bucket. Always a resolver bug: buildGraph raises a degrade alert
 };
 inline constexpr std::size_t kCallDispositionCount = 10;   // one past Unaccounted — size every per-disposition array with this

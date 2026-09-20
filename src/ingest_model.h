@@ -236,6 +236,15 @@ inline constexpr const char* kModuleScopeName = "<file-scope>";
 // grammar, and twelve indexed languages were measured to carry the defect (sh, py, js, cpp, ts, rb, lua,
 // java, php, kt, gd, c). Config/doc lanes emit no call edges, so the role/lang filter mints nothing there.
 //
+// TWO LANGUAGES ARE STATED RATHER THAN FIXED, because the gap is upstream of this pass and a silent scope
+// would be indistinguishable from an oversight. A Ruby bare-word call written without parentheses
+// (`rb_fn` on its own line) and a C# top-level-statements call (`CsFn();` in a file with no type
+// declaration) produce NO Call reference at all — before this change and after — so there is nothing for
+// the mint to own. Both are extraction gaps in the tags queries, not ownership gaps: a Ruby call WITH
+// parentheses and a C# call inside a method are both minted normally. Go, Rust, Java and Swift have no
+// executable top level to speak of (Go's `var x = f()` is owned by the var; a Rust item-level `m!()` IS
+// minted, role macro), so their zero counts are the language, not a refusal.
+//
 // It owns REFERENCES only. Bindings and route uses keep the non-module answer (DefSweep::findOwnedDef),
 // because `Binding::fromSymbol == kNoNode` is load-bearing for the file-scope var→fn table and the A5
 // address-of escape guard in graph.h buildFnPtrTables.
@@ -903,7 +912,16 @@ inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, 
         ref.fieldName   = std::move( r.fieldName );   // S5-E: the member variable name (e.g. "m_pool")
         ref.composeRel  = std::move( r.composeRel );  // S5-E: "creates" or "uses"
         ref.startByte   = r.startByte;                // shadow fix round: for the block-span containment test
-        ref.fromSymbol  = refSweep.find( r.fileId, r.startByte );
+        // #60: the module-scope owner owns EXACTLY the references it was minted for — the call/macro
+        // population of pincensus.h isResolvableCallReference. A module-level `import`/`read`/`type`
+        // reference keeps fromSymbol == kNoNode, as it always had. Without this split the same import row
+        // would carry in_id="<file-scope>" in a file that happens to hold a top-level call and no in_id in
+        // one that does not, so one reference's spelling would depend on an unrelated fact about its file;
+        // and --affected's import tier and graph.h's Binding tables both already read that kNoNode.
+        const bool refTakesModuleScope = !r.isInherit && !r.isDocLink && !r.isCompose
+                                      && ( r.role == RefRole::Call || r.role == RefRole::Macro );
+        ref.fromSymbol  = refTakesModuleScope ? refSweep.find( r.fileId, r.startByte )
+                                              : refSweep.findOwnedDef( r.fileId, r.startByte );
     }
     expandElixirImplementationReferences( result );
 }

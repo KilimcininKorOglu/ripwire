@@ -169,7 +169,10 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             // and, before this, disclosed nothing about the `<label>/` prefix every p= below carries.
             // #60: exactly when a module-scope owner is on THIS page — the emitter's own condition, so a
             // page without one pays 0 bytes for the clause.
-            const bool chHasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( result ).subspan( pw.begin, pw.end - pw.begin ) );
+            // …or when the SELECTOR itself resolved to one: `--callees=path:<file-scope>` spells the name in
+            // of= and answers with ordinary rows, so the kind still needs its reading in that document.
+            const bool chHasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( result ).subspan( pw.begin, pw.end - pw.begin ) )
+                                    || anyModuleScopeRow( ing, matches );
             rw::emitTo( stdout, "{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
@@ -329,7 +332,10 @@ std::optional<int> runGraphQuery( const MainDispatch& d )
         rw::emitTo( stdout, "<!-- ripwire graph-query: a fixed-operator node-set query over the call graph (sources "
                      "name/all; filters kind/cx/fanin/file/layer; bounded closure callers/callees; joins and/or/not), "
                      "ranked by importance + capped at the top-k limit (default 200); narrow the query or raise top-k for more. NOT Datalog. "
-                     "{}{}-->", rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+                     "{}{}{}-->",
+                     // #60: exactly when a module-scope owner is one of the rows this page prints.
+                     rw::modScopeLegend( anyModuleScopeRow( ing, std::span<const NodeId>( result ).subspan( gqPw.begin, keep ) ) ),
+                     rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         // §P8 vocabulary (see src/pageview.h, THE TRUNCATION VOCABULARY): count= is the true total and
         // shown= the --top-k slice, but capped= was missing — so a caller reading a 200-row answer had to
         // know the default top-k to tell a complete result from a truncated one. Rule 3: the bit is always
@@ -765,7 +771,7 @@ std::optional<int> runUses( const MainDispatch& d )
 // H1's residue: `unprovenDefs` is the count resolveAllByNameQualified dropped for this selector. Its clause
 // (graphlegend.h kUnprovenDefsSafeDeleteLegend) follows the risk= sentence directly, because it is the sentence
 // that says what risk= did NOT read; emitted exactly when the root carries unproven_defs=, nothing otherwise.
-inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs, std::size_t ambiguousCallers, std::string_view risk, bool singleRoot, bool hasUnindexed )
+inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs, std::size_t ambiguousCallers, std::string_view risk, bool singleRoot, bool hasUnindexed, bool hasModScope )
 {
     rw::emitTo( stdout, "<!-- ripwire safe-delete: composes signals the tool already computes into one \"can I delete this?\" READ "
                 "— never a verdict. defs= is resolveAllByNameQualified's match count, exactly as the impact/uses/callers "
@@ -783,7 +789,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                 "hold here — run the dead-code verb for the full-corpus scan. ambiguous_callers= counts callers whose OWN "
                 "outgoing calls include at least one that resolved to more than one candidate definition (g.ambOut, the "
                 "same counter a ranked row's amb= reads). {}{}risk= NAMES what was found, never a go/no-go verdict, and "
-                "this run reports {}{}{}-->{}",
+                "this run reports {}{}{}{}-->{}",
                 // The union caveat, only when there is a union to caveat.
                 defCount > 1
                     ? "defs= is above 1 here, so EVERY count in this element UNIONS more than one physical definition "
@@ -805,6 +811,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                       : "uses-exist: callers or uses exist, and at least part of the radius is test-covered. ",
                 // H1: what risk= did not read, straight after the sentence for the value it qualifies.
                 rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::SafeDelete, unprovenDefs > 0 ).c_str(),
+                rw::modScopeLegend( hasModScope ),   // #60: exactly when a <c n="<file-scope>"> row is on this page
                 rw::graphCountDisclosure( hasUnindexed ).c_str(), rw::rootRelPathsLegend( singleRoot ) );
 }
 
@@ -972,7 +979,12 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // shared graphCountDisclosure() tail is untouched, byte for byte: test/floormarkcheck.sh pins it across
     // seven other verbs and a private shorter copy here would be exactly the dialect divergence it exists
     // to catch.
-    emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk, sdSingleRoot, g.unindexedFiles > 0 );
+    // #60: exactly when a module-scope owner is one of the <c> caller rows this page prints. The window is
+    // recomputed here rather than moved up: the legend is streamed before the rows, and pageWindow is pure.
+    const PageWindow sdLegendWindow = pageWindow( callerIds.size(), effectiveRowCap( cfg.pageLimit, 40 ), cfg.pageOffset );
+    emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk, sdSingleRoot, g.unindexedFiles > 0,
+                          anyModuleScopeRow( ing, std::span<const NodeId>( callerIds )
+                                                      .subspan( sdLegendWindow.begin, sdLegendWindow.end - sdLegendWindow.begin ) ) );
 
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
                                                         // lowest, same convention --impact/--uses/--callers's of=/defs=
