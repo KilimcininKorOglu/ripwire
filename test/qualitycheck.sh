@@ -444,10 +444,13 @@ fi
 # REAL dead-code regression inside such a file report gating="0" exit 0. A false negative on the gate's
 # central promise is worse than the false positive this work set out to remove. The first fix refused only
 # when such a path was still ON DISK, and that was defeated by DELETING it — the bit hides a deletion exactly
-# as it hides an edit. So the rule is now that a flagged path must be EXPLAINED: an active cone-mode sparse
-# checkout that excludes it, and it genuinely absent. (U5) runs both bits against both an edit and a deletion,
-# inside and outside a cone; (U4) is the positive half (a cone-excluded path keeps the identity basis); (U5c)
-# is the "refusal costs nothing" half. Every (U5) arm also asserts that --quality-baseline declines to pin,
+# as it hides an edit. The next fix kept an exception for cone-mode sparse checkout and decided for itself
+# which paths a cone includes; that was defeated by a file in an ANCESTOR of a listed directory, which real
+# cone mode materializes. So there is no exception left: ANY flagged path, present or absent, sparse or not,
+# refuses the identity basis, and the root says so with head_basis="archived-index-hidden". (U5) runs both
+# bits against both an edit and a deletion, inside and outside a cone; (U5a) is the ancestor-directory shape
+# that defeated the cone rule; (U5c) is the "refusal costs nothing" half; (U4) records what a sparse checkout
+# pays for the refusal as a KNOWN GAP. Every (U5) arm also asserts that --quality-baseline declines to pin,
 # because an escape hatch that launders the finding is the same bug with a different exit code.
 #
 # EVERY ARM HAS A SENSITIVITY CONTROL, because a delta that reports nothing would pass a zero-assertion for
@@ -543,15 +546,28 @@ if ( cd "$UROOT/sparse" && ug sparse-checkout init --cone && ug sparse-checkout 
     # arm's uzero REQUIRES head_basis=identity, which is the point: those files are DELETED from disk, so they
     # are absent from both sides of a self-comparison and can lie about nothing. Present-on-disk is what (U5)
     # tests, and the two arms together pin that the distinction is the one being made.
-    uzero "sparse checkout hiding a tracked caller" "$UROOT/sparse"
-    # The POSITIVE half of the (U5) rule, stated where it is easy to check against its negative: the same bit,
-    # the same absent file, but the absence is EXPLAINED by the specification, so the identity basis is sound
-    # and is taken. Asserted on the flag actually being set, so the arm cannot pass because sparse silently
-    # did nothing.
-    if [ -n "$( cd "$UROOT/sparse" && ug ls-files -v | grep '^S ' )" ]; then
-        ok "(U4) the cone-excluded path really does carry the skip-worktree bit (the arm above is not vacuous)"
+    # KNOWN GAP, and the acceptance test for closing it is flipping this arm.
+    #
+    # A sparse checkout sets skip-worktree on every excluded path, so it lands in (U5)'s refusal and takes the
+    # ARCHIVED comparison. That tree is not sparse-aware — `git archive HEAD` materializes the excluded files —
+    # so an excluded caller reads as vanished and GATES, on a tree with no edit in it. That is the same
+    # population divergence this block exists to remove, left in place for this one shape, and it is main's
+    # pre-existing behaviour rather than anything the identity basis introduced.
+    #
+    # It is left in place on purpose. Deciding for ourselves which paths a cone includes is what this lane
+    # tried twice and had defeated twice — most recently by a file in an ANCESTOR of a listed directory, which
+    # real cone mode materializes and a hand-written rule did not know about. `git sparse-checkout check-rules`
+    # would be authoritative but lands in git 2.42, newer than this tool's supported floor. So the answer says
+    # which branch it took (head_basis="archived-index-hidden") and the fix belongs to slice 2 of
+    # prompts/help-wanted/quality-delta-unchanged-tree-zero.md: make the ARCHIVED side's population equal by
+    # construction, which fixes this shape and every other one at once.
+    if [ -z "$( cd "$UROOT/sparse" && ug ls-files -v | grep '^S ' )" ]; then
+        no "(U4) no skip-worktree bit in the sparse checkout — this arm proves nothing about the bit"
     else
-        no "(U4) no skip-worktree bit in the sparse checkout — the arm above proves nothing about the bit"
+        urun "$UROOT/sparse"
+        { [ "$( UATTR head_basis )" = "archived-index-hidden" ] && [ "$URC" -eq 2 ]; } \
+            && ok "(U4) KNOWN GAP: a sparse checkout refuses the identity basis and gates on the archived tree, and the root SAYS which branch it took (head_basis=archived-index-hidden, exit 2) — flipping this arm to gating=0 is the acceptance test for slice 2" \
+            || no "(U4) exit $URC head_basis=$( UATTR head_basis ) — expected the disclosed archived refusal; if this now reports gating=0 with head_basis=identity, the gap is CLOSED and this arm should be flipped to uzero"
     fi
 else
     no "(U4) sparse-checkout is unavailable here — the arm would be vacuous"
@@ -591,9 +607,11 @@ ublind(){
     { [ "$URC" -eq 2 ] && [ "$( UATTR gating )" = "1" ] && [ "$dead" -eq 1 ]; } \
         && ok "(U5) $label: the hidden change STILL gates one dead-code row (exit 2)" \
         || no "(U5) $label: exit $URC gating=$( UATTR gating ) dead rows=$dead — a real regression was swallowed by an index bit"
-    [ -z "$( UATTR head_basis )" ] \
-        && ok "(U5) $label: head_basis is absent — the archived HEAD tree answered, and the root says so" \
-        || no "(U5) $label: head_basis=$( UATTR head_basis ) — the identity basis was claimed over a change git will not read"
+    # THE REFUSAL IS NAMED ON THE ANSWER, not left to silence. A user whose fast path vanished can read why
+    # off the root instead of guessing, and "identity" here would be the bug itself asserting it verified.
+    [ "$( UATTR head_basis )" = "archived-index-hidden" ] \
+        && ok "(U5) $label: head_basis=archived-index-hidden — the archived HEAD tree answered, and the root says WHY" \
+        || no "(U5) $label: head_basis=$( UATTR head_basis ) — the refusal is undisclosed, or the identity basis was claimed over a change git will not read"
     # THE ESCAPE HATCH MUST NOT LAUNDER IT EITHER. --quality-baseline refuses to pin over a tree that already
     # holds gating findings (H11), so a shape that gates must also be a shape the bare pin declines.
     if ( cd "$d" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-baseline >/dev/null 2>&1 ); then
@@ -614,14 +632,53 @@ ublind "assume-unchanged over a DELETED caller"       --assume-unchanged delete
 # specification says this file belongs here, so its absence is not explained by the spec and the basis must
 # still be refused: "a sparse checkout is on" is not by itself an explanation for any flagged path.
 ublind "skip-worktree over a DELETED caller inside the cone" --skip-worktree delete "cone:lib app"
+# ...and the ANCESTOR-DIRECTORY shape, which is what defeated the hand-written cone rule. Cone mode also
+# materializes the direct files of every ANCESTOR of a listed directory: with cone=[app/sub, lib], `app` is not
+# listed but `app/other.py` is checked out all the same. A rule that only knew "listed, or under a listed one,
+# or a repository-root file" called that path cone-excluded and took the identity basis over a real deletion.
+# There is no cone rule here any more, so this arm is the proof that the class is closed rather than narrowed.
+uanc(){
+    local d="$UROOT/ancestorcone"
+    mkdir -p "$d/lib" "$d/app/sub"
+    printf 'def zeta_helper(v):\n    return v + 1\n'    > "$d/lib/core.py"
+    printf 'def driver():\n    return zeta_helper(1)\n' > "$d/app/other.py"   # the ONLY caller, in the ancestor dir
+    printf 'def nested():\n    return 1\n'               > "$d/app/sub/deep.py"
+    ( cd "$d" && ug init -q . && ug add -A && ug commit -qm init ) >/dev/null 2>&1
+    ( cd "$d" && ug sparse-checkout init --cone && ug sparse-checkout set app/sub lib ) >/dev/null 2>&1 \
+        || { no "(U5a) sparse-checkout is unavailable here — the ancestor arm would be vacuous"; return; }
+    if [ ! -f "$d/app/other.py" ]; then
+        no "(U5a) this git does not materialize the ancestor directory's own files, so the arm does not test the shape it claims"
+        return
+    fi
+    ( cd "$d" && ug update-index --skip-worktree app/other.py ) >/dev/null 2>&1
+    rm -f "$d/app/other.py"
+    if [ -n "$( cd "$d" && ug status --porcelain )" ]; then
+        no "(U5a) git status is NOT clean, so the bit is not hiding the deletion and the arm is vacuous"
+        return
+    fi
+    urun "$d"
+    local dead; dead="$( printf '%s' "$UOUT" | grep -c 'kind="dead-code" sym="zeta_helper"' )"
+    { [ "$URC" -eq 2 ] && [ "$( UATTR gating )" = "1" ] && [ "$dead" -eq 1 ]; } \
+        && ok "(U5a) a flagged+deleted file in an ANCESTOR of a listed cone directory STILL gates one dead-code row (exit 2)" \
+        || no "(U5a) exit $URC gating=$( UATTR gating ) dead rows=$dead — the ancestor-directory shape was misjudged as explained"
+    [ "$( UATTR head_basis )" = "archived-index-hidden" ] \
+        && ok "(U5a) head_basis=archived-index-hidden — the refusal is disclosed on the answer" \
+        || no "(U5a) head_basis=$( UATTR head_basis ) — identity was claimed over a deletion in an ancestor directory"
+    if ( cd "$d" && TMPDIR="$UTMP" "$BIN" "$PWD" --quality-baseline >/dev/null 2>&1 ); then
+        no "(U5a) --quality-baseline PINNED over it — the floor was laundered"
+    else
+        ok "(U5a) --quality-baseline declines to pin over it"
+    fi
+}
+uanc
 
 # U5c the refusal must not become its own source of noise: a flagged file whose content still IS HEAD's
 # reports zero through the archived comparison, and says so.
 umk "$UROOT/blindclean"
 ( cd "$UROOT/blindclean" && ug update-index --skip-worktree app/main.py ) >/dev/null 2>&1
 urun "$UROOT/blindclean"
-{ [ "$URC" -eq 0 ] && [ "$( UATTR gating )" = "0" ] && [ -z "$( UATTR head_basis )" ]; } \
-    && ok "(U5c) a flagged but UNEDITED file reports zero through the archived comparison (head_basis absent)" \
+{ [ "$URC" -eq 0 ] && [ "$( UATTR gating )" = "0" ] && [ "$( UATTR head_basis )" = "archived-index-hidden" ]; } \
+    && ok "(U5c) a flagged but UNEDITED file reports zero through the archived comparison, with the refusal disclosed" \
     || no "(U5c) exit $URC gating=$( UATTR gating ) head_basis=$( UATTR head_basis ) — refusing the identity basis introduced noise of its own"
 
 # U6 crawl flags that reached ONE side of the delta only.
