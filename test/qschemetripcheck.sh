@@ -34,6 +34,33 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-20, TRAIN 12 (integration/train-12 on main 755f9026: lane/t12-filescope-calls 31d96f40,
+#   lane/t12-qd-noop-diff d54ce3da, lane/t12-lineage-graft 9a756bb6): RE-DERIVED ON THE FINAL MERGED TREE with
+#   UPDATE_GOLDEN=1. TWO members move manifest text, not one. The qd-noop lane's own entry is below; the
+#   file-scope lane (issue #60) ALSO edits two manifest functions and never ran this gate, because the gate
+#   invokes no verb and its selection rule is by verb used — it is red on that lane's own head 31d96f40
+#   (current=179278fe…, pinned=a8b6c050…), which is a lane gap this train closes, not a merge defect.
+#   WHAT #60 CHANGES: isDeadCandidate returns false for the new SymKind::ModuleScope (a minted per-file owner
+#   with an empty extent, so there is no body to call dead), and topLevelCalleeNameHashes — the file-scope
+#   call-site evidence the dead set consults — widens `fromSymbol == kNoNode` to ALSO accept a reference owned
+#   BY a module-scope owner. The mint is what made the old predicate select nothing, so the widening RESTORES
+#   the pre-mint evidence set rather than changing it.
+#   NO kQSnapCacheScheme BUMP, on measured evidence rather than on the argument alone. Same nine-byte Python
+#   fixture (a `helper()` defined in lib.py, called at module scope from run.py), --no-cache, sidecar written
+#   by each binary:
+#     755f9026 (base): ccx/loc/nest/params/defs/bodyq for ONE key, 6841194625556899 → loc 2, bodyq d0491b0e0f47637c
+#     this tree      : the SAME key with the SAME values, PLUS one all-zero key (53bcd7ef7da4e2d4) — the owner
+#   So no entry an older blob can hold means anything different here: what counts as dead, a clone group's
+#   identity and the serialized fields are untouched. The population grows by one zero-valued key per file that
+#   holds a top-level call, and that growth is INERT — a commit that ADDS such a file reports regressions="0"
+#   api-new-surface="0" (measured), because an owner is excluded from isPublicApi, isDeadCandidate, codeLocByNode
+#   and computeDelta's churn arm, and its metrics are all 0, which is under every bar. Independently, the v14
+#   producer identity (a SHA-256 over every file under src/ and queries/) is folded into qsnapExclHex AND the
+#   sidecar header, so a blob or baseline written by 755f9026 (producer 819ef2bf…) is never named or believed by
+#   this build (producer 8c8b43cb…) in the first place. kParserVer and its mirror stay 118 (the mint runs in
+#   ingest.cpp's build-model tail, AFTER the parse cache is released, so no cached RawDef/RawRef record format
+#   moves and the new enumerator is never written to a cache; qextractionkeycheck rc=0), kCacheVersion stays 24,
+#   kQSnapCacheScheme stays 14, kHeadSnapCacheScheme stays 1.
 # 2026-09-20, lane/t12-qd-noop-diff (issue #228 part 1, on main 755f9026): computeSnapshot gained an OPTIONAL
 #   per-fileId membership filter (`fileInBaseline`) for the new IDENTITY BASIS (computeHeadBasis, same file).
 #   NO kQSnapCacheScheme BUMP, and the reason is that the filter never reaches a cached blob: computeHeadSnapshot
