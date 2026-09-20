@@ -4205,7 +4205,13 @@ inline std::vector<std::string_view> splitNulPaths( const std::string& listing, 
         if( !p.empty() ) { out.push_back( p ); }
         start = end + 1;
     }
-    std::sort( out.begin(), out.end() );
+    // rw::sortutil::svLess, not the default comparator: a string_view's operator< goes through
+    // char_traits::compare, whose libstdc++ implementation subtracts two size_t lengths and trips
+    // -fsanitize=integer on the Linux G1 leg the moment two compared views differ in length. Same total
+    // order, so nothing about the resulting sequence changes — and the binary_search over this exact
+    // vector in baselineFileMaskAtHead below MUST pass the same comparator, or the search is looking in
+    // an order the sort did not produce. test/portablebuildcheck.sh arm #6b holds both halves.
+    std::sort( out.begin(), out.end(), rw::sortutil::svLess );
     return out;
 }
 
@@ -4289,7 +4295,10 @@ inline bool baselineFileMaskAtHead( const std::string& root, const IngestResult&
         // relForHash is the SAME root-relative spelling every quality key is built from (qualityKey), so a
         // file's membership here and its key there cannot drift apart.
         const std::string_view rel = relForHash( ing.files[f], rootPath );
-        if( std::binary_search( tracked.begin(), tracked.end(), rel ) )
+        // The SAME comparator splitNulPaths sorted `tracked` with. A search under a different order than
+        // the sort produced is a silent wrong answer — here it would drop a tracked file out of the
+        // baseline mask and make its symbols read as new. Both are svLess; neither may change alone.
+        if( std::binary_search( tracked.begin(), tracked.end(), rel, rw::sortutil::svLess ) )
         {
             outMask[f] = 1;
         }
