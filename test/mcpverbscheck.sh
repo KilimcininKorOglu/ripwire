@@ -313,7 +313,8 @@ if [ "$L4_EDITCHK" = "True" ]; then ok "tools/list includes 'edit_check'"; else 
 # MCP verb, above all one that reaches an exec, is signed for, never a silent drift.
 # The set is the ADVERTISED roster (kMcpVerbTable, mcp.h); pack_task stays out (dispatch-only alias,
 # already asserted absent above). Sorted so the diff reads name-by-name.
-EXPECTED_VERBS="analyze
+EXPECTED_VERBS="affected
+analyze
 batch
 cochange
 connect
@@ -338,6 +339,7 @@ owners
 path_between
 quality_baseline
 quality_delta
+rank_by
 replace_symbol_body
 situational_awareness
 slice
