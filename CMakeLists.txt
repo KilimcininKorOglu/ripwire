@@ -24,6 +24,20 @@ if(_ripwire_verification_mode_count GREATER 1)
   message(FATAL_ERROR "RIPWIRE_ASAN, RIPWIRE_TSAN, and RIPWIRE_FUZZ are mutually exclusive; use separate build trees")
 endif()
 
+# ---- the MSVC C runtime the ASan flavour has to use, chosen BEFORE any target exists ----
+# Only the RELEASE DLL runtime (/MD) is shipped with an AddressSanitizer build on the MSVC ABI: clang-cl refuses the
+# debug one at the driver, "invalid argument '-MDd' not allowed with '-fsanitize=address'", and cl.exe's own /fsanitize
+# =address has the same rule. A plain configure (no CMAKE_BUILD_TYPE, which is what CONTRIBUTING.md's ASan tree uses)
+# selects /MDd by default, so the ASan tree could not configure at all on Windows — the third failure of @lennix1337's
+# validation run of #44. CMAKE_MSVC_RUNTIME_LIBRARY is read into each target's MSVC_RUNTIME_LIBRARY property at
+# add_executable/add_library time, so it has to be set here, above every target block, not beside the sanitizer flags
+# far below. Never overridden if the configurer already chose one: an explicit -DCMAKE_MSVC_RUNTIME_LIBRARY is a
+# deliberate answer to this same question and this build has no better one. Inert off Windows and off the ASan tree.
+if(WIN32 AND MSVC AND RIPWIRE_ASAN AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+  message(STATUS "RIPWIRE_ASAN: MSVC runtime pinned to MultiThreadedDLL (/MD) — the sanitizer runtime has no debug-CRT build")
+endif()
+
 # A flag probe is insufficient: Apple Clang accepts -fsanitize=fuzzer but some Xcode distributions omit
 # libclang_rt.fuzzer_osx.a. Compile AND link a complete harness before creating fuzz targets, and never
 # download a replacement toolchain from the build.
@@ -744,8 +758,15 @@ if(RIPWIRE_TESTS)
   # path spelling, CreateProcessW quoting, reparse/st_mode classification, wait-status and timeout conversions,
   # trusted-shell predicates). It has no <windows.h> and no platform test, so every leg compiles and runs it;
   # driven by test/oswin32logiccheck.sh (which adds the sanitizer and can-go-red arms).
+  # diagnostics.cpp is not optional here, for the same reason the four targets above carry it: os_win32_logic.h states
+  # its invariants with the self-check macros, and every one of them calls ::Diagnostics::ConsoleLog::handleAssert,
+  # which lives out of line in that file (Diagnostics.h §"out of the static analyzer's reach"). A toolchain that keeps
+  # the call — clang-cl on a plain configure — then fails to link it; the POSIX legs happened to fold every one of
+  # these checks away and never referenced the symbol, so the gap was invisible until @lennix1337 linked the target
+  # on Windows for #44. Listing it makes the target's sources complete rather than optimizer-dependent.
   add_executable(ripwire_test_oswin32logic
-    test/verify_os_win32_logic.cpp)
+    test/verify_os_win32_logic.cpp
+    src/infra/diagnostics.cpp)
   target_include_directories(ripwire_test_oswin32logic PRIVATE src/infra third_party src)
   target_link_libraries(ripwire_test_oswin32logic PRIVATE doctest::doctest)
   add_test(NAME ripwire.oswin32logic COMMAND ripwire_test_oswin32logic)
@@ -957,6 +978,11 @@ endif()
 if(RIPWIRE_ASAN)
   set(_ripwire_windows_clangcl_asan OFF)
   set(_ripwire_no_omit_frame_pointer -fno-omit-frame-pointer)
+  # The optimization and debug-info spellings the sanitizer arm needs, in the driver's own dialect. clang-cl only
+  # WARNS on a GNU-spelled -O2/-g ("unknown argument ignored in clang-cl"), which is the worst of the two outcomes:
+  # the flavour silently builds unoptimized and without line tables, so a sanitizer report has no frames. Chosen here
+  # beside /Oy- rather than at the two foreach loops below, so the dialect is decided once.
+  set(_ripwire_asan_opt_debug -O2 -g)
   # CMake's MSVC linker rule invokes CMAKE_LINKER directly. With ClangCL, passing the LLVM
   # -fsanitize flags to link.exe instruments the objects but never loads the Clang sanitizer
   # runtime, leaving __asan_* unresolved. Use clang-cl as the link driver for this one flavour;
@@ -964,6 +990,7 @@ if(RIPWIRE_ASAN)
   if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     set(_ripwire_windows_clangcl_asan ON)
     set(_ripwire_no_omit_frame_pointer /Oy-)
+    set(_ripwire_asan_opt_debug /O2 /Z7)
     string(REPLACE "<CMAKE_LINKER>" "<CMAKE_CXX_COMPILER>" CMAKE_CXX_LINK_EXECUTABLE
       "${CMAKE_CXX_LINK_EXECUTABLE}")
     # The replacement template does not carry the generator's per-target FLAGS. Keep the
@@ -977,7 +1004,7 @@ if(RIPWIRE_ASAN)
   endif()
   foreach(_t IN LISTS RIPWIRE_RUNTIME_COMPILE_TARGETS)
     target_compile_options(${_t} PRIVATE ${RIPWIRE_G1_SANITIZERS}
-      -fno-sanitize-recover=all ${_ripwire_no_omit_frame_pointer} -O2 -g)
+      -fno-sanitize-recover=all ${_ripwire_no_omit_frame_pointer} ${_ripwire_asan_opt_debug})
   endforeach()
   foreach(_t IN LISTS RIPWIRE_RUNTIME_LINK_TARGETS)
     if(NOT _ripwire_windows_clangcl_asan)
@@ -1064,7 +1091,21 @@ endif()
 # -DNDEBUG), so they cost nothing today and fence the next edit. GCC's first run of them is CI's.
 # OUR TARGETS ONLY, the same rule the sanitizer and separate-storage blocks follow: the tree-sitter core and the grammar
 # objects are generated C we do not own, and their scanners fall through by design.
-set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough)
+#
+# PER COMPILER, in ONE place. `-Werror=switch` is a GCC/Clang driver spelling. clang-cl takes it (its driver accepts
+# clang's own warning flags beside the MSVC ones — @lennix1337's Windows run compiled with these two attached and
+# reported one warning, not a flag error), but plain cl.exe reads `-W` + a number and refuses the whole command line:
+# "command line error D8021: invalid numeric argument '/Werror=switch'", the fifth failure of that run. cl.exe's
+# nearest equivalent to -Wswitch is C4062 (an enumerator not handled and no `default:`), promoted to an error with
+# /we4062; it has no counterpart for -Wimplicit-fallthrough at all — MSVC spells that one only as the /analyze-only
+# C26819 — so on cl.exe that half of the fence is NOT held, and the [[fallthrough]] rule is enforced by every other
+# leg instead. This is the only clang-dialect flag set in this file that is not already chosen per compiler
+# (cmake/PortableFlags.cmake branches on the same two conditions; the -mllvm option below is probed before use).
+if(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS /we4062)
+else()
+  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough)
+endif()
 foreach(_t IN LISTS RIPWIRE_OWNED_CXX_TARGETS)
   target_compile_options(${_t} PRIVATE ${RIPWIRE_COMPILE_TIME_FENCE_FLAGS})
 endforeach()
