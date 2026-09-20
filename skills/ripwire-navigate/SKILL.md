@@ -227,6 +227,11 @@ field un-places every field after it. A `modeled="1"` number that agrees with th
 - Rule of thumb: `--for` for a task you're about to do; `--query` for a vocabulary you're hunting. Both shine
   on specific technical wording; for broad common-word asks, plain `rg` + one read can still win.
 
+**Budgeting trap:** `--top-k` is inert on `--for` — the run warns on stderr and emits the full bundle anyway.
+Narrow `--for` with its own arguments: `--signatures-only` (no auto-bodies), `--token-budget=N` (shapes the
+bundle to fit), `--detail=N` (full bodies for just the top N). `--top-k` does shape `--query` — and pair it
+with `--expand` as `--top-k=0` whenever you want one body without the ranked map riding along.
+
 ## When the fixed verbs can't phrase the question
 
 Compose filters over the call graph with `--graph-query=EXPR` — see **ripwire-graph-query** for the

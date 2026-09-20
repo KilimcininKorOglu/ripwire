@@ -682,7 +682,12 @@ to do with it.** Two shapes get the most out of it, and one gets nothing.
 <details>
 <summary>The three controls that decide what it costs — <b>a budget</b> (<code>--token-budget</code> / <code>--top-k</code>), <b>routing</b> (<code>--help-task</code>), and <b>the skills</b> that teach an agent when <i>not</i> to reach for it</summary>
 
-1. **A budget.** `--token-budget=N` caps the bundle; `--top-k=N` caps the rows. Unbudgeted `--for` returns
+1. **A budget.** `--token-budget=N` caps the bundle; `--top-k=N` caps the rows **of the default map,
+   `--query`, `--format=candidates`, `--recall` and `--graph-query` — it does not shape `--for`**. On
+   `--for` it is read by nothing: the run prints a stderr note (`--top-k is not read by --for`) and
+   still emits the full bundle. Narrow `--for` with its own arguments instead — `--signatures-only`
+   (drop the auto-bodies), `--token-budget=N` (shapes the bundle to fit), `--detail=N` (full bodies for
+   just the top N). Unbudgeted `--for` returns
    a rich terminal bundle by design — right when it ends the question, wasteful when it does not.
 2. **Routing.** `ripwire . --help-task="<task>"` names the ONE command the task actually wants, and
    abstains when the evidence is thin. It is advice, it never runs anything. An answer of "just grep
@@ -690,6 +695,27 @@ to do with it.** Two shapes get the most out of it, and one gets nothing.
 3. **The skills.** `skills/install.sh` teaches an agent *when* to reach for which verb. Without them
    an agent has 175 flags and no map of which moment each is for, and it will reach for the map every
    time — including the times it should not.
+</details>
+
+<details>
+<summary>The invocations first-time users get wrong — <b>WRONG → RIGHT</b>, each row a real failure reported from the field</summary>
+
+| WRONG | RIGHT | why |
+|---|---|---|
+| `ripwire . --for="…" --top-k=5` | `ripwire . --for="…" --signatures-only` (or `--token-budget=N`, `--detail=N`) | `--top-k` is inert on `--for`: the run warns on stderr and emits the full bundle anyway, so the agent *believes* it narrowed the output and did not. |
+| `ripwire . --query="…"` as the default lens | `ripwire . --for="…"` | `--query` is the raw BM25 ranking — the binary's own help calls it debug and says "use --for". It is the right tool for hunting a vocabulary, the wrong default for a task. |
+| `ripwire . --expand=SYM` | `ripwire . --expand=SYM --top-k=0` | Without `--top-k=0` the ~200-symbol ranked map (~10K est_tokens) rides along with the one body you asked for. |
+| `--callers=<route handler>` expecting routes | find the URL in the project's own docs (e.g. a feature map), then `--expand` the handler | Framework route handlers have no callers in the graph — the decorator reaches them, not project code. Empty `--callers` on a handler is the design, not a bug. |
+| `ripwire <dir-of-repos> …` | `cd` into ONE checkout first | The map is per-repository; pointing it at a directory *of* repositories is the expensive mistake the wrapper guards exist to refuse. |
+
+**What ripwire does not replace** — reach for `grep`/`read` here even when a verb looks close:
+
+| still use grep/read for | why |
+|---|---|
+| route → handler lookup from a URL | ripwire ranks symbols, not URLs; it does not know your routes |
+| templates, i18n catalogs, SQL migrations | not call-graph territory |
+| one exact string in one file you can already name | `--grep=TERM` works, but `rg` is fine too — and the map is a fixed cost you did not need |
+| UX flow through frontend event handlers | the JS is in the graph, but the flow needs line context, not a ranking |
 </details>
 
 <details>

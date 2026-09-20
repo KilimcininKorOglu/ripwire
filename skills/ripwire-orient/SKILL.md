@@ -99,7 +99,9 @@ cluster looks like the one you'll be working in and five names aren't enough to 
 **5. Maintenance pain** — `ripwire <dir> --hotspots --legend=compact` — files ranked by `score = churn × ccx`; `top=` names
 the gnarliest function. Plan edits around this list.
 
-**6. Budget it** if the map is large — `--max-tokens=8000` or `--top-k=50`.
+**6. Budget it** if the map is large — `--max-tokens=8000` or `--top-k=50`. Both shape the default map;
+`--top-k` is inert on `--for` (it warns on stderr and emits the full bundle) — bound a `--for` call with
+`--signatures-only`, `--token-budget=N` or `--detail=N` instead.
 
 ## Orienting N agents at once, not yourself — `--partition=N`
 
