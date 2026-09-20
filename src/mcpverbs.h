@@ -2013,22 +2013,23 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     const std::vector<rw::ForNamedHeaderRow> mcpForHdrRows = rw::forNamedHeaderRows( ing, task );
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
-                          + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
+                          + std::string( rw::kMcpForBuildingBlocksLegend )
                           + std::string( mcpIdRouteParts.sc )      // row 6: sc= — the CLI twin's exact clause, on the CLI twin's presence rule
                           // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
                           // this dialect drops route= under no_route, and a reading with no attribute beside it is noise.
                           + std::string( mcpIdRouteParts.route )
-                          + "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb"
+                          + std::string( rw::kMcpForBundleSigsLegend )
                           + std::string( mcpForConf.note )
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
                           // hyphen is ill-formed (G4), so the CLI verb is named without its dashes.
-                          + "; lens=\"churn,amp,tested\": the three per-row quality columns the CLI for lens carries and this dialect"
-                            " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
-                            " means NOT MEASURED, never measured-and-zero; est_tokens= prices this bundle in tokens"
+                          + std::string( rw::kMcpForLensColumnsLegend )
                           + std::string( rw::kForFileTailLegend )   // deep-tail: r= + <tail> definitions, the CLI twin's exact clause (sigs-charge-exempt below)
                           + ( mcpForHdrRows.empty() ? std::string() : std::string( rw::kForHdrLegend ) )   // R2-AF: present-only
                           + " -->"
-                          + rw::forRootRelPathsLegendShort( !flRootArg.empty() );   // W3-S item 5: closes the gap this comment used to record
+                          // r2-LO: at= rides this root (mcpForAtAttrStr) and was defined nowhere in the document — the CLI twin passes
+                          // its at= condition here and this twin did not. Its 24 B are exempt from the sigs charge below, so the served
+                          // rows are byte-identical to the answer that left at= undefined.
+                          + rw::forRootRelPathsLegendShort( !flRootArg.empty(), !mcpForAtAttrStr.empty() );   // W3-S item 5: closes the gap this comment used to record
     // W3-S item 5 (2026-08-19): both --for dialects now carry rw::kForRootRelPathsLegendShort (graphlegend.h)
     // — the SAME short spelling, appended here exactly as the CLI twin (forLensHeaderText, main.cpp) does,
     // so byte-consistency between the two dialects (this file's own standing contract) still holds. See that
@@ -2070,7 +2071,8 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // …and the SAME decision the append made, so the ledger can never subtract a clause the header never wrote
     // (the CLI twin's own idRouteParts ledger, verbs_for.h, for the identical reason).
     const std::size_t mcpIdRouteExemptBytes = mcpIdRouteParts.bytes();
-    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes
+    const std::size_t mcpAtLegendExemptBytes = !flRootArg.empty() && !mcpForAtAttrStr.empty() ? rw::kForAtStampProse.size() : 0;   // r2-LO, above
+    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes - mcpAtLegendExemptBytes
                                  + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
     const std::size_t sigsBudget = forBudgetBytes > fixedBytes ? forBudgetBytes - fixedBytes : 1;   // ≥1: 0 = "no budget"
 
@@ -2133,7 +2135,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         const std::size_t closeAt = headerStr.rfind( " -->" );
         if( closeAt != std::string::npos )
         {
-            headerStr.insert( closeAt, " [budget_bytes= is the default BYTE ceiling this ranked payload was shaped against; it bounds that payload, not the whole document est_tokens prices]" );
+            headerStr.insert( closeAt, rw::kForBudgetBytesNote );
         }
     }
     // L3 follow-up (CodeRabbit 4053600616): same splice shape as dropped_positive=/budget_bytes= above — absent
@@ -2269,6 +2271,9 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // reason the CLI's could disagree with itself. Charged AFTER the sigs budget on purpose: a disclosure's
     // contract is disclosure only, and charging its ~18 bytes against the ranked head would drop a row to pay
     // for the attribute that describes the head — the same exemption mcpConfidenceExemptBytes already makes.
+    // r2-LO: a completeness attribute this bundle carries and its own legend never spells (at=, ccx=, next=) gets its compact
+    // reading — BEFORE pricing, so est_tokens= prices the bytes served, and after the sigs budget, so the rows are unchanged.
+    closeRosterGaps( out );
     priceForTaskRoot( out, budgetTokens );   // R1: est_tokens=, and over_ceiling="1" when it exceeds budgetTokens
     return out;
 }

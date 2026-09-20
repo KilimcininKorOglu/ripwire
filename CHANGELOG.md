@@ -46,6 +46,46 @@ Reported by @thavlik (the `node:test` arrow-callback arm) and @alex-michaud, who
 module-scope side-effect calls are ordinary production code and not a test-shaped corner — is what made a
 callback-only fix insufficient.
 
+### Added — the legend once per session, so an agent stops paying for the same definitions on every call
+
+Every XML answer carried its own legend, so an agent making repeated calls in one session bought the same
+definitions again and again — and it bought them **before** the rows, which is exactly the part it has to read
+past to reach the answer. An MCP session can now be served each definition once.
+
+- **The dictionary is an MCP resource.** `initialize` declares `resources`, `resources/list` names
+  `ripwire://legend-dict` (a small core: how to read `<about>`, `schema=`, the paging window, the `*_capped`
+  readings) and `ripwire://legend-dict/full` (everything). Reading the core once is what switches the session
+  on; a host that cannot read resources never switches, and every answer stays inline. Measured on this
+  repository: the core is 1,094 B, and `initialize`'s instructions grow 508 → 856 B to point at it.
+- **The `ref` posture.** After that read, an answer lists its rows first, carries a definition only the first
+  time this session meets it — in a comment **after** the rows — and ends with
+  `<about … legend="ref" dict= dictv=/>` as its last child, where `dictv=` is the dictionary version those
+  definitions came from. Nothing is dropped: a ref answer carries the same attributes and the same rows as the
+  inline answer it replaces, and it is never longer than that answer — if it would be, the inline answer is
+  served unchanged. Measured on this repository, `impact` on `compactLegendText`: 3,386 B inline, 2,571 B
+  on the second call of a switched session (−24.1%), with the bytes before the first row falling 78 → 8.
+- **`--legend-dict[=roster]`** prints the same dictionary on the CLI — one definition per line, headed by its
+  `dictv=`; `=roster` lists the completeness attributes it defines, as attribute/element/source rows. It is
+  answered wherever it appears on the command line and nothing else runs. On this build the dictionary is
+  68,021 B over 700 entries and the roster is 600 rows; a session receives only the entries its own answers
+  used, not the whole thing.
+- **`--legend=ref` refuses on the CLI**, naming the resource and `--legend-dict`. A CLI run is a single answer
+  with no session to have been served anything, so a ref answer there would point its reader at definitions
+  that reader never received. CLI output is otherwise unchanged by this work.
+
+This amends guardrail **G4**, which said the legend is emitted once at the top of an answer: it is now once per
+answer on the CLI and once per session on the agent surfaces. `CLAUDE.md` and `CONTRIBUTING.md` carry the new
+wording and name the gates that hold it — `legendcoveragecheck` (G) and `compactlegendcheck` (UG) for the
+default posture, `legendrefcheck` for the ref posture.
+
+### Fixed — the MCP `for` bundle defines `at=`, `ccx=` and `next=`, which it was already emitting
+
+`for`'s bundle writes its own legend rather than going through the compact composer, and three attributes it
+carries had no reading anywhere in it: `at=` on the root, `ccx=` and `next=` on its rows. A reader had to guess
+them. Any native-legend answer carrying a completeness attribute its own legend never spells now gets that
+attribute's compact reading, in one comment, before the answer is priced — so the next one is defined on
+arrival rather than found later. Rows are byte-identical; the legend grows 55–115 B.
+
 ### Added — `affected` and `rank_by` over MCP, so an agent can ask which tests to run and re-rank the map without leaving the server
 
 The MCP server exposed 31 tools and neither of these two, so an agent mid-task had to shell out to the CLI for

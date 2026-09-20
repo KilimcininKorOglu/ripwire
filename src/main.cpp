@@ -3913,6 +3913,41 @@ int main( int argc, char** argv )
         return runWrap( argc, argv, selfExecutablePath( argv[0] ) );
     }
 
+    // r2-LO: the session legend dictionary for a human (or a harness that holds a session of its own) — the text
+    // ripwire://legend-dict/full serves, or `=roster`, the completeness attributes it defines (legenddict.h). Like
+    // --version, answered wherever it stands and nothing else runs.
+    // EVERY occurrence is read before anything is printed. Answering at the FIRST one made acceptance depend on
+    // ORDER: `--legend-dict=roster --legend-dict=bad` printed the roster and exited 0, while the same two flags the
+    // other way round exited 1 — one command line, two verdicts, and a typo silently honoured. argv is external
+    // input, so each occurrence is checked with VALIDATE.
+    bool wantFull = false, wantRoster = false;
+    for( int i = 1; i < argc; ++i )
+    {
+        const std::string_view a = argv[ i ];
+        if( a == "--legend-dict" ) { wantFull = true; continue; }
+        if( a.starts_with( "--legend-dict=" ) )
+        {
+            const std::string_view v = a.substr( 14 );
+            if( !VALIDATE( v == "roster", "--legend-dict= names the one form it takes" ) )
+            {
+                rw::emitTo( stderr, "ripwire: --legend-dict= takes roster — got '{}'; bare --legend-dict prints the dictionary\n", v );
+                return 1;
+            }
+            wantRoster = true;
+        }
+    }
+    // Both forms asked is a question with two answers, not a preference: refused rather than quietly served one.
+    if( wantFull && wantRoster )
+    {
+        rw::emitRaw( stderr, "ripwire: --legend-dict prints the dictionary and --legend-dict=roster the attributes it defines — pass one, not both\n" );
+        return 1;
+    }
+    if( wantFull || wantRoster )
+    {
+        rw::emitRaw( stdout, wantRoster ? legenddict::rosterText().c_str() : legenddict::fullDictionaryText().c_str() );
+        return 0;
+    }
+
     const Config cfg = parseArgs( argc, argv );
     if( !cfg.ok )
     {
