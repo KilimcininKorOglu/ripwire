@@ -2332,5 +2332,78 @@ else
     no "(UD) the dialect-pin reader produced no verdict line"
 fi
 
+echo
+echo "=== (UW) A WRITE SURFACE KEEPS ITS DEFAULT, BECAUSE THE DEFAULT SHAPES NOTHING THERE ==="
+# WHY THIS ARM EXISTS (train 9 fix round 1, CodeRabbit thread 4055600340, DECLINED with this arm as the
+# evidence). The review read cli.h's write-surface list and argued: --quality-ack="why" implies
+# --quality-delta, so the run prints the XML report the acknowledgement records; with no --legend the
+# write-surface check is skipped and the default compact is assigned, so that report is compacted — while an
+# explicit --legend=compact on the same command is REFUSED. One surface, implicitly accepting the posture it
+# explicitly refuses.
+#
+# The premise is measurable, and it is false: an ack run prints NOTHING on stdout. Its whole answer is the
+# stderr acknowledgement line, so there is no report for the assigned default to shape, and the ledger records
+# hashes, magnitudes, content ids and the operator's reason — no legend text in any dialect. The default is
+# assigned and inert. Neither the ledger nor the print depends on it.
+#
+# The proposed fix — "a write surface keeps no default" — would be an actual regression, which (UW4) pins.
+# Dispatch precedence can hand a run that merely CARRIES --quality-ack to an XML verb (--for outranks
+# --quality-delta and says so on stderr), and that answer must be the one --for alone prints. Withholding the
+# default whenever a write flag is present would print it in the FULL dialect instead. That is exactly the
+# case cli.h's own comment on validateLegendModifier already warns about, and the reason only the servers and
+# --json keep no default.
+QAR="$TMP/qarepo"; mkdir -p "$QAR"; cp -R "$FIX"/. "$QAR"/
+# This arm needs a repo whose range holds a REAL finding: on the shared fixture the report has 0 findings and
+# the ledger is deliberately left untouched, which would make (UW1) assert nothing (the ack-heal-at-0 trap).
+( cd "$QAR" && git init -q && git config user.email "t@example.com" && git config user.name "t" \
+  && git add -A && git commit -q -m one \
+  && python3 -c "
+body = 'int uwWide( int a, int b, int c, int d, int e, int f ){\n  int s = 0;\n'
+for i in range(40):
+    body += '  if( a > %d ){ if( b > %d ){ if( c > %d ){ s += %d; } else { s -= %d; } } }\n' % (i,i,i,i,i)
+open('uw.cpp','w').write(body + '  return s;\n}\n')" \
+  && git add -A && git commit -q -m two ) || no "(UW) the scratch repo setup failed"
+qarun(){ ( cd "$QAR" && "$BIN" . "$@" >"$TMP/uw.out" 2>"$TMP/uw.err" ); }
+
+# (UW1) the default posture: the ack answers on stderr, writes the ledger, and puts NOTHING on stdout.
+rm -f "$QAR/.ripwire_quality_acks"
+qarun --quality-delta=HEAD~1..HEAD --quality-ack="pinned by (UW)"; uwRc=$?
+uwBytes="$( wc -c < "$TMP/uw.out" | tr -d ' ' )"
+if [ "$uwRc" = 0 ] && [ "$uwBytes" = 0 ] && [ -f "$QAR/.ripwire_quality_acks" ]; then
+    ok "(UW1) --quality-ack under the DEFAULT posture: rc 0, ledger written, stdout 0 B — no report for the dialect to shape"
+else
+    no "(UW1) --quality-ack under the default posture: rc=$uwRc stdout=${uwBytes}B ledger=$( [ -f "$QAR/.ripwire_quality_acks" ] && echo written || echo missing ) stderr=[$( head -c 160 "$TMP/uw.err" )]"
+fi
+# (UW2) and what it wrote carries no legend text in either dialect, so no posture could change the record.
+if [ -f "$QAR/.ripwire_quality_acks" ] && ! grep -q 'hdr:\|=N: \|counts_floor=1:' "$QAR/.ripwire_quality_acks"; then
+    ok "(UW2) the ledger records hashes, magnitudes and the reason — no legend text in any dialect"
+else
+    no "(UW2) the ledger carries legend text, so the posture could change the record: $( head -c 200 "$QAR/.ripwire_quality_acks" 2>/dev/null )"
+fi
+# (UW3) an ASKED posture is still refused, naming the surface, and writes no ledger — a posture flag must
+#       never be the reason a ledger write starts.
+for uwLg in compact full; do
+    rm -f "$QAR/.ripwire_quality_acks"
+    qarun --quality-delta=HEAD~1..HEAD --quality-ack="pinned by (UW)" --legend=$uwLg; uwRc=$?
+    if [ "$uwRc" != 0 ] && grep -q 'quality-ack (writes the ledger)' "$TMP/uw.err" && [ ! -f "$QAR/.ripwire_quality_acks" ]; then
+        ok "(UW3) --legend=$uwLg with --quality-ack is refused by name, and no ledger is written"
+    else
+        no "(UW3) --legend=$uwLg with --quality-ack: rc=$uwRc ledger=$( [ -f "$QAR/.ripwire_quality_acks" ] && echo WRITTEN || echo none ) stderr=[$( head -c 160 "$TMP/uw.err" )]"
+    fi
+done
+# (UW4) THE REASON THE DEFAULT IS NOT WITHHELD. A run CARRYING the write flag that dispatches to an XML verb
+#       answers exactly what that verb alone answers. Byte identity is the whole claim: if a write surface
+#       kept no default, this answer would arrive in the full dialect and this comparison would fail.
+rm -f "$QAR/.ripwire_quality_acks"
+( cd "$QAR" && "$BIN" . --for="distance between points" >"$TMP/uw.for1" 2>/dev/null )
+( cd "$QAR" && "$BIN" . --for="distance between points" --quality-delta=HEAD~1..HEAD --quality-ack="pinned by (UW)" >"$TMP/uw.for2" 2>"$TMP/uw.err" )
+uwForBytes="$( wc -c < "$TMP/uw.for1" | tr -d ' ' )"
+if [ "${uwForBytes:-0}" -gt 400 ] && cmp -s "$TMP/uw.for1" "$TMP/uw.for2" && grep -q 'takes precedence' "$TMP/uw.err"; then
+    ok "(UW4) a run carrying --quality-ack that dispatches to --for is BYTE-IDENTICAL to --for alone (${uwForBytes} B, default posture) — withholding the default from write surfaces would print this in the full dialect"
+else
+    no "(UW4) --for beside --quality-ack diverged from --for alone: ${uwForBytes}B vs $( wc -c < "$TMP/uw.for2" | tr -d ' ' )B, precedence notice=$( grep -c 'takes precedence' "$TMP/uw.err" )"
+fi
+rm -f "$QAR/.ripwire_quality_acks"
+
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"
