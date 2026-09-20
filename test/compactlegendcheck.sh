@@ -2224,5 +2224,113 @@ printf 'callers escapeXml\n' > "$FXT/batch.txt"
     && ok "(FX8) --for=X --batch=F: the batch envelope carries the default posture's schema=" \
     || no "(FX8) --for=X --batch=F answered the batch envelope outside the default posture"
 
+echo
+echo "=== (UD) NO GATE PINS A FULL-DIALECT SPELLING AGAINST A DEFAULT ANSWER ==="
+# WHY THIS ARM EXISTS (train 9 fix round 1). Making the compact dialect the DEFAULT turned two gates red in CI
+# that every local run had passed — externalvetocheck (H) grepped `hdr:external=` and regexguardcheck (k)
+# grepped `LONG LINES:`, both spellings the FULL legend carries and the compact one never emits. Neither was a
+# missing definition: (G) in legendcoveragecheck and (UG) above both hold the DEFINEDNESS predicate ("every
+# attribute a default answer emits is defined in its own legend") and both were green on those very answers,
+# because the definitions were there all along — `external=K: …` and `regex_lines_skipped=N: …` — just worded
+# the other way. Widening those probes to more states could never have caught this, so this is a DIFFERENT
+# predicate, not a bigger roster:
+#
+#     a gate that greps a LEGEND-PROSE literal the default posture never emits, and never asks for --legend=full,
+#     is asserting against a dialect its own run does not speak.
+#
+# Both corpora come from the binary, so the vocabulary is derived from the emitter rather than listed here; no
+# gate is named and there is no exemption list to go stale. The guard below fails loudly rather than passing
+# empty if either corpus or the candidate pool collapses.
+#
+# WHAT IT CANNOT SEE, stated rather than implied: a gate that runs --legend=full SOMEWHERE is taken at its word
+# even if the literal is greped against a different, default-posture run in the same script; a literal built by
+# string concatenation or holding a shell metacharacter is not read; and a prose literal this sweep's corpora
+# never make the tool print is not judged (it is absent from the FULL corpus, so it simply does not arise).
+cat > "$TMP/dialectpin.py" <<'PY'
+import glob, os, re, subprocess, sys
+BIN, ROOT, FIX, TRACE = sys.argv[1:5]
+# A skipped-line answer reaches the long-line clause on EVERY regex engine through the fault bound, so this
+# corpus does not depend on whether the host's std::regex recurses per character (it is why the macOS legs
+# stayed green on the very red this arm closes).
+FXR = os.path.join(os.path.dirname(TRACE), "udregex")
+os.makedirs(FXR, exist_ok=True)
+open(os.path.join(FXR, "f.md"), "w").write("x" * 100 + " aab\naab\n")
+ENV = dict(os.environ, RIPWIRE_FAULT_REGEX_LINE_BOUND="1")
+ARGVS = [
+    (FIX, []), (FIX, ["--for=geometry"]), (FIX, ["--expand=distance"]), (FIX, ["--callers=distance"]),
+    (FIX, ["--callees=distance"]), (FIX, ["--impact=distance"]), (FIX, ["--uses=distance"]),
+    (FIX, ["--hotspots"]), (FIX, ["--lint"]), (FIX, ["--clones"]), (FIX, ["--metrics"]),
+    (FIX, ["--grep=distance"]), (FIX, ["--regex=dist.*"]), (FIX, ["--around=distance"]),
+    (FIX, ["--skipped"]), (FIX, ["--external-surface"]), (FIX, ["--field-affinity=Point"]),
+    (FIX, ["--handoff"]), (FIX, ["--handoff", "--token-budget=800"]), (FIX, ["--pack-task=geometry"]),
+    (FIX, ["--arch"]), (FIX, ["--communities"]), (FIX, ["--seams"]), (FIX, ["--flags"]),
+    (FIX, ["--max-tokens=500"]), (FIX, ["--rank-by=churn"]), (FIX, ["--order=stable"]),
+    (FIX, ["--from-trace=" + TRACE]), (FXR, ["--regex=a+b"]),
+]
+COMMENT = re.compile(rb"<!--(.*?)-->", re.S)
+def run(root, args, full):
+    a = [BIN, root] + args + (["--legend=full"] if full else []) + ["--no-cache"]
+    try:
+        return subprocess.run(a, capture_output=True, timeout=120, env=ENV).stdout
+    except Exception:
+        return b""
+# FULL: the legend COMMENTS only — prose is exactly what compaction drops.
+# DEFAULT: the WHOLE document — a literal the default emits anywhere, legend or payload, is not a dialect pin.
+FULL = b"\n".join(b"\n".join(COMMENT.findall(run(r, a, True))) for r, a in ARGVS)
+DEF  = b"\n".join(run(r, a, False) for r, a in ARGVS)
+LIT = re.compile(r"""grep\s+(?:-[A-Za-z]+\s+)*(['"])(.+?)\1""")
+cand = 0
+findings = []
+for g in sorted(glob.glob(os.path.join(ROOT, "test", "*.sh"))):
+    src = open(g, encoding="utf-8", errors="replace").read()
+    body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    asksFull = "--legend=full" in body or "RIPWIRE_LEGEND" in body
+    for _, lit in LIT.findall(body):
+        if len(lit) < 6 or any(c in lit for c in "$\\[]*^"):
+            continue
+        # A LEGEND-ONLY SPELLING, and nothing looser. Two namespaces can only ever come from a legend, so a
+        # literal in either is judged with no risk of confusing it for payload:
+        #   `hdr:…`        the map header's definition clauses, which the compact dialect strips BY CONTRACT
+        #                  (kCompactProsePrefixes "<!-- hdr:", and the always-on legend's hdr: half) — this
+        #                  half is principled rather than heuristic: no payload can carry the prefix
+        #   `ALL CAPS:`    a full-legend clause LABEL greped whole (LONG LINES:, ORDER:) — payload attributes
+        #                  are lowercase, so an upper-case label standing alone can only come from prose
+        # Two wider rules were tried on this tree and rejected for FALSE findings, which is the failure mode
+        # that would earn this arm an exemption roster — the very thing it exists to avoid: "two adjacent
+        # words" matched four STDERR refusal messages ("is empty", "never counted") that merely occur in
+        # legend prose as well, and allowing a label to carry a tail matched atcheck's `FILE:LINE`
+        # metavariable. Deliberately OUT of scope, and stated rather than implied: a bare `attr=` pin cannot
+        # be judged here at all, because a gate greping one may be matching its own fixture's PAYLOAD, which
+        # this sweep's corpora do not enumerate.
+        if not (lit.startswith("hdr:") or re.fullmatch(r"[A-Z][A-Z ]{3,}:\s?", lit)):
+            continue
+        cand += 1
+        b = lit.encode()
+        if b in FULL and b not in DEF and not asksFull:
+            findings.append((os.path.basename(g), lit))
+print(f"{len(FULL)}\t{len(DEF)}\t{cand}\t{len(findings)}")
+for name, lit in findings:
+    print(f"{name}\t{lit}")
+PY
+python3 "$TMP/dialectpin.py" "$BIN" "$ROOT" "$REPO" "$TMP/trace.txt" >"$TMP/ud.out" 2>"$TMP/ud.err" \
+    || no "(UD) the dialect-pin reader crashed: $( head -c 400 "$TMP/ud.err" )"
+if [ -s "$TMP/ud.out" ]; then
+    IFS=$'\t' read -r udFull udDef udCand udBad < "$TMP/ud.out"
+    # Non-vacuity floors, measured on this tree 2026-09-19 and set under it: an arm that reads nothing must go
+    # RED, not quietly pass. The literal pool is 9 (6 distinct: three real `hdr:`/label pins — declinecheck's
+    # hdr:declined=, externalvetocheck's hdr:external=, regexguardcheck's LONG LINES: — and three that the
+    # default posture does emit). It is deliberately a narrow, high-precision pool, so the floor is 5.
+    if [ "${udFull:-0}" -lt 20000 ] || [ "${udDef:-0}" -lt 20000 ] || [ "${udCand:-0}" -lt 5 ]; then
+        no "(UD) the sweep collapsed (full=${udFull:-0}B default=${udDef:-0}B legend-only-spellings=${udCand:-0}) — this arm would prove nothing"
+    elif [ "${udBad:-1}" = 0 ]; then
+        ok "(UD) no gate greps a full-dialect legend spelling without asking for it: $udCand legend-only spelling(s) across $( ls "$ROOT"/test/*.sh | wc -l | tr -d ' ' ) gates, read against ${udFull}B of full-dialect legend and ${udDef}B of default-posture output"
+    else
+        no "(UD) $udBad gate literal(s) the DEFAULT posture never emits, in gates that never run --legend=full — assert the default dialect's own wording (and the full one separately), do not add a second spelling to the legend:"
+        tail -n +2 "$TMP/ud.out" | sed 's/^/          /'
+    fi
+else
+    no "(UD) the dialect-pin reader produced no verdict line"
+fi
+
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"
