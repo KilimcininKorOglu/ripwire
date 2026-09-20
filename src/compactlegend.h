@@ -138,7 +138,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "hotspots",     "hotspots",     "maintenance pain = churn x ccx over window=: <f p= churn= ccx= score= top= top_ccx= top_l=>; unranked_*= no churn/complexity" },
     { "clones",       "clones",       "similar normalized-token bodies: <group type=2|3 gid= tokens= n= similarity=> of <f n= p=>; dup_loc=/dup_pct=" },
     { "deps",         "deps",         "file-to-file include/import view, heaviest cone first: <f p= afferent= includes= instab= transitive=>, <health>, <godfiles>, <cycles>" },
-    { "dead-code",    "dead-code",    "high-confidence dead functions (internal linkage, no caller in the index): <d n= t= p= l=>; filter= path component" },
+    { "dead-code",    "dead-code",    "internal-linkage functions with no caller found in the index (not a confidence score): <d n= t= p= l=>; filter= path component" },
     { "lint",         "lint",         "AST-only checks, facts not gates: <rule name= count= shown_rows= rows_capped= count_capped=> of <f rule= p= in=>" },
     { "lintcatalog",  "lint-catalog", "the built-in lint rule registry: <rule name= sev= cat= lang= since=>" },
     { "external-surface", "external-surface", "names used but never defined in the index: <x n= lang= refs= calls=>" },
@@ -789,8 +789,9 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "changed", "changed=: the files/symbols argument as given", false, "affected", MapHeaderRead::No, {}, "affected" },
     // connect: src/mcpverbs.h packConnect
     { "terminals", "terminals=/groups=/edges=: task symbols resolved, connected groups (g), e edges printed", false, "connect", MapHeaderRead::No, {}, "connect" },
-    // dead-code: src/verbs_quality.h
-    { "confidence", "confidence=high count=: every row met the evidence= rule; count= the rows, a floor", false, "dead-code", MapHeaderRead::No, {}, "dead-code" },
+    // dead-code: src/verbs_quality.h — T13/fix1: confidence="high" removed (a claim the code did not
+    // support); count= still needs its own reading now that the confidence row is gone.
+    { "count", "count=N: candidates meeting evidence= (a floor)", false, "dead-code", MapHeaderRead::No, {}, "dead-code" },
     // doc-drift: src/docdrift.h
     { "drift", "drift=/dated=: anchors that no longer hold / anchors skipped as dated (unverifiable by date)", false, "doc-drift", MapHeaderRead::No, {}, "doc-drift" },
     // edit-check: src/editcheck.h

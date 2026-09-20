@@ -433,7 +433,7 @@ add(S4, f"{BIN} . --report", "Architecture summary (modules, god-files, cycles) 
 add(S4, f"{BIN} . --seams", "Cross-module call seams no test reaches. NOW carries seam_pairs/shown/capped.")
 add(S4, f"{BIN} . --mermaid", "Module (directory) dependency graph as a Mermaid diagram.")
 add(S4, f"{BIN} . --owners", "Bus-factor: recency-weighted author ownership per file.")
-add(S4, f"{BIN} . --dead-code=src", "High-confidence internal functions with no caller. NOTE the filter is a path-COMPONENT match: 'src' matches any .../src/... segment; use ./src to pin the root directory.")
+add(S4, f"{BIN} . --dead-code=src", "Internal functions with no caller found in the index — a name-based graph reading, not a confidence score. NOTE the filter is a path-COMPONENT match: 'src' matches any .../src/... segment; use ./src to pin the root directory.")
 add(S4, f"{BIN} . --exercises=test/regression.sh", "Which symbols a TEST FILE exercises — the reverse direction of --affected.")
 add(S4, f"{BIN} . --community=0", "Drill into ONE call-graph community by id — the drill= the --communities output itself advertises.")
 add(S4, f"{BIN} . --quality-delta", onTree(
