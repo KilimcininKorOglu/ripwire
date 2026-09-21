@@ -380,7 +380,7 @@ inline std::string mcpResolveAssumedRoot()
     std::string       launchCwd = mcpCanonRoot( cwdBuf );   // not const: returned, and a const local cannot be moved out
     const char* const homeEnv   = std::getenv( "HOME" );
     const std::string homeCanon = homeEnv ? mcpCanonRoot( homeEnv ) : std::string{};
-    if( launchCwd == "/" || ( !homeCanon.empty() && launchCwd == homeCanon ) )
+    if( os::path_is_root( launchCwd ) || ( !homeCanon.empty() && launchCwd == homeCanon ) )   // "/", or a drive's "C:/"
     {
         return {};
     }
@@ -988,6 +988,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             };
 
             std::string       path    = strArg( "path" );     // may be REBOUND to a workspace key by `paths` below (A11)
+            os::normalize_path_arg( path.data() );             // intake: the program's path spelling, once
             std::string       assumedRootNote;                // R2a: non-empty ⇒ path was defaulted to the launch cwd; disclosed by textResult (declared here so the lambda captures it)
             const std::string symbol  = strArg( "symbol" );
             const std::string pattern = strArg( "pattern" );
@@ -1251,7 +1252,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // fell through to `path` and was refused with "missing required field: path" — a field the
                 // caller never touched, about a field they did send in the wrong shape.
                 const McpArrayArg              pathsArg = mcpArrayArg( args, "paths", false, 1, 16 );
-                const std::vector<std::string> rootArgs = pathsArg.strings;
+                std::vector<std::string>       rootArgs = pathsArg.strings;
+                for( std::string& rootArg : rootArgs )
+                {
+                    os::normalize_path_arg( rootArg.data() );   // intake: the program's path spelling, once
+                }
                 if( !pathsArg.refusal.empty() )
                 {
                     resp = errResultMsg( -32602, pathsArg.refusal );

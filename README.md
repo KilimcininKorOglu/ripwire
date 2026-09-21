@@ -1848,9 +1848,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>646 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>647 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **646 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **647 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2198,7 +2198,7 @@ same renderer. One computation has one output shape.
 
 | Item | Requirement |
 | --- | --- |
-| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). On Windows, use WSL2. |
+| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). Native Windows x64 **builds** with clang-cl — CI builds it on `windows-latest` every full matrix and smoke-tests the binary (`--version`, `ctest`, a real crawl, the two-run byte-identical contract, well-formed XML); the 647-gate suite does not run there yet, so treat it as a build, not a validated platform. MSVC `cl.exe` does not build yet — the tree uses GCC/Clang language extensions (`asm volatile` barriers, `__builtin_*`, `[[gnu::…]]`) that need a portability seam. No prebuilt Windows binary is published; WSL2 remains the supported way to RUN it on a Windows machine. |
 | Prebuilt Linux floor | RHEL 8 or later (glibc 2.28) |
 | Prebuilt macOS floor | macOS 14 or later, Apple silicon. 0.6.1 is the last release with an Intel macOS binary; on an Intel Mac, pin `RIPWIRE_VERSION=v0.6.1` or build from source. |
 | x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later), for a prebuilt binary and a source build alike |
@@ -2589,7 +2589,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 221 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 221 compile-time caps and 8 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.

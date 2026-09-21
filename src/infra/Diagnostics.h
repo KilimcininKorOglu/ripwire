@@ -65,6 +65,20 @@
   #define _SHORTERFILE_ __FILE__
 #endif
 
+// 1b. __PRETTY_FUNCTION__ — the enclosing function as the compiler spells it, which is what every check below
+// prints so a failure names the function and not just the line. GCC and Clang expose __PRETTY_FUNCTION__, and
+// clang-cl keeps it on the MSVC ABI; plain cl.exe has no such identifier at all and spells the same thing
+// __FUNCSIG__ ("error C2065: '__PRETTY_FUNCTION__': undeclared identifier" — windows-latest CI, 2026-09-20).
+// One spelling here rather than a condition at each of the seven macros below. The condition names the two
+// COMPILER families that have the identifier, never an operating system: __PRETTY_FUNCTION__ is a compiler
+// extension, not a platform feature, and test/osswitchcheck.sh arm A refuses an OS name in a directive outside
+// src/infra/os.h — the same shape §1 above already uses. clang-cl defines __clang__ and lands in the first arm.
+#if defined( __clang__ ) || defined( __GNUC__ )
+  #define _PRETTYFUNCTION_ __PRETTY_FUNCTION__
+#else
+  #define _PRETTYFUNCTION_ __FUNCSIG__
+#endif
+
 // handleAssert and handleThreadViolation end in __builtin_trap, but in diagnostics.cpp, out of the static analyzer's
 // sight. Without this it walks on past a failed ASSUME and reports exactly what the ASSUME ruled out — an
 // out-of-bounds read of an index the ASSUME had just bounded. analyzer_noreturn informs the analyzer ONLY; codegen is
@@ -243,7 +257,7 @@ template<class Site>
       {                                                                                                                  \
           if( !static_cast<bool>( e ) ) [[unlikely]]                                                                     \
           {                                                                                                              \
-              ::Diagnostics::ConsoleLog::handleAssert( kind, #e, _SHORTERFILE_, __LINE__, __PRETTY_FUNCTION__, msg );     \
+              ::Diagnostics::ConsoleLog::handleAssert( kind, #e, _SHORTERFILE_, __LINE__, _PRETTYFUNCTION_, msg );     \
           }                                                                                                              \
       } while( 0 )
 
@@ -251,7 +265,7 @@ template<class Site>
   #define RW_DASSERT_( e, msg )       RW_CHECK_( ::Diagnostics::CheckKind::DAssert, e, msg )
   #define RW_UNREACHABLE_( msg )                                                                                          \
       ( ::Diagnostics::ConsoleLog::handleAssert( ::Diagnostics::CheckKind::Unreachable, "UNREACHABLE()", _SHORTERFILE_, __LINE__, \
-                                                 __PRETTY_FUNCTION__, msg ),                                              \
+                                                 _PRETTYFUNCTION_, msg ),                                              \
         __builtin_trap() )
 
 #else   // NDEBUG — release build
@@ -338,7 +352,7 @@ template<class Site>
 // --------------------------------------------------------------------------------------------------------------------
 #if !defined( NDEBUG )
   #define RW_VALIDATE_FAILED_( e, msg )                                                                                   \
-      ::Diagnostics::detail::validateFailed( [] {}, #e, _SHORTERFILE_, __LINE__, __PRETTY_FUNCTION__, msg )
+      ::Diagnostics::detail::validateFailed( [] {}, #e, _SHORTERFILE_, __LINE__, _PRETTYFUNCTION_, msg )
 #else
   #define RW_VALIDATE_FAILED_( e, msg ) ::Diagnostics::detail::validateFailed( sizeof( msg ) )
 #endif
@@ -380,7 +394,7 @@ template<class Site>
                   if( rwSeen_ != rwSelf_ )                                                                               \
                   {                                                                                                      \
                       ::Diagnostics::ConsoleLog::handleThreadViolation( rwSeen_, rwSelf_, _SHORTERFILE_, __LINE__,       \
-                                                                        __PRETTY_FUNCTION__, msg );                      \
+                                                                        _PRETTYFUNCTION_, msg );                      \
                   }                                                                                                      \
               }                                                                                                          \
           }                                                                                                              \
@@ -392,7 +406,7 @@ template<class Site>
           if( !( obj ).threadOwner.claimOrCheck( &rwOwner_ ) ) [[unlikely]]                                              \
           {                                                                                                              \
               ::Diagnostics::ConsoleLog::handleThreadViolation( rwOwner_, ::Diagnostics::currentThreadId(), _SHORTERFILE_, \
-                                                                __LINE__, __PRETTY_FUNCTION__, msg );                    \
+                                                                __LINE__, _PRETTYFUNCTION_, msg );                    \
           }                                                                                                              \
       } while( 0 )
 #else
@@ -405,7 +419,7 @@ template<class Site>
 // --------------------------------------------------------------------------------------------------------------------
 // 4. PANIC — always active, never compiled out
 // --------------------------------------------------------------------------------------------------------------------
-#define PANIC( msg ) ::Diagnostics::ConsoleLog::handlePanic( _SHORTERFILE_, __LINE__, __PRETTY_FUNCTION__, msg )
+#define PANIC( msg ) ::Diagnostics::ConsoleLog::handlePanic( _SHORTERFILE_, __LINE__, _PRETTYFUNCTION_, msg )
 
 // --------------------------------------------------------------------------------------------------------------------
 // 4b. DISCLOSE — a degrade path the reader must learn about
@@ -554,7 +568,7 @@ template<class S> using WhyOf = typename WhyOfImpl<Bare<S>>::type;
           static ::std::atomic<bool> rwDegradeSeen_{ false };                                                            \
           if( !rwDegradeSeen_.exchange( true, ::std::memory_order_relaxed ) )                                            \
           {                                                                                                              \
-              ::Diagnostics::ConsoleLog::handleDegraded( _SHORTERFILE_, __LINE__, __PRETTY_FUNCTION__, text );           \
+              ::Diagnostics::ConsoleLog::handleDegraded( _SHORTERFILE_, __LINE__, _PRETTYFUNCTION_, text );           \
           }                                                                                                              \
       } while( 0 )
 #else

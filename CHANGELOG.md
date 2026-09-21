@@ -413,6 +413,59 @@ skills, against a built binary rather than from reading the source. Contributed 
 who built the Flask fixture that found them.
 
 ### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
+### Added — native Windows x64 (clang-cl, MSVC ABI), behind `src/infra/os.h` — thanks to @lennix1337 (#44)
+
+@lennix1337 ported ripwire to native Windows in #44 and then kept it alive through weeks of a moving main: UTF-8
+and long paths end to end, the no-follow sidecar opens against symlinks, junctions and OneDrive placeholders,
+`--run-trace` children inside a Job Object so a timeout ends the whole tree, Git Bash script bridges so `cmd.exe`
+never expands a `%`, the `LockFileEx` edit lock their race trials proved, the MCP directory watcher, the
+PATH/PATHEXT search, and an owner-and-Administrators ACL for the cache directory — plus a local validation run of
+the Windows gates on their own machine, and a snapshot (`win32-port-snapshot`) with the fixes that run turned up.
+Their commits are in this history as they wrote them.
+
+This release carries that work in the shape `os.h` set out: every Windows body is in
+`src/infra/os_win32.cpp` (the one translation unit that sees `<windows.h>`), declared by `os.h`'s Windows branch
+under the same POSIX names call sites already spell, and every piece of it that is not a Win32 call — the
+Win32→errno table, UTF-8/UTF-16, `CreateProcessW` quoting (adapted from libuv, notice in `THIRD_PARTY.md`),
+reparse-tag and wait-status decoding — is in `src/infra/os_win32_logic.h`, which every Linux and macOS leg now
+compiles and tests (`test/oswin32logiccheck.sh`: 29 cases, 4,480,667 assertions, a sanitizer arm and a mutant arm
+that must fail). A Windows build adds only `cmake/Windows.cmake`: `os_win32.cpp`, a manifest (`longPathAware`,
+UTF-8 active code page), `ws2_32`/`advapi32`/`shell32`, `/EHsc`. No force-include, no compat headers, no
+libc-renaming macros.
+
+Linux and macOS pay nothing for it. Measured on macOS arm64, Release, this branch against main `e54b688e`: no
+`rw::os` symbol in either binary, identical symbol sets (11,021), `__text` 9,172,004 B in both, and of 5,034
+functions 5,031 disassemble identically and 3 differ only by the build stamps (the source-identity hash in the
+quality snapshot's two serializers, the `built_from` length in `--doctor`). The same 71 cases the `os.h` refresh
+used (map, 25 verbs, `--run-trace`, MCP stdio and `--listen`, the sidecar and index writes) are byte-identical.
+
+Since proven on Windows, and exactly that far. @lennix1337's run against the D3 branch found five build failures, all fixed; a `windows-latest` CI job now builds with clang-cl and smoke-tests the result on every full matrix — configure, build, `ctest` (including the port's own `oswin32logiccheck` target), `--version`/`--help`, a real crawl of `test/fixture`, the two-run byte-identical determinism contract, well-formed XML, and the ASan flavour compiling. What is NOT proven: the gate suite does not run on Windows (it needs the harness), no sanitizer RUN happens there, and nothing exercises a UNC share, a junction, a non-ASCII path or a volume without a drive letter — the checklist on #44 is still open. MSVC `cl.exe` does not build: it configures and compiles until it reaches the GCC/Clang language extensions the tree is written in, which needs a portability seam in `src/infra/platform.h`; the CI leg asserts that it stops exactly there, so a different break is a red job.
+
+A review pass (no Windows machine, read plus a macOS/Linux-provable subset) found one MED and five LOWs, none
+touching POSIX; this fix round closes the MED and three of the LOWs, still on top of @lennix1337's work:
+
+- Paths past ~260 characters now get the `\\?\` extended-length prefix (`NativePath`, reusing the existing
+  `extendedLengthPath` helper behind a length threshold, `os_win32.cpp`/`os_win32_logic.h`): without it, a file
+  deeper than that on a default-policy Windows (`LongPathsEnabled=0`) failed `CreateFileW` with
+  `ERROR_PATH_NOT_FOUND` — `ENOENT` for a file that exists — and the crawl or sidecar silently skipped it.
+- `ERROR_IO_PENDING` (997) now maps to `EWOULDBLOCK` in the Win32→errno table, alongside `ERROR_LOCK_VIOLATION`
+  (33), as a defence for the edit-lock contention loop.
+- `getline`'s buffer growth no longer reads `*capacity` while `*line` is `NULL` (POSIX ignores it in that case).
+- The `stat_t::st_ino` comment now says what the code does (`BY_HANDLE_FILE_INFORMATION`'s 64-bit file index; a
+  ReFS/DevDrive volume's 128-bit id is not queried) instead of describing a fold that never happens.
+- `--in=`, `--doc-drift=` and `--exclude=` join the path-valued flags normalized at intake (`--scope=`, a glob
+  set, and `--layout=`, a type name, deliberately do not).
+- `--doctor`'s binary-path row is marked `degraded="1"` on Windows (Git Bash's MSYS `which` never prints
+  `.exe`, so the row's file comparison can disagree with a correct install) rather than left to read as a false
+  mismatch; POSIX is unaffected. The honest fix — a native `os::which` PATH/PATHEXT search — is a follow-up.
+- `openat`'s handle-anchored join (kept as-is this release, not `NtCreateFile`) now documents its residual: the
+  final `CreateFileW` re-walks a freshly built path string, so a link swapped in above the anchored directory in
+  that narrow window is followed, unlike a true handle-relative open.
+
+Left for a contributor's own Windows run (checklist in the coordination history): MSYS bash re-parsing
+`spawn_sh`'s command line, and `openat` on a volume mounted without a drive letter.
+
+### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
 
 Reported by @mariadb-KyleHutchinson in #289: `--expand=SYM` on a name matching more than one definition, in a
 file over `--pack-budget-bytes`, served `mode="bundle"` — the ~200-symbol default ranked map, then the

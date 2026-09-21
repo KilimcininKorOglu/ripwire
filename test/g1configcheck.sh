@@ -55,8 +55,9 @@ signChangeDisableCount="$( grep -c -- '-fno-sanitize=implicit-integer-sign-chang
 swiftSignSectionCount="$( grep -c '\[implicit-integer-sign-change\]' "$CMAKE" )"
 swiftWhitespaceCount="$( grep -c 'fun:eat_whitespace' "$CMAKE" )"
 bashScanCount="$( grep -c 'fun:scan' "$CMAKE" )"
-# M2-era note: `[unsigned-integer-overflow]` now opens TWO ignorelists — bash's scanner (fun:scan) and
-# the libstdc++ one — so the SECTION count is 2, and every entry underneath is audited separately below
+# M2-era note: `[unsigned-integer-overflow]` now opens THREE ignorelists — bash's scanner (fun:scan),
+# the libstdc++ one, and the Windows-only MSVC STL <filesystem> one added under CMakeLists.txt's
+# `if(WIN32)` block — so the SECTION count is 3, and every entry underneath is audited separately below
 # so that none can be added or dropped without moving this gate.
 # …counted by OCCURRENCE, not by line: an ignorelist here is one CMake string holding several `\n`-joined
 # entries, so `grep -c` (which counts matching LINES) reads a smuggled second entry on an existing line as
@@ -85,7 +86,13 @@ scannerUnsignedSectionCount="$( occurrences '\[unsigned-integer-overflow\]' )"
 #   write through these two headers, so the exemption is what keeps the complete G1 stack running.
 # Section counts move with it: [implicit-integer-sign-change] and [implicit-unsigned-integer-truncation]
 # each open a second list (Swift/tree-sitter before, libstdc++ now); [implicit-signed-integer-truncation]
-# opens its first. 3 + 8 = 11 `src:` occurrences, no more.
+# opens its first. 3 + 8 = 11 `src:` occurrences under those two sections, plus below.
+#
+# WINDOWS FILESYSTEM SEAM (CMakeLists.txt's `if(WIN32)` block): MSVC STL _Is_drive_prefix performs a
+# defined unsigned wrap; third-party header, Windows-only. ONE more `[unsigned-integer-overflow]`
+# section (the bare header path, no function-name pattern — g1configcheck.sh bans `fun:*` outright, so
+# a Windows-only exemption stays file-scoped like every other entry here) and ONE more `src:` occurrence.
+# 11 + 1 = 12 `src:` occurrences, no more.
 stringViewRuleCount="$( occurrences 'src:\*/bits/string_view\.tcc' )"
 basicStringHeaderRuleCount="$( occurrences 'src:\*/bits/basic_string\.h' )"
 basicStringTccRuleCount="$( occurrences 'src:\*/bits/basic_string\.tcc' )"
@@ -94,22 +101,24 @@ formatRuleCount="$( occurrences 'src:\*/include/c\\\\+\\\\+/\*/format' )"
 printRuleCount="$( occurrences 'src:\*/include/c\\\\+\\\\+/\*/print' )"
 formatPrintRuleCount="$(( formatRuleCount + printRuleCount ))"
 signedTruncationSectionCount="$( occurrences '\[implicit-signed-integer-truncation\]' )"
+filesystemRuleCount="$( occurrences 'src:\*/include/filesystem' )"
 srcScopedRuleCount="$( occurrences 'src:' )"
 if [ "$unsignedTruncationSectionCount" = 2 ] && [ "$balanceCount" = 1 ] \
     && [ "$functionSectionCount" = 1 ] && [ "$scannerCreateCount" = 1 ] \
     && [ "$unsignedDisableCount" = 2 ] && [ "$signedTruncationDisableCount" = 2 ] \
     && [ "$signChangeDisableCount" = 2 ] \
     && [ "$swiftSignSectionCount" = 2 ] && [ "$swiftWhitespaceCount" = 1 ] \
-    && [ "$scannerUnsignedSectionCount" = 2 ] && [ "$bashScanCount" = 1 ] \
+    && [ "$scannerUnsignedSectionCount" = 3 ] && [ "$bashScanCount" = 1 ] \
     && [ "$signedTruncationSectionCount" = 1 ] \
     && [ "$stringViewRuleCount" = 1 ] && [ "$basicStringHeaderRuleCount" = 1 ] && [ "$basicStringTccRuleCount" = 1 ] \
     && [ "$libstdcxxHeaderRuleCount" = 3 ] \
     && [ "$formatRuleCount" = 4 ] && [ "$printRuleCount" = 4 ] && [ "$formatPrintRuleCount" = 8 ] \
-    && [ "$srcScopedRuleCount" = 11 ] \
+    && [ "$filesystemRuleCount" = 1 ] \
+    && [ "$srcScopedRuleCount" = 12 ] \
     && ! grep -Eq 'fun:\*' "$CMAKE"; then
-    ok "dependency policy is limited to audited Tree-sitter core, Swift/bash scanner, the 3 libstdc++ string seams and the 2 formatting seams (<format>/<print>, 4 checks each)"
+    ok "dependency policy is limited to audited Tree-sitter core, Swift/bash scanner, the 3 libstdc++ string seams, the 2 formatting seams (<format>/<print>, 4 checks each) and the 1 Windows-only MSVC STL <filesystem> seam"
 else
-    no "sanitizer exemption policy differs from the audited list (sections uint=$scannerUnsignedSectionCount, src:-scoped=$srcScopedRuleCount of which string_view.tcc=$stringViewRuleCount basic_string.h=$basicStringHeaderRuleCount basic_string.tcc=$basicStringTccRuleCount format=$formatRuleCount print=$printRuleCount; sections sign-change=$swiftSignSectionCount signed-trunc=$signedTruncationSectionCount unsigned-trunc=$unsignedTruncationSectionCount)"
+    no "sanitizer exemption policy differs from the audited list (sections uint=$scannerUnsignedSectionCount, src:-scoped=$srcScopedRuleCount of which string_view.tcc=$stringViewRuleCount basic_string.h=$basicStringHeaderRuleCount basic_string.tcc=$basicStringTccRuleCount format=$formatRuleCount print=$printRuleCount filesystem=$filesystemRuleCount; sections sign-change=$swiftSignSectionCount signed-trunc=$signedTruncationSectionCount unsigned-trunc=$unsignedTruncationSectionCount)"
 fi
 # MUTATION CONTROL (live, not the historical note above): plant a twelfth `src:` entry in a COPY of the file
 # and re-run the identical occurrence extraction over it — the audited count must move. A control over an

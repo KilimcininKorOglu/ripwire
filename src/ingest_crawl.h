@@ -1576,7 +1576,7 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
             {
                 if( full.empty() )
                 {
-                    full = p.string();
+                    full = os::program_path( p );   // the logical path the model carries: '/' on every platform
                 }
                 return full;
             };

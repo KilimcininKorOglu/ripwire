@@ -413,12 +413,30 @@ gotcha:** a POSIX name that some libc defines as a *function-like macro* cannot 
 the declaration and every `os::name(` call expand before the compiler sees a function — `S_ISREG( m )`,
 `S_ISLNK( m )` and the other mode predicates everywhere, and `htons` under glibc at `-O2`. Those stay bare at call
 sites, like the `O_*`/`X_OK`/`PATH_MAX` constants, and `os.h`'s Windows branch defines them. `test/osswitchcheck.sh`
-refuses all of the above outside `os.h`; its one allowlisted file is `src/infra/profilePmc.h`, the profiler's
-undocumented-ABI counter backends.
+refuses all of the above outside `os.h`; its allowlisted files are `src/infra/profilePmc.h`, the profiler's
+undocumented-ABI counter backends, and `src/infra/os_win32.cpp`.
+
+**Windows bodies live out of line.** `os.h`'s Windows branch only *declares* — the same names, POSIX constants,
+types and `stat` fields its POSIX branch uses — so `<windows.h>` never reaches a call site. The definitions are in
+`src/infra/os_win32.cpp`, which CMake compiles only for a Windows target (`cmake/Windows.cmake`), and they keep the
+POSIX contract their callers read: errno, `-1`, `struct stat` fields (`st_dev`/`st_ino` identify a file; `lstat`
+reports `S_IFLNK` for a symlink or junction; `O_NOFOLLOW` judges the final component). Every kernel object there
+has one RAII owner, and nothing throws. Anything in that port that is not a Win32 call — the Win32→errno table,
+UTF-8/UTF-16 conversion, path spelling, `CreateProcessW` quoting, reparse-tag and wait-status decoding — belongs in
+`src/infra/os_win32_logic.h`, a header with no `<windows.h>` and no platform test, so that every CI leg compiles
+it and `test/oswin32logiccheck.sh` tests it. Paths are `/`-separated inside the program: Windows spells them once
+where they enter (`os::init_process` for argv and the environment, `os::normalize_path_arg` for a path-valued
+flag or MCP argument), never at a comparison. The three questions whose answer depends on drives existing have
+`os::` names of their own — `os::path_is_absolute`, `os::path_is_root`, and `os::program_path( fs::path )` for a
+path the program generated itself (the crawl) — and each POSIX body is the expression the call site used to hold.
 
 **Platforms.** Unix, Linux and macOS come first; native Windows is second, with clang-cl the primary compiler and
 MSVC `cl.exe` also required to build. A `cl.exe` portability problem is worth fixing, but it does not block a change
-to a POSIX-only code path.
+to a POSIX-only code path. **As of this writing that second half is a target, not a fact:** clang-cl builds and is
+verified by the `windows` CI job, and `cl.exe` does not build — it stops at the GCC/Clang language extensions this
+tree uses (`asm volatile` barriers, `__builtin_*`, `[[gnu::…]]`), which need a portability seam in
+`src/infra/platform.h`. Do not read the rule above as a description of the current state; the CI leg asserts the
+failure so the two cannot drift apart silently.
 
 ### Aliasing: spelling, placement, contract
 
