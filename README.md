@@ -56,11 +56,12 @@ JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript
 
 **ripwire 0.6.2 — complete, honest, fast lookups, and Windows.** Calls that live outside any named function now
 have a caller: on vue-core, 72.83% of call sites that `--callers`, `--impact` and `--test-gate` could not see.
-Answers got smaller where it counts: the compact legend is the default (`--legend=full` restores the old bytes
-byte-for-byte), and over MCP each definition is sent once per session instead of in every answer.
-`--quality-delta` is trustworthy on a clean tree again. Native Windows x64 now builds and gates with **both**
-clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the 647-gate suite doesn't run on
-Windows yet, and ASan compiles there but never executes.
+`--affected` now finds materially more of the tests that actually reach a change without asking for more — 184
+of vue-core's suite for one file, up from 101. Answers got smaller where it counts: the compact legend is the
+default (`--legend=full` restores the old bytes byte-for-byte), and over MCP each definition is sent once per
+session instead of in every answer. `--quality-delta` is trustworthy on a clean tree again. Native Windows x64
+now builds and gates with **both** clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the
+647-gate suite doesn't run on Windows yet, and ASan compiles there but never executes.
 
 **ripwire 0.6.1 — the answers an agent reads got smaller.** A compact answer is 46–66% smaller per call, and on
 llvm-project the declined-call index drops from 114 MB to 368 KB with every count and every byte of output

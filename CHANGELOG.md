@@ -13,6 +13,38 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Added — `--affected` finds far more of the tests that actually reach a change, at the same default budget
+
+Re-measured the two release binaries (`v0.6.1` `30f14a274`, `v0.6.2` `15a20855c`) against the same fixed corpora
+and the exact same command line, no `--legend=` flag on either side. On vue-core
+(`54097087a0918b98f16c84599b1a6d654e952ca7`, `packages/reactivity/src/ref.ts`), `--affected` reports
+`tests="101"` on v0.6.1 and `tests="184"` on v0.6.2 — 83 more real test files identified as reaching the same
+file, same resolver defaults, no bigger ask. `--test-gate` on the same file and corpus shows the identical jump
+(`tests="101"`→`"184"`), while its own `untested=` count falls slightly (327 → 316).
+
+This is one half of a two-part byte story, measured across nine everyday verbs on both this repository and
+vue-core (18 cells total): the four fixed-shape blast-radius verbs — `--callers`, `--uses`, `--impact`, `--for`
+— shrink on **every** cell, 7.2%–48.5% smaller, median −26.0%, because 0.6.2's now-default compact legend (see
+the 0.6.2 entry below) costs fewer bytes for the same rows. Four budget-capped verbs — the flagless map,
+`--expand`, `--affected`, `--test-gate` — spend those same saved legend bytes on more real rows once a corpus
+has more to say: on this repository (small, comfortably under every cap) they still shrink, but on vue-core
+(larger, richer in true positives) they instead grow 0.6%–38.5%, because the cheaper legend buys headroom the
+resolver fills with more correct matches, not padding — every growth case was checked against its own row/file
+counters, not just its byte count. Across all 18 cells: **−48.5% to +38.5%, median −9.5%.**
+
+Re-derive (any local checkout of both tags; substitute your own clone of `vuejs/core` pinned at
+`54097087a0918b98f16c84599b1a6d654e952ca7`):
+```bash
+git worktree add ../ripwire-v061 v0.6.1
+git worktree add ../ripwire-v062 v0.6.2
+cmake -S ../ripwire-v061 -B ../ripwire-v061/build && cmake --build ../ripwire-v061/build -j8
+cmake -S ../ripwire-v062 -B ../ripwire-v062/build && cmake --build ../ripwire-v062/build -j8
+../ripwire-v061/build/ripwire <vue-core-checkout> --affected=packages/reactivity/src/ref.ts   # tests="101"
+../ripwire-v062/build/ripwire <vue-core-checkout> --affected=packages/reactivity/src/ref.ts   # tests="184"
+```
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
