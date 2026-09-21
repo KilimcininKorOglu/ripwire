@@ -591,6 +591,45 @@ set(RIPWIRE_SRCS
   src/infra/diagnostics.cpp
 )
 
+# ---- RIPWIRE_LAYOUT_TU: the translation unit's own identity, where __BASE_FILE__ does not exist ----
+# src/structlayout.h registers each TU's struct layouts under a name that must differ per TU, so that two
+# objects compiled from one header with disagreeing layouts can be told apart (that is the whole point of the
+# registry, and --doctor's `layout` row reads it). __FILE__ is the wrong identity: the registration macro is
+# expanded inside headers, so it names the header and every TU would register the same string. GCC and Clang
+# spell the right one __BASE_FILE__; it is a compiler EXTENSION, not a platform feature, and cl.exe has no
+# counterpart, so structlayout.h #errors rather than guess (three C1189s on the cl leg, windows-latest CI,
+# 2026-09-20). The header documents the override and test/structlayoutcheck.sh already drives it with
+# -DRIPWIRE_LAYOUT_TU; this supplies it from the build system for the front end that needs it.
+#
+# Keyed on the COMPILER, never the platform: clang-cl targets Windows and HAS __BASE_FILE__, so a condition on
+# MSVC-ness (the CMAKE_CXX_COMPILER_FRONTEND_VARIANT test used for /fp:precise just below) would wrongly claim
+# this leg too.
+#
+# The value is the path RELATIVE to the source root, not ${CMAKE_CURRENT_SOURCE_DIR}/... . Relative is the
+# reproducible choice: two checkouts in different directories then register byte-identical strings, where
+# __BASE_FILE__ on the GNU legs already carries whatever absolute path CMake passed. Nothing here reaches the
+# map — LayoutRecord::unit is read in exactly two places, both in structlayout.h, a sort comparator and the
+# mismatch report — but a build-system value that differs by checkout directory is the shape that makes a build
+# non-reproducible later, and relative costs nothing.
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  set(_ripwire_layout_tus
+    src/main.cpp
+    src/tsprobe.cpp
+    ${RIPWIRE_SRCS}
+    test/verify_csr.cpp
+    test/verify_pagerank.cpp
+    test/verify_radix.cpp
+    test/verify_strkern.cpp
+    test/verify_os_win32_logic.cpp)
+  foreach(_ripwire_tu IN LISTS _ripwire_layout_tus)
+    set_property(SOURCE ${_ripwire_tu} APPEND PROPERTY COMPILE_DEFINITIONS "RIPWIRE_LAYOUT_TU=\"${_ripwire_tu}\"")
+  endforeach()
+  # The generated identity TU is written into the build tree, so its source path is absolute and varies by
+  # build directory; it registers under its bare name for the same reproducibility reason as above.
+  set_property(SOURCE ${_ripwire_source_identity_cpp} APPEND PROPERTY
+    COMPILE_DEFINITIONS "RIPWIRE_LAYOUT_TU=\"source_identity.cpp\"")
+endif()
+
 # The global profile uses -ffast-math, but PageRank reductions must not reassociate (the determinism
 # contract's no-reassociation rule — docs/ARCHITECTURE.md §3).
 if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")

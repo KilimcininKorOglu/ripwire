@@ -469,11 +469,15 @@ path the program generated itself (the crawl) — and each POSIX body is the exp
 
 **Platforms.** Unix, Linux and macOS come first; native Windows is second, with clang-cl the primary compiler and
 MSVC `cl.exe` also required to build. A `cl.exe` portability problem is worth fixing, but it does not block a change
-to a POSIX-only code path. **As of this writing that second half is a target, not a fact:** clang-cl builds and is
-verified by the `windows` CI job, and `cl.exe` does not build — it stops at the GCC/Clang language extensions this
-tree uses (`asm volatile` barriers, `__builtin_*`, `[[gnu::…]]`), which need a portability seam in
-`src/infra/platform.h`. Do not read the rule above as a description of the current state; the CI leg asserts the
-failure so the two cannot drift apart silently.
+to a POSIX-only code path. **Both now build and both gate**: the `windows` CI job builds with clang-cl and with
+cl.exe on every full matrix, and each leg runs the binary, runs `ctest`, and checks the two-run byte-identical
+contract and well-formedness. The GCC/Clang language extensions this tree uses go through the seam in
+`src/infra/platform.h` (and, for the layer below it, `src/infra/Diagnostics.h` §1c); `test/osswitchcheck.sh` arm H
+refuses a new `__builtin_*`, inline asm or `__attribute__` outside that pair, so a Windows break is caught on every
+POSIX leg rather than discovered on Windows.
+
+A green Windows matrix is **not** the same as a validated platform. The 647-gate suite does not run there — it needs
+the harness on #44 — and the ASan flavour is compiled on Windows but never executed.
 
 ### Aliasing: spelling, placement, contract
 

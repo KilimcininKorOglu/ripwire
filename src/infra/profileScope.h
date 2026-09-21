@@ -688,36 +688,18 @@ private:
 };
 
 // ----------------------------------------------------------------------------
-// Optimizer barriers for micro-benchmarks. Without these the compiler is free
-// to delete a benchmarked loop whose results are never read (dead-store
-// elimination) or hoist a loop-invariant computation out of the timed region —
-// either way the measured time is meaningless. clobberMemory() is an empty asm
-// that "may read/write all memory" — but on its own it does NOT help for a
-// non-escaped local buffer: the compiler can prove the asm has no way to reach
-// an address it never saw, so it still elides/hoists. escape() closes that gap.
-ALWAYS_INLINE void clobberMemory() noexcept
-{
-    asm volatile( "" : : : "memory" );
-}
-
-// escape() — feed a buffer's address INTO an (empty) asm that also clobbers
-// memory. Once the pointer has visibly escaped, the compiler must assume the asm
-// may read AND write through it, so it (a) emits any pending stores to the buffer
-// before the barrier and (b) reloads from it afterwards. Call escape() on BOTH
-// the input and the output of a benchmarked pass to stop the optimizer deleting
-// the stores OR hoisting a loop-invariant computation out of the timed loop.
-ALWAYS_INLINE void escape( const volatile void* p ) noexcept
-{
-    asm volatile( "" : : "r,m"( p ) : "memory" );
-}
-
-// Pin a single value so the compiler can't fold it away (the scalar twin of
-// escape; use when there's a result register rather than a buffer).
-template< class T >
-ALWAYS_INLINE void doNotOptimize( T& value ) noexcept
-{
-    asm volatile( "" : "+r,m"( value ) : : "memory" );
-}
+// Optimizer barriers for micro-benchmarks live in Diagnostics.h, not here.
+//
+// This file used to carry its own clobberMemory() / escape() / doNotOptimize(), three inline-asm
+// barriers with NO caller anywhere in the tree and the same job as Diagnostics::ClobberMemory and
+// Diagnostics::DoNotOptimize one layer down — which are called, and which already carry a portable
+// `#else` arm for a front end without inline asm. Two implementations of one barrier is the shape
+// where the unused copy silently rots, and this header's own rule (platform.h: "Every macro and
+// constant below has a real call site above this layer; nothing is kept in case") says which copy
+// goes. Removed 2026-09-20, with the cl.exe seam: they were also three of the tree's remaining
+// `asm volatile` sites, and porting a facility nobody calls is the worse half of that trade.
+// Use Diagnostics::ClobberMemory / Diagnostics::DoNotOptimize.
+// ----------------------------------------------------------------------------
 
 // ============================================================================
 // report() — snapshot (under locks) -> convert -> sort -> print. Cold path.
@@ -752,7 +734,7 @@ struct ThreadSnap
 // AFTER the map — on stdout it would trail the document (ill-formed XML, dead
 // `| xmllint` pipes) and vanish under `>file`. stderr also unifies with the
 // leaked-thread warning in teardown() and prof::pmc's diagnostics.
-__attribute__(( format( printf, 1, 2 ) ))
+RW_PRINTF_FORMAT( 1, 2 )
 inline void report_printf( const char* fmt, ... ) noexcept
 {
     va_list args;
@@ -1298,7 +1280,7 @@ inline void report()
 
 #define PROF_SCOPE_IMPL_( desc, id )                                                       \
     static const ::prof::Site PROF_CAT( prof_site_, id ) {                                 \
-        __PRETTY_FUNCTION__, ::prof::detail::basename( __FILE__ ), ( desc ), __LINE__ };    \
+        _PRETTYFUNCTION_, ::prof::detail::basename( __FILE__ ), ( desc ), __LINE__ };       \
     static thread_local ::prof::Record* const PROF_CAT( prof_rec_, id ) =                  \
         ::prof::detail::tls_acquire( &PROF_CAT( prof_site_, id ) );                         \
     ::prof::ScopedTimer PROF_CAT( prof_timer_, id ) { PROF_CAT( prof_rec_, id ) }
