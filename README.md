@@ -2018,11 +2018,13 @@ Three worth starting with:
 | [`capture-audit.md`](prompts/capture-audit.md) | A fresh showcase capture read by parallel adversarial lenses, and the findings turned into family-wide gates. |
 
 <details>
-<summary>The other seven — head-to-head, ranking-eval from your own sessions, per-language, onboarding, sibling sweep, command tour, showcase build</summary>
+<summary>The other ten — head-to-head, ranking-eval from your own sessions, per-language, onboarding, sibling sweep, command tour, showcase build, add a language, quality-panel calibration, COBOL corpus measurement</summary>
 
-The other seven — a paired head-to-head against a competitor, a ranking-eval loop that mines real
+The other ten — a paired head-to-head against a competitor, a ranking-eval loop that mines real
 retrieval misses from your own sessions, a per-language improvement pass, a zero-context onboarding
-study, a sibling sweep, a live command tour, a showcase build — are listed with their audiences in
+study, a sibling sweep, a live command tour, a showcase build, the path a new language's grammar
+actually took, a quality-panel calibration round, and a COBOL two-pass corpus measurement — are
+listed with their audiences in
 [`prompts/README.md`](prompts/README.md). Each states its own scope and its honesty rules, and most name the gates they must leave green.
 
 </details>
