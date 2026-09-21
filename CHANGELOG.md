@@ -15,6 +15,39 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--adaptive` no longer narrows a large pool of identically-named symbols on tie-break order
+
+A name-exact route against a common word (`update`, `run`) puts dozens of unrelated, identically-named
+definitions into one scoring pool. Their scores differ only by the ranker's tie-break, so the largest
+relative gap in that pool is an artefact of ordering, not a relevance cliff — and `--adaptive` cut on it
+anyway, taking `update` from 231 symbols to 6 and `run` from 148 to 10 while the header stamped
+`confidence="high"`. `--adaptive` now declines to narrow when a name-exact route's positive pool clears
+`kAdaptiveHomonymPoolFloor` (50) and the proposed cut is at most twice the floor: the default top-N is
+served instead, an in-band note says why (the pool size, and that the gap is tie-break order), and
+`confidence=` stops claiming `high` on a cut it declined to trust. `margin_pct=` keeps the true measured
+drop — a zero there still means "no cliff found", never "none exists".
+
+The routing question behind the gate is now asked once. Three call sites — `--for`'s own bundle, the
+`--candidates` export and the MCP `for` verb — each decided "is this the name-exact lane" their own way,
+and `runForLens` asked the negation of a different question (`!isConceptualRoute`), which is also true for
+the third route state, `no-route`. So `--no-route --adaptive` read an un-routed ranking as name-exact and
+reported a same-name count for a pool that did not exist, with the CLI and MCP disagreeing on the same
+tree. `isNameExactRouteTag` is the single predicate all three now call.
+
+### Fixed — legend, capture and disclosure gaps found by a deferred-items sweep
+
+Nine items carried from earlier trains, all in the disclosure surface rather than in analysis: eight stale
+entries in the full/compact legend baseline closed; a live `CHANGELOG.md` figure for the `tools/list`
+manifest corrected against a measurement (`test/mcpmanifestcheck.sh` arm `(1b)` now asserts it against a
+live `tools/list` response, so the same rot fails a gate instead of waiting to be rediscovered);
+`test/showcasecapturecheck.sh` gained staleness detection, which immediately caught a stale capture;
+`--pack-task`'s bodyless placeholder branch now emits the `bodyless=` count and a false `capped="1"` is
+gone; a `--around-depth` row in `docs/LINEAGE.md` corrected; `--readability` carries an explicit note in
+`--help` and `README.md` that its score is not validated against a human-judgement corpus; and stale
+quality acknowledgements were healed through the binary rather than by hand. The rule for choosing which
+gates a change must run — by verb, by fixture, by the files it touches, and by shard — now lives in
+`CONTRIBUTING.md` instead of a train's own notes.
+
 ### Fixed — `--dead-code` no longer claims a confidence its evidence cannot support
 
 Every `--dead-code` root carried `confidence="high"`, hardcoded: nothing in the candidate loop — internal
@@ -416,7 +449,6 @@ behaviour is a silent merge. Both corrected in `README.md` and in the `ripwire-n
 skills, against a built binary rather than from reading the source. Contributed by **@llvm-x86** in #302,
 who built the Flask fixture that found them.
 
-### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
 ### Added — native Windows x64 (clang-cl, MSVC ABI), behind `src/infra/os.h` — thanks to @lennix1337 (#44)
 
 @lennix1337 ported ripwire to native Windows in #44 and then kept it alive through weeks of a moving main: UTF-8
