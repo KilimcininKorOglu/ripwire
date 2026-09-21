@@ -273,8 +273,8 @@ public:
                 {
                     if( k + PF + 4 < m_nnz )
                     {
-                        __builtin_prefetch( &x[ m_col[ k + PF     ] ], 0, 0 );
-                        __builtin_prefetch( &x[ m_col[ k + PF + 4 ] ], 0, 0 );
+                        RW_PREFETCH_READ_NT( &x[ m_col[ k + PF     ] ] );
+                        RW_PREFETCH_READ_NT( &x[ m_col[ k + PF + 4 ] ] );
                     }
                     a0 += m_val[k  ] * x[ m_col[k  ] ];   a1 += m_val[k+1] * x[ m_col[k+1] ];
                     a2 += m_val[k+2] * x[ m_col[k+2] ];   a3 += m_val[k+3] * x[ m_col[k+3] ];

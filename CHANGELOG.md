@@ -15,6 +15,45 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
+
+The native Windows port (#44) built with clang-cl only; `cl.exe` stopped at the GCC/Clang language extensions
+this tree is written in. Four classes of extension now go through a portability seam and both front ends build
+on `windows-latest` in every full matrix, each running the same smoke steps (`--version`, `ctest`, a real crawl
+of `test/fixture`, the two-run byte-identical contract, well-formed XML).
+
+- `__BASE_FILE__`, which `src/structlayout.h` used to stamp a layout assertion with its own translation unit, is
+  supplied by CMake as `RIPWIRE_LAYOUT_TU` per source file; the header `#error`s rather than guess when neither
+  is available.
+- `__PRETTY_FUNCTION__`, `__int128` and `__BYTE_ORDER__` are behind `src/infra/platform.h` — and, for the layer
+  below it that cannot include it, `src/infra/Diagnostics.h` §1c.
+- `/bigobj` is passed on both MSVC-ABI front ends: `src/main.cpp` exceeds the COFF limit of 2^16 sections
+  (fatal error C1128, windows-latest CI, 2026-09-20).
+
+`hashutil`'s wrapping multiply is the one place where the two front ends get different code, and deliberately.
+The `unsigned __int128` product with a mask is not there for its value — that is plain modulo-2^64 arithmetic —
+but to be sanitizer-clean: G1's `integer` group flags a wrapping `uint64` multiply and `-fno-sanitize-recover=all`
+makes it fatal, so a narrow body aborts every ASan-flavour crawl on the first byte of the first hash. GNU and
+Clang therefore keep the wide multiply, proven byte-identical to the previous binary by an empty `.s` diff at
+`-O2` and under the sanitizer flags; MSVC, which has neither the wide type nor the check, gets the plain
+multiply. The sanitizer is not suppressed on any platform that runs it.
+
+`test/osswitchcheck.sh` gains arm H, which refuses a new `__builtin_*`, inline asm or `__attribute__` outside
+that seam pair, with a pinned per-row `EXEMPT_COUNTS` so a growing allowlist cannot pass unnoticed. A
+Windows-breaking change now fails on every POSIX leg instead of being discovered on Windows. `README.md`,
+`CONTRIBUTING.md` and this file say the same three things about the platform: both compilers build, CI verifies
+both, the 647-gate suite does **not** run on Windows, and the ASan flavour is compiled there but never executed.
+
+### Changed — the README's top says what ripwire is before it says what it did
+
+The page opened with a release note. It now opens with the differentiator — a map before an agent reads the repo,
+and a check on what it writes — followed by one sentence naming what the check actually reports: blast radius,
+the tests that reach a change, ten quality kinds reporting only what got worse, forgotten co-changes, fields read
+and written, and names that resolve more than one way. Every clause was verified against the binary's own
+`--help` and `docs/COMMANDS.md` before it was written. The 0.6.1 paragraph is condensed to the two figures that
+carry it (46–66% smaller compact answers; 114 MB → 368 KB on llvm-project) with all three contributor credits
+kept, and the badge row moves above the banner so the first screenful is signal rather than decoration.
+
 ### Fixed — `--adaptive` no longer narrows a large pool of identically-named symbols on tie-break order
 
 A name-exact route against a common word (`update`, `run`) puts dozens of unrelated, identically-named
@@ -475,7 +514,7 @@ functions 5,031 disassemble identically and 3 differ only by the build stamps (t
 quality snapshot's two serializers, the `built_from` length in `--doctor`). The same 71 cases the `os.h` refresh
 used (map, 25 verbs, `--run-trace`, MCP stdio and `--listen`, the sidecar and index writes) are byte-identical.
 
-Since proven on Windows, and exactly that far. @lennix1337's run against the D3 branch found five build failures, all fixed; a `windows-latest` CI job now builds with clang-cl and smoke-tests the result on every full matrix — configure, build, `ctest` (including the port's own `oswin32logiccheck` target), `--version`/`--help`, a real crawl of `test/fixture`, the two-run byte-identical determinism contract, well-formed XML, and the ASan flavour compiling. What is NOT proven: the gate suite does not run on Windows (it needs the harness), no sanitizer RUN happens there, and nothing exercises a UNC share, a junction, a non-ASCII path or a volume without a drive letter — the checklist on #44 is still open. MSVC `cl.exe` does not build: it configures and compiles until it reaches the GCC/Clang language extensions the tree is written in, which needs a portability seam in `src/infra/platform.h`; the CI leg asserts that it stops exactly there, so a different break is a red job.
+Since proven on Windows, and exactly that far. @lennix1337's run against the D3 branch found five build failures, all fixed; a `windows-latest` CI job now builds with clang-cl and smoke-tests the result on every full matrix — configure, build, `ctest` (including the port's own `oswin32logiccheck` target), `--version`/`--help`, a real crawl of `test/fixture`, the two-run byte-identical determinism contract, well-formed XML, and the ASan flavour compiling. What is NOT proven: the gate suite does not run on Windows (it needs the harness), no sanitizer RUN happens there, and nothing exercises a UNC share, a junction, a non-ASCII path or a volume without a drive letter — the checklist on #44 is still open. MSVC `cl.exe` now builds too. The GCC/Clang language extensions the tree is written in go through a seam in `src/infra/platform.h` — and, for the layer below it that cannot include it, `src/infra/Diagnostics.h` §1c — so both front ends run the same CI steps and both gate. `test/osswitchcheck.sh` arm H refuses a new `__builtin_*`, inline asm or `__attribute__` outside that pair, which makes a Windows-breaking change fail on every POSIX leg instead of on Windows. The same caveats still apply to both compilers: the gate suite does not run on Windows, and ASan is compiled there but never executed.
 
 A review pass (no Windows machine, read plus a macOS/Linux-provable subset) found one MED and five LOWs, none
 touching POSIX; this fix round closes the MED and three of the LOWs, still on top of @lennix1337's work:

@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/platform.h" // infra::platform::{add,sub,mul}Overflow — the checked constant-expression arithmetic
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -671,9 +672,9 @@ private:
         bool         outOfRange = false;
         switch( op )
         {
-            case '+': outOfRange = __builtin_add_overflow( a, b, &r ); break;
-            case '-': outOfRange = __builtin_sub_overflow( a, b, &r ); break;
-            case '*': outOfRange = __builtin_mul_overflow( a, b, &r ); break;
+            case '+': outOfRange = infra::platform::addOverflow( a, b, &r ); break;
+            case '-': outOfRange = infra::platform::subOverflow( a, b, &r ); break;
+            case '*': outOfRange = infra::platform::mulOverflow( a, b, &r ); break;
             default:
                 outOfRange = b == 0 || ( b == -1 && a == std::numeric_limits<std::int64_t>::min() );   // never divide by zero under G1
                 r          = outOfRange ? 0 : a / b;

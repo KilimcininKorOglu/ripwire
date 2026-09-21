@@ -8,6 +8,8 @@
 //
 #pragma once
 
+#include <bit>          // std::bit_cast — the portable float-key bit pun
+
 namespace radix
 {
 namespace detail
@@ -62,7 +64,7 @@ ALWAYS_INLINE SortWordFor<Key> sortWordOf( Key key ) noexcept
     {
         ASSUME( keyIsSortable(key), "radix float keys must be finite" );
 
-        uint32_t raw = __builtin_bit_cast( uint32_t, key );
+        uint32_t raw = std::bit_cast<uint32_t>( key );
         if( ( raw & 0x7FFFFFFFu ) == 0u ) {
             raw = 0u;                               // keep -0.0 and +0.0 stable-equal
 }

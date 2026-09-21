@@ -1,5 +1,3 @@
-<p align="center"><img src="docs/assets/banner.svg" alt="ripwire — the ripgrep of AI context" width="880"></p>
-
 [![CI](https://github.com/redhat-et/ripwire/actions/workflows/ci.yml/badge.svg)](https://github.com/redhat-et/ripwire/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/redhat-et/ripwire)](https://github.com/redhat-et/ripwire/releases/latest)
 [![Licence](https://img.shields.io/badge/licence-Apache%202.0-blue.svg)](LICENSE)
@@ -7,12 +5,15 @@
 [![Runtime dependencies](https://img.shields.io/badge/runtime%20dependencies-none-blue.svg)](THIRD_PARTY.md)
 [![Slides](https://img.shields.io/badge/slides-the%20showcase%20deck-56d6e8.svg)](present/ripwire-showcase.pdf)
 
+<p align="center"><img src="docs/assets/banner.svg" alt="ripwire — the ripgrep of AI context" width="880"></p>
+
 # Rip'n Fast. Fewer Tokens. Better Code.
 
-**The ripgrep of AI context. Give your coding agent a map before it reads the repo.**
+**The ripgrep of AI context. A map before your agent reads the repo — and a check on what it writes.**
 
-Point it at any repository and your agent gets a ranked, deterministic call graph — what to touch,
-what it breaks, which tests to run — instead of grepping around and reading whole files.
+Ranked, deterministic call graph: what to touch, what it breaks, which tests to run. On the edit: blast
+radius, tests that reach it, ten quality kinds reporting only what got worse, forgotten co-changes, fields
+read and written, names that resolve more than one way.
 
 **Just want to use it?** Install it with the one line below, then start each coding session by telling your agent to
 use it, for example: *"Use ripwire on this repo."* That is all most people need: the install also teaches your agent
@@ -53,15 +54,11 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
-**ripwire 0.6.1 — out now. The answers an agent reads got smaller.** A compact answer is 46–66% smaller per
-call — 2.8–5.8 KB less on `--callers`, `--uses`, `--impact` and `--affected` — the flagless map is 15.3% smaller at
-identical rows, and the new `--in=DIR` scopes "what changed recently" to a directory: 39.8 KB down to 10.2 KB per
-answer on RocksDB. It got smaller in memory too: on llvm-project the declined-call index drops from **114 MB to
-368 KB**, with every count and every byte of output unchanged. Elixir resolves natively by module, name and arity
-(thanks @henry-hz), `--scip` reads scip-java indexes (thanks @dpunosevac), and a `file:name` selector no longer
-answers with a definition that belongs to another file (thanks @andriytyurnikov). Every number in a compact answer
-now arrives with its definition, and the focus verbs say when a definition could not be proven instead of
-reporting a quiet zero.
+**ripwire 0.6.1 — the answers an agent reads got smaller.** A compact answer is 46–66% smaller per call, and on
+llvm-project the declined-call index drops from 114 MB to 368 KB with every count and every byte of output
+unchanged. `--in=DIR` scopes "what changed recently" to a directory. Elixir resolves natively by module, name and
+arity (thanks @henry-hz), `--scip` reads scip-java indexes (thanks @dpunosevac), and a `file:name` selector no
+longer answers with a definition from another file (thanks @andriytyurnikov).
 
 **ripwire 0.6.0 — out now.** Kotlin and Dart bring it to 24 vendored grammars, and Ruby now reads the dependencies a
 Rails application actually has: superclasses, mixins, `autoload`, and the constant receivers an autoloader loads
@@ -2205,7 +2202,7 @@ same renderer. One computation has one output shape.
 
 | Item | Requirement |
 | --- | --- |
-| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). Native Windows x64 **builds** with clang-cl — CI builds it on `windows-latest` every full matrix and smoke-tests the binary (`--version`, `ctest`, a real crawl, the two-run byte-identical contract, well-formed XML); the 647-gate suite does not run there yet, so treat it as a build, not a validated platform. MSVC `cl.exe` does not build yet — the tree uses GCC/Clang language extensions (`asm volatile` barriers, `__builtin_*`, `[[gnu::…]]`) that need a portability seam. No prebuilt Windows binary is published; WSL2 remains the supported way to RUN it on a Windows machine. |
+| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). Native Windows x64 **builds** with both clang-cl and MSVC `cl.exe` — CI builds both on `windows-latest` every full matrix and smoke-tests each binary (`--version`, `ctest`, a real crawl, the two-run byte-identical contract, well-formed XML); the 647-gate suite does not run there, and ASan is compiled but never executed, so treat it as a build, not a validated platform. No prebuilt Windows binary is published; WSL2 remains the supported way to RUN it on a Windows machine. |
 | Prebuilt Linux floor | RHEL 8 or later (glibc 2.28) |
 | Prebuilt macOS floor | macOS 14 or later, Apple silicon. 0.6.1 is the last release with an Intel macOS binary; on an Intel Mac, pin `RIPWIRE_VERSION=v0.6.1` or build from source. |
 | x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later), for a prebuilt binary and a source build alike |

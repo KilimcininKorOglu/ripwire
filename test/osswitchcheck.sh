@@ -79,6 +79,31 @@ ALLOW = {
         "WIN32_LEAN_AND_MEAN/NOMINMAX (arm A'), calls "
         "the Win32 and Winsock API by its global names inside rw::os's own definitions (arm F), and reopens namespace rw::os "
         "to define what os.h declares (arm G). Compiled only for Windows; no other file may do any of the three" ),
+    "src/infra/platform.h": ( { "H" },
+        "THE compiler-extension seam: the one file that may spell __builtin_memcpy, __attribute__ and an inline-asm "
+        "barrier, each behind a __clang__/__GNUC__ vs MSVC arm, so every other file names a macro instead" ),
+    "src/infra/Diagnostics.h": ( { "H" },
+        "the seam's lower half. platform.h INCLUDES this header and this header includes nothing of ours (it stays "
+        "library-free so a standalone harness can compile it alone), so it cannot use platform.h's macros and owns "
+        "the six its own checks need in its S1c, plus the benchmark barriers' no-inline-asm fallback" ),
+    "src/infra/enumcount.h": ( { "H" },
+        "the enum-name probe reads __PRETTY_FUNCTION__'s TEXT to decide whether a value spells a declared "
+        "enumerator — it is parsing the string, not printing it, so _PRETTYFUNCTION_ would not serve: the parser "
+        "is written against Clang's exact spelling. Behind `#if defined( __clang__ )`, with an #else that sets "
+        "kEnumCountProbed = false and degrades, so MSVC never reaches the line" ),
+    "src/infra/radixSort.h": ( { "H" },
+        "the SIMD backend choice, in a PREPROCESSOR condition where std::endian cannot be spelled (it is a "
+        "constant expression, not a macro). Already correct where the macro does not exist: the condition leads "
+        "with `!defined( __BYTE_ORDER__ )`, so MSVC takes the little-endian answer for NEON and otherwise falls "
+        "to the _M_X64 arm. The absence IS the portability guard" ),
+    "src/structlayout.h": ( { "H" },
+        "the two lines that DEFINE the RIPWIRE_LAYOUT_TU fallback — `#if defined( __BASE_FILE__ )` and the "
+        "#define that uses it. This is that spelling's own seam: the header #errors rather than guess when the "
+        "extension is absent, and CMake supplies the value for the front end that needs it" ),
+    "src/infra/profileScope.h": ( { "H" },
+        "three `mrs` reads of the ARM64 cycle counter, inside `#if defined( __aarch64__ )`. An architecture is not a "
+        "compiler: MSVC never reaches them (every other target takes the std::chrono arm), so they block no front end "
+        "and there is no portable spelling of a register read to route them through" ),
     "src/infra/profilePmc.h": ( { "A", "B", "F" },
         "the opt-in self-profiler's hardware-counter backends: dlopen of Apple's private kperf frameworks and Linux "
         "perf_event_open (syscall/ioctl/read on a perf descriptor) — an undocumented ABI with no POSIX shape and no "
@@ -408,6 +433,58 @@ def detect_F( rel, raw ):
         hits.append( "%s:%d: %s%s" % ( rel, line_of( code, m.start() ), q, m.group( 2 ) ) )
     return sorted( set( hits ), key=lambda h: ( int( h.split( ":" )[1] ), h ) )
 
+# (H) a GCC/Clang language extension that cl.exe REFUSES. These are the spellings that are a hard compile ERROR
+# on MSVC, not a warning, so a new one silently un-builds the Windows leg. What to write instead:
+#   __builtin_*, asm volatile, __attribute__  -> the seam macro in infra/platform.h (or Diagnostics.h S1c below it)
+#   __PRETTY_FUNCTION__                       -> _PRETTYFUNCTION_            (Diagnostics.h S1b)
+#   __BASE_FILE__                             -> RIPWIRE_LAYOUT_TU           (CMake supplies it; structlayout.h)
+#   __BYTE_ORDER__ / __ORDER_*_ENDIAN__       -> std::endian                 (<bit>, C++20)
+#   __int128 / unsigned __int128              -> a 64-bit formulation        (MSVC has no 128-bit integer on x64)
+# The last four were each found by a CI round AFTER the first three were fixed, which is why the arm names
+# spellings rather than a category: the category is "whatever cl.exe refuses", and only the leg can enumerate it.
+# The seam pair (infra/platform.h, infra/Diagnostics.h) owns every spelling and is allowlisted; everything else
+# calls the seam's macro. `[[gnu::…]]` is deliberately NOT refused here: MSVC ignores an unknown attribute with
+# C5030, a warning, so those sites still build — routing them through ALWAYS_INLINE is its own change with its
+# own arm, and folding them in here would red this gate on 104 pre-existing sites that break nothing.
+# `\basm\b` is the BARE keyword, not `asm\s+volatile`: cl.exe refuses `asm( "nop" );` exactly as it refuses the
+# volatile form, so pinning the qualifier let the unqualified spelling through. The word boundaries are what keep
+# it from over-firing — `__asm__`, `wasm`, `asm_buf` and `assembler` all fail \b — and comments and string
+# literals are gone before the scan (`strip( raw, keep_strings=False )`), which is why slice.h's C++ keyword
+# table listing "asm" is not a hit. The whole tree was re-scanned after widening it: no new site.
+EXTENSION_RE = re.compile( r'(__builtin_\w+|__attribute__|\basm\b|__asm__|__PRETTY_FUNCTION__|__BASE_FILE__'
+                           r'|__BYTE_ORDER__|__ORDER_[A-Z]+_ENDIAN__|\bunsigned __int128\b|\b__int128\b'
+                           r'|__restrict__|__extension__|__typeof__)' )
+
+def has_builtin_arg_spans( code ):
+    """The character span of each `__has_builtin( … )` ARGUMENT — nothing else.
+
+    A feature TEST is not a use, but the carve-out must be no wider than the parentheses it belongs to. Reading a
+    fixed window of text BEFORE a match sheltered every extension within that window, so a genuine violation on
+    the same line as a guard — or on the next one — inherited the exemption it had no claim to. The spans are
+    paren-matched so a nested `(` inside the argument cannot end one early."""
+    spans = []
+    for m in re.finditer( r'__has_builtin\s*\(', code ):
+        i = m.end(); depth = 1
+        while i < len( code ) and depth:
+            if code[i] == "(": depth += 1
+            elif code[i] == ")": depth -= 1
+            i += 1
+        spans.append( ( m.end(), i - 1 if depth == 0 else len( code ) ) )   # unterminated: to end of file, never wider
+    return spans
+
+def detect_H( rel, raw ):
+    hits = []
+    code = strip( raw, keep_strings=False )
+    spans = has_builtin_arg_spans( code )
+    for m in EXTENSION_RE.finditer( code ):
+        # __has_builtin( __builtin_x ) is a portable feature TEST, not a use: it is how a file asks whether the
+        # extension exists before spelling it, which is the behaviour this arm wants rather than one it refuses.
+        # The exemption reaches the ARGUMENT and stops there.
+        if any( start <= m.start() and m.end() <= end for start, end in spans ):
+            continue
+        hits.append( "%s:%d: %s outside the compiler-extension seam" % ( rel, line_of( code, m.start() ), m.group( 1 ) ) )
+    return hits
+
 def facts_of( os_raw ):
     code = strip( os_raw, False )
     names = set( re.findall( r'inline\s+constexpr\s+(?:bool|Target)\s+(k[A-Z]\w*)', code ) )
@@ -510,13 +587,37 @@ else:
     else:
         no( "%s declares facts %s; arm G expects at least kTarget/kWindows/kApple/kLinux/Target — its refusal list would be short" % ( HOME, sorted( facts ) ) )
 
+# An allowlist row says "these KNOWN sites are exempt", not "this file is exempt for ever". Without a pinned
+# count an exempted file absorbs the next violation silently — a planted __builtin_expect in profileScope.h
+# passed while the same plant in strkern.h reddened (review, 2026-09-21). EXEMPT_COUNTS pins what each row
+# covers; anything above it is reported like any other violation, and anything BELOW it is reported too, so a
+# row cannot outlive the sites that justified it.
+EXEMPT_COUNTS = {
+    ( "src/infra/Diagnostics.h",  "H" ): 11,
+    ( "src/infra/platform.h",     "H" ): 10,
+    ( "src/infra/profileScope.h", "H" ): 3,
+    ( "src/infra/enumcount.h",    "H" ): 1,
+    ( "src/infra/radixSort.h",    "H" ): 3,
+    ( "src/structlayout.h",       "H" ): 2,
+}
+
 def scan( arm, fn ):
     hits = []; exempted = {}
     for r in files:
         if r == HOME and arm != "D": continue
         got = fn( r, texts[r] )
         if r in ALLOW and arm in ALLOW[r][0]:
-            exempted[r] = len( got ); continue
+            exempted[r] = len( got )
+            want = EXEMPT_COUNTS.get( ( r, arm ) )
+            # Arm H REQUIRES a pin (that is the arm the absorb was demonstrated on). The older arms keep their
+            # unpinned behaviour unless a pin is added for them, so this fixes what was found without silently
+            # changing five arms nobody measured; adding their counts here is the obvious follow-up.
+            if want is None and arm == "H":
+                hits.append( "%s: allowlisted for arm H with no pinned count — add one to EXEMPT_COUNTS" % r )
+            elif want is not None and len( got ) != want:
+                hits.append( "%s: arm %s allowlist covers %d site(s), found %d — re-read them and re-pin"
+                             % ( r, arm, want, len( got ) ) )
+            continue
         hits += got
     return hits, exempted
 
@@ -554,6 +655,8 @@ report( "D", "no macro or compile definition named after a libc/POSIX function a
 run_arm( "F", "no raw POSIX/libc call or POSIX type outside %s" % HOME, detect_F )
 run_arm( "G", "no platform fact (%s) named, and namespace os not reopened, outside %s" % ( ", ".join( sorted( facts ) ) or "none declared", HOME ),
          lambda r, t: detect_G( r, t, facts ) )
+
+run_arm( "H", "no cl.exe-refused compiler extension (__builtin_*, inline asm, __attribute__, __PRETTY_FUNCTION__, __BASE_FILE__, the endianness macros, __int128) outside the seam in src/infra/platform.h", detect_H )
 
 # ── (E) declaration parity ──────────────────────────────────────────────────────────────────────────────────
 if os_raw is not None:
@@ -595,16 +698,30 @@ PLANT = {
     "F":  ( "void f( int fd ) { ::close( fd ); if( std::rename( a, b ) ) {} FILE* p = popen( c, \"r\" ); struct stat st; ssize_t n = 0; }\n"
             "struct QRead { void read( int c ); };\nvoid h( int fd, char* buf, unsigned n ) { read( fd, buf, n ); }\n", 6 ),
     "G":  ( "void f() { if( os::kWindows ) {} bool b = rw::os::kApple; }\nnamespace rw::os { }\n", 3 ),
+    # the __has_builtin block is the control for the carve-out: a feature TEST must not count as a use, or a file
+    # asking whether an extension exists would be refused for asking. The two statements after it are the controls
+    # for the review round of 2026-09-21: an UNQUALIFIED `asm(…)` is refused by cl.exe exactly as `asm volatile` is,
+    # and a genuine `__builtin_expect` USE on the SAME LINE as a `__has_builtin` guard must still red — it sits
+    # beside the exemption, not inside its parentheses, and the fixed 40-character look-back sheltered it.
+    "H":  ( "int f( int* p ) { __builtin_prefetch( p, 0, 0 ); asm volatile( \"\" : : : \"memory\" ); return 0; }\n"
+            "__attribute__(( used )) static int g = 0;\n"
+            "const char* w() { return __PRETTY_FUNCTION__; }\nconst char* b() { return __BASE_FILE__; }\n"
+            "int e = ( __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__ );\nunsigned __int128 wide = 0;\n"
+            "#if defined( __has_builtin )\n#if __has_builtin( __builtin_trap )\nint h = 1;\n#endif\n#endif\n"
+            "void n() { asm( \"nop\" ); }\n"
+            "#if __has_builtin( __builtin_clz ) && __builtin_expect( 1, 1 )\nint c = 1;\n#endif\n", 10 ),
 }
 CLEAN = ( "// __APPLE__ and ::open( and #include <unistd.h> are only words in a comment\n"
+          "int wasm = 0; int asm_buf = 1; struct Q { int assembler; };\n"   # \basm\b must not fire inside a longer identifier
+
           "#include \"infra/os.h\"\n#if defined( __aarch64__ )\nint z;\n#endif\n"
           "struct P { bool accept( char c ); void write( int n ); };\n"
           "template<class Accept> bool route( Accept accept ) { return accept( 1 ); }\n"
           "void g( P& p, int fd ) { p.write( 1 ); p.accept( 'x' ); os::close( fd ); os::stat_t st; os::ssize_t n = os::read( fd, 0, 0 );\n"
           "  const char* s = \"::open( popen( struct stat\"; std::remove( v.begin(), v.end(), 3 ); std::getline( in, line ); }\n" )
 DET = { "A": detect_A, "A'": detect_A2, "B": lambda r, t: detect_B( r, t, "/nonexistent" ), "D": detect_D, "F": detect_F,
-        "G": lambda r, t: detect_G( r, t, { "kWindows", "kApple", "kLinux", "kTarget", "Target" } ) }
-for arm in [ "A", "A'", "B", "D", "F", "G" ]:
+        "G": lambda r, t: detect_G( r, t, { "kWindows", "kApple", "kLinux", "kTarget", "Target" } ), "H": detect_H }
+for arm in [ "A", "A'", "B", "D", "F", "G", "H" ]:
     text, want = PLANT[arm]
     got = DET[arm]( "planted.h", text ); clean = DET[arm]( "clean.h", CLEAN )
     if len( got ) != want:
