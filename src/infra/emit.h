@@ -300,7 +300,7 @@ public:
     {
         if( m_file != nullptr )
         {
-            std::fclose( m_file );   // unfinished: its bytes were never read, so its answer has nobody to tell
+            os::fclose( m_file );    // unfinished: its bytes were never read, so its answer has nobody to tell
         }
         std::free( m_buf );
     }
@@ -325,9 +325,10 @@ public:
         {
             return {};
         }
-        const bool isFlushed   = std::fflush( m_file ) == 0;
+        // os::fflush / os::fclose: POSIX's own calls; a platform without open_memstream publishes m_buf / m_size in them
+        const bool isFlushed   = os::fflush( m_file ) == 0;
         const bool isErrorFree = std::ferror( m_file ) == 0;
-        const bool isClosed    = std::fclose( m_file ) == 0;
+        const bool isClosed    = os::fclose( m_file ) == 0;
         m_file       = nullptr;
         m_isFinished = true;
         const bool isWhole = isFlushed && isErrorFree && isClosed && m_buf != nullptr && !isMemstreamFinishFaultInjected();

@@ -35,6 +35,7 @@ kEditCheckSpellingsShown	OUTPUT
 kEvidenceCap	OUTPUT
 kExpandMaxPer	OUTPUT
 kExpandMaxSeeds	OUTPUT
+kExtendedLengthThresholdUnits	BOUNDARY
 kFieldWalkCap	INDEXING
 kForPageRowsDefault	OUTPUT
 kForPageUnionSymbolCap	INDEXING

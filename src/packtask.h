@@ -208,6 +208,12 @@ inline constexpr const char* kPackTaskBundleLegendBody =
          // thereby keep fewer, bigger ones — a falling count is not lost content, and the reader should not have
          // to infer that from a number that went down. Stated once, here, where the count itself is printed.
          "bodies fill rank-first, so a bigger budget can keep FEWER, larger bodies — the count is not a quality measure. "
+         // t14-cleanup #6 / rv-t12-3.md LOW-1: bodyless= can ride EITHER <bodies> shape this bundle emits —
+         // the packBodies-rendered one (its own kBodylessBodiesLegend rides beside it, gated on the count)
+         // and the bare-wrapper placeholder a too-tight budget falls back to (which never calls packBodies,
+         // so it cannot write that comment itself). Defined here, unconditionally, once, so neither shape
+         // can emit it undefined.
+         "bodies: bodyless=N of total= are module-scope owners with no body by construction, never in shown=, never raising capped=. "
          // §B7.5 (CA4): this dictionary is EXPLICIT — it says "Row keys:" and then lists three of them — so
          // every key it omits reads as "not a row key" rather than "look elsewhere". It omitted l=, cx= and
          // ccx=, which every ranking row carries, plus t=/p=/rel= on the name-only rows, and left the whole
@@ -1737,9 +1743,24 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         // back 5692 B against a 5428 B allowance). The bare wrapper tag is a FIXED, small cost — the
         // same shape restatePackTaskBodiesWrapper hand-formats a few lines below for the same reason
         // (it cannot call packBodies again either) — so it is safe to emit unconditionally here.
-        char tag[ 112 ];
-        rw::formatTo( tag, sizeof( tag ), "<bodies shown=\"0\" total=\"{}\" capped=\"{}\"{}></bodies>",
-                       bodyIds.size(), bodyIds.empty() ? 0 : 1, in.compress ? " compress=\"1\"" : "" );
+        //
+        // rv-t12-3.md LOW-1 / t14-cleanup #6: this tag used to omit bodyless= even when bodyIds held
+        // module-scope owners (no body by construction, never a budget casualty), which made TWO things
+        // wrong at once — the attribute was silently absent, AND capped="1" was a FALSE positive whenever
+        // every candidate here was bodyless (nothing was actually cut). bodiesBodyless is already computed
+        // above (line ~1546, countBodylessCandidates) for the monotoneRoll below, so it costs nothing extra
+        // to read it here too. The definition lives in kPackTaskBundleLegendBody (this bundle's ONE
+        // unconditional legend, appended to every shape of the header) rather than packBodies' own
+        // kBodylessBodiesLegend, because this path never calls packBodies to write that comment.
+        char bodylessAttr[ 40 ] = { 0 };
+        if( bodiesBodyless > 0 )
+        {
+            rw::formatTo( bodylessAttr, sizeof( bodylessAttr ), " bodyless=\"{}\"", bodiesBodyless );
+        }
+        char tag[ 160 ];
+        rw::formatTo( tag, sizeof( tag ), "<bodies shown=\"0\" total=\"{}\" capped=\"{}\"{}{}></bodies>",
+                       bodyIds.size(), bodiesBodyless < bodyIds.size() ? 1 : 0,
+                       rw::cstr( bodylessAttr ), in.compress ? " compress=\"1\"" : "" );
         bodiesStr = tag;
         // bodiesKept stays 0 (its declared default) — matches shown="0" exactly.
     }

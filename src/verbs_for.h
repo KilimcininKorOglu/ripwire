@@ -331,8 +331,20 @@ inline void emitCandidates( std::FILE* out, const rw::IngestResult& ing, const s
     if( adaptive )
     {
         const rw::AdaptiveCut ac = rw::adaptiveCut( rank, 5, std::size_t( topK ), scanFullDistribution );
+        // T14: same homonym-pool decline as --for's own bundle (lexical.h isAdaptiveHomonymDecline) — this
+        // export shares the identical adaptiveCut call and must not narrow a large homonym pool on tie-break
+        // order either. `prov.route` is the caller's own routing fact ("name-exact"/"subtoken+body"/"no-
+        // route"/…) — read through isNameExactRouteTag, the one predicate every call site now shares
+        // (review rv-t14a.md finding 1: runForLens's OWN inline check answered a different question and
+        // mislabeled "no-route" as name-exact; this site was already correct, now on the shared function).
+        const bool declined = rw::isAdaptiveHomonymDecline( rw::isNameExactRouteTag( prov.route ), ac, 5 );
         char nb[ 208 ];
-        if( !ac.hitCeiling && ac.cliffRank < ac.kept )
+        if( declined )
+        {
+            rw::formatTo( nb, sizeof( nb ), "<!-- adaptive: declined - {} symbols share this exact name; the score gap here is tie-break order, not relevance - kept the default top-{} -->",
+                           ac.positiveHits, topK );
+        }
+        else if( !ac.hitCeiling && ac.cliffRank < ac.kept )
         {
             rw::formatTo( nb, sizeof( nb ), "<!-- adaptive: kept {} of {} - sharp cliff at rank {} ({}% drop), clamped up to the floor of {} -->",
                            ac.kept, topK, ac.cliffRank, ac.dropPct, ac.kept );
@@ -353,7 +365,7 @@ inline void emitCandidates( std::FILE* out, const rw::IngestResult& ing, const s
                            ac.kept, topK );
         }
         std::fputs( nb, out );
-        capN = int( ac.kept );
+        capN = declined ? topK : int( ac.kept );
     }
     packCandidates( out, ing, rank, capN, redact, prov, candRootArg );   // R-R: root-relative p= + id=
 }
@@ -2293,6 +2305,21 @@ std::optional<int> runForLens( const MainDispatch& d )
         // served head size is known.
         const AdaptiveCut forCut = adaptiveCut( lensRank, 5, std::size_t( forTopN ), /*scanFullDistribution=*/true );
 
+        // T14 (docs/research/adaptive-short-query.md): a name-exact route against a large pool of
+        // identically-named, unrelated symbols can clear the cliff on TIE-BREAK order rather than
+        // relevance — see lexical.h isAdaptiveHomonymDecline for the measured threshold and why. Computed
+        // from the SAME forCut above (no second scorer), read by both the --adaptive block below (whether
+        // to actually decline the narrowing) and deriveForConfidence below (confidence must not say "high"
+        // on a cliff it declined to trust).
+        //
+        // review rv-t14a.md finding 1 (HIGH): this used to read `!conceptualRoute`, a DIFFERENT question
+        // (isConceptualRoute only recognizes "subtoken+body") whose negation is also true on the THIRD
+        // route state, "no-route" (--no-route's struct default, packtask.h LensRanking::routeTag) — so
+        // --no-route --adaptive mislabeled an un-routed ranking as name-exact and declined + fabricated a
+        // same-name count on a genuine cliff. isNameExactRouteTag is the one predicate emitCandidates and
+        // MCP `for` already used their own way; all three now share it (lexical.h).
+        const bool forHomonymDecline = isAdaptiveHomonymDecline( isNameExactRouteTag( lr.routeTag ), forCut, 5 );
+
         // --adaptive (lever 2): cut the returned set at the relevance CLIFF — the largest
         // relative score gap in [floor, ceiling] (Adaptive-k). A sharp query keeps few; a flat/broad query
         // (no knee) hits the ceiling and is kept as-is (cap-and-note). floor=5, ceiling=forTopN. The cut
@@ -2311,27 +2338,39 @@ std::optional<int> runForLens( const MainDispatch& d )
             // `forCut` above is exactly this call (same scores, floor, ceiling, full-distribution scan),
             // hoisted so the confidence disclosure derives from the statistic --adaptive acts on.
             const AdaptiveCut& ac = forCut;
-            forTopN = int( ac.kept );
             char nb[ 200 ];
-            if( !ac.hitCeiling && ac.cliffRank < ac.kept )
+            if( forHomonymDecline )
             {
-                rw::formatTo( nb, sizeof( nb ), " [adaptive: kept {} of {} - sharp cliff at rank {} ({}% drop), clamped up to the floor of {}]",
-                               ac.kept, ceil, ac.cliffRank, ac.dropPct, ac.kept );
-            }
-            else if( !ac.hitCeiling )
-            {
-                rw::formatTo( nb, sizeof( nb ), " [adaptive: kept {} of {} - cliff at rank {}, {}% drop]",
-                               ac.kept, ceil, ac.cliffRank, ac.dropPct );
-            }
-            else if( ac.positiveHits <= ac.kept )
-            {
-                rw::formatTo( nb, sizeof( nb ), " [adaptive: kept {} of {} - only {} symbols matched this query (sharp query, short tail)]",
-                               ac.kept, ceil, ac.positiveHits );
+                // decline to narrow: forTopN stays at `ceil` (the pre-cut default), never ac.kept — the
+                // fallback IS the default top-K, not a smaller, equally-arbitrary slice of the same pool.
+                // Stated in the ANSWER (this note), not only stderr — T14 requirement 1.
+                rw::formatTo( nb, sizeof( nb ), " [adaptive: declined - {} symbols share this exact name; the "
+                               "score gap here is tie-break order, not relevance - kept the default top-{}]",
+                               ac.positiveHits, ceil );
             }
             else
             {
-                rw::formatTo( nb, sizeof( nb ), " [adaptive: kept {} of {} - no relevance cliff (broad query saturates the score); capped at the ceiling]",
-                               ac.kept, ceil );
+                forTopN = int( ac.kept );
+                if( !ac.hitCeiling && ac.cliffRank < ac.kept )
+                {
+                    rw::formatTo( nb, sizeof( nb ), " [adaptive: kept {} of {} - sharp cliff at rank {} ({}% drop), clamped up to the floor of {}]",
+                                   ac.kept, ceil, ac.cliffRank, ac.dropPct, ac.kept );
+                }
+                else if( !ac.hitCeiling )
+                {
+                    rw::formatTo( nb, sizeof( nb ), " [adaptive: kept {} of {} - cliff at rank {}, {}% drop]",
+                                   ac.kept, ceil, ac.cliffRank, ac.dropPct );
+                }
+                else if( ac.positiveHits <= ac.kept )
+                {
+                    rw::formatTo( nb, sizeof( nb ), " [adaptive: kept {} of {} - only {} symbols matched this query (sharp query, short tail)]",
+                                   ac.kept, ceil, ac.positiveHits );
+                }
+                else
+                {
+                    rw::formatTo( nb, sizeof( nb ), " [adaptive: kept {} of {} - no relevance cliff (broad query saturates the score); capped at the ceiling]",
+                                   ac.kept, ceil );
+                }
             }
             adaptiveNote = nb;
         }
@@ -2368,7 +2407,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             lensSurfaceIds.resize( cap );
         }
 
-        ForConfidence forConf = deriveForConfidence( forCut, forTopN );
+        ForConfidence forConf = deriveForConfidence( forCut, forTopN, forHomonymDecline );
         // L-W: coverage= rides the SAME sentence and the SAME byte exemption as confidence=/margin_pct= — but ONLY
         // on a THIN answer (owner decision 2026-09-12: present-only). The thin verdict is decided HERE, from the
         // resolved surface above and the top symbol's term share, and it drives three things at once: the

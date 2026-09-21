@@ -124,7 +124,6 @@ community | community@bridges
 community | community@bridges_capped
 community | community@dir
 community | community@shown_bridges
-connect | connect@est_tokens
 connect | connect@radius
 connect | connect@terminals
 connect | g@terminals
@@ -132,10 +131,8 @@ connect | s@sig
 dead-code | dead-code@count
 deps | deps@capped
 deps | deps@shown
-deps | f@afferent
 deps | godfiles@capped
 deps | godfiles@shown
-deps | health@shape
 deps | stabledeps@violations
 deps | v@from
 deps | v@gap
@@ -146,11 +143,8 @@ exercises | exercises@note
 exercises | exercises@reaches
 exercises | exercises@seed_files
 exercises | exercises@seed_files_capped
-exercises | exercises@shown
 exercises | exercises@shown_seed_files
 exercises | exercises@test_symbols
-external-surface | external-surface@capped
-external-surface | external-surface@shown
 external-surface | x@lang
 for | ctx@task
 for-auto | ctx@task
@@ -180,8 +174,6 @@ lint | rule@name
 mentions | mentions@defs
 merge-scout | landing@order
 merge-scout | no-work@note
-merge-scout | pair@b
-merge-scout | pair@risks
 owners | f@share
 owners | f@top
 pack-task | ctx@route
@@ -190,14 +182,9 @@ path | path@from_defs
 path | path@from_p
 path | path@to_defs
 path | path@to_p
-pr-context | cochange@commits
 pr-context | no-ref-work@note
 pr-context | owners@bf
 pr-context | pr-context@base_sha
-scan-skills | skillscan@files
-scan-skills | skillscan@findings
-scan-skills | skillscan@skipped
-scan-skills | skillscan@verdict
 seams | seams@bridges
 seams | seams@modules
 seams | seams@seam_pairs
@@ -210,13 +197,11 @@ stray-content | ref@tip
 stray-content | stray-content@blobs
 stray-content | stray-content@head_ref
 test-gate | test-gate@at
-test-gate | test-gate@changed
 test-gate | test-gate@impacted
 test-gate | test-gate@tests_capped
 test-gate | test-gate@untested_capped
 whereis | hit@date
 whereis | hit@tip
-zoom | zoom@levels
 # P3/P7's for-auto|d@next and for|d@next lines (ELEMENT-BLINDNESS closure, 2026-09-19, L2 round-1 lever B1):
 # both DELETED. kForSectionStubLegend (serialize.h) — the <lego>/<compose> counted-stub clause, present-only
 # whenever this run's ranked set actually stubbed one of them — spells "next= --sections=lego,compose restores

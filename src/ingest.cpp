@@ -260,7 +260,7 @@ static std::vector<std::string> selectorRootPrefixes( const std::string& root )
         if( !rootPath.is_absolute() ) { absolutes.push_back( normal( std::filesystem::path( c ) / rootPath ) ); }
     }
     char realBuf[ PATH_MAX ];
-    if( os::realpath( rootPath.c_str(), realBuf ) != nullptr )
+    if( os::realpath( os::path_arg( rootPath ).c_str(), realBuf ) != nullptr )
     {
         absolutes.push_back( normal( realBuf ) );
     }

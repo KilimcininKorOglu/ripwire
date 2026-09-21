@@ -18,6 +18,7 @@
 #include "ingest.h"   // rw::kDefaultMaxFileBytes — the canonical crawl size ceiling (--max-file-size)
 #include "version.h"  // configure-generated kRipwireVersion + short build info (--version)
 #include "infra/emit.h" // rw::emitTo + kEmitterName — --version discloses the emitter that compiled in (emit=)
+#include "infra/os.h"   // rw::os::normalize_path_arg — path-valued arguments take the program's path spelling at intake
 
 namespace rw
 {
@@ -1386,6 +1387,13 @@ inline constexpr char kHelpHead[] =
         "                               The formula was fitted on snippets of 20 lines or fewer, so it is a RANKING lens, not a\n"
         "                               grade: read the ORDER of the rows, not the number on any one of them. Pages with limit=N\n"
         "                               (offset=M); default 40 rows. Declarations with no body are not measured.\n"
+        "                               UNVALIDATED (t14-cleanup #8): this is a deterministic ORDERING signal that has not been\n"
+        "                               checked against human judgement of readability. Our own proxy measurement — 484 matched\n"
+        "                               before/after function pairs from 80 refactor/simplify/cleanup commits in this repo's own\n"
+        "                               history — found the lens agrees with the commit's implied readability direction on only\n"
+        "                               30.2% of pairs, which is worse than chance and suggests the ranking may run backwards more\n"
+        "                               often than not. Treated here as a signal to weigh, never a verdict; do not read a low\n"
+        "                               posnett= as proof a function needs work.\n"
         "    --nonlocal-state           per function, the non-local mutable state it can reach, most writes first\n"
         "                               per function, the NON-LOCAL MUTABLE STATE it can reach, MOST WRITES FIRST: writes= reads= are the\n"
         "                               distinct cells this function OR its transitive callees write / read; direct_writes= direct_reads=\n"
@@ -3360,6 +3368,30 @@ static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kI
 // flag matched, and did its value survive" is one question with one answer.
 enum class ViewFlagMatch : std::uint8_t { NoMatch, Assigned, Refused };
 
+// The view flags whose value is a PATH (lennix1337's list from PR #44, plus --in=/--doc-drift=/--exclude= added in
+// the D3 fix round): the one set whose value takes the program's path spelling at intake (os::normalize_path_arg).
+// A --grep pattern, a symbol or a number must never be rewritten. NOT here, deliberately: --scope= (one or more
+// comma-separated GLOBS — '\' is the glob escape character, not a separator to rewrite) and --layout= (a struct/class
+// name, never a path).
+inline constexpr std::string_view kPathValuePrefixes[] =
+{
+    "--eval-mined=", "--eval-skills=", "--arch=", "--cache=", "--index-out=", "--scip=", "--pin-census=",
+    "--lint-rules=", "--exercises=", "--cochange=", "--situ=", "--test-gate=", "--scan-skills=", "--dead-code=",
+    "--plan-lint=", "--scan-skill=", "--batch=", "--at=", "--edit-payload=", "--edit-target-file=", "--edit-plan=",
+    "--eval-stray=", "--from-trace=", "--with-profile=", "--brief=", "--html=", "--affected=",
+    "--in=", "--doc-drift=", "--exclude="
+};
+
+// intake: a path-valued flag's value takes the program's path spelling here, once (argv storage is mutable, and Config
+// borrows it as a view, so the rewrite is in place and never longer). POSIX: nothing — os::normalize_path_arg is empty.
+inline void normalizePathValueAtIntake( std::string_view prefix, std::string_view value ) noexcept
+{
+    if( std::ranges::find( kPathValuePrefixes, prefix ) != std::ranges::end( kPathValuePrefixes ) )
+    {
+        os::normalize_path_arg( const_cast<char*>( value.data() ) );
+    }
+}
+
 inline ViewFlagMatch applyViewFlag( std::string_view arg, Config& c )
 {
     for( const ViewFlag& vf : kViewFlags )
@@ -3369,6 +3401,7 @@ inline ViewFlagMatch applyViewFlag( std::string_view arg, Config& c )
             continue;
         }
         const std::string_view value = arg.substr( vf.prefix.size() );
+        normalizePathValueAtIntake( vf.prefix, value );
         // §B5: the EMPTY-value decision is the row's, never this loop's. Refuse prints here; Meaningful and
         // HandlerRefuses both fall through to the assignment — the difference between them is which code
         // OWNS the refusal, and the row records it (the consteval floor beside the table pins the columns).
@@ -5095,6 +5128,9 @@ inline Config parseArgs( int argc, char** argv ) noexcept
                 // with an unset $X excluded nothing and said nothing. Same refusal as its table siblings.
                 if( a.size() == 10 )
                 { refuseEmptyValue( "--exclude=", "a path substring to drop from the crawl", "--exclude=vendor/" );  c.ok = false; return c; }
+                // Windows intake (D3 fix round): hand-written, so it does not ride applyViewFlag's kViewFlags loop —
+                // called explicitly, same as every kPathValuePrefixes row. POSIX: normalizePathValueAtIntake is empty.
+                normalizePathValueAtIntake( "--exclude=", a.substr( 10 ) );
                 c.excludes.push_back( std::string( a.substr( 10 ) ) );
                 // r27-emitters T5: a BAD VALUE is not an unknown FLAG. `--rank-by=bogus` used to fall through the
                 // exact-match chain to the generic "unknown flag" arm, which told the agent the flag itself does not
@@ -5303,6 +5339,7 @@ inline Config parseArgs( int argc, char** argv ) noexcept
                 rw::emitTo( stderr, "ripwire: too many roots (max {}): '{}'\n", kMaxWorkspaceRoots, std::string_view( a.data(), a.size() ) );
                 c.ok = false;  return c;
             }
+            os::normalize_path_arg( const_cast<char*>( a.data() ) );   // intake: a root takes the program's path spelling once
             if( c.rootPath.empty() )
             {
                 c.rootPath = a; // roots[0] alias (A1)

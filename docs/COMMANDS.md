@@ -1839,7 +1839,7 @@ $ ./build/ripwire . --clones
 
 **Answers:** rank functions least-readable first, by volume, token entropy and length per-function readability lens, LEAST readable first: vol= Halstead volume V (N*log2(eta)), ent= Shannon token entropy E, lines= L, posnett= sigmoid(8.87 - 0.033V + 0.40L - 1.5E) (Posnett/Hindle/Devanbu, MSR 2011).
 
-APPROXIMATION, disclosed: ONE token-class table serves every language (keywords + punctuation = operators, identifiers + literals = operands), with no per-grammar refinement, so V is cross-language and not a per-grammar Halstead count. The formula was fitted on snippets of 20 lines or fewer, so it is a RANKING lens, not a grade: read the ORDER of the rows, not the number on any one of them. Pages with limit=N (offset=M); default 40 rows. Declarations with no body are not measured.
+APPROXIMATION, disclosed: ONE token-class table serves every language (keywords + punctuation = operators, identifiers + literals = operands), with no per-grammar refinement, so V is cross-language and not a per-grammar Halstead count. The formula was fitted on snippets of 20 lines or fewer, so it is a RANKING lens, not a grade: read the ORDER of the rows, not the number on any one of them. Pages with limit=N (offset=M); default 40 rows. Declarations with no body are not measured. UNVALIDATED (t14-cleanup #8): this is a deterministic ORDERING signal that has not been checked against human judgement of readability. Our own proxy measurement — 484 matched before/after function pairs from 80 refactor/simplify/cleanup commits in this repo's own history — found the lens agrees with the commit's implied readability direction on only 30.2% of pairs, which is worse than chance and suggests the ranking may run backwards more often than not. Treated here as a signal to weigh, never a verdict; do not read a low posnett= as proof a function needs work.
 
 **Try it**
 
@@ -4386,7 +4386,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=42ad8a51f8890926 entries=702
+ripwire legend dictionary ripwire.dict/v1 dictv=de80b7c7b3ea84b5 entries=703
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)

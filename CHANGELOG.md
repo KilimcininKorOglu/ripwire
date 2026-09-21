@@ -15,6 +15,39 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--adaptive` no longer narrows a large pool of identically-named symbols on tie-break order
+
+A name-exact route against a common word (`update`, `run`) puts dozens of unrelated, identically-named
+definitions into one scoring pool. Their scores differ only by the ranker's tie-break, so the largest
+relative gap in that pool is an artefact of ordering, not a relevance cliff — and `--adaptive` cut on it
+anyway, taking `update` from 231 symbols to 6 and `run` from 148 to 10 while the header stamped
+`confidence="high"`. `--adaptive` now declines to narrow when a name-exact route's positive pool clears
+`kAdaptiveHomonymPoolFloor` (50) and the proposed cut is at most twice the floor: the default top-N is
+served instead, an in-band note says why (the pool size, and that the gap is tie-break order), and
+`confidence=` stops claiming `high` on a cut it declined to trust. `margin_pct=` keeps the true measured
+drop — a zero there still means "no cliff found", never "none exists".
+
+The routing question behind the gate is now asked once. Three call sites — `--for`'s own bundle, the
+`--format=candidates` export and the MCP `for` verb — each decided "is this the name-exact lane" their own way,
+and `runForLens` asked the negation of a different question (`!isConceptualRoute`), which is also true for
+the third route state, `no-route`. So `--no-route --adaptive` read an un-routed ranking as name-exact and
+reported a same-name count for a pool that did not exist, with the CLI and MCP disagreeing on the same
+tree. `isNameExactRouteTag` is the single predicate all three now call.
+
+### Fixed — legend, capture and disclosure gaps found by a deferred-items sweep
+
+Nine items carried from earlier trains, all in the disclosure surface rather than in analysis: eight stale
+entries in the full/compact legend baseline closed; a live `CHANGELOG.md` figure for the `tools/list`
+manifest corrected against a measurement (`test/mcpmanifestcheck.sh` arm `(1b)` now asserts it against a
+live `tools/list` response, so the same rot fails a gate instead of waiting to be rediscovered);
+`test/showcasecapturecheck.sh` gained staleness detection, which immediately caught a stale capture;
+`--pack-task`'s bodyless placeholder branch now emits the `bodyless=` count and a false `capped="1"` is
+gone; a `--around-depth` row in `docs/LINEAGE.md` corrected; `--readability` carries an explicit note in
+`--help` and `README.md` that its score is not validated against a human-judgement corpus; and stale
+quality acknowledgements were healed through the binary rather than by hand. The rule for choosing which
+gates a change must run — by verb, by fixture, by the files it touches, and by shard — now lives in
+`CONTRIBUTING.md` instead of a train's own notes.
+
 ### Fixed — `--dead-code` no longer claims a confidence its evidence cannot support
 
 Every `--dead-code` root carried `confidence="high"`, hardcoded: nothing in the candidate loop — internal
@@ -195,9 +228,13 @@ Both serve the CLI's own renderer rather than a second implementation of it:
 
 Both declare `legend`, so they take their posture per request like the rest of the family — absent means
 compact, `legend:"full"` restores the prose legend byte-for-byte, and the rows do not move between the two.
-The `tools/list` manifest grows 43,500 → 46,371 B (method: `test/mcpmanifestcheck.sh`'s own formula — the
+The `tools/list` manifest grows 43,500 → 46,493 B (method: `test/mcpmanifestcheck.sh`'s own formula — the
 compact JSON length of the served `tools` array — over one `tools/list` response on this repository's binary
-before and after; its 46,600 B ceiling is unmoved, with 229 B of headroom).
+before and after; its 46,600 B ceiling is unmoved, with 107 B of headroom — the 46,371 B this entry first
+recorded was superseded, same round, by a `rank_by` description fix (`test/mcpmanifestcheck.sh`'s own
+RE-ANCHORED/TRAIN 10 FIX ROUND comment history), and this prose copy went uncorrected for five days before
+being re-derived by hand; `test/mcpmanifestcheck.sh` arm `(1b)` now asserts this figure against a live
+`tools/list` measurement so that rot is a gate failure, not a future rediscovery).
 
 ### Fixed — `rank_by` over MCP no longer answers a different ranking than `--rank-by` on a tree with uncommitted changes
 
@@ -411,6 +448,58 @@ actually applies, and the directory-of-repos row described a guard that does not
 behaviour is a silent merge. Both corrected in `README.md` and in the `ripwire-navigate` and `ripwire-orient`
 skills, against a built binary rather than from reading the source. Contributed by **@llvm-x86** in #302,
 who built the Flask fixture that found them.
+
+### Added — native Windows x64 (clang-cl, MSVC ABI), behind `src/infra/os.h` — thanks to @lennix1337 (#44)
+
+@lennix1337 ported ripwire to native Windows in #44 and then kept it alive through weeks of a moving main: UTF-8
+and long paths end to end, the no-follow sidecar opens against symlinks, junctions and OneDrive placeholders,
+`--run-trace` children inside a Job Object so a timeout ends the whole tree, Git Bash script bridges so `cmd.exe`
+never expands a `%`, the `LockFileEx` edit lock their race trials proved, the MCP directory watcher, the
+PATH/PATHEXT search, and an owner-and-Administrators ACL for the cache directory — plus a local validation run of
+the Windows gates on their own machine, and a snapshot (`win32-port-snapshot`) with the fixes that run turned up.
+Their commits are in this history as they wrote them.
+
+This release carries that work in the shape `os.h` set out: every Windows body is in
+`src/infra/os_win32.cpp` (the one translation unit that sees `<windows.h>`), declared by `os.h`'s Windows branch
+under the same POSIX names call sites already spell, and every piece of it that is not a Win32 call — the
+Win32→errno table, UTF-8/UTF-16, `CreateProcessW` quoting (adapted from libuv, notice in `THIRD_PARTY.md`),
+reparse-tag and wait-status decoding — is in `src/infra/os_win32_logic.h`, which every Linux and macOS leg now
+compiles and tests (`test/oswin32logiccheck.sh`: 29 cases, 4,480,667 assertions, a sanitizer arm and a mutant arm
+that must fail). A Windows build adds only `cmake/Windows.cmake`: `os_win32.cpp`, a manifest (`longPathAware`,
+UTF-8 active code page), `ws2_32`/`advapi32`/`shell32`, `/EHsc`. No force-include, no compat headers, no
+libc-renaming macros.
+
+Linux and macOS pay nothing for it. Measured on macOS arm64, Release, this branch against main `e54b688e`: no
+`rw::os` symbol in either binary, identical symbol sets (11,021), `__text` 9,172,004 B in both, and of 5,034
+functions 5,031 disassemble identically and 3 differ only by the build stamps (the source-identity hash in the
+quality snapshot's two serializers, the `built_from` length in `--doctor`). The same 71 cases the `os.h` refresh
+used (map, 25 verbs, `--run-trace`, MCP stdio and `--listen`, the sidecar and index writes) are byte-identical.
+
+Since proven on Windows, and exactly that far. @lennix1337's run against the D3 branch found five build failures, all fixed; a `windows-latest` CI job now builds with clang-cl and smoke-tests the result on every full matrix — configure, build, `ctest` (including the port's own `oswin32logiccheck` target), `--version`/`--help`, a real crawl of `test/fixture`, the two-run byte-identical determinism contract, well-formed XML, and the ASan flavour compiling. What is NOT proven: the gate suite does not run on Windows (it needs the harness), no sanitizer RUN happens there, and nothing exercises a UNC share, a junction, a non-ASCII path or a volume without a drive letter — the checklist on #44 is still open. MSVC `cl.exe` does not build: it configures and compiles until it reaches the GCC/Clang language extensions the tree is written in, which needs a portability seam in `src/infra/platform.h`; the CI leg asserts that it stops exactly there, so a different break is a red job.
+
+A review pass (no Windows machine, read plus a macOS/Linux-provable subset) found one MED and five LOWs, none
+touching POSIX; this fix round closes the MED and three of the LOWs, still on top of @lennix1337's work:
+
+- Paths past ~260 characters now get the `\\?\` extended-length prefix (`NativePath`, reusing the existing
+  `extendedLengthPath` helper behind a length threshold, `os_win32.cpp`/`os_win32_logic.h`): without it, a file
+  deeper than that on a default-policy Windows (`LongPathsEnabled=0`) failed `CreateFileW` with
+  `ERROR_PATH_NOT_FOUND` — `ENOENT` for a file that exists — and the crawl or sidecar silently skipped it.
+- `ERROR_IO_PENDING` (997) now maps to `EWOULDBLOCK` in the Win32→errno table, alongside `ERROR_LOCK_VIOLATION`
+  (33), as a defence for the edit-lock contention loop.
+- `getline`'s buffer growth no longer reads `*capacity` while `*line` is `NULL` (POSIX ignores it in that case).
+- The `stat_t::st_ino` comment now says what the code does (`BY_HANDLE_FILE_INFORMATION`'s 64-bit file index; a
+  ReFS/DevDrive volume's 128-bit id is not queried) instead of describing a fold that never happens.
+- `--in=`, `--doc-drift=` and `--exclude=` join the path-valued flags normalized at intake (`--scope=`, a glob
+  set, and `--layout=`, a type name, deliberately do not).
+- `--doctor`'s binary-path row is marked `degraded="1"` on Windows (Git Bash's MSYS `which` never prints
+  `.exe`, so the row's file comparison can disagree with a correct install) rather than left to read as a false
+  mismatch; POSIX is unaffected. The honest fix — a native `os::which` PATH/PATHEXT search — is a follow-up.
+- `openat`'s handle-anchored join (kept as-is this release, not `NtCreateFile`) now documents its residual: the
+  final `CreateFileW` re-walks a freshly built path string, so a link swapped in above the anchored directory in
+  that narrow window is followed, unlike a true handle-relative open.
+
+Left for a contributor's own Windows run (checklist in the coordination history): MSYS bash re-parsing
+`spawn_sh`'s command line, and `openat` on a volume mounted without a drive letter.
 
 ### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
 

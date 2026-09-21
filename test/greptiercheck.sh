@@ -54,7 +54,16 @@ TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
-attr(){ printf '%s' "$2" | grep -oE "$1=\"[^\"]*\"" | head -1 | sed -E "s/^$1=\"//; s/\"$//"; }
+# Attributes are read from the ROOT `<grep …>` ELEMENT ONLY, never from the whole document. This gate
+# greps the live tree for words this gate is itself about, so a returned HIT's CDATA can contain the
+# literal text of an attribute: src/grep_tier.h documents the very defect arm 11g checks, in a comment
+# that spells `tier="comment+string"`. A whole-document search then reads an "attribute" out of a search
+# RESULT. That is how 11g went red on 2026-09-20 (CI run 35533898709, gcc Release shard 1): a corpus
+# change flipped --grep=deterministic to the CODE tier, the root correctly carried no tier= at all and
+# suppressed_comment= instead, and the helper picked the sentence up out of the hit text and demanded a
+# tier_partial for a label the answer had never made. Every attribute this gate asks for is a root
+# attribute, so narrowing the region is correct for all of them and fixes the class, not the instance.
+attr(){ printf '%s' "$2" | grep -o '<grep [^>]*>' | head -1 | grep -oE "$1=\"[^\"]*\"" | head -1 | sed -E "s/^$1=\"//; s/\"$//"; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 echo "greptiercheck: BIN=$BIN"

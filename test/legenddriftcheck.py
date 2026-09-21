@@ -179,7 +179,13 @@ def extract_flag_tokens_from_legend(legend_text):
     # its <calls total=N shown=M ...> child in the same "word=N"/"word=M" placeholder prose this pattern
     # is built to catch — "total" and "shown" are OUTPUT ATTRIBUTES (rides the same shown=/total= pair
     # THE TRUNCATION VOCABULARY, src/pageview.h, already uses on a dozen other elements), never CLI flags.
-    placeholder_exclude = {"bodies", "overloads", "files", "hits", "toks", "noedge", "total", "shown"}
+    # train-14 (2026-09-20): "bodyless" joins for the same documented reason. src/compactlegend.h's
+    # <bodies> row defines the OUTPUT ATTRIBUTE as "bodyless=N of total= are module-scope owners with no
+    # body by construction", and there is no --bodyless flag. The row only reaches a served legend when
+    # something emits bodyless=, which --pack-task's section-dropped placeholder branch started doing in
+    # this train — so the bareword entered the live arm's corpus and manufactured a phantom on correct
+    # legend text. Added by NAME, per this list's own rule, never by narrowing pattern 5.
+    placeholder_exclude = {"bodies", "bodyless", "overloads", "files", "hits", "toks", "noedge", "total", "shown"}
     for match in re.finditer(r'\b([a-z][a-z0-9\-]*)=[NM]\b', legend_text):
         word = match.group(1)
         if word not in placeholder_exclude:

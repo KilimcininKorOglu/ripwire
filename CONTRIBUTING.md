@@ -150,6 +150,43 @@ transient untracked file flips every determinism arm running beside you under `-
 (`.gateprobe.*`). `test/pargates.py` samples that command while the suite runs and fails the run
 naming the gate in flight. It is a sampler, so a clean run there is "none found", never "none exists".
 
+### Selecting which gates to run for a change smaller than the full suite
+
+A lane or PR does not run the full suite locally — but "which subset" is not "grep for the verb you
+changed". Gate selection by VERB NAME under-covers; four classes of gate are invisible to it (found the
+hard way, across several trains, each time by a gate the verb-grep never reached):
+
+1. **Language-fixture gates.** A change to extraction, ingest or the call graph can move a fixture's
+   count without the gate naming any verb you touched. Do not enumerate fixtures by name — ask the
+   binary which ones your change can move, then run the gate that owns each:
+   ```bash
+   for d in test/*fix; do "$BIN" "$d" --no-cache '--graph-query=<the property you changed>' \
+       | grep -q 'count="[1-9]' && echo "$d"; done
+   # each hit's gate is test/<basename-minus-fix>check.sh, plus the cross-language gates that own no
+   # fixture of their own: langcensuscheck qualnewcheck callformcheck
+   ```
+2. **Source- and docs-grepping gates.** A gate that reads a header's text directly (an enum's member
+   list, a constant, a hardcoded roster meant to track one) has no verb and no fixture — it has a
+   filename. Run every gate that names a file your change touched, over the FULL merge/PR diff, not
+   just the files the last fix round happened to edit:
+   ```bash
+   git diff --name-only <base>...HEAD -- 'src/*' | while read f; do grep -l "$(basename "$f")" test/*.sh; done | sort -u
+   ```
+   A gate keyed on an enum (a shape roster indexed by `SymKind`, say) is this class, not a fifth one:
+   the header that declares the enum has a name, and the sweep above finds any gate that greps it.
+3. **Shard-placed gates.** A gate's CI shard says where it runs, never what it covers — do not let
+   "that runs on a shard I don't usually watch" stand in for "out of scope". `portablebuildcheck` is
+   the standing example: a whole-`src/` sweep with no fixture, no verb and no per-language list, so it
+   is invisible to every selection method except clause 2's file sweep above (it greps `src/`
+   wholesale). Run clause 2's sweep and trust it over a mental model of "what usually catches this".
+4. **Run the sweep, don't just write it down.** Writing the rule is not running it: clause 2's command
+   has been reasoned about and then skipped in the same round it was proposed, because it was run over
+   the files edited in the latest fix rather than over the whole change. Run it over the FULL base...HEAD
+   (or merge) file list before calling a round done — on a change that touches a widely-`#include`d
+   header this can be most of the suite (hundreds of gates), and that size is the honest answer, not a
+   sign to narrow the query: run the local intersection this sweep names and let CI carry the rest, but
+   never conclude "no gate covers this" without having actually run the command.
+
 ### The formatting gate — and the rule for when it disagrees with you
 
 ```bash
@@ -413,12 +450,30 @@ gotcha:** a POSIX name that some libc defines as a *function-like macro* cannot 
 the declaration and every `os::name(` call expand before the compiler sees a function — `S_ISREG( m )`,
 `S_ISLNK( m )` and the other mode predicates everywhere, and `htons` under glibc at `-O2`. Those stay bare at call
 sites, like the `O_*`/`X_OK`/`PATH_MAX` constants, and `os.h`'s Windows branch defines them. `test/osswitchcheck.sh`
-refuses all of the above outside `os.h`; its one allowlisted file is `src/infra/profilePmc.h`, the profiler's
-undocumented-ABI counter backends.
+refuses all of the above outside `os.h`; its allowlisted files are `src/infra/profilePmc.h`, the profiler's
+undocumented-ABI counter backends, and `src/infra/os_win32.cpp`.
+
+**Windows bodies live out of line.** `os.h`'s Windows branch only *declares* — the same names, POSIX constants,
+types and `stat` fields its POSIX branch uses — so `<windows.h>` never reaches a call site. The definitions are in
+`src/infra/os_win32.cpp`, which CMake compiles only for a Windows target (`cmake/Windows.cmake`), and they keep the
+POSIX contract their callers read: errno, `-1`, `struct stat` fields (`st_dev`/`st_ino` identify a file; `lstat`
+reports `S_IFLNK` for a symlink or junction; `O_NOFOLLOW` judges the final component). Every kernel object there
+has one RAII owner, and nothing throws. Anything in that port that is not a Win32 call — the Win32→errno table,
+UTF-8/UTF-16 conversion, path spelling, `CreateProcessW` quoting, reparse-tag and wait-status decoding — belongs in
+`src/infra/os_win32_logic.h`, a header with no `<windows.h>` and no platform test, so that every CI leg compiles
+it and `test/oswin32logiccheck.sh` tests it. Paths are `/`-separated inside the program: Windows spells them once
+where they enter (`os::init_process` for argv and the environment, `os::normalize_path_arg` for a path-valued
+flag or MCP argument), never at a comparison. The three questions whose answer depends on drives existing have
+`os::` names of their own — `os::path_is_absolute`, `os::path_is_root`, and `os::program_path( fs::path )` for a
+path the program generated itself (the crawl) — and each POSIX body is the expression the call site used to hold.
 
 **Platforms.** Unix, Linux and macOS come first; native Windows is second, with clang-cl the primary compiler and
 MSVC `cl.exe` also required to build. A `cl.exe` portability problem is worth fixing, but it does not block a change
-to a POSIX-only code path.
+to a POSIX-only code path. **As of this writing that second half is a target, not a fact:** clang-cl builds and is
+verified by the `windows` CI job, and `cl.exe` does not build — it stops at the GCC/Clang language extensions this
+tree uses (`asm volatile` barriers, `__builtin_*`, `[[gnu::…]]`), which need a portability seam in
+`src/infra/platform.h`. Do not read the rule above as a description of the current state; the CI leg asserts the
+failure so the two cannot drift apart silently.
 
 ### Aliasing: spelling, placement, contract
 
