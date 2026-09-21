@@ -2450,6 +2450,27 @@ inline constexpr std::string_view kForConfidenceNote =
     "percent, 0 = none; the same gap the adaptive flag cuts at). low = flat ranking: treat the set "
     "as a starting point, not an answer]";
 
+// ── Homonym-pool decline gate (T14; docs/research/adaptive-short-query.md on lane/research-adaptive-
+// shortquery, c04affc2 — investigation only, not merged) ───────────────────────────────────────────────
+// A name-exact route against a large pool of identically-named, UNRELATED symbols (every class's own
+// `update()`) can still clear kMinCliffDrop above: the drop is real, but it is a drop in the SECONDARY
+// (tie-break) key that orders symbols already tied on lexical score, not a drop in relevance — nothing in
+// a bare word like "update" picks rank 6 over rank 7 of 231 identical name matches. Left alone, --adaptive
+// narrows to a handful of an undifferentiated pool while confidence="high" claims the cut is relevance-
+// driven: a confident wrong answer. Measured on two corpora (the doc's word sweep, both routed name-exact):
+// every positiveHits>=50 row clears this gate (`update` 231->6, `run` 148->10, `init` 56->7, all kept<=10);
+// every harmless name-exact cut measured (pools of 13-37, kept 11-35) does not — leaving a 37..56 margin for
+// the threshold below. Reuses AdaptiveCut::positiveHits, already computed for the cut itself — no new
+// scorer, no second pass over the score vector (the doc's own rejection criterion for the two alternatives
+// it measured and dropped: a query-length/content threshold cannot separate `update` from `adaptiveCut`,
+// both one token, one working correctly and one not).
+constexpr std::size_t kAdaptiveHomonymPoolFloor = 50;   // positiveHits must clear this; measured gap is 37 (harmless) .. 56 (failing)
+
+inline bool isAdaptiveHomonymDecline( bool nameExactRoute, const AdaptiveCut& cut, std::size_t floorK )
+{
+    return nameExactRoute && cut.positiveHits > kAdaptiveHomonymPoolFloor && cut.kept <= 2 * floorK;
+}
+
 struct ForConfidence
 {
     std::string attrs;      // ` confidence="high|low" margin_pct="N"` — root facts, every ladder rung
@@ -2458,11 +2479,16 @@ struct ForConfidence
     int         marginPct = 0;
 };
 
-inline ForConfidence deriveForConfidence( const rw::AdaptiveCut& cut, int servedTopN )
+// homonymDecline: true when isAdaptiveHomonymDecline fired on this same cut — confidence must not claim
+// "high" on a cliff driven by tie-break order rather than relevance (a decline plus a high-confidence
+// stamp is the same defect wearing a different hat). marginPct is left as the TRUE measured drop even
+// when declined — 0 means "no cliff found" (non-negotiable #3: a zero must mean none found, never none
+// exists), and a real 25% tie-break drop is not that; the note's extra clause is what says not to trust it.
+inline ForConfidence deriveForConfidence( const rw::AdaptiveCut& cut, int servedTopN, bool homonymDecline )
 {
     ForConfidence out;
     const bool servedComplete = cut.positiveHits > 0 && cut.positiveHits <= std::size_t( servedTopN );
-    out.level     = ( !cut.hitCeiling || servedComplete ) ? "high" : "low";
+    out.level     = homonymDecline ? "low" : ( !cut.hitCeiling || servedComplete ) ? "high" : "low";
     out.marginPct = cut.hitCeiling ? 0 : cut.dropPct;
     char attrBuf[ 48 ];
     rw::formatTo( attrBuf, sizeof( attrBuf ), " confidence=\"{}\" margin_pct=\"{}\"", out.level, out.marginPct );
@@ -2471,6 +2497,18 @@ inline ForConfidence deriveForConfidence( const rw::AdaptiveCut& cut, int served
     // this rides EVERY --for header and its bytes are charged under an explicit budget, so each word
     // competes with a sig row (the W3-S short-spelling precedent). The full mapping: the --for help text.
     out.note = kForConfidenceNote;
+    if( homonymDecline )
+    {
+        // present-only (fires only on the decline itself — byte-identical elsewhere): margin_pct above is
+        // real and nonzero here, which "low = flat ranking" alone does not cover — this clause is what makes
+        // the two consistent (T14 requirement 2).
+        char db[ 200 ];
+        rw::formatTo( db, sizeof( db ),
+                       " [{} symbols share this exact name; the drop above is tie-break order among them, not "
+                       "relevance, so confidence stays low even though margin_pct is nonzero]",
+                       cut.positiveHits );
+        out.note += db;
+    }
     return out;
 }
 

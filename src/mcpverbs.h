@@ -1872,7 +1872,12 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // agent. It is a pure function of the finished lensRank (lexical.h's adaptiveCut → deriveForConfidence,
     // the CLI's own call with the CLI's own arguments), so there was never a cost reason for the omission.
     const AdaptiveCut   mcpForCut = adaptiveCut( lensRank, 5, std::size_t( forTopN ), /*scanFullDistribution=*/true );
-    ForConfidence       mcpForConf = deriveForConfidence( mcpForCut, forTopN );
+    // T14 (docs/research/adaptive-short-query.md): same homonym-pool decline gate as the CLI --for twin
+    // (lexical.h isAdaptiveHomonymDecline) — this bundle is disclosure-only (it never narrows the served
+    // set on this statistic, see the H14 note above), but confidence= must still not claim "high" on a
+    // cliff driven by tie-break order rather than relevance.
+    const bool          mcpHomonymDecline = isAdaptiveHomonymDecline( rc.which == LexMode::NameExact, mcpForCut, 5 );
+    ForConfidence       mcpForConf = deriveForConfidence( mcpForCut, forTopN, mcpHomonymDecline );
     // THE BUNDLE'S RESOLVED SURFACE (top-N by lensRank — the set <sigs> selects), shared by the compose
     // view, the B6.3 route view and (§P3) the <lego> scope filter. Same order the CLI --for uses. Hoisted
     // above the header (L-W): the thin verdict reads it.
