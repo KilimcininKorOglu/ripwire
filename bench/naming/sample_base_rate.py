@@ -167,7 +167,7 @@ def collect(files, extractor):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
-    ap.add_argument("--repos-root", default="/Users/qgames/AppDevelopLocal/project2/bench-assets",
+    ap.add_argument("--repos-root", default=os.environ.get("RIPWIRE_BENCH_ASSETS", "bench-assets"),
                      help="root holding the real-project checkouts (python under r4/repos_*, swift under swift/)")
     ap.add_argument("--ripwire-src", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
