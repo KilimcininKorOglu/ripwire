@@ -233,16 +233,20 @@ fi
 chmod 644 "$B13R/locked.md" 2>/dev/null || true
 
 # 5. absent = nothing skipped: a directory with nothing unscannable must not grow the attribute (the house
-#    rule every existing artifact and gate rides on).
+#    rule every existing artifact and gate rides on). Matched as `skipped="` (the real attribute's exact
+#    spelling, src/skillscan.h's ` skipped=\"{}\"`) rather than bare `skipped=`: t14-cleanup #1 gave
+#    --legend=full its own legend comment, which spells the word `skipped=N` in PROSE (no quote) to define
+#    the attribute per the house name= convention — a bare-substring grep now matches that prose on every
+#    run, not only a real leaked attribute, so it no longer discriminates what this arm exists to check.
 B13C="$TMP/b13clean"; mkdir -p "$B13C"
 cp "$CLEAN" "$B13C/skill.md"
 "$BIN" "--scan-skills=$B13C" --legend=full >"$TMP/b13c.out" 2>/dev/null
-grep -q 'skipped=' "$TMP/b13c.out" \
+grep -q 'skipped="' "$TMP/b13c.out" \
     && no "§B13.3: skipped= leaked on a directory where nothing was skipped (breaks artifact byte-identity)" \
     || ok "§B13.3: skipped= is absent when nothing was skipped"
 # and the single-file form's artifact is unchanged
 "$BIN" "--scan-skill=$CLEAN" --legend=full >"$TMP/b13s.out" 2>/dev/null
-grep -q 'skipped=' "$TMP/b13s.out" \
+grep -q 'skipped="' "$TMP/b13s.out" \
     && no "§B13.3: the single-file artifact grew a skipped= attribute it has no use for" \
     || ok "§B13.3: the single-file artifact is byte-unchanged (skips nothing, says nothing)"
 
