@@ -18,7 +18,8 @@ implementations** — nothing in `src/readability.h` runs a model or a judge:
   the actual diff, rather than living inside a generation prompt as one more instruction competing with the
   rest of the prompt for effect.
 
-Both are cited in this repo's own research log, `DESIGN_READABILITY_METRICS.md` §7, as the "Readability
+Both are cited in the readability design note — an internal working document, not part of this
+repository — at its §7, as the "Readability
 Spectrum" prompt-constraint finding and as "LLM self-judges … fixate on surface features (CoReEval)" —
 see the reference list at the end of this document for both arXiv identifiers. That design log already states
 the honesty bound this document expands on: *"Everything here is a lens, never a verdict."* This document is
@@ -93,7 +94,7 @@ reader would recognize. Here is the validation we think would settle that, speci
 
 **Unit of comparison: pairs, not scores.** Ask a rater "which of these two is more readable," never "rate
 this snippet 1–5" — the literature's own ground-truth datasets are pairwise-derived or scale-based and Vitale
-(2025, cited in `DESIGN_READABILITY_METRICS.md` §7) found up to a third of classic scale labels
+(2025, cited in the readability design note §7) found up to a third of classic scale labels
 self-contradictory on reread. A forced pairwise choice is cheaper to collect, cheaper to get consistent, and
 is exactly the shape `--readability`'s own claim needs checking against: it emits an order, so validate the
 order.
@@ -118,7 +119,7 @@ order.
 `posnett=`, no commit message); each pair rated independently by at least three raters, majority vote as the
 pair's label, inter-rater agreement reported alongside the correlation (a low agreement number is itself a
 finding, per Vitale). Raters should not be told which side the lens preferred — Piantadosi et al.'s "readable
-state flip" framing (cited in `DESIGN_READABILITY_METRICS.md` §6) is a reasonable model for how to phrase the
+state flip" framing (cited in the readability design note §6) is a reasonable model for how to phrase the
 question without anchoring the rater on a metric.
 
 **The statistic.** Percentage pairwise agreement between the lens's implied direction and the majority human
@@ -303,8 +304,8 @@ following, specifically:
    subject regex, a manual pass over a sample, restricting to commits that touch exactly one function) would
    make the label trustworthy enough to report a headline number from?
 4. **Is Halstead volume, entropy and length the right feature set to be checking at all** in 2026, or is this
-   entire investigation validating a formula the field has already moved past? `DESIGN_READABILITY_METRICS.md`
-   §5 in this repo surveys later models (Buse & Weimer 2010, Scalabrino 2018) that add lexical/visual/textual
+   entire investigation validating a formula the field has already moved past? The readability design note
+   §5 surveys later models (Buse & Weimer 2010, Scalabrino 2018) that add lexical/visual/textual
    features on top of the same structural core — if there is a more recent, still-deterministic (no model
    call) formula with better-established construct validity, we would rather adopt it than keep defending
    Posnett 2011 out of inertia.
@@ -319,19 +320,19 @@ following, specifically:
   [doi:10.1109/ICPC.2016.7503707](https://doi.org/10.1109/ICPC.2016.7503707)
 - Trockman, A. et al. — the MSR 2018 result cited throughout this repo's readability code as finding no
   readability metric or combination correlates strongly with measured understandability (see
-  `src/readability.h`, `DESIGN_READABILITY_METRICS.md` §0).
+  `src/readability.h`, the readability design note §0).
 - Fakhoury, S. et al. *Improving Source Code Readability: Theory and Practice.* ICPC 2019 — 548
   developer-declared readability-improving commits across 63 projects; classic models "fail to capture
   readability improvements."
 - Peitek, N., Apel, S., Parnin, C., Brechmann, A. & Siegmund, J. *Program Comprehension and Code Complexity
   Metrics: An fMRI Study.* ICSE 2021. [doi:10.1109/ICSE43902.2021.00056](https://doi.org/10.1109/ICSE43902.2021.00056) —
   Halstead volume specifically tracks measured cognitive load.
-- Vitale, T. et al. (2025) — cited in `DESIGN_READABILITY_METRICS.md` §0 as finding up to a third of classic
+- Vitale, T. et al. (2025) — cited in the readability design note §0 as finding up to a third of classic
   readability ground-truth labels self-contradictory.
 - The "Readability Spectrum" prompt-style-constraint study, arXiv:2605.13280 — style constraints in a
-  generation prompt help but plateau; cited in `DESIGN_READABILITY_METRICS.md` §7.
+  generation prompt help but plateau; cited in the readability design note §7.
 - CoReEval, arXiv:2510.16579 — LLM self-judges of code readability fixate on surface features; cited
-  alongside the prompt-constraint study in `DESIGN_READABILITY_METRICS.md` §7 as the joint reason
+  alongside the prompt-constraint study in the readability design note §7 as the joint reason
   `--quality-delta`'s gate is deterministic and external to the model, applied to the diff.
 - `docs/LINEAGE.md` §9.0 and `src/naminglens.h` (top-of-file comment) — the withdrawn `naming-body-mismatch`
   rule, this repo's only other instance of "measured, then withdrawn," and the template §4 of this document
