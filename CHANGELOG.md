@@ -28,7 +28,7 @@ served instead, an in-band note says why (the pool size, and that the gap is tie
 drop — a zero there still means "no cliff found", never "none exists".
 
 The routing question behind the gate is now asked once. Three call sites — `--for`'s own bundle, the
-`--candidates` export and the MCP `for` verb — each decided "is this the name-exact lane" their own way,
+`--format=candidates` export and the MCP `for` verb — each decided "is this the name-exact lane" their own way,
 and `runForLens` asked the negation of a different question (`!isConceptualRoute`), which is also true for
 the third route state, `no-route`. So `--no-route --adaptive` read an un-routed ranking as name-exact and
 reported a same-name count for a pool that did not exist, with the CLI and MCP disagreeing on the same
