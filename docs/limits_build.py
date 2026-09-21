@@ -67,7 +67,14 @@ WEIGHT_NAME = re.compile(r'Mul(?!ti)|Blend|Share|Tolerance|Headroom|Decay|Weight
 # 30.0 is thirty days, not a proportion — and `kRadixThreshold` is the point at which a sort switches
 # algorithm, which apportions nothing. Both would have rendered in the parameter table as **unsourced**
 # ranking parameters, which is a claim about them that is simply false. They are BOUNDARY caps below.
-NOT_A_WEIGHT = re.compile(r'AgeDays|RadixThreshold')
+# `ExtendedLengthThreshold` joins them (train-14, 2026-09-20, CodeRabbit on docs/LIMITS.md:86) for
+# kRadixThreshold's reason exactly: 248 is the path length in UTF-16 units at which NativePath starts
+# spelling a path with the "\\?\\" prefix instead of leaving WidePath's spelling alone. It decides which
+# SIDE of a rule a path falls on, apportions nothing, weights nothing, and truncates nothing — so it can
+# be judged neither by an EVALS anchor nor by shown=/total=. Rendering it as an **unsourced** ranking
+# parameter asked for a measurement that could not exist and stated something false about it; BOUNDARY,
+# the third answer the census kept getting wrong, is the right class.
+NOT_A_WEIGHT = re.compile(r'AgeDays|RadixThreshold|ExtendedLengthThreshold')
 
 def is_weight(name, val):
     if NOT_A_WEIGHT.search(name):

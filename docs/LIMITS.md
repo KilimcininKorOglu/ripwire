@@ -16,10 +16,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 221 | 88 | 121 | **100** |
+| 222 | 89 | 121 | **101** |
 
-Plus 8 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 221 + 8 is the 229 constants this generator parses out of `src/`.
+Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
+are not counted as caps, and 222 + 7 is the 229 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -37,8 +37,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **122 of 221 caps are classified
-(40 INDEXING, 41 OUTPUT, 41 BOUNDARY); the remaining 99 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **123 of 222 caps are classified
+(40 INDEXING, 41 OUTPUT, 42 BOUNDARY); the remaining 99 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -70,7 +70,7 @@ measurement that chose it; listing them beside truncation caps invites tuning th
 
 The **anchor** column is read from each constant's own trailing comment. **unsourced** means the
 comment cites no measurement — the value came from somewhere, but not from anything a reader can
-check. All 8 read unsourced today, which is the finding, not an omission: `kSpecificMinLen` has
+check. All 7 read unsourced today, which is the finding, not an omission: `kSpecificMinLen` has
 the widest measured blast radius of any constant in this tree (14 invocations across 9 verbs, per
 `docs/TUNING.md`) and its entire stated provenance is the parenthetical `(aider's)`. Sourcing them
 means editing `src/`; a cited anchor that `docs/EVALS.md` does not contain makes this generator
@@ -83,13 +83,12 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 | `kCommonNameDefThreshold` | `5` | `src/graph.h` | **unsourced** | >5 defs of the same name ⇒ common (aider's) |
 | `kCoreBudgetShare` | `0.34` | `src/partition.h` | **unsourced** | — |
 | `kExemplarCcxCeilFactor` | `4` | `src/exemplar.h` | **unsourced** | — |
-| `kExtendedLengthThresholdUnits` | `248` | `src/infra/os_win32_logic.h` | **unsourced** | — |
 | `kSpecificMinLen` | `8` | `src/graph.h` | **unsourced** | ≥8 chars …  (aider's) |
 | `kZoneDistanceThreshold` | `0.5` | `src/arch.h` | **unsourced** | \|A+I-1\| past this → classify into pain/useless |
 
 ## Caps, by file
 
-One table for each of the 88 files that declare a cap — the 221 caps counted above, and no parameter.
+One table for each of the 89 files that declare a cap — the 222 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -390,6 +389,14 @@ Discloses: **none**
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kFieldIdCapacity` | `64` | — | — |
+
+### `src/infra/os_win32_logic.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kExtendedLengthThresholdUnits` | `248` | BOUNDARY | — |
 
 ### `src/infra/profilePmc.h`
 
