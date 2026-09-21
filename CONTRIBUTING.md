@@ -150,6 +150,43 @@ transient untracked file flips every determinism arm running beside you under `-
 (`.gateprobe.*`). `test/pargates.py` samples that command while the suite runs and fails the run
 naming the gate in flight. It is a sampler, so a clean run there is "none found", never "none exists".
 
+### Selecting which gates to run for a change smaller than the full suite
+
+A lane or PR does not run the full suite locally — but "which subset" is not "grep for the verb you
+changed". Gate selection by VERB NAME under-covers; four classes of gate are invisible to it (found the
+hard way, across several trains, each time by a gate the verb-grep never reached):
+
+1. **Language-fixture gates.** A change to extraction, ingest or the call graph can move a fixture's
+   count without the gate naming any verb you touched. Do not enumerate fixtures by name — ask the
+   binary which ones your change can move, then run the gate that owns each:
+   ```bash
+   for d in test/*fix; do "$BIN" "$d" --no-cache '--graph-query=<the property you changed>' \
+       | grep -q 'count="[1-9]' && echo "$d"; done
+   # each hit's gate is test/<basename-minus-fix>check.sh, plus the cross-language gates that own no
+   # fixture of their own: langcensuscheck qualnewcheck callformcheck
+   ```
+2. **Source- and docs-grepping gates.** A gate that reads a header's text directly (an enum's member
+   list, a constant, a hardcoded roster meant to track one) has no verb and no fixture — it has a
+   filename. Run every gate that names a file your change touched, over the FULL merge/PR diff, not
+   just the files the last fix round happened to edit:
+   ```bash
+   git diff --name-only <base>...HEAD -- 'src/*' | while read f; do grep -l "$(basename "$f")" test/*.sh; done | sort -u
+   ```
+   A gate keyed on an enum (a shape roster indexed by `SymKind`, say) is this class, not a fifth one:
+   the header that declares the enum has a name, and the sweep above finds any gate that greps it.
+3. **Shard-placed gates.** A gate's CI shard says where it runs, never what it covers — do not let
+   "that runs on a shard I don't usually watch" stand in for "out of scope". `portablebuildcheck` is
+   the standing example: a whole-`src/` sweep with no fixture, no verb and no per-language list, so it
+   is invisible to every selection method except clause 2's file sweep above (it greps `src/`
+   wholesale). Run clause 2's sweep and trust it over a mental model of "what usually catches this".
+4. **Run the sweep, don't just write it down.** Writing the rule is not running it: clause 2's command
+   has been reasoned about and then skipped in the same round it was proposed, because it was run over
+   the files edited in the latest fix rather than over the whole change. Run it over the FULL base...HEAD
+   (or merge) file list before calling a round done — on a change that touches a widely-`#include`d
+   header this can be most of the suite (hundreds of gates), and that size is the honest answer, not a
+   sign to narrow the query: run the local intersection this sweep names and let CI carry the rest, but
+   never conclude "no gate covers this" without having actually run the command.
+
 ### The formatting gate — and the rule for when it disagrees with you
 
 ```bash
