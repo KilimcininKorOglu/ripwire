@@ -118,7 +118,7 @@ void markTruncated( char* notice, std::size_t capacity, std::size_t fullBytes ) 
 }
 
 template<class... A>
-[[gnu::cold]] void writeNotice( std::format_string<A...> format, A&&... args ) noexcept
+RW_COLD void writeNotice( std::format_string<A...> format, A&&... args ) noexcept
 {
     char              notice[ kNoticeByteCap ];
     const std::size_t fullBytes = rw::formatTo( notice, sizeof( notice ), format, std::forward<A>( args )... );
@@ -133,7 +133,7 @@ template<class... A>
 
 } // namespace
 
-[[gnu::cold, gnu::noinline]]
+RW_COLD_NOINLINE
 void ConsoleLog::handleAssert( CheckKind kind, const char* expr, const char* file, int line, const char* function,
                                const char* description ) noexcept
 {
@@ -150,10 +150,10 @@ void ConsoleLog::handleAssert( CheckKind kind, const char* expr, const char* fil
                  "======================================\n",
                  kKindBanner[ row ], orEmpty( expr ), kKindBlame[ row ], orEmpty( file ), line, orEmpty( function ),
                  notes.label, notes.text, notes.eol );
-    __builtin_trap();
+    RW_TRAP();
 }
 
-[[gnu::cold, gnu::noinline, noreturn]]
+[[noreturn]] RW_COLD_NOINLINE
 void ConsoleLog::handlePanic( const char* file, int line, const char* function, const char* description ) noexcept
 {
     writeNotice( "\n======================================\n"
@@ -167,7 +167,7 @@ void ConsoleLog::handlePanic( const char* file, int line, const char* function, 
     std::abort();
 }
 
-[[gnu::cold, gnu::noinline]]
+RW_COLD_NOINLINE
 void ConsoleLog::handleThreadViolation( std::uint64_t expected, std::uint64_t got, const char* file, int line, const char* function,
                                         const char* description ) noexcept
 {
@@ -182,10 +182,10 @@ void ConsoleLog::handleThreadViolation( std::uint64_t expected, std::uint64_t go
                  "{}{}{}"
                  "======================================\n",
                  expected, got, orEmpty( file ), line, orEmpty( function ), notes.label, notes.text, notes.eol );
-    __builtin_trap();
+    RW_TRAP();
 }
 
-[[gnu::cold, gnu::noinline]]
+RW_COLD_NOINLINE
 void ConsoleLog::handleValidateFailed( const char* expr, const char* file, int line, const char* function, const char* description ) noexcept
 {
     // One line, no trap: a false VALIDATE is input being refused, which is the program working.
@@ -196,7 +196,7 @@ void ConsoleLog::handleValidateFailed( const char* expr, const char* file, int l
                  orEmpty( expr ), separator, text, orEmpty( file ), line, orEmpty( function ) );
 }
 
-[[gnu::cold, gnu::noinline]]
+RW_COLD_NOINLINE
 void ConsoleLog::handleDegraded( const char* file, int line, const char* function, const char* description ) noexcept
 {
     // DISCLOSE's debug trace. One-line notice, no trap — the caller clamps/falls back and continues. The

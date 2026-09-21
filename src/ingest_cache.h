@@ -6,6 +6,7 @@
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include "pathguard.h"  // CWE-59/367 round 5: rw::pathguard::createExclTempFile — saveCache's temp is created exclusively, never through a link
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
+#include <bit>               // std::endian — the cache blob's arch tag, without a compiler-specific macro
 
 // ingest_cache.h — the raw-facts model + incremental cache, moved VERBATIM from ingest.cpp in the
 // 2026-08-29 split: RawDef (the pre-id-assignment definition record), the extraction identity
@@ -1298,8 +1299,12 @@ static_assert( quality::kIngestParserVerMirror == kParserVer && quality::kIngest
 // portable encoding on the hot (de)serialize path that fe47139/PERF.md P2 optimized; a future big-endian
 // target that actually needs a portable re-encode is a separate gated decision,
 // not pre-paid here — the guard already makes such a target CORRECT (self-heal), just not fast.
+// std::endian, not __BYTE_ORDER__/__ORDER_BIG_ENDIAN__: those are GCC/Clang predefined macros that MSVC does
+// not define, so the whole initializer vanished there and left a constexpr object with no value ("error C2737:
+// constexpr object must be initialized", windows-latest CI, 2026-09-20). <bit>'s std::endian is the C++20
+// spelling of exactly this question and needs no compiler condition at all.
 constexpr std::uint8_t kArtifactArch =
-      static_cast<std::uint8_t>( ( __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__ ) ? 1u : 0u )   // bit 0: endianness
+      static_cast<std::uint8_t>( ( std::endian::native == std::endian::big ) ? 1u : 0u )  // bit 0: endianness
     | static_cast<std::uint8_t>( sizeof( void* ) << 1 );                                   // bits 1..: pointer width (bytes)
 
 // The lean/rich cache FAMILY split (documented against reality per a reviewer note).

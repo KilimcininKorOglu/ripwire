@@ -24,6 +24,7 @@
 #pragma once
 
 #include "platform.h"
+#include <bit>          // std::bit_cast — the portable spelling of the float/uint pun below
 #include <type_traits>   // std::is_integral_v for the integral min/max overloads
 
 namespace fastmath
@@ -36,8 +37,8 @@ namespace fastmath
 // cannot assume finiteness. NaN and ±Inf both have exponent == 0xFF.
 [[nodiscard]] ALWAYS_INLINE bool isFiniteFast( float x ) noexcept
 {
-    unsigned u = __builtin_bit_cast(unsigned, x);
-    asm volatile("" : "+r"(u));                 // opaque: defeat -ffinite-math-only
+    unsigned u = std::bit_cast<unsigned>( x );
+    RW_OPAQUE( u );                             // opaque: defeat -ffinite-math-only (a no-op on MSVC — platform.h says why)
     return (u & 0x7F800000u) != 0x7F800000u;
 }
 

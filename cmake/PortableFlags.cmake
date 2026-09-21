@@ -93,6 +93,16 @@ else()
 endif()
 message(STATUS "RIPWIRE_MSVC_OPT_FLAGS:${RIPWIRE_MSVC_OPT_FLAGS}")
 
+# /bigobj, on BOTH MSVC-ABI front ends. A COFF object file holds at most 2^16 sections, and src/main.cpp exceeds
+# it: this tree is header-dominated, and one translation unit that includes the verb surface instantiates more
+# COMDATs than the format can address ("src/gitmine.h(980) : fatal error C1128: number of sections exceeded object
+# file format limit: compile with /bigobj", windows-latest CI, 2026-09-20). /bigobj raises the limit to 2^32 and
+# changes nothing else — it is not an optimization or a conformance switch, and the linker has accepted the wider
+# format since VS2005. It is attached to clang-cl as well as cl.exe deliberately: the limit belongs to the OBJECT
+# FORMAT, not the compiler, so a front end that fits today is one translation unit away from not fitting, and
+# discovering that as a Windows-only hard error is exactly what this leg exists to prevent. There is no POSIX
+# counterpart because ELF and Mach-O have no comparable section ceiling.
+
 # cl.exe only: the CONFORMANT preprocessor. MSVC's traditional one predates C99 variadic macros and has no
 # __VA_OPT__, which src/infra/Diagnostics.h's whole check vocabulary is built on — without this flag every
 # ASSUME/EXPECTS/ENSURES/DASSERT/VALIDATE/DISCLOSE site is a syntax error ("C2760: '__VA_OPT__' was unexpected
@@ -110,9 +120,9 @@ if(RIPWIRE_NATIVE)
       # ClangCL accepts the LLVM architecture flag through /clang:, but /O3 is a GCC/Clang
       # driver spelling and is ignored by its MSVC frontend. Keep the Windows native arm
       # genuinely optimized even when the build type is empty.
-      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=native /fp:precise /permissive- /utf-8 ${RIPWIRE_MSVC_CL_FLAGS})
+      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=native /fp:precise /permissive- /utf-8 /bigobj ${RIPWIRE_MSVC_CL_FLAGS})
     else()
-      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8 ${RIPWIRE_MSVC_CL_FLAGS})
+      set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8 /bigobj ${RIPWIRE_MSVC_CL_FLAGS})
     endif()
   else()
     set(RIPWIRE_ARCH_FLAGS -O3 -march=native -ffast-math -fno-finite-math-only)
@@ -120,10 +130,10 @@ if(RIPWIRE_NATIVE)
 elseif(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND RIPWIRE_IS_X86_64)
   # ClangCL accepts the MSVC frontend flags but still needs the LLVM architecture level explicitly;
   # keeping this branch ahead of the generic MSVC one is what enables strkern.h's AVX2 path on Windows.
-  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=x86-64-v3 /fp:precise /permissive- /utf-8 ${RIPWIRE_MSVC_CL_FLAGS})
+  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /clang:-march=x86-64-v3 /fp:precise /permissive- /utf-8 /bigobj ${RIPWIRE_MSVC_CL_FLAGS})
 elseif(MSVC)
   # MSVC compiler flags: precise math (preserves isnan/isfinite), conformant C++ mode, UTF-8 source/exec charset
-  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8 ${RIPWIRE_MSVC_CL_FLAGS})
+  set(RIPWIRE_ARCH_FLAGS ${RIPWIRE_MSVC_OPT_FLAGS} /fp:precise /permissive- /utf-8 /bigobj ${RIPWIRE_MSVC_CL_FLAGS})
 elseif(RIPWIRE_IS_APPLE_SILICON)
   set(RIPWIRE_ARCH_FLAGS -O2 -mcpu=apple-m1 -ffast-math -fno-finite-math-only)
 elseif(RIPWIRE_IS_X86_64)

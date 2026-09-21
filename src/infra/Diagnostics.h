@@ -79,6 +79,64 @@
   #define _PRETTYFUNCTION_ __FUNCSIG__
 #endif
 
+// --------------------------------------------------------------------------------------------------------------------
+// 1c. The compiler extensions this header's own macros are built on
+//
+// Keyed on COMPILER identity, never an operating system — §1b says why, and test/osswitchcheck.sh arm A enforces it.
+// These live HERE rather than in the seam in platform.h for one reason: platform.h includes THIS header, not the
+// reverse, and this header stays library-free so a standalone harness can compile it alone (test/noaliascheck.sh
+// arm 5). Every consumer of the six below is this file or diagnostics.cpp, so nothing is duplicated between them —
+// platform.h owns the extensions with callers above this layer and says so where it defines them.
+//
+// RW_TRAP stops at the failing instruction with no unwinding and no handler, so a debugger lands on the failed
+// check rather than inside abort(). __builtin_trap() emits ud2; __debugbreak() is MSVC's int 3. The
+// __assume( 0 ) after the break is not decoration: __builtin_trap is modelled as never-returning and no epilogue
+// follows it, while __debugbreak is an ordinary intrinsic the compiler will happily generate a fall-through path
+// after. Without it the two arms would differ in the one way that matters here, because handleAssert is
+// deliberately NOT [[noreturn]] (§1b's analyzer attribute only — a real [[noreturn]] would let the optimizer
+// delete whatever follows the CALL), so the trap at the end of its body is the only thing that stops a failed
+// check, and in debug the call site is a bare `if( !e ) { handleAssert(); }` with nothing after it.
+//
+// The residual is SYMMETRIC across all three front ends, which is why it is stated here once rather than as an
+// MSVC caveat. A debugger can move the program counter past ud2 exactly as it can past int 3 (`lldb thread
+// jump`, `gdb jump`), and both arms have already told the optimizer that nothing follows, so resuming lands in
+// unspecified bytes on Clang and GCC too. Undebugged, both die by default — SIGILL, or an unhandled
+// EXCEPTION_BREAKPOINT. The contract this macro promises is therefore the same everywhere: a failed check stops
+// here, and the compiler may assume nothing follows. Closing the resume case would mean __fastfail() on MSVC and
+// something equally terminal on the others, trading away the debugger break that makes a failed check
+// inspectable at the point it failed — for a hazard that only a debugger operator can reach deliberately.
+// RW_UNREACHABLE_HINT generates nothing and hands the optimizer a fact. There is deliberately no RW_ASSUME_HINT
+// beside it: the one __builtin_assume in this file sits inside a clang-only block that also needs a _Pragma to
+// silence -Wassume, and the non-clang path reaches C++23 [[assume]] or, failing that, RW_UNREACHABLE_HINT. A
+// macro with no caller is the thing platform.h's header rule refuses, so the assume spelling is not wrapped.
+//
+// RW_LIKELY is VALIDATE's branch hint. MSVC has no __builtin_expect, and its [[likely]] is a STATEMENT attribute
+// that cannot sit inside the ternary VALIDATE expands to, so that arm yields the condition unchanged — a lost
+// layout hint, never a behaviour difference.
+//
+// RW_COLD is empty on MSVC, which has no cold-section attribute; the only loss is code placement. The noinline
+// half of RW_COLD_NOINLINE is load-bearing and is NOT dropped — the report handlers must stay out of line, or
+// every one of the 100+ check sites inlines the reporting path it exists to keep off the hot path — so that arm
+// spells it __declspec( noinline ), which MSVC accepts where [[gnu::noinline]] it would merely ignore.
+// Both expand to a COMPLETE attribute/specifier, brackets included, so a call site never writes [[ RW_COLD ]]:
+// the two arms need different syntax ([[...]] vs __declspec(...)) and only a whole-specifier macro can hide that.
+// A standard attribute at a site that also needs one goes FIRST — `[[noreturn]] RW_COLD_NOINLINE void f()` —
+// because __declspec must follow any [[...]] and precede the return type.
+// --------------------------------------------------------------------------------------------------------------------
+#if defined( __clang__ ) || defined( __GNUC__ )
+  #define RW_TRAP()             __builtin_trap()
+  #define RW_UNREACHABLE_HINT() __builtin_unreachable()
+  #define RW_LIKELY( e )        __builtin_expect( static_cast<bool>( e ), 1 )
+  #define RW_COLD               [[gnu::cold]]
+  #define RW_COLD_NOINLINE      [[gnu::cold, gnu::noinline]]
+#else
+  #define RW_TRAP()             ( __debugbreak(), __assume( 0 ) )
+  #define RW_UNREACHABLE_HINT() __assume( 0 )
+  #define RW_LIKELY( e )        ( static_cast<bool>( e ) )
+  #define RW_COLD
+  #define RW_COLD_NOINLINE      __declspec( noinline )
+#endif
+
 // handleAssert and handleThreadViolation end in __builtin_trap, but in diagnostics.cpp, out of the static analyzer's
 // sight. Without this it walks on past a failed ASSUME and reports exactly what the ASSUME ruled out — an
 // out-of-bounds read of an index the ASSUME had just bounded. analyzer_noreturn informs the analyzer ONLY; codegen is
@@ -127,26 +185,26 @@ template<class T> inline constexpr bool isView = HasStaticExtent<T> || HasTraits
 class ConsoleLog
 {
 public:
-    [[gnu::cold, gnu::noinline]]
+    RW_COLD_NOINLINE
     static void handleAssert( CheckKind kind, const char* expr, const char* file, int line, const char* function,
                               const char* description ) noexcept DIAGNOSTICS_ANALYZER_NORETURN;
 
-    [[gnu::cold, gnu::noinline, noreturn]]
+    [[noreturn]] RW_COLD_NOINLINE
     static void handlePanic( const char* file, int line, const char* function, const char* description ) noexcept;
 
     // ASSUME_SAME_THREAD / ASSUME_SAME_THREAD_AS: a site or object already claimed by one thread was reached from another.
-    [[gnu::cold, gnu::noinline]]
+    RW_COLD_NOINLINE
     static void handleThreadViolation( std::uint64_t expected, std::uint64_t got, const char* file, int line, const char* function,
                                        const char* description ) noexcept DIAGNOSTICS_ANALYZER_NORETURN;
 
     // VALIDATE came back false. A one-line trace, once per site, never a trap: rejecting bad input is the program
     // working, and the caller's refusal or degrade path is what the user sees.
-    [[gnu::cold, gnu::noinline]]
+    RW_COLD_NOINLINE
     static void handleValidateFailed( const char* expr, const char* file, int line, const char* function, const char* description ) noexcept;
 
     // DISCLOSE's debug trace — one-line notice, never traps, debug only (§4b). The "[math degraded]" prefix is what 11
     // gates grep for; it stays byte-identical, as do the messages.
-    [[gnu::cold, gnu::noinline]]
+    RW_COLD_NOINLINE
     static void handleDegraded( const char* file, int line, const char* function, const char* description ) noexcept;
 };
 
@@ -223,7 +281,7 @@ namespace detail
 // One instantiation per VALIDATE site: `Site` is the type of a `[] {}` written in the macro, and every lambda-expression
 // has its own type, so `seen` is a per-site latch without __COUNTER__ (which is per-TU and would merge unrelated sites).
 template<class Site>
-[[nodiscard, gnu::cold, gnu::noinline]] bool validateFailed( Site, const char* expr, const char* file, int line, const char* function,
+[[nodiscard]] RW_COLD_NOINLINE bool validateFailed( Site, const char* expr, const char* file, int line, const char* function,
                                                             const char* description ) noexcept
 {
     static ::std::atomic<bool> seen{ false };
@@ -266,7 +324,7 @@ template<class Site>
   #define RW_UNREACHABLE_( msg )                                                                                          \
       ( ::Diagnostics::ConsoleLog::handleAssert( ::Diagnostics::CheckKind::Unreachable, "UNREACHABLE()", _SHORTERFILE_, __LINE__, \
                                                  _PRETTYFUNCTION_, msg ),                                              \
-        __builtin_trap() )
+        RW_TRAP() )
 
 #else   // NDEBUG — release build
 
@@ -297,7 +355,7 @@ template<class Site>
       #define RW_ASSUME_RELEASE_( e )                                                                                     \
           if( !static_cast<bool>( e ) )                                                                                  \
           {                                                                                                              \
-              __builtin_unreachable();                                                                                   \
+              RW_UNREACHABLE_HINT();                                                                                   \
           }
     #endif
   #endif
@@ -321,7 +379,7 @@ template<class Site>
 
   // std::unreachable() is exactly this builtin in libc++ and libstdc++; <utility> is not included because this header
   // must stay library-free (test/noaliascheck.sh arm 5: libc++'s own headers do not compile under its forced shape).
-  #define RW_UNREACHABLE_( msg ) ( static_cast<void>( sizeof( msg ) ), __builtin_unreachable() )
+  #define RW_UNREACHABLE_( msg ) ( static_cast<void>( sizeof( msg ) ), RW_UNREACHABLE_HINT() )
 
 #endif
 
@@ -357,7 +415,7 @@ template<class Site>
   #define RW_VALIDATE_FAILED_( e, msg ) ::Diagnostics::detail::validateFailed( sizeof( msg ) )
 #endif
 #define VALIDATE( e, ... )                                                                                                \
-    ( __builtin_expect( static_cast<bool>( e ), 1 ) ? ::Diagnostics::detail::validatePassed()                             \
+    ( RW_LIKELY( e ) ? ::Diagnostics::detail::validatePassed()                                                            \
                                                     : RW_VALIDATE_FAILED_( e, "" __VA_OPT__( __VA_ARGS__ ) ) )
 
 // --------------------------------------------------------------------------------------------------------------------

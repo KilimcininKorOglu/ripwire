@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bit>          // std::countr_zero — the portable trailing-zero count (strkern.h:50 records the same choice)
+
 // fixedStr.h — a 32-byte fixed-capacity string for hot SHORT-string workloads (symbol tables, dictionary
 // keys, join keys). The trick: length is stored inline and the tail is ZERO-PADDED at construction, so the
 // whole object is a fixed 32-byte block whose unused bytes are deterministically zero. Equality and hashing
@@ -107,7 +109,7 @@ inline const char* findByte( const char* first, const char* last, char needle ) 
         const std::uint64_t mask = vget_lane_u64( vreinterpret_u64_u8( vshrn_n_u16( vreinterpretq_u16_u8( eq ), 4 ) ), 0 );
         if( mask != 0 )
         {
-            return first + ( __builtin_ctzll( mask ) >> 2 );
+            return first + ( static_cast<unsigned>( std::countr_zero( mask ) ) >> 2 );
         }
         first += 16;
     }
@@ -119,7 +121,7 @@ inline const char* findByte( const char* first, const char* last, char needle ) 
         const int     mask = _mm_movemask_epi8( eq );
         if( mask != 0 )
         {
-            return first + __builtin_ctz( static_cast<unsigned>( mask ) );
+            return first + static_cast<unsigned>( std::countr_zero( static_cast<unsigned>( mask ) ) );
         }
         first += 16;
     }

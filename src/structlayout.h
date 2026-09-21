@@ -20,11 +20,12 @@
 #include <cstring>
 #include <vector>
 
-#if defined( __GNUC__ ) || defined( __clang__ )
-#define RIPWIRE_LAYOUT_USED __attribute__( ( used ) )
-#else
-#define RIPWIRE_LAYOUT_USED
-#endif
+#include "infra/platform.h"  // RW_ATTR_USED — the seam that owns the compiler-extension spellings
+
+// `used` keeps a static registration object the optimizer can prove unreferenced. Routed through the seam in
+// infra/platform.h rather than kept as a second in-place arm here: a mechanism that exists and is not routed to
+// is how the two spellings drift apart.
+#define RIPWIRE_LAYOUT_USED RW_ATTR_USED
 
 // __FILE__ expands to this header at the registration site. GCC and Clang's
 // __BASE_FILE__ is the primary source file passed to the compiler, which is the

@@ -13,6 +13,7 @@
 // here already do.
 
 #include <climits>
+#include "platform.h"   // infra::platform::{mul,add}Overflow — the checked arithmetic this file is built on
 #include <ctime>
 
 namespace rw
@@ -21,12 +22,12 @@ namespace rw
 [[nodiscard]] inline constexpr long long saturatingNanoseconds( long long seconds, long long nanoseconds ) noexcept
 {
     long long scaled = 0;
-    if( __builtin_mul_overflow( seconds, 1000000000LL, &scaled ) )
+    if( infra::platform::mulOverflow( seconds, 1000000000LL, &scaled ) )
     {
         return seconds < 0 ? LLONG_MIN : LLONG_MAX;
     }
     long long total = 0;
-    if( __builtin_add_overflow( scaled, nanoseconds, &total ) )
+    if( infra::platform::addOverflow( scaled, nanoseconds, &total ) )
     {
         return nanoseconds < 0 ? LLONG_MIN : LLONG_MAX;
     }

@@ -31,14 +31,14 @@ name: CI
 # a cache step would have hidden a re-introduced network fetch behind a warm runner.
 #
 # LIGHT SET vs. FULL MATRIX (owner decision, 2026-09-17: CI was the bottleneck — a merge to main re-ran all
-# 31 jobs on a tree its PR had already tested, and per-lane full CI on the landing queue found almost
+# 33 jobs on a tree its PR had already tested, and per-lane full CI on the landing queue found almost
 # nothing). The `plan` job below computes ONE `full` output from the event name, the pull request's labels
 # and the ref; every heavy job reads that output through its own `if:` instead of repeating the same
 # event/label logic.
 #   LIGHT (style + the one ubuntu-24.04/Release/clang release leg, all 4 shards — that leg already runs the
 #   det-gate and G4 xmllint checks): a push to main, or a pull_request carrying the `train-member` label.
 #   Labelling is maintainer-only by construction — a fork PR cannot add a label to itself.
-#   FULL (all 31 jobs): every other pull_request (integration/* train PRs, direct-land PRs, contributor
+#   FULL (all 33 jobs): every other pull_request (integration/* train PRs, direct-land PRs, contributor
 #   PRs), workflow_dispatch — the owner requires a full build and test on the EXACT commit before any
 #   release tag, so dispatch this manually against the commit you are about to tag rather than trusting an
 #   earlier green nightly — and a nightly `schedule` against main. See the report-failure/report-green jobs
@@ -805,66 +805,7 @@ jobs:
           if "${{ matrix.toolchain }}"=="clang-cl" set "PATH=%RW_LLVM%;%PATH%"
           cmake --version || exit /b 1
           cmake -S . -B build -G Ninja %RW_TC% -DCMAKE_BUILD_TYPE= -DRIPWIRE_TESTS=ON || exit /b 1
-          if "${{ matrix.toolchain }}"=="cl" goto clbuild
           cmake --build build -j || exit /b 1
-          goto :eof
-          :clbuild
-          rem cl.exe is EXPECTED to fail, and the next step says precisely how. -k 0 so ninja keeps going
-          rem after the first failure and the log is the whole inventory rather than three translation
-          rem units; the exit code is recorded rather than propagated, because "it failed" is not the
-          rem assertion — "it failed HERE, for THIS reason" is, and that is the step below.
-          cmake --build build -j -- -k 0 > cl-build.log 2>&1
-          echo %ERRORLEVEL% > cl-build.rc
-          exit /b 0
-
-      # WHAT THIS LEG IS FOR, now that cl.exe is known not to build. A leg that is simply red says only
-      # "still broken", and cannot tell the person reading it whether it broke in a NEW way — which is the
-      # regression this lane itself introduced once (`/Werror=switch`, a D8021 command-line error) and then
-      # fixed. So the leg asserts its own expectation and is GREEN while reality matches it:
-      #   * configure must SUCCEED (the step above gates on it) — a flag or CMake regression is red here;
-      #   * the build must FAIL — if cl.exe starts building, that is good news and this leg must be
-      #     rewritten into a real one, so it goes red and says so;
-      #   * no MSVC command-line error (D8xxx) — that is the flag-dialect class, not the seam, and it must
-      #     never hide behind the known failure;
-      #   * every file with an error must be OUR source, and the first error must be one of the
-      #     language-extension codes the seam is made of. An error in a vendored or system header, or a
-      #     first error of some other class, means something else broke and this leg stops claiming
-      #     otherwise.
-      # `continue-on-error` is deliberately NOT set on this job any more: the leg now passes when the world
-      # is as documented, so it can gate like everything else, and `windows` is back in the
-      # report-failure/report-green needs where a real Windows break reaches the nightly tracking issue.
-      - name: cl.exe stops exactly where the extension seam says it does (cl leg only)
-        if: matrix.toolchain == 'cl'
-        run: |
-          rc="$( tr -d '\r\n ' < cl-build.rc )"
-          echo "cl.exe build exit code: $rc"
-          if [ "$rc" = "0" ]; then
-            echo "ci: cl.exe BUILT. That is the goal, not a failure — but this leg asserts the opposite." >&2
-            echo "ci: land the platform.h extension seam's leg instead: drop this step, let the build gate." >&2
-            exit 1
-          fi
-          if grep -qE 'command line (error|warning) D8[0-9]{3}' cl-build.log; then
-            echo "ci: a command-line/flag regression, NOT the extension seam:" >&2
-            grep -E 'command line (error|warning) D8[0-9]{3}' cl-build.log | head -5 >&2
-            exit 1
-          fi
-          # The inventory the seam lane starts from, printed whether this step passes or fails.
-          grep -oE '[^ ]+\.(h|cpp|c)\([0-9]+[,0-9]*\) *: *(fatal )?error [A-Z][0-9]+' cl-build.log \
-            | sed -E 's/\(.*//' | tr '\\' '/' | sed -E 's#.*/ripwire/##' | sort -u > cl-error-files.txt
-          echo "--- files with errors (the seam inventory) ---"; cat cl-error-files.txt
-          test -s cl-error-files.txt || { echo "ci: the build failed with no compiler error at all — read cl-build.log" >&2; exit 1; }
-          if grep -qvE '^(src|test)/' cl-error-files.txt; then
-            echo "ci: an error outside our own source — that is not the known seam:" >&2
-            grep -vE '^(src|test)/' cl-error-files.txt >&2
-            exit 1
-          fi
-          first="$( grep -oE '(fatal )?error [A-Z][0-9]+' cl-build.log | head -1 | grep -oE '[A-Z][0-9]+' )"
-          echo "first error code: $first"
-          case "$first" in
-            C2059|C2065|C2143|C2760|C3861|C4430|C2988|C2447) : ;;   # the GNU-extension classes: asm, builtins, attributes
-            *) echo "ci: first error $first is not one of the language-extension codes this leg expects" >&2; exit 1 ;;
-          esac
-          echo "cl.exe stopped at the extension seam, as documented."
 
       # The front end this leg actually configured with, read off the cache rather than inferred from the
       # matrix label — a `clang-cl` leg whose cache says MSVC is a broken matrix, not a passing run.
@@ -886,7 +827,6 @@ jobs:
       # a bare invocation, and a binary that cannot find its own provenance is exactly what a broken
       # Windows build looks like. emit= and built_from= are the two tokens a bug report is useless without.
       - name: The binary runs — --version and --help
-        if: matrix.toolchain == 'clang-cl'   # the cl leg produces no binary; its own step above says why
         run: |
           ./build/ripwire.exe --version | tee version.txt
           grep -qE '^ripwire [0-9]+\.[0-9]+\.[0-9]+ \(' version.txt
@@ -898,14 +838,12 @@ jobs:
       # RIPWIRE_TESTS block registers nothing — which is a plausible Windows failure, not a hypothetical
       # (measured: empty CTestTestfile.cmake -> rc 0 bare, rc 8 with the flag).
       - name: Unit tests (ctest — csr, pagerank, radix, strkern, and the Windows port's own oswin32logic)
-        if: matrix.toolchain == 'clang-cl'   # the cl leg produces no binary; its own step above says why
         run: ctest --test-dir build --output-on-failure --no-tests=error
 
       # A real crawl, then the two contracts that hold for the map on every platform: byte-identical across
       # two runs, and well-formed XML (G4). xmllint is not on the Windows image, so Python's own parser is
       # the reader here — it refuses exactly what xmllint --noout refuses.
       - name: det-gate and G4 — two runs byte-identical, well-formed, and NOT empty
-        if: matrix.toolchain == 'clang-cl'   # the cl leg produces no binary; its own step above says why
         run: |
           ./build/ripwire.exe test/fixture --no-cache > a.xml
           ./build/ripwire.exe test/fixture --no-cache > b.xml
