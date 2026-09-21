@@ -317,7 +317,7 @@ against reality.
 
 ## 6. Dogfood gaps
 
-Per `BRIEF_COMMON.md`'s DOGFOOD RULE — navigated with the shipped binary itself before grep/reads,
+Per this repo's dogfood rule — navigated with the shipped binary itself before grep/reads,
 built fresh in this worktree (`cmake -S . -B build && cmake --build build -j8`, clean configure +
 build, no prior binary reused). The §1 findings above (`k="sec"` markdown rows, `.yml` config rows
 in `--format=candidates`) were produced by `./build/ripwire . --for=... --format=candidates`, not by
