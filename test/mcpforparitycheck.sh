@@ -282,6 +282,24 @@ EX="$( printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"p
 GR="$( printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"grep","arguments":{"path":"%s","pattern":"x","no_route":true}}}\n' "$CORPUS" | "$BIN" --mcp 2>/dev/null )"
 case "$GR" in *"unknown field: 'no_route'"*) ok "(6) a non-routing verb still refuses no_route by name";; *) no "(6) grep accepted no_route: $( printf '%s' "$GR" | head -c 160 )";; esac
 
+# ── (6b) T14 REGRESSION (review rv-t14a.md finding 1): confidence=/margin_pct= must agree between the
+#    CLI and MCP dialects under no-route, on a query with a genuine sharp cliff and a LARGE positive-
+#    score population — exactly the shape runForLens's own homonym-decline gate used to mislabel (it
+#    read the route as `!isConceptualRoute(routeTag)`, true on BOTH "subtoken+body" and the un-routed
+#    default "no-route", so --no-route --adaptive declined a real cliff and reported a fabricated
+#    same-name count). MCP `for`'s confidence=/margin_pct= is disclosure-only (H14) and was already
+#    correct (it reads rc.which directly) — the CLI is what drifted, so this arm is CLI-vs-MCP, not
+#    just CLI-vs-itself. estimateExpandBodyTokens is the same query arm (e)/(i) of adaptivecheck.sh use
+#    for its large scored population (>50) and floor-clamped kept (5).
+SHARP_Q="estimateExpandBodyTokens"
+cli_for    "$SHARP_Q" --no-route >"$TMP/sharp.cli.xml"
+mcp_for_nr "$SHARP_Q" true       >"$TMP/sharp.mcp.xml"
+CLI_CONF="$( grep -oE 'confidence="[^"]*" margin_pct="[^"]*"' "$TMP/sharp.cli.xml" | head -1 )"
+MCP_CONF="$( grep -oE 'confidence="[^"]*" margin_pct="[^"]*"' "$TMP/sharp.mcp.xml" | head -1 )"
+{ [ -n "$CLI_CONF" ] && [ "$CLI_CONF" = "$MCP_CONF" ] && printf '%s' "$CLI_CONF" | grep -q 'confidence="high"'; } \
+    && ok "(6b) CLI/MCP agree under no-route on a sharp cliff: $CLI_CONF (never a homonym-decline low)" \
+    || no "(6b) CLI/MCP disagree or mislabeled under no-route: cli='$CLI_CONF' mcp='$MCP_CONF'"
+
 # ── determinism + well-formedness on the MCP dialect ─────────────────────────────────────────────────────
 mcp_for "$INERT_Q" >"$TMP/d1.xml"; mcp_for "$INERT_Q" >"$TMP/d2.xml"
 cmp -s "$TMP/d1.xml" "$TMP/d2.xml" \
