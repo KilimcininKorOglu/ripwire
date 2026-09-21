@@ -1875,8 +1875,14 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // T14 (docs/research/adaptive-short-query.md): same homonym-pool decline gate as the CLI --for twin
     // (lexical.h isAdaptiveHomonymDecline) — this bundle is disclosure-only (it never narrows the served
     // set on this statistic, see the H14 note above), but confidence= must still not claim "high" on a
-    // cliff driven by tie-break order rather than relevance.
-    const bool          mcpHomonymDecline = isAdaptiveHomonymDecline( rc.which == LexMode::NameExact, mcpForCut, 5 );
+    // cliff driven by tie-break order rather than relevance. Routed through the SAME isNameExactRouteTag
+    // predicate emitCandidates uses and runForLens now uses too (review rv-t14a.md finding 1: three
+    // independent checks of "is this name-exact" is how the CLI one drifted into answering a different
+    // question under --no-route) — this call site already had the right FACT (rc.which is SubtokenBody by
+    // construction when noRoute defaulted rc, see RouteChoice's own default), just its own bespoke read of
+    // it; synthesize the same three-state tag verbs_for.h's routeTag carries so all three read one string.
+    const char* const   mcpRouteTag        = noRoute ? "no-route" : ( rc.which == LexMode::NameExact ? "name-exact" : "subtoken+body" );
+    const bool          mcpHomonymDecline = isAdaptiveHomonymDecline( isNameExactRouteTag( mcpRouteTag ), mcpForCut, 5 );
     ForConfidence       mcpForConf = deriveForConfidence( mcpForCut, forTopN, mcpHomonymDecline );
     // THE BUNDLE'S RESOLVED SURFACE (top-N by lensRank — the set <sigs> selects), shared by the compose
     // view, the B6.3 route view and (§P3) the <lego> scope filter. Same order the CLI --for uses. Hoisted

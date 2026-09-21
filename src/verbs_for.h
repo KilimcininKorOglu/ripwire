@@ -333,9 +333,11 @@ inline void emitCandidates( std::FILE* out, const rw::IngestResult& ing, const s
         const rw::AdaptiveCut ac = rw::adaptiveCut( rank, 5, std::size_t( topK ), scanFullDistribution );
         // T14: same homonym-pool decline as --for's own bundle (lexical.h isAdaptiveHomonymDecline) — this
         // export shares the identical adaptiveCut call and must not narrow a large homonym pool on tie-break
-        // order either. `prov.route` is the caller's own routing fact ("name-exact"/"subtoken+body"/…).
-        const bool declined = prov.route != nullptr && std::strcmp( prov.route, "name-exact" ) == 0
-                               && rw::isAdaptiveHomonymDecline( true, ac, 5 );
+        // order either. `prov.route` is the caller's own routing fact ("name-exact"/"subtoken+body"/"no-
+        // route"/…) — read through isNameExactRouteTag, the one predicate every call site now shares
+        // (review rv-t14a.md finding 1: runForLens's OWN inline check answered a different question and
+        // mislabeled "no-route" as name-exact; this site was already correct, now on the shared function).
+        const bool declined = rw::isAdaptiveHomonymDecline( rw::isNameExactRouteTag( prov.route ), ac, 5 );
         char nb[ 208 ];
         if( declined )
         {
@@ -2309,7 +2311,14 @@ std::optional<int> runForLens( const MainDispatch& d )
         // from the SAME forCut above (no second scorer), read by both the --adaptive block below (whether
         // to actually decline the narrowing) and deriveForConfidence below (confidence must not say "high"
         // on a cliff it declined to trust).
-        const bool forHomonymDecline = isAdaptiveHomonymDecline( !conceptualRoute, forCut, 5 );
+        //
+        // review rv-t14a.md finding 1 (HIGH): this used to read `!conceptualRoute`, a DIFFERENT question
+        // (isConceptualRoute only recognizes "subtoken+body") whose negation is also true on the THIRD
+        // route state, "no-route" (--no-route's struct default, packtask.h LensRanking::routeTag) — so
+        // --no-route --adaptive mislabeled an un-routed ranking as name-exact and declined + fabricated a
+        // same-name count on a genuine cliff. isNameExactRouteTag is the one predicate emitCandidates and
+        // MCP `for` already used their own way; all three now share it (lexical.h).
+        const bool forHomonymDecline = isAdaptiveHomonymDecline( isNameExactRouteTag( lr.routeTag ), forCut, 5 );
 
         // --adaptive (lever 2): cut the returned set at the relevance CLIFF — the largest
         // relative score gap in [floor, ceiling] (Adaptive-k). A sharp query keeps few; a flat/broad query

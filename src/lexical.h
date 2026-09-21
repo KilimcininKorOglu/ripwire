@@ -2471,6 +2471,23 @@ inline bool isAdaptiveHomonymDecline( bool nameExactRoute, const AdaptiveCut& cu
     return nameExactRoute && cut.positiveHits > kAdaptiveHomonymPoolFloor && cut.kept <= 2 * floorK;
 }
 
+// ── ONE predicate for "is this ranking's route the raw name-exact BM25 lane" (T14 finding 1, review
+// rv-t14a.md 2026-09-20) ───────────────────────────────────────────────────────────────────────────────
+// The route tag is a three-state string every producer already writes verbatim — "name-exact" |
+// "subtoken+body" | "no-route" (packtask.h LensRanking::routeTag's own comment; --no-route leaves the
+// field at that struct default rather than routing at all). Three call sites need "is this name-exact"
+// for the homonym-decline gate above; ONE of them (runForLens) answered it as `!isConceptualRoute(tag)`
+// — a DIFFERENT question ("is this NOT subtoken+body") whose negation is true on "no-route" too, so
+// --no-route --adaptive silently mislabeled the un-routed subtoken+body ranking as name-exact and
+// declined + fabricated a same-name count on a genuine, unrelated cliff. The other two call sites
+// (emitCandidates, MCP `for`) already asked the right question, each with its own string/enum
+// comparison — so CLI and MCP disagreed under --no-route. Fixing the negation in place would still
+// leave three independent implementations to keep in sync; this is the one all three now call.
+inline bool isNameExactRouteTag( const char* routeTag ) noexcept
+{
+    return routeTag != nullptr && std::strcmp( routeTag, "name-exact" ) == 0;
+}
+
 struct ForConfidence
 {
     std::string attrs;      // ` confidence="high|low" margin_pct="N"` — root facts, every ladder rung
