@@ -3,6 +3,16 @@
 Status: **research only**. No `src/` change on this branch. Everything below is measured against the
 binary as it ships today (`0.6.1`, commit at the head of `lane/research-adaptive-shortquery`).
 
+**Outcome (added 2026-09-21).** The defect this investigation found — a name-exact cut firing on a
+large pool of identically-named symbols, where the gap is tie-break order rather than a relevance
+cliff — was fixed in a separate lane and **released in v0.6.2** (2026-09-21). `--adaptive` now
+declines to narrow when a name-exact route's positive pool clears `kAdaptiveHomonymPoolFloor` (50)
+and the proposed cut is at most twice the floor: the default top-N is served, an in-band note gives
+the pool size and says the gap is tie-break order, and `confidence=` no longer claims `high` on a cut
+it declined to trust. `margin_pct=` keeps the true measured drop. See the `## [0.6.2]` section of
+`CHANGELOG.md`. This branch still carries no `src/` change, and every measurement below is the
+pre-fix behaviour, left exactly as recorded.
+
 ## The question
 
 Adaptive-k — [arXiv:2506.08479](https://arxiv.org/abs/2506.08479) — cuts a ranked list at its largest
@@ -233,7 +243,8 @@ large is uninterpretable either way, and the honest answer is a *disclosed low-c
 different-shaped serve) — that would argue for reusing the existing `confidence="low"` path with a
 clearer note instead of a new decline branch, which is a smaller change and worth measuring first.
 
-**4. What we would NOT do on this branch.** No `src/` change ships here. This is the investigation the
+**4. What we would NOT do on this branch.** No `src/` change ships here. (The fix itself landed through a
+separate lane and shipped in v0.6.2 — see Outcome at the top of this document.) This is the investigation the
 brief asked for; a fix round would need its own registration, gates, and red/green pair against a
 gate that currently does not exist.
 
