@@ -749,6 +749,10 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "ok", "ok=1 on an arm row means the comparison RAN, so changed=/head_conflicts= are real and may legitimately be 0 (an empty but materialized tree is a real index); ok=0 means it did not run at all", true, "arm", MapHeaderRead::No, {}, "merge-scout" },
     { "reason", "arm reason= (only with ok=0): reason=no_merge_base (no merge base with HEAD) or reason=tree_unavailable (a side's tree could not be materialized or ingested)", true, "arm", MapHeaderRead::No, {}, "merge-scout" },
     { "note", "no-work note=: arm compared and has no divergent work vs its merge base, so no landing slot", true, "no-work", MapHeaderRead::No, {}, "merge-scout" },
+    // t14-cleanup #1: <sym anchoring="file-level"> (mergescout.h writeSymRows) had no compact-posture
+    // definition at all — invisible until a roster run's own working-tree arm happened to touch a
+    // file with zero real-body symbols (a doc/test-only diff), which is common and not an edge case.
+    { "anchoring", "anchoring=file-level: a whole-file fallback row for a file with no real-body symbols, counted like any other changed file, just not attributed to one inside it", true, "sym", MapHeaderRead::No, {}, "merge-scout" },
     // owners: src/verbs_report.h (CLI owners emitter near the <owners files=> comment); <uniform/> fold
     { "files", "files=N: files analysed", false, "owners", MapHeaderRead::No, {}, "owners" },
     { "files", "files=N: single-author files folded into this one row; detail=1 lists each", true, "uniform", MapHeaderRead::No, {}, "owners" },

@@ -919,7 +919,10 @@ inline void writeMergeScout( std::FILE* out, const ScoutResult& result )
                        "tree-sitter symbol spans it) — counted and conflict-checked like any other row, just not "
                        "attributed to a symbol inside it. at= is the git commit these numbers were computed at; a "
                        "trailing +shallow means the clone's history is truncated (a depth-limited clone: churn counts only the commits present), and a trailing +dirty means the working tree differed from that commit (head= is the same commit, "
-                       "bare sha, kept for compatibility). -->", result.arms.size() );
+                       "bare sha, kept for compatibility). Below the arms, a <pair a= b=> compares two of them "
+                       "pairwise (one row per pair with any overlap at all): conflicts= is the same-symbol-on-both "
+                       "count landing= would have to resolve, risks= is the weaker same-file/different-symbol count "
+                       "— the two kinds this legend's opening sentence names. -->", result.arms.size() );
     // §P8: head= was a FULL 40 here vs 9 hex in <abi>/<stray-content>/<landing-plan>/<history> — one name,
     // two widths. Aligned to the majority; nothing reads this one. (`base=` on the <arm> rows is still full
     // against <stray-content>'s 9-char base= — a second split, documented, not widened into this change.)

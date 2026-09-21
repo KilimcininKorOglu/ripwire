@@ -585,6 +585,49 @@ else
     esac
 fi
 
+# ── (I) t14-cleanup #4 / train11.md's open question — a STALE recorded number, not just a stale shape ──
+# Every arm above checks the capture's SHAPE (coverage, disclosure wording, seed resolution) against
+# EITHER the real binary or a synthetic mutant; none of them re-derives a NUMBER the capture prints and
+# compares it to what the current binary actually produces. That is exactly how a published `dictv=`/
+# `entries=` pair survived a merge that tripled the skill dictionary (train11.md, CodeRabbit 4056670830):
+# the capture's --legend-dict block named one binary, the tree had moved to a different one, and this
+# gate stayed green throughout because nothing here reads the recorded number. `--legend-dict` is the
+# cheap case train11.md names: CORPUS-FREE (no root-dependent content, unlike a --for/--pack-task demo)
+# and fully reproducible from source alone, so a mismatch here can mean only one thing — the capture
+# predates the binary that built it — never a legitimate per-corpus difference.
+if [ -z "$newestCapture" ]; then
+    no "(I) no docs/captures/COMMANDS_showcase_*.md found — cannot check a recorded --legend-dict figure against the live binary"
+else
+    recorded="$( sed -n '/^## .*--legend-dict/,/^## /p' "$newestCapture" | grep -oE 'dictv=[0-9a-f]+ entries=[0-9]+' | head -1 )"
+    live="$( "$BIN" . --legend-dict 2>/dev/null | grep -oE 'dictv=[0-9a-f]+ entries=[0-9]+' | head -1 )"
+    if [ -z "$recorded" ]; then
+        no "(I) $( basename "$newestCapture" ) has no '## ... --legend-dict' block with a dictv=/entries= line to check — either add one or say in the capture why it is exempt"
+    elif [ -z "$live" ]; then
+        no "(I) '$BIN . --legend-dict' printed no dictv=/entries= line at all — cannot compare against the recorded figure"
+    elif [ "$recorded" = "$live" ]; then
+        ok "(I) $( basename "$newestCapture" )'s recorded --legend-dict figure ($recorded) matches the live binary — the capture is not stale on this corpus-free number"
+    else
+        no "(I) $( basename "$newestCapture" )'s recorded --legend-dict figure is STALE: capture says [$recorded], the live binary says [$live] — regenerate the capture, do not hand-edit the number"
+    fi
+
+    # Mutation control: prove this arm can fail. A capture claiming an obviously-wrong entries= must be
+    # reported stale, not silently accepted just because SOME dictv=/entries= pair was found.
+    mutCap="$MTMP/i_stale.md"
+    cat >"$mutCap" <<'EOF'
+## `./build/ripwire . --legend-dict`
+
+`````
+ripwire legend dictionary ripwire.dict/v1 dictv=0000000000000000 entries=1
+`````
+EOF
+    mutRecorded="$( sed -n '/^## .*--legend-dict/,/^## /p' "$mutCap" | grep -oE 'dictv=[0-9a-f]+ entries=[0-9]+' | head -1 )"
+    if [ -n "$live" ] && [ "$mutRecorded" != "$live" ]; then
+        ok "(I) mutation control: a capture claiming [$mutRecorded] against a live [$live] is correctly distinguishable (the arm can fail)"
+    else
+        no "(I) mutation control: the planted stale figure [$mutRecorded] was NOT distinguishable from the live reading [$live] — (I) proves nothing"
+    fi
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"

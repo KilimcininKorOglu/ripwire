@@ -285,6 +285,28 @@ print( "  INFO  %d tools, manifest %d B (~%d tokens): descriptions %d B, schemas
 check( manifest <= CEILING,
        "(1) tools/list is %d B, within the %d B per-session ceiling" % ( manifest, CEILING ) )
 
+# ── (1b) the CHANGELOG's own copy of this figure does not silently rot ──────────────────────────────
+# train10.md's "manifest anchor" finding: the byte figure above lives in two places — this file's own
+# RE-ANCHORED/RE-MEASURED comment history (checked live, every run) and CHANGELOG.md's prose restating it
+# for readers. The comment history is self-correcting because it is this script; the CHANGELOG copy is not
+# — it sat wrong for five days (43,432 carried forward as 43,500) before a lane happened to re-derive it by
+# hand. While the entry is still under [Unreleased] (mutable — later work can still move the manifest before
+# release), assert the CHANGELOG's stated post-change byte count against the SAME live measurement above, so
+# a future change that moves the manifest without updating CHANGELOG's prose is a red here, not a rediscovery.
+# Once the entry rolls under a dated release heading it is a historical record of what was true when it was
+# measured, same as the dated blocks train10.md declined to touch, so this only reads inside [Unreleased].
+changelog = open( os.path.join( ROOT, "CHANGELOG.md" ), encoding = "utf-8" ).read()
+_, _, afterHeading = changelog.partition( "## [Unreleased]" )
+unreleased = afterHeading.split( "\n## [", 1 )[ 0 ]  # [Unreleased]'s body, up to the next dated heading
+m = re.search( r"tools/list.? manifest grows [\d,]+[^\d]+([\d,]+) B", unreleased )
+if m is None:
+    print( "  INFO  (1b) no 'tools/list manifest grows N -> N B' claim in CHANGELOG's [Unreleased] section (nothing to check)" )
+else:
+    claimed = int( m.group( 1 ).replace( ",", "" ) )
+    check( claimed == manifest,
+           "(1b) CHANGELOG's [Unreleased] manifest-growth claim (%d B) matches the live tools/list measurement (%d B)"
+           % ( claimed, manifest ) )
+
 if os.environ.get( "RIPWIRE_MANIFEST_DUMP" ):
     for db, sb, n in sorted( ( ( len( t[ "description" ] ),
                                  len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ),
