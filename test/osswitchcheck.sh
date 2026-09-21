@@ -446,18 +446,41 @@ def detect_F( rel, raw ):
 # calls the seam's macro. `[[gnu::…]]` is deliberately NOT refused here: MSVC ignores an unknown attribute with
 # C5030, a warning, so those sites still build — routing them through ALWAYS_INLINE is its own change with its
 # own arm, and folding them in here would red this gate on 104 pre-existing sites that break nothing.
-EXTENSION_RE = re.compile( r'(__builtin_\w+|__attribute__|\basm\s+volatile\b|__asm__|__PRETTY_FUNCTION__|__BASE_FILE__'
+# `\basm\b` is the BARE keyword, not `asm\s+volatile`: cl.exe refuses `asm( "nop" );` exactly as it refuses the
+# volatile form, so pinning the qualifier let the unqualified spelling through. The word boundaries are what keep
+# it from over-firing — `__asm__`, `wasm`, `asm_buf` and `assembler` all fail \b — and comments and string
+# literals are gone before the scan (`strip( raw, keep_strings=False )`), which is why slice.h's C++ keyword
+# table listing "asm" is not a hit. The whole tree was re-scanned after widening it: no new site.
+EXTENSION_RE = re.compile( r'(__builtin_\w+|__attribute__|\basm\b|__asm__|__PRETTY_FUNCTION__|__BASE_FILE__'
                            r'|__BYTE_ORDER__|__ORDER_[A-Z]+_ENDIAN__|\bunsigned __int128\b|\b__int128\b'
                            r'|__restrict__|__extension__|__typeof__)' )
+
+def has_builtin_arg_spans( code ):
+    """The character span of each `__has_builtin( … )` ARGUMENT — nothing else.
+
+    A feature TEST is not a use, but the carve-out must be no wider than the parentheses it belongs to. Reading a
+    fixed window of text BEFORE a match sheltered every extension within that window, so a genuine violation on
+    the same line as a guard — or on the next one — inherited the exemption it had no claim to. The spans are
+    paren-matched so a nested `(` inside the argument cannot end one early."""
+    spans = []
+    for m in re.finditer( r'__has_builtin\s*\(', code ):
+        i = m.end(); depth = 1
+        while i < len( code ) and depth:
+            if code[i] == "(": depth += 1
+            elif code[i] == ")": depth -= 1
+            i += 1
+        spans.append( ( m.end(), i - 1 if depth == 0 else len( code ) ) )   # unterminated: to end of file, never wider
+    return spans
 
 def detect_H( rel, raw ):
     hits = []
     code = strip( raw, keep_strings=False )
+    spans = has_builtin_arg_spans( code )
     for m in EXTENSION_RE.finditer( code ):
         # __has_builtin( __builtin_x ) is a portable feature TEST, not a use: it is how a file asks whether the
         # extension exists before spelling it, which is the behaviour this arm wants rather than one it refuses.
-        before = code[ max( 0, m.start() - 40 ) : m.start() ]
-        if "__has_builtin" in before:
+        # The exemption reaches the ARGUMENT and stops there.
+        if any( start <= m.start() and m.end() <= end for start, end in spans ):
             continue
         hits.append( "%s:%d: %s outside the compiler-extension seam" % ( rel, line_of( code, m.start() ), m.group( 1 ) ) )
     return hits
@@ -675,15 +698,22 @@ PLANT = {
     "F":  ( "void f( int fd ) { ::close( fd ); if( std::rename( a, b ) ) {} FILE* p = popen( c, \"r\" ); struct stat st; ssize_t n = 0; }\n"
             "struct QRead { void read( int c ); };\nvoid h( int fd, char* buf, unsigned n ) { read( fd, buf, n ); }\n", 6 ),
     "G":  ( "void f() { if( os::kWindows ) {} bool b = rw::os::kApple; }\nnamespace rw::os { }\n", 3 ),
-    # the fourth statement is the control for the __has_builtin carve-out: a feature TEST must not count as a use,
-    # or a file asking whether an extension exists would be refused for asking.
+    # the __has_builtin block is the control for the carve-out: a feature TEST must not count as a use, or a file
+    # asking whether an extension exists would be refused for asking. The two statements after it are the controls
+    # for the review round of 2026-09-21: an UNQUALIFIED `asm(…)` is refused by cl.exe exactly as `asm volatile` is,
+    # and a genuine `__builtin_expect` USE on the SAME LINE as a `__has_builtin` guard must still red — it sits
+    # beside the exemption, not inside its parentheses, and the fixed 40-character look-back sheltered it.
     "H":  ( "int f( int* p ) { __builtin_prefetch( p, 0, 0 ); asm volatile( \"\" : : : \"memory\" ); return 0; }\n"
             "__attribute__(( used )) static int g = 0;\n"
             "const char* w() { return __PRETTY_FUNCTION__; }\nconst char* b() { return __BASE_FILE__; }\n"
             "int e = ( __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__ );\nunsigned __int128 wide = 0;\n"
-            "#if defined( __has_builtin )\n#if __has_builtin( __builtin_trap )\nint h = 1;\n#endif\n#endif\n", 8 ),
+            "#if defined( __has_builtin )\n#if __has_builtin( __builtin_trap )\nint h = 1;\n#endif\n#endif\n"
+            "void n() { asm( \"nop\" ); }\n"
+            "#if __has_builtin( __builtin_clz ) && __builtin_expect( 1, 1 )\nint c = 1;\n#endif\n", 10 ),
 }
 CLEAN = ( "// __APPLE__ and ::open( and #include <unistd.h> are only words in a comment\n"
+          "int wasm = 0; int asm_buf = 1; struct Q { int assembler; };\n"   # \basm\b must not fire inside a longer identifier
+
           "#include \"infra/os.h\"\n#if defined( __aarch64__ )\nint z;\n#endif\n"
           "struct P { bool accept( char c ); void write( int n ); };\n"
           "template<class Accept> bool route( Accept accept ) { return accept( 1 ); }\n"
