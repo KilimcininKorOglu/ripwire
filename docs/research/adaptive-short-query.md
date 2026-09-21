@@ -30,14 +30,15 @@ not the one the paper's framing alone would predict.
 Built `./build/ripwire` from this branch's HEAD (dev config, no `Release`). Two corpora:
 
 - **ripwire itself** — 20,217 symbols, its own C++23 source plus docs/bench/tests.
-- **canyonraid48** — a large private C++/Objective-C++/Metal game codebase (`/Users/qgames/
-  AppDevelopLocal/project2/canyonraid48`), 46,913 symbols including a vendored Bullet physics tree —
-  a real polyglot corpus with none of ripwire's own vocabulary, so a finding that reproduces on both
-  is not an artifact of self-reference.
+- **a private corpus** — a large private C++/Objective-C++/Metal application, 46,913 symbols
+  including a vendored physics tree — a real polyglot corpus with none of ripwire's own vocabulary,
+  so a finding that reproduces on both is not an artifact of self-reference. It is not part of this
+  repository and is not redistributable, so every file path, type name and corpus-specific query
+  below is redacted to a placeholder; only the counts it produced are reproduced verbatim.
 
 Two instruments, both under `bench/adaptive_shortquery/`, both reproducible against the shipped
 binary (pure function of scores → deterministic; verified byte-identical on a repeated `--for=update
---json` call against canyonraid48, see below):
+--json` call against private-corpus, see below):
 
 - **`run_adaptive_shortquery.py`** — five queries per corpus spanning the brief's axis: one common
   word, two words, a contentless instruction, a specific multi-word technical task, and a query naming
@@ -62,14 +63,14 @@ Raw output: `bench/adaptive_shortquery/results_2026-09-20.json` (five-query set)
 | ripwire | contentless | `summarize this` | subtoken+body:broad | low/0 | 35 | 35 |
 | ripwire | technical multiword | `cut a ranked list at the largest relative score gap` | subtoken+body | high/23 | 26 | 5 |
 | ripwire | named symbol | `adaptiveCut` | name-exact | high/45 | 4 | 4 |
-| canyonraid48 | common word | `value` | name-exact | high/45 | 17 | 13 |
-| canyonraid48 | two words | `particle system` | subtoken+body:broad | low/0 | 35 | 35 |
-| canyonraid48 | contentless | `summarize this` | subtoken+body:broad | low/0 | 29 | 29 |
-| canyonraid48 | technical multiword | `bump map normal generation from height field` | subtoken+body | low/0 | 28 | 27 |
-| canyonraid48 | named symbol | `generateCubeMaps` | name-exact | high/27 | 8 | 5 |
+| private-corpus | common word | `value` | name-exact | high/45 | 17 | 13 |
+| private-corpus | two words | `«two-word domain phrase»` | subtoken+body:broad | low/0 | 35 | 35 |
+| private-corpus | contentless | `summarize this` | subtoken+body:broad | low/0 | 29 | 29 |
+| private-corpus | technical multiword | `«technical multiword task»` | subtoken+body | low/0 | 28 | 27 |
+| private-corpus | named symbol | `«named symbol»` | name-exact | high/27 | 8 | 5 |
 
 **First reading.** The paper's literal cases — a contentless instruction, a broad two-word phrase — are
-already handled. `summarize this` and `particle system` route to `subtoken+body:broad`, the adaptive
+already handled. `summarize this` and `«two-word domain phrase»` route to `subtoken+body:broad`, the adaptive
 scan finds no material cliff (drop never reaches the 20% `kMinCliffDrop` floor), `confidence="low"` is
 reported honestly, and **`--adaptive` is a byte-identical no-op**: served count is the same with or
 without the flag on all four broad/contentless rows above. That is the correct, and already-shipped,
@@ -82,7 +83,7 @@ long and specific, routes to a sharper score distribution, `--adaptive` narrows 
 relevant cluster for a query about score-gap cutting. This is the tool doing exactly what
 Adaptive-k proposes.
 
-The one row that does not fit either story cleanly is the single common word. `value` on canyonraid48
+The one row that does not fit either story cleanly is the single common word. `value` on private-corpus
 keeps 13 of 17 — mild, plausible. But this is not representative of "single common word" as a class,
 which the wider sweep below shows.
 
@@ -96,43 +97,43 @@ name.
 
 | corpus | word | route | conf/margin | kept | scored (positiveHits) | discarded |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
-| canyonraid48 | `update` | name-exact | **high**/25 | 6 | **231** | **97%** |
+| private-corpus | `update` | name-exact | **high**/25 | 6 | **231** | **97%** |
 | ripwire | `run` | name-exact | **high**/27 | 10 | **148** | **93%** |
-| canyonraid48 | `init` | name-exact | **high**/25 | 7 | 56 | 88% |
+| private-corpus | `init` | name-exact | **high**/25 | 7 | 56 | 88% |
 | ripwire | `find` | name-exact | high/45 | 5 | 19 | 74% |
-| canyonraid48 | `get` | name-exact | low/0 | 40 | 108 | 63% (no cut — protected) |
-| canyonraid48 | `name` | name-exact | low/0 | 40 | 131 | 69% (no cut — protected) |
-| canyonraid48 | `add` | name-exact | high/36 | 35 | 36 | 3% (cut, but harmless) |
-| canyonraid48 | `remove` | name-exact | high/27 | 23 | 24 | 4% (cut, but harmless) |
-| canyonraid48 | `find` | name-exact | high/27 | 25 | 27 | 7% (cut, but harmless) |
-| canyonraid48 | `set` | name-exact | high/45 | 31 | 37 | 16% (cut, but harmless) |
-| canyonraid48 | `check` | name-exact | high/45 | 11 | 13 | 15% (cut, but harmless) |
-| canyonraid48 | `run` | name-exact | high/36 | 14 | 17 | 18% (cut, but harmless) |
+| private-corpus | `get` | name-exact | low/0 | 40 | 108 | 63% (no cut — protected) |
+| private-corpus | `name` | name-exact | low/0 | 40 | 131 | 69% (no cut — protected) |
+| private-corpus | `add` | name-exact | high/36 | 35 | 36 | 3% (cut, but harmless) |
+| private-corpus | `remove` | name-exact | high/27 | 23 | 24 | 4% (cut, but harmless) |
+| private-corpus | `find` | name-exact | high/27 | 25 | 27 | 7% (cut, but harmless) |
+| private-corpus | `set` | name-exact | high/45 | 31 | 37 | 16% (cut, but harmless) |
+| private-corpus | `check` | name-exact | high/45 | 11 | 13 | 15% (cut, but harmless) |
+| private-corpus | `run` | name-exact | high/36 | 14 | 17 | 18% (cut, but harmless) |
 
 Full 13-word × 2-corpus table: `bench/adaptive_shortquery/word_sweep_2026-09-20.txt`.
 
-**`update` on canyonraid48 is the clean example.** 231 symbols are literally named `update` (every
-class in a game codebase has one). `--adaptive` reports `confidence="high"`, `margin_pct="25"`, and
+**`update` on private-corpus is the clean example.** 231 symbols are literally named `update` (every
+class in a large application has one). `--adaptive` reports `confidence="high"`, `margin_pct="25"`, and
 serves 6. The served six:
 
 ```
-1 update  Motion/motion.mm
-2 update  Renderer/gameIf.mm
-3 update  Renderer/renderer.mm
-4 update  sound/sound2.h
-5 update  sound/sound2.h
-6 update  sound/soundInterface.mm
+1 update  ‹file A›
+2 update  ‹file B›
+3 update  ‹file C›
+4 update  ‹file D›
+5 update  ‹file D›
+6 update  ‹file E›
 ```
 
 Ranks 7–12, discarded, are just as plausible a reading of the bare word "update" as ranks 1–6:
 
 ```
-7  update  Motion/motion.h    KalmanFilterQuaternion
-8  update  Motion/motion.h    KalmanFilterVector
-9  update  Motion/motion.h    iosMotion
-10 update  Renderer/camera.hpp AnimationParameters
-11 update  Renderer/lights.hpp GamePointLight
-12 update  Renderer/lights.hpp Lights
+7  update  ‹file F›  ‹class 1›
+8  update  ‹file F›  ‹class 2›
+9  update  ‹file F›  ‹class 3›
+10 update  ‹file G›  ‹class 4›
+11 update  ‹file H›  ‹class 5›
+12 update  ‹file H›  ‹class 6›
 ```
 
 Nothing in the query ("update") picks between these. The 25% drop the cut fired on is real — it is
@@ -154,18 +155,18 @@ which few instances to keep* trustworthy. It is not, for large homonym clusters,
 are genuinely different — a query can be perfectly "answerable" (`update` obviously names something
 real) while the specific six the cut picked are an arbitrary sixth of an undifferentiated 231.
 
-**The failure is not simply "the query is short."** `adaptiveCut` and `generateCubeMaps` are also
+**The failure is not simply "the query is short."** `adaptiveCut` and `«named symbol»` are also
 one-token queries and work exactly as intended (4→4, 8→5, both tight and correct on inspection — see
 the five-query table). `init`, `set`, `data`, `test` on ripwire have small homonym pools (4–8 hits) and
 a floor-clamped or near-total keep, which is honest. The discriminator in this data is not query
 length or word count, it is **homonym-cluster size under name-exact routing**: a handful of harmless
-cuts (`add`, `remove`, `find`, `set`, `check`, `run` on canyonraid48 — pools of 13–37, cuts that keep
+cuts (`add`, `remove`, `find`, `set`, `check`, `run` on private-corpus — pools of 13–37, cuts that keep
 70–96% of them) sit right next to the two dramatic ones (`update` 231→6, ripwire `run` 148→10) with no
 clean separation by query surface features alone — only by the pool size the router already computes
 and currently uses for nothing but the "sharp query, short tail" wording in the adaptive note.
 
 **Also notable: the same mechanism is inconsistently protected.** `get` (108 hits) and `name` (131
-hits) on canyonraid48 land on the SAME large-pool-common-word pattern as `update` (231) and `init`
+hits) on private-corpus land on the SAME large-pool-common-word pattern as `update` (231) and `init`
 (56), but happen to get `confidence="low"` and a full no-cut serve, purely because their particular
 score distribution didn't clear `kMinCliffDrop` within the first 40 ranks. Whether a large homonym
 pool is protected or not is presently a coin flip of where the tie-break scores happen to dip, not a
@@ -208,7 +209,7 @@ Why this shape over the brief's other two candidates:
   The data above shows content length does not separate the failing cases from the working ones:
   `adaptiveCut` and `update` are both one token; one works perfectly, the other discards 97% of an
   undifferentiated pool. A length/stopword gate would either miss `update`/`run` (false negative on
-  exactly the case that motivated this investigation) or block `adaptiveCut`/`generateCubeMaps`
+  exactly the case that motivated this investigation) or block `adaptiveCut`/`«named symbol»`
   (false positive on cases already measured to work well). It optimizes the wrong axis.
 - *Not* "widen the gap requirement as content falls" (a continuous version of the same idea). Same
   objection — there is no content-derived dial that separates `update` from `adaptiveCut`; widening
@@ -224,7 +225,7 @@ Why this shape over the brief's other two candidates:
 
 What would make me reject it, stated now: if an expanded sweep (below) cannot find a single
 `(positiveHits threshold, discard-ratio threshold)` pair that separates the harmless cuts observed here
-(`add` 36→35, `remove` 24→23, `find` 27→25, `set` 37→31, `check` 13→11, `run`-on-canyonraid48 17→14 —
+(`add` 36→35, `remove` 24→23, `find` 27→25, `set` 37→31, `check` 13→11, `run`-on-private-corpus 17→14 —
 all name-exact, all cut, none harmful) from the two dramatic ones (`update` 231→6, `run`-on-ripwire
 148→10) without misclassifying a meaningful share of either group; or if the fallback's fixed top-N
 turns out, on inspection, to be no more useful than the cut it replaces (i.e., a homonym cluster this
@@ -243,7 +244,7 @@ gate that currently does not exist.
 English verbs/nouns that are plausible short identifiers, drawn from a source not chosen by this
 investigation after seeing failing cases (e.g. the 50 most frequent English verbs, filtered to those
 that parse as valid C-family identifiers) — to avoid the failure mode where a threshold is fit to the
-two examples that motivated it. Run against ≥3 corpora (ripwire, canyonraid48, and one more not yet
+two examples that motivated it. Run against ≥3 corpora (ripwire, private-corpus, and one more not yet
 touched by this investigation) with the shipped binary, `--for=W --json`, both with and without the
 proposed fix's decline gate compiled in (an A/B binary pair, not a flag — the decline behavior would
 not be optional per the "no new operating point without a licensed one" discipline this codebase
@@ -263,7 +264,7 @@ already holds to for the abstention axis).
   *equal or better* than the fallback top-40's first five by relevance must be **≤ 10%** — i.e. the
   gate should almost never override a cut a human would have kept.
 - **Harmless-cut preservation**: the six harmless cases already measured here (`add`, `remove`,
-  `find`, `set`, `check`, canyonraid48 `run`) must NOT trip the gate at the chosen threshold — this is
+  `find`, `set`, `check`, private-corpus `run`) must NOT trip the gate at the chosen threshold — this is
   the compound condition's whole reason to exist over a bare pool-size cutoff.
 
 **Self-reject rule.** If no single threshold pair clears all three bands simultaneously on the
@@ -300,11 +301,11 @@ paper text alone:
 cmake -S . -B build && cmake --build build -j8
 python3 bench/adaptive_shortquery/run_adaptive_shortquery.py \
   --bin ./build/ripwire --out /tmp/results.json \
-  --corpus ripwire=. --corpus canyonraid48=/path/to/canyonraid48
+  --corpus ripwire=. --corpus private-corpus=/path/to/your/second/corpus
 python3 bench/adaptive_shortquery/word_sweep.py \
   --bin ./build/ripwire \
-  --corpus ripwire=. --corpus canyonraid48=/path/to/canyonraid48
+  --corpus ripwire=. --corpus private-corpus=/path/to/your/second/corpus
 ```
 
-Determinism spot-check performed for this document: `ripwire canyonraid48 --for=update --json` run
+Determinism spot-check performed for this document: `ripwire <private-corpus> --for=update --json` run
 twice, byte-identical stdout both times.

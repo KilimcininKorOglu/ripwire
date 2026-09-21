@@ -34,10 +34,14 @@ PER_CORPUS = {
         "technical_multiword": "cut a ranked list at the largest relative score gap",
         "named_symbol": "adaptiveCut",
     },
-    "canyonraid48": {
-        "two_words": "particle system",
-        "technical_multiword": "bump map normal generation from height field",
-        "named_symbol": "generateCubeMaps",
+    # The second corpus used for the recorded run is private and not redistributable;
+    # its three corpus-specific queries are redacted. Fill these in for your own
+    # second corpus: a two-word domain phrase, a specific multi-word technical task,
+    # and one symbol that really exists in that tree.
+    "private-corpus": {
+        "two_words": "<two-word domain phrase>",
+        "technical_multiword": "<specific multi-word technical task>",
+        "named_symbol": "<a symbol that exists in that corpus>",
     },
 }
 

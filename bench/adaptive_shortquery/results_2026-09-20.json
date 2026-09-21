@@ -13,8 +13,8 @@
       "served_rows": 6,
       "top5": [
         "value(src/infra/dynamic_map.hpp:143)",
-        "`--slice-flow` \u2014 ARISE rung 2, cross-statement data-flow slicing (2026-08-30) \u2014 REGISTERED CONTRACT(docs/EVALS.md:8158)",
-        "Background \u2014 the grammar, the surfaces, the bridge(prompts/help-wanted/scala-jvm-bridge.md:47)",
+        "`--slice-flow` — ARISE rung 2, cross-statement data-flow slicing (2026-08-30) — REGISTERED CONTRACT(docs/EVALS.md:8158)",
+        "Background — the grammar, the surfaces, the bridge(prompts/help-wanted/scala-jvm-bridge.md:47)",
         "value(test/emptyvaluerefusecheck.sh:86)",
         "value(test/swiftfix/Purity.swift:9)"
       ]
@@ -29,8 +29,8 @@
       "served_rows": 5,
       "top5": [
         "value(src/infra/dynamic_map.hpp:143)",
-        "`--slice-flow` \u2014 ARISE rung 2, cross-statement data-flow slicing (2026-08-30) \u2014 REGISTERED CONTRACT(docs/EVALS.md:8158)",
-        "Background \u2014 the grammar, the surfaces, the bridge(prompts/help-wanted/scala-jvm-bridge.md:47)",
+        "`--slice-flow` — ARISE rung 2, cross-statement data-flow slicing (2026-08-30) — REGISTERED CONTRACT(docs/EVALS.md:8158)",
+        "Background — the grammar, the surfaces, the bridge(prompts/help-wanted/scala-jvm-bridge.md:47)",
         "value(test/emptyvaluerefusecheck.sh:86)",
         "value(test/swiftfix/Purity.swift:9)"
       ]
@@ -162,8 +162,8 @@
       "top5": [
         "AdaptiveCut(src/lexical.h:2343)",
         "adaptiveCut(src/lexical.h:2363)",
-        "The paper-shape lane (2026-08-28) \u2014 motivation note, result-free(docs/EVALS.md:8112)",
-        "Agent Retrieval Bench \u2014 abstention round 2: the adaptive cut's corpus-support facts,(docs/EVALS.md:9177)"
+        "The paper-shape lane (2026-08-28) — motivation note, result-free(docs/EVALS.md:8112)",
+        "Agent Retrieval Bench — abstention round 2: the adaptive cut's corpus-support facts,(docs/EVALS.md:9177)"
       ]
     },
     "adaptive": {
@@ -177,17 +177,17 @@
       "top5": [
         "AdaptiveCut(src/lexical.h:2343)",
         "adaptiveCut(src/lexical.h:2363)",
-        "The paper-shape lane (2026-08-28) \u2014 motivation note, result-free(docs/EVALS.md:8112)",
-        "Agent Retrieval Bench \u2014 abstention round 2: the adaptive cut's corpus-support facts,(docs/EVALS.md:9177)"
+        "The paper-shape lane (2026-08-28) — motivation note, result-free(docs/EVALS.md:8112)",
+        "Agent Retrieval Bench — abstention round 2: the adaptive cut's corpus-support facts,(docs/EVALS.md:9177)"
       ]
     }
   },
   {
-    "corpus": "canyonraid48",
+    "corpus": "private-corpus",
     "label": "common_word",
     "query": "value",
     "default": {
-      "route": "name-exact(value); anchors: value(amc/flatset.hpp+12)",
+      "route": "name-exact(‹redacted›)",
       "confidence": "high",
       "margin_pct": 45,
       "kept_disclosed": 13,
@@ -195,15 +195,15 @@
       "corpus_n": 46913,
       "served_rows": 17,
       "top5": [
-        "value(amc/flatset.hpp:87)",
-        "value(amc/flatset.hpp:88)",
-        "value(amc/smallset.hpp:195)",
-        "value(amc/smallset.hpp:196)",
-        "value(infrastucture/btree.hpp:700)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
     },
     "adaptive": {
-      "route": "name-exact(value); anchors: value(amc/flatset.hpp+12)",
+      "route": "name-exact(‹redacted›)",
       "confidence": "high",
       "margin_pct": 45,
       "kept_disclosed": 13,
@@ -211,18 +211,19 @@
       "corpus_n": 46913,
       "served_rows": 13,
       "top5": [
-        "value(amc/flatset.hpp:87)",
-        "value(amc/flatset.hpp:88)",
-        "value(amc/smallset.hpp:195)",
-        "value(amc/smallset.hpp:196)",
-        "value(infrastucture/btree.hpp:700)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
-    }
+    },
+    "redacted": "file paths, type names and the query text are removed; the corpus is private and not redistributable"
   },
   {
-    "corpus": "canyonraid48",
+    "corpus": "private-corpus",
     "label": "two_words",
-    "query": "particle system",
+    "query": "‹redacted — private corpus›",
     "default": {
       "route": "subtoken+body:broad",
       "confidence": "low",
@@ -232,11 +233,11 @@
       "corpus_n": 46913,
       "served_rows": 35,
       "top5": [
-        "initParticle(billboard/billboard.cpp:364)",
-        "initParticle(billboard/billboard.cpp:919)",
-        "BillboardParticleEmitter(billboard/billboard.h:304)",
-        "update(billboard/billboard.cpp:846)",
-        "update(billboard/billboard.cpp:260)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
     },
     "adaptive": {
@@ -248,16 +249,17 @@
       "corpus_n": 46913,
       "served_rows": 35,
       "top5": [
-        "initParticle(billboard/billboard.cpp:364)",
-        "initParticle(billboard/billboard.cpp:919)",
-        "BillboardParticleEmitter(billboard/billboard.h:304)",
-        "update(billboard/billboard.cpp:846)",
-        "update(billboard/billboard.cpp:260)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
-    }
+    },
+    "redacted": "file paths, type names and the query text are removed; the corpus is private and not redistributable"
   },
   {
-    "corpus": "canyonraid48",
+    "corpus": "private-corpus",
     "label": "contentless",
     "query": "summarize this",
     "default": {
@@ -269,11 +271,11 @@
       "corpus_n": 46913,
       "served_rows": 29,
       "top5": [
-        "summarize(canyon/SuiteRunner.h:427)",
-        "summarizeSegment(canyon/flowEstimator.h:115)",
-        "summarize(canyon/SuiteRunner.cpp:710)",
-        "summarize(canyon/momeArchive.h:835)",
-        "runSuite(canyon/SuiteRunner.cpp:748)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
     },
     "adaptive": {
@@ -285,18 +287,19 @@
       "corpus_n": 46913,
       "served_rows": 29,
       "top5": [
-        "summarize(canyon/SuiteRunner.h:427)",
-        "summarizeSegment(canyon/flowEstimator.h:115)",
-        "summarize(canyon/SuiteRunner.cpp:710)",
-        "summarize(canyon/momeArchive.h:835)",
-        "runSuite(canyon/SuiteRunner.cpp:748)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
-    }
+    },
+    "redacted": "file paths, type names and the query text are removed; the corpus is private and not redistributable"
   },
   {
-    "corpus": "canyonraid48",
+    "corpus": "private-corpus",
     "label": "technical_multiword",
-    "query": "bump map normal generation from height field",
+    "query": "‹redacted — private corpus›",
     "default": {
       "route": "subtoken+body",
       "confidence": "low",
@@ -306,11 +309,11 @@
       "corpus_n": 46913,
       "served_rows": 28,
       "top5": [
-        "mm_normalFromGrad(Metal/MusicMaterial.h:106)",
-        "mm_normalFD(Metal/MusicMaterial.h:98)",
-        "musicDisplacement(sound/MusicControlledVisuals/TronTessellation.metal:165)",
-        "printUsage(tools/bumpgen/bumpgen.cpp:23)",
-        "AAPLTextureIndex(Common/AAPLCommonDefinitions.h:44)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
     },
     "adaptive": {
@@ -322,20 +325,21 @@
       "corpus_n": 46913,
       "served_rows": 27,
       "top5": [
-        "mm_normalFromGrad(Metal/MusicMaterial.h:106)",
-        "mm_normalFD(Metal/MusicMaterial.h:98)",
-        "musicDisplacement(sound/MusicControlledVisuals/TronTessellation.metal:165)",
-        "printUsage(tools/bumpgen/bumpgen.cpp:23)",
-        "AAPLTextureIndex(Common/AAPLCommonDefinitions.h:44)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
-    }
+    },
+    "redacted": "file paths, type names and the query text are removed; the corpus is private and not redistributable"
   },
   {
-    "corpus": "canyonraid48",
+    "corpus": "private-corpus",
     "label": "named_symbol",
-    "query": "generateCubeMaps",
+    "query": "‹redacted — private corpus›",
     "default": {
-      "route": "name-exact(generateCubeMaps); anchors: generateCubeMaps(Metal/AAPLMetalRenderer.mm+3)",
+      "route": "name-exact(‹redacted›)",
       "confidence": "high",
       "margin_pct": 27,
       "kept_disclosed": 5,
@@ -343,15 +347,15 @@
       "corpus_n": 46913,
       "served_rows": 8,
       "top5": [
-        "generateCubeMaps(Metal/AAPLMetalRenderer.mm:4341)",
-        "generateCubeMaps(Renderer/renderer.mm:24)",
-        "generateCubeMaps(Metal/AAPLMetalRenderer.h:20)",
-        "generateCubeMaps(Renderer/renderer.h:21)",
-        "7. Useful things missing(Metal/AUDIT_renderStack.md:381)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
     },
     "adaptive": {
-      "route": "name-exact(generateCubeMaps); anchors: generateCubeMaps(Metal/AAPLMetalRenderer.mm+3)",
+      "route": "name-exact(‹redacted›)",
       "confidence": "high",
       "margin_pct": 27,
       "kept_disclosed": 5,
@@ -359,12 +363,13 @@
       "corpus_n": 46913,
       "served_rows": 5,
       "top5": [
-        "generateCubeMaps(Metal/AAPLMetalRenderer.mm:4341)",
-        "generateCubeMaps(Renderer/renderer.mm:24)",
-        "generateCubeMaps(Metal/AAPLMetalRenderer.h:20)",
-        "generateCubeMaps(Renderer/renderer.h:21)",
-        "7. Useful things missing(Metal/AUDIT_renderStack.md:381)"
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›",
+        "‹redacted — private corpus›"
       ]
-    }
+    },
+    "redacted": "file paths, type names and the query text are removed; the corpus is private and not redistributable"
   }
 ]
