@@ -4300,7 +4300,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         {
             rows.push_back( { path, f } );
         }
-        printSkillScanArtifact( stdout, rows, /*filesScanned=*/1 );
+        printSkillScanArtifact( stdout, rows, /*filesScanned=*/1, /*filesSkipped=*/0, cfg.legend == "full" );
         rw::emitTo( stderr, "ripwire scan: {} finding(s) in {}\n", int( result.findings.size() ), path.c_str() );
         return skillScanExitCode( result.findings );
     }
@@ -4497,7 +4497,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             }
         }
 
-        printSkillScanArtifact( stdout, allRows, filesScanned, filesSkipped );
+        printSkillScanArtifact( stdout, allRows, filesScanned, filesSkipped, cfg.legend == "full" );
 
         // Honest zero: "0 finding(s)" alone doesn't say whether that's because nothing was WARN/CRITICAL
         // or because there was nothing readable to scan. Naming the file count keeps a genuine "scanned

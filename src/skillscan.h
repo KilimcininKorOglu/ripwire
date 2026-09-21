@@ -1107,8 +1107,23 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // Emitted only when non-zero (the house rule: absent = nothing skipped, so every existing artifact and gate
 // stays byte-identical), and defaulted so the single-file entry point — which scans the one file it is given
 // and skips nothing — needs no change.
-inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, int filesScanned, int filesSkipped = 0 ) noexcept
+//
+// t14-cleanup #1: this verb never wrote an XML comment at all — compactlegend.h's "skillscan" dictionary
+// entry covers the compact/default posture (scanned and matched by attribute name, independent of anything
+// this function writes), but --legend=full had nothing to match against, so files=/findings=/skipped=/
+// verdict= were undefined debt on every --legend=full run (legendcoverage_baseline.txt's four
+// `scan-skills | skillscan@*` lines). `fullLegend=true` (only when cfg.legend=="full") writes the missing
+// comment; false (every existing caller) is byte-identical.
+inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, int filesScanned, int filesSkipped = 0, bool fullLegend = false ) noexcept
 {
+    if( fullLegend )
+    {
+        rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
+                          "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
+                          "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
+                          "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
+                          "worst finding's severity, the same read as the exit code (0/1/2). -->", kSkillScanFindingCap );
+    }
     int maxSev = 0;
     for( const SkillScanRow& r : rows )
     {
