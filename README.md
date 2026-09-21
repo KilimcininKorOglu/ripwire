@@ -1990,7 +1990,7 @@ it points at the installer's staged copy of the skills when the cwd is not a che
 
 ## Improve it with your agent
 
-[`prompts/`](prompts/) holds twelve **self-contained orchestrator prompts**: the loops this project is
+[`prompts/`](prompts/) holds thirteen **self-contained orchestrator prompts**: the loops this project is
 built with, written so a coding agent can run them. They encode the workflow rather than describing
 it.
 
@@ -2787,7 +2787,7 @@ files under `bench/`.
 
 ### 16. Improvement
 
-`prompts/` holds twelve **self-contained orchestrator prompts**. Each prompt is a workflow that a
+`prompts/` holds thirteen **self-contained orchestrator prompts**. Each prompt is a workflow that a
 coding agent can run against this repository. Each prompt writes a plan and stops for your approval
 before it runs a command. Build the binary first. The prompts measure against the binary.
 
