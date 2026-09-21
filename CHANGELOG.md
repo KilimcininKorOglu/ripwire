@@ -439,7 +439,7 @@ functions 5,031 disassemble identically and 3 differ only by the build stamps (t
 quality snapshot's two serializers, the `built_from` length in `--doctor`). The same 71 cases the `os.h` refresh
 used (map, 25 verbs, `--run-trace`, MCP stdio and `--listen`, the sidecar and index writes) are byte-identical.
 
-Not yet proven on Windows by anyone who ran it: this exact branch still needs @lennix1337's build and gate run.
+Since proven on Windows, and exactly that far. @lennix1337's run against the D3 branch found five build failures, all fixed; a `windows-latest` CI job now builds with clang-cl and smoke-tests the result on every full matrix — configure, build, `ctest` (including the port's own `oswin32logiccheck` target), `--version`/`--help`, a real crawl of `test/fixture`, the two-run byte-identical determinism contract, well-formed XML, and the ASan flavour compiling. What is NOT proven: the gate suite does not run on Windows (it needs the harness), no sanitizer RUN happens there, and nothing exercises a UNC share, a junction, a non-ASCII path or a volume without a drive letter — the checklist on #44 is still open. MSVC `cl.exe` does not build: it configures and compiles until it reaches the GCC/Clang language extensions the tree is written in, which needs a portability seam in `src/infra/platform.h`; the CI leg asserts that it stops exactly there, so a different break is a red job.
 
 A review pass (no Windows machine, read plus a macOS/Linux-provable subset) found one MED and five LOWs, none
 touching POSIX; this fix round closes the MED and three of the LOWs, still on top of @lennix1337's work:

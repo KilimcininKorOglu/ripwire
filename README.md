@@ -2198,7 +2198,7 @@ same renderer. One computation has one output shape.
 
 | Item | Requirement |
 | --- | --- |
-| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). On Windows, use WSL2. |
+| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). Native Windows x64 **builds** with clang-cl — CI builds it on `windows-latest` every full matrix and smoke-tests the binary (`--version`, `ctest`, a real crawl, the two-run byte-identical contract, well-formed XML); the 647-gate suite does not run there yet, so treat it as a build, not a validated platform. MSVC `cl.exe` does not build yet — the tree uses GCC/Clang language extensions (`asm volatile` barriers, `__builtin_*`, `[[gnu::…]]`) that need a portability seam. No prebuilt Windows binary is published; WSL2 remains the supported way to RUN it on a Windows machine. |
 | Prebuilt Linux floor | RHEL 8 or later (glibc 2.28) |
 | Prebuilt macOS floor | macOS 14 or later, Apple silicon. 0.6.1 is the last release with an Intel macOS binary; on an Intel Mac, pin `RIPWIRE_VERSION=v0.6.1` or build from source. |
 | x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later), for a prebuilt binary and a source build alike |

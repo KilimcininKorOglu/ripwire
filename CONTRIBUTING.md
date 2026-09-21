@@ -432,7 +432,11 @@ path the program generated itself (the crawl) — and each POSIX body is the exp
 
 **Platforms.** Unix, Linux and macOS come first; native Windows is second, with clang-cl the primary compiler and
 MSVC `cl.exe` also required to build. A `cl.exe` portability problem is worth fixing, but it does not block a change
-to a POSIX-only code path.
+to a POSIX-only code path. **As of this writing that second half is a target, not a fact:** clang-cl builds and is
+verified by the `windows` CI job, and `cl.exe` does not build — it stops at the GCC/Clang language extensions this
+tree uses (`asm volatile` barriers, `__builtin_*`, `[[gnu::…]]`), which need a portability seam in
+`src/infra/platform.h`. Do not read the rule above as a description of the current state; the CI leg asserts the
+failure so the two cannot drift apart silently.
 
 ### Aliasing: spelling, placement, contract
 
