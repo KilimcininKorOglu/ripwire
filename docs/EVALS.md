@@ -6867,6 +6867,22 @@ Listed because the reason is more useful than the silence.
   prototyped on two corpora and rejected — see "Shotgun Surgery — two formulations measured" at the end of
   this document. What ships for the smell is the co-change check `--situ` / `--pr-context` already
   carried; its backtest numbers there are the only ones this project publishes about it.
+- **"484 matched pairs, 146 right-direction, 30.2%"** for `--readability`'s construct-validity proxy
+  (`--help=--readability`, this document, and README.md all carried it). It was first computed by
+  walking `git log --all` over a clone whose branch set changes every time a lane is pushed — a rerun
+  of the identical, unmodified script gave 413 pairs (38.3%) and, separately, 409 pairs (38.4%),
+  neither matching the published number and neither touching `src/readability.h`. A number that moves
+  when an unrelated lane is pushed is not measuring the lens; it is measuring which branches exist in
+  the shared `.git` right now. Pinned to the immutable `v0.6.2` tag, the same instrument reproduces
+  deterministically: **412 function pairs, 154 right-direction (37.4%)**. The mechanism behind the
+  inversion is not "the lens is wrong 63% of the time" — it is that the sign of a function's
+  token-count change predicts the lens's direction in **96.0%** of pairs (388/404 whose token count
+  changed), with the Halstead-volume term driving 91.1% of the wrong-direction pairs. Full protocol,
+  the instrument-fix note, and the decomposition: `docs/research/readability-construct-validity.md`
+  §3a/§3c — a draft investigation, PR [#313](https://github.com/redhat-et/ripwire/pull/313) (open;
+  cited here for the derivation only, nothing shipped depends on it merging). The shipped `--help`
+  text now states the pinned figures; this entry keeps the retracted number visible rather than
+  silently replacing it.
 
 ---
 
