@@ -5381,7 +5381,7 @@ ripwire.impact/v1 <impact>: transitive blast radius of of=: <s t= n= p=> reach s
 ripwire.path/v1 <path>: one DIRECTED call path from= to to=, each <s t= n= p=> a hop; reachable=0 hops=0 when none
 ripwire.connect/v1 <connect>: minimal joining subgraph: <g> groups, <t> terminals, <s connects=> joins, <e f= t=> edges, <unconnected>
 ripwire.at/v1 <at>: enclosing-definition chain at p=:l=: sym= innermost, chain= outermost-first, <s n= t= l= el=> spans
-… [675 more display lines; full output is 68575 bytes on 705 raw line(s)]
+… [675 more display lines; full output is 68632 bytes on 705 raw line(s)]
 `````
 
 ## `./build/ripwire . --lint --lint-select=cache-`
