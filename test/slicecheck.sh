@@ -23,7 +23,8 @@
 #   (7)  unsupported-language refusal: exit 1, "not served for" (never an empty success)
 #   (8)  unknown-symbol refusal: exit 1, the shared not-found message
 #   (9)  determinism (x3, byte-identical)
-#   (10) xmllint well-formedness (both modes)
+#   (10) xmllint well-formedness (both modes); (10d) the FULL tier specifically, plain and
+#        --slice-flow=both — the tier the default-tier-only arms above never exercise
 #   (11) keyword-local exclusion: a degraded parse must never offer a reserved word as a sliceable
 #        local (inventory clean of it, slicing it refuses) — the ugrep matcher.cpp misparse shape
 #   (12) C++ condition declaration `if( int k = x )`: tree-sitter-cpp emits a `declaration` whose
@@ -342,6 +343,17 @@ if command -v xmllint >/dev/null 2>&1; then
     ( cd "$WORK" && "$BIN" . --slice=accumulate --no-cache 2>/dev/null | xmllint --noout - ) \
         && ok "(10) xmllint: --slice=accumulate inventory output is well-formed XML" \
         || no "(10) xmllint: --slice=accumulate inventory output is NOT well-formed XML"
+    # (10d) the full-tier legend is its own XML comment (never the compact dictionary's shorter one);
+    # an inline flag mention with its dashes ("--at=") is a double-hyphen INSIDE that comment, which
+    # xmllint --noout rejects outright — a pre-existing G4 violation on origin/main 15a20855 too, not
+    # caught before because every other well-formedness arm here and in sliceflowcheck.sh/
+    # sliceflowsenscheck.sh only lints the DEFAULT (compact) tier.
+    ( cd "$WORK" && "$BIN" . --slice=accumulate:count --legend=full --no-cache 2>/dev/null | xmllint --noout - ) \
+        && ok "(10d) xmllint: --slice=accumulate:count --legend=full output is well-formed XML" \
+        || no "(10d) xmllint: --slice=accumulate:count --legend=full output is NOT well-formed XML (a '--' inside the legend comment?)"
+    ( cd "$WORK" && "$BIN" . --slice=accumulate:count --slice-flow=both --legend=full --no-cache 2>/dev/null | xmllint --noout - ) \
+        && ok "(10d) xmllint: --slice=accumulate:count --slice-flow=both --legend=full output is well-formed XML" \
+        || no "(10d) xmllint: --slice=accumulate:count --slice-flow=both --legend=full output is NOT well-formed XML (a '--' inside the legend comment?)"
 else
     echo "  SKIP  (10) xmllint not installed — well-formedness not checked"
 fi

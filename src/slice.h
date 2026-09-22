@@ -3056,12 +3056,12 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
             "<s l k t [b] [pp] [rd]>: k=def|use|both|scope, t=param|decl|assign|call-arg|read|global|nonlocal, b=declaration line a "
             "shadowed name binds to (0=unbound), pp=1 build-dependent preprocessor region, rd=lines of the defs reaching a use row "
             "(-=none) per reach=cfg (flow-sensitive; C-family, Python) | linear (source order; JS/TS, Go, Java, Rust). "
-            "order=defuse: <s> seed rows ranked by def-use coverage (distinct sliceable locals on the line) desc, then line — not "
+            "order=defuse: <s> seed rows ranked by def-use coverage (distinct local names on the line) desc, then line — not "
             "source order. Inventory "
             "<v n l t [seed]>, vars=count. "
             "bindings=shadow count; preproc_rows=lines dropped under #if 0; seed/var_from/seed_vars/seed=1 = line-seed disclosure. "
             "Flow rows add v=variable d=depth f=from-line; steps=flow rows, depth=bound, flow_truncated=1 bounded not complete, "
-            "flow_redundant=1 (both=, unseeded only) reaches no line the flat inventory does not — seed via --at=FILE:LINE for real reach. "
+            "flow_redundant=1 (both=, unseeded only) reaches no line the flat inventory does not — seed via at=FILE:LINE for real reach. "
             "Limits: a write hidden behind a call (receiver mutation, by-ref/out-param, macro) rows as a use; no alias analysis; "
             "the statement is the unit (nested bodies/?:/short-circuit fold, goto untracked); no control dependence; block "
             "scopes separated; C-family #if 0 dropped, other #if kept+flagged. Full legend: omit "
@@ -3071,7 +3071,7 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
     {
         out =
             "<!-- ripwire slice: NAME-BASED intra-procedural def-use slice of one variable inside ONE resolved definition (ARISE, "
-            "arXiv:2605.03117). ROWS: one <s> per LINE touching VAR, order=\"defuse\": most distinct locals on the line first, then line "
+            "arXiv:2605.03117). ROWS: one <s> per LINE touching VAR, order=\"defuse\": most distinct local names on the line first, then line "
             "(not source order) — k= def|use|both|scope (both = the line writes AND "
             "reads it, `x += y`; scope = a Python global/nonlocal statement: neither read nor write, it introduces the name and "
             "never anchors a flow), t= the strongest role on the line (param > decl > assign > call-arg > read > global/nonlocal), CDATA "
@@ -3139,7 +3139,7 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
                 "rows are line-granular (a multi-statement line merges and may over-connect) while chaining is statement-anchored (a "
                 "statement spanning lines chains as ONE unit keyed on its first line); data dependence only — no control dependence: "
                 "the guard (if/loop) deciding whether a def executes is never a row. "
-                "flow_redundant=\"1\" (unseeded both=): adds no line beyond the flat inventory; seed --at= for real gain. -->";
+                "flow_redundant=\"1\" (unseeded both=): adds no line beyond the flat inventory; seed at= for real gain. -->";
         }
     }
     // H1: the residue clause, in BOTH dialects and as its own comment — opened `<!-- ripwire slice: ` so the compact layer
@@ -3201,12 +3201,14 @@ inline void sliceAppendReachAttr( std::string& out, const std::vector<std::uint3
     out += "\"";
 }
 
-// order="defuse" — the seed rows' EMISSION order. A row's score is its def-use COVERAGE: how many distinct sliceable
-// locals (inventory NAMES — scan.all also holds unbound identifiers such as a called builtin, which are not locals and
+// order="defuse" — the seed rows' EMISSION order. A row's score is its def-use COVERAGE: how many distinct local
+// NAMES (inventory NAMES — scan.all also holds unbound identifiers such as a called builtin, which are not locals and
 // do not count) have an occurrence on its line, every local, not just the seed. Rows emit score-descending, then
 // line, then binding line, then fold index — a total order, so nothing is left to container order. Zero parameters.
-// Why not source order: on LocBench py (478 instance x variable pairs) source order ranked a gold line BELOW a random
-// shuffle of the same rows (MRR 0.525 vs 0.602); this rule ranks above it (0.628) — docs/research, slice-line-recall.
+// Why not source order: on LocBench py (478 instance x variable pairs, Python only) source order ranked a gold line
+// BELOW a random shuffle of the same rows (MRR 0.525 vs 0.602); this rule ranks above it (0.628), in-sample, zero
+// fitted parameters — pre-registration, population and honesty caveats in docs/EVALS.md, "`--slice=SYM:VAR` def-use
+// row order".
 inline constexpr const char* kSliceRowOrderName = "defuse";
 
 inline std::vector<std::uint32_t> sliceDefUseRowOrder( const SliceScan& scan, const std::vector<SliceLineRow>& rows )
