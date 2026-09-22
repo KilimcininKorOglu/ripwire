@@ -17,9 +17,9 @@ pre-fix behaviour, left exactly as recorded.
 
 Adaptive-k — [arXiv:2506.08479](https://arxiv.org/abs/2506.08479) — cuts a ranked list at its largest
 relative score gap instead of a fixed k, because the knee moves by orders of magnitude between
-queries. It ships here as `--adaptive` (`docs/LINEAGE.md`, `src/lexical.h::adaptiveCut`). The paper's
-own stated limitation is that a largest-gap cut degrades when the query is short or carries little
-content: a thin score distribution has no reliable knee to find.
+queries. It ships here as `--adaptive` (`docs/LINEAGE.md`, `src/lexical.h::adaptiveCut`). The case we
+expected a largest-gap cut to fail on is a short or low-content query: a thin score distribution
+has no reliable knee to find.
 
 Two adjacent, already-closed measurement rounds sit right next to this question in `docs/EVALS.md`
 (search `abstention calibration`): both tried to calibrate an *abstention* decision — should the tool
@@ -79,8 +79,8 @@ Raw output: `bench/adaptive_shortquery/results_2026-09-20.json` (five-query set)
 | private-corpus | technical multiword | `«technical multiword task»` | subtoken+body | low/0 | 28 | 27 |
 | private-corpus | named symbol | `«named symbol»` | name-exact | high/27 | 8 | 5 |
 
-**First reading.** The paper's literal cases — a contentless instruction, a broad two-word phrase — are
-already handled. `summarize this` and `«two-word domain phrase»` route to `subtoken+body:broad`, the adaptive
+**First reading.** The cases we expected to be hardest for a largest-gap cut — a contentless instruction,
+a broad two-word phrase — are already handled. `summarize this` and `«two-word domain phrase»` route to `subtoken+body:broad`, the adaptive
 scan finds no material cliff (drop never reaches the 20% `kMinCliffDrop` floor), `confidence="low"` is
 reported honestly, and **`--adaptive` is a byte-identical no-op**: served count is the same with or
 without the flag on all four broad/contentless rows above. That is the correct, and already-shipped,
@@ -191,7 +191,7 @@ name: whether the query is a name-exact hit against a large, semantically flat h
 
 **2. Is the failure real, or already covered?** Both, on different axes:
 
-- **Covered:** the paper's literal "low-content instruction" / "broad phrase" case. `subtoken+body:
+- **Covered:** the low-content-instruction / broad-phrase case we expected to be hardest. `subtoken+body:
   broad` + no material cliff + `confidence="low"` + `--adaptive` no-op, reproduced on both corpora, four
   for four. Nothing to fix here — a genuinely negative result on the axis the task description leads
   with.
