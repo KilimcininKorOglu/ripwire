@@ -24,13 +24,15 @@
 #   (8) RE-SCORE PROVENANCE (round 2026-09-22): a magnitude-bearing ack row carries `now=`/`was=` — the exact
 #       (was,now) pair that decided its severity — and a facet-driven kind (duplication /
 #       new-clone-of-reused-helper) additionally carries `facet=`. RED on the pre-provenance binary: neither
-#       token existed, so this arm fails there by construction. The "round trip reproduces the same verdict"
-#       half of the contract is proven a different way — not by this shell script re-deriving the materiality
-#       formula, but by an ENSURES self-check wired into the write path itself (verbs_quality.h, right after
-#       `rec` is built): every `--quality-ack` on a magnitude-bearing finding calls rescoreAckRecord on the row
-#       it just wrote and ENSURES the verdict matches the one the live report just computed. That check runs on
-#       every ack this gate's own fixtures take (arms 1-7 above, and 8 below) in the plain (non-NDEBUG) build —
-#       a divergence would abort the process, which this arm's plain 0-exit check therefore also covers.
+#       token existed, so this arm fails there by construction. The "table-driven re-score formula agrees with
+#       the live one" half of the contract is proven a different way — not by this shell script re-deriving the
+#       materiality formula, but by an ENSURES self-check wired into the write path itself (verbs_quality.h,
+#       right after `rec` is built): every `--quality-ack` on a magnitude-bearing finding calls rescoreAckRecord
+#       on the row it just wrote (in memory — NOT through renderAckRecords/readAckRecords, so it does not prove
+#       the ledger's text grammar round-trips; that half is this arm's own grep checks below plus arms (2)/(7))
+#       and ENSURES the verdict matches the one the live report just computed. That check runs on every ack this
+#       gate's own fixtures take (arms 1-7 above, and 8 below) in the plain (non-NDEBUG) build — a divergence
+#       would abort the process, which this arm's plain 0-exit check therefore also covers.
 #
 # Every arm was run RED against the pre-fix binary before the fix landed (arms 1 and 4's convergence arm; 8
 # against the pre-provenance binary, which writes no now=/was=/facet= token at all).
@@ -291,7 +293,7 @@ case "$DUPROW" in
 esac
 [ "$rcProv" -eq 0 ] \
     && ok "(8) the write-path self-check did not abort — rescoreAckRecord on the row it just wrote reproduced the just-computed severity (ENSURES in verbs_quality.h)" \
-    || no "(8) --quality-ack on the provenance fixture exited $rcProv — a crash here is that round-trip self-check firing"
+    || no "(8) --quality-ack on the provenance fixture exited $rcProv — a crash here is the in-memory re-score self-check (ENSURES) firing"
 
 # a plain numeric (non-facet) bar kind: complexity — same growth shape as qackorigincheck's (f) arm
 NUM="$WORK/numprov"; mkdir -p "$NUM"

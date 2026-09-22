@@ -1249,17 +1249,24 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                                           r.was, r.now, r.facet, r.path, r.line, /*hasProvenance=*/true,
                                           cfg.qualityAckReason.empty() ? rec.reason
                                                                        : quality::composeAckReason( rec.reason, std::string( cfg.qualityAckReason ) ) };
-                // SELF-CHECK, not a one-off test: every magnitude-bearing ack proves its OWN round trip on the
-                // spot — rescoreAckRecord, reading the row it just wrote back exactly as readAckRecords would,
-                // must reproduce the materiality verdict this same run just computed. A drift here means the
-                // live formula (numericRegressionIsMajor, via perSymbolKind) and the re-score formula
+                // SELF-CHECK, not a one-off test: every magnitude-bearing ack proves that the TABLE-DRIVEN
+                // re-score formula agrees with the LIVE one on the row it just built. NOT a full round trip —
+                // rescoreAckRecord runs here on the in-memory `rec` directly; it never goes through
+                // renderAckRecords/readAckRecords, so this does not exercise the ledger's text grammar (order-
+                // tolerant token parsing, splitAckLocator, the takeAckNamedToken family) at all — that half of
+                // the contract is what qackconcurrencycheck.sh's grammar arm (2) and byte-identity arm (7) pin
+                // instead, over the actual file. What THIS catches: rescoreNumericMajor's kMaterialityBars
+                // lookup (by kind name) silently drifting from the bar/minorDelta/growthTiered literals
+                // perSymbolKind was called with (computeDelta, above) — two spellings of the same three
+                // constants that a future edit could change in only one place. A drift there means the live
+                // formula (numericRegressionIsMajor, via perSymbolKind) and the re-score formula
                 // (rescoreNumericMajor) have silently diverged — see quality.h's MaterialityBar table, the one
                 // place both are meant to agree. ENSURES, not ASSUME: this is this function's OWN postcondition
                 // on the row it just built, not a fact something else already guarantees.
                 const std::optional<bool> rescored      = quality::rescoreAckRecord( rec );
                 const bool                rescoreAgrees = !rescored.has_value() || *rescored == !r.isMinor;   // plain bool, so the promise below is a bare accessor-free read
                 ENSURES( rescoreAgrees,
-                         "ack provenance round-trip (write, read back, re-score) must reproduce the just-computed severity" );
+                         "ack provenance re-score (in-memory, not a ledger round trip) must reproduce the just-computed severity" );
             }
             if( ackWritten == 0 && !cfg.qualityAckOnly.empty() )
             {
