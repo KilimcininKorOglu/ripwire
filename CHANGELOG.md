@@ -13,6 +13,22 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Fixed — `--readability`'s caveat cited a proxy number that did not reproduce
+
+The `UNVALIDATED` note in `--help=--readability` and the README said the lens agrees with a refactor
+commit's implied readability direction on 30.2% of 484 function pairs. That population came from
+`bench/readability_refactor_pairs.py` walking `git log --all`, which reads every branch in the clone's
+shared `.git`, so the count changed whenever an unrelated branch was pushed. With the script pinned to
+the `v0.6.2` tag (#313), the same method (80 refactor/simplify/cleanup commits, ≤400 changed lines each)
+gives **154 of 412 pairs, 37.4%**. That is still worse than chance, so the caveat's conclusion holds.
+Both surfaces now cite the pinned figure and name the tag. The `--quality-delta` help also named its
+tenth kind `reuse-decline`; it now uses the `kind=` string the binary emits,
+`new-clone-of-reused-helper`.
+
+---
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
