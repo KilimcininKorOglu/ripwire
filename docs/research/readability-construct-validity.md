@@ -145,9 +145,9 @@ actually makes"):
 - **No better than chance, or a sign flip on a held-out language/corpus** → withdraw the ranking claim from
   any joined surface (`--ensemble`'s `rrank=`) and keep `--readability` only as a standalone, clearly-labeled
   "how does this formula see the codebase" report — the same demotion path `naminglens.h` already used once
-  (§4).
+  (§5).
 
-We have not run the human-rated arm. It needs raters we do not have in this pass; §5 names it as the thing we
+We have not run the human-rated arm. It needs raters we do not have in this pass; §6 names it as the thing we
 would like the most external help with.
 
 ## 3. What we ran WITHOUT human labels
@@ -435,7 +435,80 @@ default) and `bench/readability_declared_pairs.py --bin build/ripwire --decompos
 the same pinned population as §3a itself). `--ref` points either command at a different immutable ref;
 `--until` still narrows within whichever ref is walked.
 
-## 4. Precedent: we have already withdrawn a lens that failed exactly this kind of check
+## 4. Does the ordering predict anything worth acting on? A later-fix-rate validation
+
+§2 and §3 both validate the ORDER: does it move the direction a refactor implies, is it stable under a
+meaning-preserving rewrite. Neither asks the question an agent actually relies on when it reaches for
+`--readability` to pick a target: **does a low score predict that a function will need fixing later?** That
+is the implicit claim behind "use the worst-ranked functions as a worklist," and it has never been tested.
+This section tests it, with no human label and no LLM judge, against a complexity control this repo's own
+`--quality-delta` "complexity" gate kind already trusts, on the same population, with and without controlling
+for function size.
+
+### Protocol (fixed in this commit, before the harness that computes it was run)
+
+This subsection was committed before `bench/readability_fixrate_validity.py` was run for the record — the
+same discipline §3c used for proxy (c), and for the same reason: a band decided after seeing the number is
+not a band.
+
+**Population.** Every `fn`/`method` in `src/**/*.{h,hpp,cpp,cc}` at a single pinned CUTOFF commit on
+`v0.6.2`'s history — never `--all` (§3c's instrument-fix note explains why a shared `.git` makes that
+non-reproducible). The cutoff is chosen to leave a multi-week, thousand-plus-commit follow-up window to the
+pinned UNTIL ref (`v0.6.2` itself), long enough that a fix-shaped commit has real room to happen, short
+enough that the population is still recognizably today's codebase. Functions are matched between a real
+`--readability` crawl and a real `--metrics` crawl of the identical extracted tree (`git archive`, not
+per-file scratch, so `--metrics`'s in/out/ccx see real cross-file structure) by (path, name), requiring
+`loc`(metrics) `==` `lines`(readability); an ambiguous match (same path+name, disagreeing loc — almost always
+an overload) is dropped and counted, never guessed at.
+
+**Exposure**, per function, read at the cutoff: `z`, the exact pre-sigmoid Posnett score recomputed from
+integer `toks=`/`vocab=` exactly as `bench/readability_refactor_pairs.py` does (lower z = less readable —
+`--readability`'s own least-readable-first sort order), and `ccx`, cognitive complexity from `--metrics` —
+the same metric `src/quality.h`'s `"complexity"` gate kind reads, used here as the already-trusted baseline
+on the identical population, not as a bar the lens must clear.
+
+**Outcome**, defined before looking, over the window `(CUTOFF, UNTIL]`:
+
+- **fix-shaped commit**: subject line (not body — §3c already found body-matching noisy) matches, case
+  insensitively: `\bfix(e[sd])?\b|\bbug(s|fix(e[sd])?)?\b|\bcrash(e[sd])?\b|\bregression(s)?\b`.
+- a function is **FIXED** if any fix-shaped commit in the window has a diff hunk — in that commit's OWN
+  parent's line numbers, not the cutoff's — overlapping the function's span AS MEASURED AT THAT PARENT
+  revision (re-scored per commit specifically so line drift from earlier window commits cannot misattribute
+  a hunk to the wrong function), matched back to the population by (basename, function name). A pure-insertion
+  hunk (old count 0) is treated as touching whichever function(s) contain old-line `start` or `start+1`.
+- a function is **MODIFIED** (the broader arm) under the identical rule over every commit that touches a src
+  file in the window, fix-shaped or not — a superset computed in the same pass, since every fix-shaped commit
+  is also a modifying commit.
+
+**Statistic.** Fix-rate (and modified-rate) in the least-readable quartile (bottom 25% by z) vs the rest,
+Wilson interval per proportion, risk ratio with a Katz log-CI — reported beside the identical statistic for
+the highest-ccx quartile vs the rest, on the same population, as the trusted-signal comparison point.
+Repeated within three size (lines-at-cutoff) terciles, with the least-readable/highest-ccx quartile
+recomputed WITHIN each tercile, to test whether either signal survives controlling for size.
+
+**Decision bands**, restated from this document's own §2 framing, applied to the raw (unstratified) arm:
+the least-readable quartile's fix-rate CI excludes a risk ratio of 1, and the effect does not vanish once
+stratified by size → keep the ordering claim as an actionable, if weak-to-moderate, signal; effect present
+raw but gone in every size tercile → the size confound explains it, narrow the claim accordingly; CI includes
+1 raw → withdraw the "predicts later fixes" claim outright. The complexity arm is reported for comparison,
+never as a bar the lens must clear — Scalabrino/Trockman's own consensus (§2) is that no classic metric
+correlates strongly with anything, so "about as good as complexity" is itself the "keep as a weak signal"
+outcome, not a pass/fail line of its own.
+
+**A pre-registered caveat about the size control itself.** §3c already found that `z`'s direction on this
+repository's own history is almost entirely the sign of the TOKEN-count change (96.0% of pairs), not the
+line-count change — the Posnett lines coefficient is positive, so more lines alone would push z the other
+way. Stratifying by LINES (the natural, legible size band) therefore does not fully neutralize the mechanism
+§3c already implicated: two functions in the same line-count tercile can still differ sharply in token
+volume, and z tracks that. A result that survives a lines-based stratification is not automatically a result
+that survives a tokens-based one — that is disclosed here, before either number exists, as a limitation of
+this design, not folded quietly into the verdict after the fact.
+
+Re-run: `bench/readability_fixrate_validity.py --bin build/ripwire` (population + both outcome arms, raw and
+size-stratified, `v0.6.2`-pinned CUTOFF/UNTIL by default; `--out` writes the per-function TSV this section's
+numbers were computed from).
+
+## 5. Precedent: we have already withdrawn a lens that failed exactly this kind of check
 
 This is not the first deterministic proxy ripwire has shipped, measured, and had to reckon with. §9.0 of
 `docs/LINEAGE.md`, and the top of `src/naminglens.h` itself, record `naming-body-mismatch` — a rule that
@@ -458,7 +531,7 @@ citing why this round's finding no longer applies. §3's numbers are not at that
 63%-wrong-direction result on refactor commits is concerning enough that we think the human-rated study in
 §2 is now the right next step, not an optional nice-to-have.
 
-## 5. What we would like help with
+## 6. What we would like help with
 
 We are not readability researchers; we are reporting what a deterministic, disclosed, ordering-only lens
 measures against a construct it was never claimed to solve, and we would like informed pushback on the
@@ -514,5 +587,5 @@ following, specifically:
   alongside the prompt-constraint study in the readability design note §7 as the joint reason
   `--quality-delta`'s gate is deterministic and external to the model, applied to the diff.
 - `docs/LINEAGE.md` §9.0 and `src/naminglens.h` (top-of-file comment) — the withdrawn `naming-body-mismatch`
-  rule, this repo's only other instance of "measured, then withdrawn," and the template §4 of this document
+  rule, this repo's only other instance of "measured, then withdrawn," and the template §5 of this document
   follows.
