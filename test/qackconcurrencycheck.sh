@@ -34,8 +34,17 @@
 #       gate's own fixtures take (arms 1-7 above, and 8 below) in the plain (non-NDEBUG) build — a divergence
 #       would abort the process, which this arm's plain 0-exit check therefore also covers.
 #
+#   (9) THE LEGACY-ACK BACKFILL (round 2026-09-22): a row written before provenance existed carries none, and
+#       for the two CLONE kinds it does not have to stay that way — their ack identity is the member-set hash,
+#       so the idiom verdict is recomputable from the CURRENT tree. A stripped-back (legacy) clone row must
+#       come back carrying `prov=recon` and its idiom; the pass must be idempotent; a LIVE ack of the same
+#       finding must outrank the reconstruction and clear `prov=`; and a legacy NUMERIC row must be left alone,
+#       because nothing in this tree can supply its `was=` and half a triple is worse than none. RED on the
+#       pre-backfill binary, which leaves every stripped row legacy.
+#
 # Every arm was run RED against the pre-fix binary before the fix landed (arms 1 and 4's convergence arm; 8
-# against the pre-provenance binary, which writes no now=/was=/facet= token at all).
+# against the pre-provenance binary, which writes no now=/was=/facet= token at all; 9 against the
+# pre-backfill binary, which heals no legacy row).
 #
 # Own temp git repo, never the real one. Needs git + python3.
 # Usage:  bash test/qackconcurrencycheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/qackconcurrencycheck.sh
@@ -334,6 +343,212 @@ case "$CCXROW" in
 esac
 # grammar arm (2) above already re-parses the WHOLE ledger with the updated pattern — a token this arm wrote
 # in a shape that pattern does not accept would already have failed there for every run after this one.
+
+# ── (9) THE LEGACY-ACK BACKFILL ───────────────────────────────────────────────────────────────────────
+# A row written before provenance existed carries no now=/was=/facet=, so the knob sweep cannot re-score it.
+# For the two CLONE kinds it does not have to stay that way: their ack identity IS the member-set hash, so a
+# later run can recompute the idiom verdict from the CURRENT tree and heal the row — marked prov=recon,
+# because "what the idiom is now" is a weaker claim than "what was measured when it was accepted".
+#
+# The only way to MAKE a legacy row here is to strip the tokens back off, because every binary under test
+# writes them. That is a hand-edit of a FIXTURE ledger in a throwaway temp repo, never of the committed one
+# (which is a build product and is only ever healed through the binary — quality.h's backfill note).
+#
+# Four things are asserted, and the last two are the honesty half rather than the feature half:
+#   a) a stripped clone row comes BACK with prov=recon and its idiom — RED on the pre-backfill binary, which
+#      leaves it legacy;
+#   b) the pass is IDEMPOTENT — a second --quality-ack over the healed ledger moves zero bytes;
+#   c) MEASURED BEATS RECONSTRUCTED — when the finding actually re-fires (its ratchet floor is dropped so it
+#      is no longer suppressed) the live fold overwrites the reconstruction and prov= goes away. The backfill
+#      runs BEFORE the fold, so ordering is what guarantees this rather than a check inside the backfill;
+#   d) a stripped NUMERIC row is never given a reconstructed was= — nothing in this tree can supply one, and
+#      inventing it is exactly the guess the honesty contract forbids. This is why the clone kinds are
+#      healable and the numeric kinds are not, asserted rather than asserted-in-a-comment;
+#   f) THE LEDGER-TEXT ROUND TRIP, which the write-path ENSURES does NOT cover: that promise re-scores an
+#      in-memory AckRecord and never touches renderAckRecords/readAckRecords, so a serialisation or parsing
+#      bug is invisible to it — and prov=, the tri-state and the omitted-when-Measured rule are all exactly
+#      that class. A hand-written fixture ledger carries the shapes the binary never emits (permuted token
+#      order, an unknown prov= value, a half pair, a ':' inside p=), the shipping binary reads and rewrites
+#      it, and the result is checked from the bytes — including that no row ever carries both a measurement
+#      and a reconstruction, which the fold ordering is supposed to make unreachable;
+#   e) a reconstruction whose group is NO LONGER FOUND is left intact and reported unverified, never deleted.
+#      prov=recon is a cache — re-derived on every ack that can check it — but "not found" is a floor, not a
+#      verdict: a scoped scan, a capped file, or a ledger read beside a different tree all produce it, and
+#      arm 7's transplant probe is one of them. Deleting derived data on a floor is irreversible.
+#
+# `strip_prov` is a FUNCTION, not three copies of the same regex: the two fixtures below strip the same way,
+# and a lookahead (never consuming the separating space) is what makes back-to-back `now=N was=N` tokens both
+# match — a naive ' now=\d+ ' eats the space its neighbour needs and silently leaves half a triple behind.
+strip_prov(){
+    python3 - "$1" <<'PYEOF'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r' (?:now|was)=\d+(?=[ \n])', '', s)
+s = re.sub(r' (?:prov|facet|p)=[^ \n]+(?=[ \n])', '', s)
+open(p, 'w').write(s)
+PYEOF
+}
+
+BF="$WORK/backfill"; cp -R "$PROV" "$BF" 2>/dev/null
+if [ -f "$BF/.ripwire_quality_acks" ]; then
+    strip_prov "$BF/.ripwire_quality_acks"
+    STRIPPED="$( grep '^ack ' "$BF/.ripwire_quality_acks" 2>/dev/null | grep -c ' now=\| was=\| prov=\| facet=' || true )"
+    [ "${STRIPPED:-0}" = 0 ] \
+        && ok "(9) fixture precondition: every row is legacy again (no now=/was=/prov=/facet= anywhere)" \
+        || no "(9) the strip left ${STRIPPED} row(s) still carrying provenance — the fixture is not legacy"
+
+    ( cd "$BF" && "$BIN" . --quality-delta --quality-ack="backfill fixture" >/dev/null 2>"$WORK/bf1.err" )
+    BFROW="$( grep '^ack duplication ' "$BF/.ripwire_quality_acks" 2>/dev/null )"
+    case "$BFROW" in
+        *" prov=recon facet=threshold-ladder "*) ok "(9) a stripped legacy clone row was reconstructed from the current tree — prov=recon plus the recomputed idiom" ;;
+        *" prov=recon "*)                        ok "(9) a stripped legacy clone row was reconstructed (prov=recon); the idiom verdict is None here, which is itself the answer" ;;
+        *) no "(9) the legacy duplication row was NOT backfilled — no prov=recon on it"; printf '%s\n' "$BFROW" ;;
+    esac
+    grep -q 'ack provenance backfill' "$WORK/bf1.err" \
+        && ok "(9) …and the run DISCLOSED the backfill on stderr (reconstructed / left-legacy / ineligible counts)" \
+        || no "(9) the backfill healed rows without disclosing it — a weaker claim must never land silently"
+
+    cp "$BF/.ripwire_quality_acks" "$WORK/bf.once"
+    ( cd "$BF" && "$BIN" . --quality-delta --quality-ack="backfill fixture" >/dev/null 2>&1 )
+    if cmp -s "$WORK/bf.once" "$BF/.ripwire_quality_acks"; then
+        ok "(9) the backfill is IDEMPOTENT — a second pass over the healed ledger produced a byte-identical file"
+    else
+        no "(9) a second backfill pass changed the ledger — the pass is not idempotent"
+        diff "$WORK/bf.once" "$BF/.ripwire_quality_acks" | head -4
+    fi
+
+    # (c) drop the row's ratchet floor to 1 so the SAME finding is no longer suppressed and re-fires; the fold
+    # then measures it, and the reconstruction it was carrying must not survive that.
+    python3 - "$BF/.ripwire_quality_acks" <<'PYEOF'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r'^(ack duplication [0-9a-f]{16}) \d+ ', r'\1 1 ', s, flags=re.M)
+open(p, 'w').write(s)
+PYEOF
+    ( cd "$BF" && "$BIN" . --quality-delta --quality-ack="live re-ack over a reconstructed row" >/dev/null 2>&1 )
+    LIVEROW="$( grep '^ack duplication ' "$BF/.ripwire_quality_acks" 2>/dev/null )"
+    case "$LIVEROW" in
+        *" prov=recon "*) no "(9) a live re-ack left prov=recon on the row — a measurement must outrank a reconstruction"; printf '%s\n' "$LIVEROW" ;;
+        *" now="*" was="*) ok "(9) a live re-ack UPGRADED the row to measured — prov= is gone, now=/was= remain" ;;
+        *) no "(9) the live re-ack left the row without provenance at all"; printf '%s\n' "$LIVEROW" ;;
+    esac
+    # (e) ABSENCE IS A FLOOR. When the clone group is no longer found, the reconstruction must be left ALONE
+    # and reported as unverified — not deleted. A run can fail to find a group because the scan was scoped or
+    # capped, or because the ledger is sitting next to a different tree (arm 7's transplant probe is exactly
+    # that, and it is what caught an earlier draft that withdrew the row instead). Deleting derived data on
+    # the strength of a floor is irreversible and is the guess the honesty contract forbids.
+    # Re-stripped first so the row is reconstructed (not measured) going in.
+    strip_prov "$BF/.ripwire_quality_acks"
+    ( cd "$BF" && "$BIN" . --quality-delta --quality-ack="re-reconstruct before withdrawal" >/dev/null 2>&1 )
+    case "$( grep '^ack duplication ' "$BF/.ripwire_quality_acks" 2>/dev/null )" in
+        *" prov=recon "*) : ;;
+        *) no "(9) withdrawal precondition: the row is not reconstructed going in" ;;
+    esac
+    rm -f "$BF/b/pick.cpp"
+    ( cd "$BF" && "$BIN" . --quality-delta --quality-ack="withdrawal probe" >/dev/null 2>"$WORK/bf2.err" )
+    GONEROW="$( grep '^ack duplication ' "$BF/.ripwire_quality_acks" 2>/dev/null )"
+    case "$GONEROW" in
+        *" prov=recon "*) ok "(9) a reconstruction whose group was not found is LEFT INTACT — absence is a floor, and derived data is never deleted on one" ;;
+        "")               no "(9) the clone ack row was DELETED when its group stopped being found — absence is a floor, not a verdict" ;;
+        *)                no "(9) a reconstruction was stripped when its group was not found — it must be left alone and reported unverified"; printf '%s\n' "$GONEROW" ;;
+    esac
+    grep -q 'UNVERIFIED' "$WORK/bf2.err" \
+        && ok "(9) …and the run SAID so — the unverified count is what makes leaving the value honest" \
+        || no "(9) the run left an unverifiable reconstruction in place without disclosing it"
+else
+    no "(9) no fixture ledger to strip — arm 8's --quality-ack produced none"
+fi
+
+# ── (9f) THE LEDGER-TEXT ROUND TRIP ───────────────────────────────────────────────────────────────────
+# The write-path ENSURES re-scores the in-memory AckRecord right after it is built; it never goes through
+# renderAckRecords/readAckRecords, so it cannot catch a SERIALISATION or PARSING bug — see the corrected
+# wording in verbs_quality.h. Every new thing the provenance axis adds (the prov= token, the tri-state, the
+# omitted-when-Measured rule) is squarely in that uncovered class, so it is covered here instead, through
+# the real file: hand-write a ledger, let the shipping binary read and rewrite it, and read the result back.
+#
+# Hand-writing a FIXTURE ledger is the only way to produce shapes the binary never emits — a permuted token
+# order from a 3-way merge, a prov= value from some later binary, a row hand-truncated to half a pair. The
+# committed ledger is a build product and is still only ever healed through the binary.
+RT="$WORK/roundtrip"; mkdir -p "$RT"
+cat > "$RT/x.py" <<'EOF'
+def solo(a):
+    return a
+EOF
+( cd "$RT" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+# key 1: canonical order. key 2: PERMUTED (facet before now/was, prov last) — a 3-way merge can produce it.
+# key 3: prov= with a value no binary here writes. key 4: now= with NO was= — half a pair, never provenance.
+# key 5: a p= path containing a ':' — split on the LAST colon, so the path must survive intact.
+cat > "$RT/.ripwire_quality_acks" <<'EOF'
+# ripwire quality acks v1 — hand-written fixture
+ack duplication 1111111111111111 7 now=7 was=0 prov=recon facet=threshold-ladder canonical order
+ack duplication 2222222222222222 7 facet=switch-name-table was=0 now=7 prov=recon permuted order
+ack duplication 3333333333333333 7 now=7 was=0 prov=from-the-future facet=builder-chain unknown prov value
+ack complexity  4444444444444444 9 now=9 half a pair: the second token is absent
+ack complexity  5555555555555555 9 now=9 was=2 p=src/a:b/c.py:41 colon inside the path
+EOF
+( cd "$RT" && "$BIN" . --quality-delta --quality-ack="round-trip probe" >/dev/null 2>&1 )
+rt_row(){ grep "^ack [a-z-]* $1 " "$RT/.ripwire_quality_acks" 2>/dev/null; }
+
+# NON-DISCRIMINATING ON ITS OWN, said out loud rather than left for a reviewer to notice: a reader that does
+# not know prov= leaves the token sitting in the reason text, so the string still appears and this arm passes
+# on the pre-backfill binary too. It is kept because it documents the canonical spelling — but the
+# discrimination in this sub-arm lives in its two neighbours, the PERMUTED-order and unknown-prov= cases,
+# which the old reader fails. An unlabelled assertion that proves nothing is how a gate becomes decorative.
+case "$( rt_row 1111111111111111 )" in
+    *" now=7 was=0 prov=recon facet=threshold-ladder "*) ok "(9f) a canonical prov=recon row round-trips through the ledger text unchanged (documents the spelling; see the note — its neighbours carry the discrimination)" ;;
+    *) no "(9f) the canonical prov=recon row did not survive a read+rewrite"; printf '%s\n' "$( rt_row 1111111111111111 )" ;;
+esac
+case "$( rt_row 2222222222222222 )" in
+    *" now=7 was=0 prov=recon facet=switch-name-table "*) ok "(9f) a PERMUTED token order is read and re-emitted in canonical order, losing no field" ;;
+    *) no "(9f) a permuted token order lost or reordered a field on rewrite"; printf '%s\n' "$( rt_row 2222222222222222 )" ;;
+esac
+# An unknown prov= must degrade to the WEAKER confidence. Reading it as Measured would silently promote a
+# spelling this binary does not understand into the audited-as-measured population.
+case "$( rt_row 3333333333333333 )" in
+    *" prov=recon "*) ok "(9f) an unrecognized prov= value degrades to reconstructed — never promoted to measured" ;;
+    *" now="*)        no "(9f) an unrecognized prov= was read as MEASURED — an unknown confidence must never become the strongest one"; printf '%s\n' "$( rt_row 3333333333333333 )" ;;
+    *) no "(9f) the unknown-prov row lost its provenance entirely"; printf '%s\n' "$( rt_row 3333333333333333 )" ;;
+esac
+# now= without was= is half the pair rescoreAckRecord needs; it must read as NO provenance rather than as a
+# half-answer, so the rewrite carries neither token and the stray text stays in the reason.
+# Pinned to the TOKEN RUN the writer emits (`now=<n> was=<n>`, adjacent and right after the magnitude and
+# any cid=/by=), not to a bare substring: `was=` can legitimately appear later inside a reason, and a gate
+# that cannot tell a token from prose fails on correct behaviour — which is what it did before this line.
+if rt_row 4444444444444444 | grep -qE '^ack [a-z-]+ 4444444444444444 [0-9]+ (cid=[0-9a-f]+ )?(by=[^ ]+ )?(now=[0-9]+ was=|prov=)'; then
+    no "(9f) a half-pair row was treated as provenance-bearing"; printf '%s\n' "$( rt_row 4444444444444444 )"
+else
+    ok "(9f) a row with now= but no was= reads as legacy — half a pair is never provenance"
+fi
+case "$( rt_row 5555555555555555 )" in
+    *" p=src/a:b/c.py:41 "*) ok "(9f) a p= path containing ':' survives the round trip — split on the LAST colon" ;;
+    *) no "(9f) a p= path containing ':' was mangled on rewrite"; printf '%s\n' "$( rt_row 5555555555555555 )" ;;
+esac
+# THE UNREACHABILITY CLAIM, proven from bytes rather than argued from ordering: no row anywhere in this
+# ledger may carry prov= alongside a live measurement. The backfill runs BEFORE the fold, so the fold
+# overwrites the whole record; if that ever stopped holding, a row would show both.
+BOTH="$( grep '^ack ' "$RT/.ripwire_quality_acks" | grep -c ' prov=recon .*prov=' || true )"
+MIXED="$( grep -c '^ack .* prov=[^ ]* .*\( now=\| was=\).*prov=' "$RT/.ripwire_quality_acks" 2>/dev/null || true )"
+[ "${BOTH:-0}" = 0 ] && [ "${MIXED:-0}" = 0 ] \
+    && ok "(9f) no row carries a doubled or mixed provenance stamp — measured and reconstructed stay exclusive in the bytes" \
+    || no "(9f) a row carries more than one provenance stamp (doubled=$BOTH mixed=$MIXED)"
+
+BFN="$WORK/backfillnum"; cp -R "$NUM" "$BFN" 2>/dev/null
+if [ -f "$BFN/.ripwire_quality_acks" ]; then
+    strip_prov "$BFN/.ripwire_quality_acks"
+    ( cd "$BFN" && "$BIN" . --quality-delta --quality-ack="numeric backfill fixture" >/dev/null 2>&1 )
+    NUMROW="$( grep '^ack complexity ' "$BFN/.ripwire_quality_acks" 2>/dev/null )"
+    # prov= is the ONLY thing the backfill could have added. A live re-measure of this same finding would
+    # legitimately restore now=/was= WITHOUT a prov= stamp, so testing for was= here would fail on correct
+    # behaviour; the reconstructed stamp is the thing that must never appear on a numeric row.
+    case "$NUMROW" in
+        *" prov="*) no "(9) a legacy COMPLEXITY row was given reconstructed provenance — its was= cannot be recovered from this tree and must not be invented"; printf '%s\n' "$NUMROW" ;;
+        *) ok "(9) a legacy numeric row was never given a reconstructed was= — the honest refusal" ;;
+    esac
+else
+    no "(9) no numeric fixture ledger to strip"
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

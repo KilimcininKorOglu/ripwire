@@ -185,6 +185,11 @@ struct DeltaBasis
     // the fast one was refused for a reason the caller can act on. nullptr = the attribute is absent, which is
     // the ordinary archived comparison every git-HEAD marker has always meant. See quality::HeadBasis.
     const char* headBasis = nullptr;
+    // Every CURRENT-tree clone group's (member-set hash, idiom verdict) — computeDelta already had both in
+    // hand, so this is a copy rather than a second clone pass. Consumed ONLY by the legacy-ack backfill
+    // (quality::backfillCloneAckProvenance) on the --quality-ack path; a read-only --quality-delta fills it
+    // and never looks at it, which keeps the two runs' reported findings identical.
+    std::vector<rw::quality::CloneIdiomFact> cloneIdioms;
 };
 
 // Returns an EXIT CODE when there is nothing to compare against (already reported), nullopt when `out` holds
@@ -220,7 +225,8 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
         out.healing = quality::healIdentity( out.baseSel.snapshot, out.acks, refs.target().ing, refs.target().g,
                                              out.deltaRoot, root, cfg.qualityAck, refs.rangeSpan );
         out.regs    = quality::computeDelta( refs.target().ing, refs.target().g, out.baseSel.snapshot,
-                                             out.deltaRoot, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface );
+                                             out.deltaRoot, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface,
+                                             &out.cloneIdioms );
         return std::nullopt;
     }
 
@@ -300,7 +306,8 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
     out.acks    = quality::readAckRecords( quality::acksPath( root ), out.acksBadLines );
     out.healing = quality::healIdentity( out.baseSel.snapshot, out.acks, d.ing, d.g,
                                          std::string( cfg.rootPath ), root, cfg.qualityAck );
-    out.regs = quality::computeDelta( d.ing, d.g, out.baseSel.snapshot, cfg.rootPath, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface );
+    out.regs = quality::computeDelta( d.ing, d.g, out.baseSel.snapshot, cfg.rootPath, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface,
+                                      &out.cloneIdioms );
     return std::nullopt;
 }
 
@@ -1214,6 +1221,26 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                 return refused;
             }
 
+            // THE LEGACY-ACK BACKFILL, run on the map this process already holds the write lock over and
+            // BEFORE this run's own acks are folded in, so a row healed here can still be overwritten by a
+            // live measurement of the same finding in the loop below — measured always beats reconstructed,
+            // and ordering is what guarantees it rather than a check. It runs even when this run accepts
+            // NOTHING: healing the ledger's provenance is the same class of forward repair the identity
+            // remap already performs on every ack, and H10's ackNothingToAccept re-renders and notices.
+            // quality::backfillCloneAckProvenance owns the rule, what it refuses to touch, and why.
+            const quality::AckBackfill backfilled = quality::backfillCloneAckProvenance( acks, basis.cloneIdioms );
+            // DISCLOSED, never silent: a reconstructed row is a weaker claim than a measured one, so a reader
+            // is told how many rows just changed confidence class and how many could not be healed at all.
+            // The unresolved count is a FLOOR on what is missing, not a total of what is wrong: a member set
+            // that no longer clones in THIS tree is unanswerable here, not proven gone.
+            if( backfilled.resolved > 0 || backfilled.refreshed > 0 || backfilled.unverified > 0 || backfilled.unresolved > 0 )
+            {
+                rw::emitTo( stderr, "ripwire: ack provenance backfill — {} clone row(s) reconstructed from the current tree, {} re-derived, {} left UNVERIFIED (their group was not found here — a floor, not proof it is gone), "
+                                      "{} left legacy (member set does not clone here), {} ineligible (no current-tree fact answers their kind), {} already measured (left alone). "
+                                      "prov=recon is what the idiom is NOW, as of the last run that could check it — not what was measured when the row was accepted.\n",
+                              backfilled.resolved, backfilled.refreshed, backfilled.unverified, backfilled.unresolved, backfilled.ineligible, backfilled.measured );
+            }
+
             std::size_t ackWritten = 0, ackSkipped = 0;
             for( const quality::Regression& r : regs )
             {
@@ -1246,7 +1273,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                 // one is and why a later run can re-score from them alone.
                 rec = quality::AckRecord{ ackKind, r.key, std::max( rec.ackNow, r.now ), cid,
                                           scope.active() ? scope.spec : rec.by,
-                                          r.was, r.now, r.facet, r.path, r.line, /*hasProvenance=*/true,
+                                          r.was, r.now, r.facet, r.path, r.line, quality::AckProvenance::Measured,
                                           cfg.qualityAckReason.empty() ? rec.reason
                                                                        : quality::composeAckReason( rec.reason, std::string( cfg.qualityAckReason ) ) };
                 // SELF-CHECK, not a one-off test: every magnitude-bearing ack proves that the TABLE-DRIVEN
