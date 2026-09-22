@@ -26,7 +26,8 @@
 #   9. a tracked bench/, docs/, scripts/ or test/lib/ measurement script must not walk git history
 #      from an unpinned population (bare `git log`/`rev-list`, `--all`, `--branches`, `--remotes`,
 #      `for-each-ref`) — this repo's shared .git carries every worktree's branches, so an unpinned
-#      walk's own answer moves under it; allowlisted by exact (path, line) pair, never by whole file
+#      walk's own answer moves under it; allowlisted by (path, content hash of the matched line), never
+#      by whole file or by line number — a line-number key would false-RED on an unrelated edit above it
 #
 # Usage:  bash test/ripwirepubliccheck.sh
 # Exit:   0 = clean · 1 = at least one arm failed (offenders listed) · 2 = usage / missing tool.
@@ -1241,9 +1242,17 @@ fi
 # SOMEVAR is never actually a fixed point would still read clean. It misses population walks split
 # across two lines, and (by design) says nothing about src/ or the rest of test/.
 #
-# EXEMPT (path, line) PAIRS — never a whole file, for the same reason arm 8 keeps its exemptions
-# per-name: a blanket file exemption would hide a genuinely new unpinned walk landing anywhere else
-# in that file forever.
+# EXEMPT (path, content hash of the matched line) PAIRS — never a whole file, for the same reason arm 8
+# keeps its exemptions per-name: a blanket file exemption would hide a genuinely new unpinned walk
+# landing anywhere else in that file forever. Keyed by hash rather than by line number so an unrelated
+# edit elsewhere in the file (which shifts every line below it) cannot false-RED an already-vetted,
+# byte-for-byte-unchanged hit — proved live during review (2026-09-22): inserting one blank line above
+# bench/mine_traces.py's two exemptions, with neither exempted line itself touched, re-fired both under
+# the old (path, line-number) key. A hash key is inert to that shift and still re-fires the moment the
+# matched line's OWN text changes even by one character — which is exactly the case that should get
+# re-justified, so this is strictly more precise than the line-number key it replaces, not looser. The
+# line numbers below are commentary for a human reading this file today, not the match key; they will
+# drift as the file changes, same as any other comment.
 #   bench/cppbench/run_cppbench.py:160,164,290 — the base `git log` argv and its error message; the
 #       actual branch-scope choice (line 161, not matched — see below) is recorded in the checked-in
 #       `dataset.lock`'s `branch_scope`/`mining_stats` fields with a `content_sha256` the harness
@@ -1264,19 +1273,22 @@ fi
 #       name), not an invocation.
 #   docs/docs_commands_build.py:627,642 — generates prose ABOUT `git log` as an example of ambient
 #       non-document output for docs/COMMANDS.md; it never invokes git.
-ARM9_OK='bench/cppbench/run_cppbench\.py:(160|164|290)
-bench/ensemblecal/run_ensemblecal\.py:172
-bench/mine_traces\.py:(242|361)
-bench/roundc-h2h/derive_questions\.py:34
-bench/shotgun/cochange_history\.py:4
-bench/substitution_report\.py:75
-docs/docs_commands_build\.py:(627|642)'
+ARM9_OK='bench/cppbench/run_cppbench.py:e5d3f485c59b0187
+bench/cppbench/run_cppbench.py:7e89ac16d50cd5d2
+bench/cppbench/run_cppbench.py:5d65fe73e9406e01
+bench/ensemblecal/run_ensemblecal.py:d97f1d2b710f35ab
+bench/mine_traces.py:8e357b3957f4460e
+bench/mine_traces.py:7ff5013c36d4b58d
+bench/roundc-h2h/derive_questions.py:3c59a07f84c2b48d
+bench/shotgun/cochange_history.py:eb47c55f978cf817
+bench/substitution_report.py:c3043030dc3e5473
+docs/docs_commands_build.py:fa972c42dc369a5c
+docs/docs_commands_build.py:f10f0b8021b7b6c2'
 python3 - "$TMP/tracked.z" "$ARM9_OK" > "$TMP/arm9" <<'PY'
-import os, re, sys
+import hashlib, os, re, sys
 paths = [p.decode('utf-8', 'surrogateescape')
          for p in open(sys.argv[1], 'rb').read().split(b'\0') if p]
-okLines = [l.strip() for l in sys.argv[2].splitlines() if l.strip()]
-okRe = [re.compile('^' + pat + '$') for pat in okLines]
+okSet = {l.strip() for l in sys.argv[2].splitlines() if l.strip()}
 SCOPE_RE = re.compile(r'^(bench/|docs/|scripts/|test/lib/)')
 SELF = 'test/ripwirepubliccheck.sh'
 GIT_LOGREV = re.compile(r'git[^|&;\n]{0,40}\b(log|rev-list|for-each-ref)\b')
@@ -1320,9 +1332,11 @@ for p in paths:
         rest = line[:m.start()] + line[m.end():]
         if not (ALL_TOKEN.search(rest) or not PIN_SIGNAL.search(rest)):
             continue   # a ref-shaped token is on this line — the floor calls it pinned
-        loc = f'{p}:{i}'
-        if any(r.match(loc) for r in okRe):
-            continue   # exact allowlisted (path, line)
+        # keyed by CONTENT, not by line number: an edit anywhere else in the file must not move this
+        # exemption off its target, and a real edit to this exact line must drop it back into the sweep
+        contentHash = hashlib.sha256(line.encode('utf-8', 'surrogateescape')).hexdigest()[:16]
+        if f'{p}:{contentHash}' in okSet:
+            continue   # allowlisted — this exact line's content is unchanged from the reviewed hit
         print(f'{p}:{i}: unpinned {m.group(0)!r} — {line.strip()[:140]}')
 PY
 if [ -s "$TMP/arm9" ]; then
