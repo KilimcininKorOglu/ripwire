@@ -45,8 +45,8 @@ def changed_lines(sha: str) -> int:
     return sum(int(tok) for tok in re.findall(r"(\d+) (?:insertion|deletion)s?\(\+?-?\)?", stat))
 
 
-def declared_commits(max_changed_lines: int, use_body: bool) -> list[tuple[str, str]]:
-    raw = rp.git("log", "--format=%H\x1f%s\x1f%b\x1e", "--all", "--", "src/*.h", "src/*.hpp", "src/*.cpp", "src/*.cc")
+def declared_commits(max_changed_lines: int, use_body: bool, ref: str = rp.DEFAULT_REF) -> list[tuple[str, str]]:
+    raw = rp.git("log", "--format=%H\x1f%s\x1f%b\x1e", ref, "--", "src/*.h", "src/*.hpp", "src/*.cpp", "src/*.cc")
     out: list[tuple[str, str]] = []
     for rec in raw.split("\x1e"):
         rec = rec.strip("\n")
@@ -150,6 +150,8 @@ def main() -> int:
     ap.add_argument("--max-changed-lines", type=int, default=400)
     ap.add_argument("--decompose", action="store_true", help="decompose §3a's pairs instead of running proxy (c)")
     ap.add_argument("--max-commits", type=int, default=80, help="§3a's commit cap, used only with --decompose")
+    ap.add_argument("--ref", default=rp.DEFAULT_REF,
+                     help=f"walk history from exactly this ref (default {rp.DEFAULT_REF!r}) — never --all")
     ap.add_argument("--until", default=None, help="only commits committed at or before this date (git log --until); pins §3a's "
                                                   "newest-80 window against refs added later")
     args = ap.parse_args()
@@ -162,13 +164,13 @@ def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="rw_declpairs_"))
     try:
         if args.decompose:
-            pairs = rp.collect_pairs(args.bin, args.max_commits, args.max_changed_lines, scratch)
+            pairs = rp.collect_pairs(args.bin, args.max_commits, args.max_changed_lines, scratch, args.ref)
             s = rp.summarize(pairs)
             print(f"§3a regenerated: {s['pairs']} pairs, improved {s['improved']}, worsened {s['worsened']}, tied {s['tied_within_1e-9']}")
             report_decomposition(pairs)
         else:
             for label, use_body in (("PRIMARY arm (subject line)", False), ("SECONDARY arm (subject + body, descriptive only)", True)):
-                commits = declared_commits(args.max_changed_lines, use_body)
+                commits = declared_commits(args.max_changed_lines, use_body, args.ref)
                 pairs = pairs_for(args.bin, commits, scratch)
                 report_direction(label, commits, pairs)
                 if not use_body:

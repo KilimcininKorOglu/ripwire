@@ -169,35 +169,42 @@ saturates to a repeated `"0.000"` for most real functions (see the tie count bel
 falsely indistinguishable. `z` is monotonic in `posnett` (same sigmoid), so ranking by `z` ranks identically
 to ranking by `posnett` without the display truncation.
 
-**Run** (`--max-commits 80 --max-changed-lines 400`, the numbers below):
+**Run** (`--max-commits 80 --max-changed-lines 400`, history pinned to the `v0.6.2` tag — never `git log
+--all`, the numbers below):
 
 | | |
 |---|---|
-| candidate refactor/simplify/cleanup commits | 80 (78 contributed ≥1 usable pair) |
-| function pairs (changed shape, matched by name) | 484 |
-| lens ranks AFTER more readable (`z` increased) | 146 (30.2% of the 484 directional pairs) |
-| lens ranks AFTER less readable (`z` decreased) | 338 (69.8%) |
+| candidate refactor/simplify/cleanup commits | 80 (77 contributed ≥1 usable pair) |
+| function pairs (changed shape, matched by name) | 412 |
+| lens ranks AFTER more readable (`z` increased) | 154 (37.4% of the 412 directional pairs) |
+| lens ranks AFTER less readable (`z` decreased) | 258 (62.6%) |
 | exact tie | 0 |
-| mean Δz (after − before, + = more readable) | **+1.89** |
-| median Δz | **−0.73** |
-| pairs with \|Δz\| > 20 (large swings) | 27 / 484 (5.6%) |
+| mean Δz (after − before, + = more readable) | **+3.79** |
+| median Δz | **−0.56** |
+| pairs with \|Δz\| > 20 (large swings) | 32 / 412 (7.8%) |
 
-**Read this plainly, including that it is not flattering.** On a majority (70%) of the function pairs a human
+First recorded as 484 pairs / 146 right-direction / 30.2% from an unpinned `git log --all` walk, which does
+not reproduce; see §3c for the instrument defect, the fix, and the full decomposition.
+
+**Read this plainly, including that it is not flattering.** On a majority (63%) of the function pairs a human
 called a refactor, the lens's own ranking moved the *wrong* direction — it scored the after-version as *less*
-readable. The mean is positive only because a small number of large swings (5.6% of pairs, all from commits
+readable. The mean is positive only because a small number of large swings (7.8% of pairs, all from commits
 that genuinely shrank a function by splitting work into named helpers) pull it there; the median, which a
 skewed distribution like this one should be read against, is negative. This lines up with exactly the
 literature the lens's own code already cites as a reason for caution — Fakhoury ICPC'19's finding that
 classic readability models "miss real-world readability-improvement commits" is not a hypothetical risk here,
 it is what this run measured on ripwire's own history.
 
-**Two worked examples, to show what is and is not driving the number.** The eight largest positive swings
-are all commits whose stated purpose was extraction — moving a block of logic out into named helper
-functions, which mechanically shortens the function the lens is scoring: `buildFieldNarrowTables`
-(114→50 lines), `computeSnapshot` (116→61), `buildScopedRecvDecls` (61→15), `hasNetExfilShape` (59→17),
-`buildExternalVetoTables` (147→86), `resolve` in `src/elixir_resolve.h` (57→17), `parseAsan` (99→21) and
-`runSkipped` (71→45) — a 25%–75% line-count cut in every case. The lens's length-sensitivity is doing
-exactly the intuitive thing there. The single
+**Two worked examples, to show what is and is not driving the number.** The eight largest positive swings on
+the pinned population are all commits whose stated purpose was extraction — moving a block of logic out into
+named helper functions, which mechanically shortens (or hollows out) the function the lens is scoring:
+`buildScipOverlay` (227→124 lines), `ingest` (1138→1029), `writePinCensus` (88→38), `buildFieldNarrowTables`
+(114→50), `computeSnapshot` (116→61), `buildScopedRecvDecls` (61→15), `hasNetExfilShape` (59→17) and
+`buildExternalVetoTables` (147→86) — a 41%–75% line-count cut in all but one case. The exception is `ingest`
+(`refactor(ingest): the doc post-pass becomes ingest_docpass.h`): only a 9.6% line cut, but the swing is
+still large because a token-dense block moved out into the new header — the Halstead-volume term collapsed
+even though the line count barely moved. That is the same volume-not-lines mechanism §3c's decomposition
+finds behind 91%+ of the wrong-direction pairs too (see below), not a second, unrelated effect. The single
 largest *negative* swing is the opposite shape of edit: commit `15af398e`
 (`refactor(L1-fix): keep existing contracts; readings spell no element markup`) inlined a one-line forwarding
 wrapper (`classify()`, 5 lines) into what had been a same-named sibling implementation, producing one 126-line
@@ -209,7 +216,8 @@ the kind of case a pairwise human study (§2) would need to arbitrate, and we wo
 proxy if we quietly excluded it.
 
 Re-run: `bench/readability_refactor_pairs.py --max-commits 80 --out pairs.tsv` (defaults to this repo,
-`build/ripwire`; deterministic given a fixed git history and a fixed binary).
+`build/ripwire`, and the `v0.6.2` ref — override with `--ref`, never `--all`; deterministic given a fixed
+git history and a fixed binary).
 
 ### 3b. Self-consistency under meaning-preserving rewrites (`bench/readability_self_consistency.py`)
 
@@ -278,11 +286,12 @@ the ordering claim rather than re-fit the formula to rescue it.**
 This protocol was committed to this document before the harness that computes it was run; the commit that
 adds this subsection predates the commit that adds its results, and nothing here was edited afterwards.
 
-**Corpus and binary.** Exactly §3a's: this repository's own git history, walked with the same
-`git log --all` over `src/` C/C++ sources, the same ≤400 total-changed-lines cap, the same single-file
-scratch scoring through the shipped `--readability` verb, the same (basename, name) matching, the same
-"changed token shape" filter and the same full-precision pre-sigmoid `z` comparison. The binary is a v0.6.2
-build; `src/readability.h` is byte-identical between that build's source and this document's base.
+**Corpus and binary.** Exactly §3a's: this repository's own git history, walked with the same pinned `v0.6.2`
+ref over `src/` C/C++ sources (originally `git log --all` — see the instrument-fix note in Results below),
+the same ≤400 total-changed-lines cap, the same single-file scratch scoring through the shipped
+`--readability` verb, the same (basename, name) matching, the same "changed token shape" filter and the same
+full-precision pre-sigmoid `z` comparison. The binary is a v0.6.2 build; `src/readability.h` is byte-identical
+between that build's source and this document's base.
 
 **Selection rule — proxy (c), primary arm.** A commit is selected when its **subject line**, after the lens's
 own name is masked, matches the case-insensitive regex
@@ -321,47 +330,67 @@ directional pairs moved up) is also reported. It is secondary and does not move 
 (Δz < 0), the **driver** is the term with the most negative contribution. Reported: the driver split, the
 mean contribution of each term over the wrong-direction pairs, and how many wrong-direction pairs got *longer*
 (ΔL > 0). The same split over §3a's right-direction pairs is reported beside it for contrast. The pairs are
-regenerated by re-running §3a's exact command (`--max-commits 80 --max-changed-lines 400`); because
-`git log --all` sees every ref, a later ref set can shift which 80 commits are newest, so the regenerated
-counts are reported beside the published 484 / 146 rather than assumed equal to them.
+regenerated by re-running §3a's exact command (`--max-commits 80 --max-changed-lines 400`), now pinned to the
+`v0.6.2` ref by default — walking `git log --all` instead would see every ref in this clone's shared `.git`
+(~291 worktree branches at the time this defect was found), so a later ref set could silently shift which 80
+commits are "newest" and move the published fraction with it. That is exactly what happened to §3a's first
+recorded number; see the instrument-fix note below.
 
 No LLM judgment is used anywhere in this section — not for labels, not for spot-checks. The reference list
 cites CoReEval for why: an LLM readability judge fixates on surface features, which is the very construct
 question under test.
 
-#### Results (computed after the protocol above was committed and pushed)
+#### Instrument fix (this revision) — read this before the numbers below
 
-**Proxy (c), primary arm: n not reached — no verdict.** The pre-registered subject-line rule selected **4
-commits yielding 4 directional pairs** against a target of 100 (3 ranked more readable after, 1 less; 3/1 per
+The first recorded run of this section (484 pairs / 146 right-direction / 30.2% in §3a; the proxy (c) and
+decomposition numbers this subsection used to report) walked `git log --all` in both
+`bench/readability_refactor_pairs.py` and `bench/readability_declared_pairs.py`. This clone's `.git` is
+shared across every worktree in the orchestration tree that produced this document — at the time the defect
+was found, that was on the order of 291 branches — so `--all` pulled in whatever those branches happened to
+contain that day. A rerun of the *identical, unmodified* script gave 413 pairs (38.3%) with the commit window
+pinned to the original run's date and 409 pairs (38.4%) without even that pin; neither matched the published
+484/146/30.2%, and neither run had touched `src/readability.h` or the lens in any way. A number that moves
+when an unrelated lane is pushed is not measuring the lens — it is measuring which branches exist in the
+shared `.git` right now. That is an instrument defect, not a finding.
+
+Both scripts now default to walking exactly one immutable ref — the `v0.6.2` tag, which is also the ref the
+scoring binary (`build/ripwire`, `built_from=15a20855c`) was built from — instead of `--all`. `--ref`
+overrides it for a deliberately different population; `--until` (added when the defect was first worked
+around) still narrows further within whatever ref is walked. §3a's headline table above is this pinned run.
+Every number for the rest of this section is the same pinned run too, so — unlike the first version of this
+document — the "published" and "regenerated" numbers here are one run, not two.
+
+#### Results (recomputed on the `v0.6.2`-pinned instrument)
+
+**Proxy (c), primary arm: n not reached — no verdict.** The pre-registered subject-line rule selected **3
+commits yielding 3 directional pairs** against a target of 100 (2 ranked more readable after, 1 less; 2/1 per
 commit). Under the protocol that is reported as "n not reached" and draws no band. It is also worse than
-small: **none of the four is a readability declaration.** Two match `readab` inside *unreadable* (commits
-about files the tool could not read), and two match the lens's own name in a form the mask did not anticipate
-(`readability-wave1`, a lane name). The mask gap is a defect of the pre-registered rule, disclosed here and not
-patched after the fact. The honest summary: **this repository's `src/` history holds no commit whose subject
-declares a readability improvement**, so proxy (c) cannot be run on this corpus at all.
+small: **none of the three is a readability declaration.** Two match `readab` inside *unreadable* (commits
+about files the tool could not read), and one matches the lens's own name in a form the mask did not
+anticipate (`readability-wave1`, a lane name). The mask gap is a defect of the pre-registered rule, disclosed
+here and not patched after the fact. The honest summary: **this repository's `src/` history, at `v0.6.2`,
+holds no commit whose subject declares a readability improvement**, so proxy (c) cannot be run on this corpus
+at all.
 
-**Secondary arm: descriptive only, and not a second proxy.** Subject and body together selected 58 commits and
-153 directional pairs, of which the lens ranked AFTER more readable on 43 (28.1%; 16/31/3 per commit
+**Secondary arm: descriptive only, and not a second proxy.** Subject and body together selected 46 commits
+and 134 directional pairs, of which the lens ranked AFTER more readable on 38 (28.4%; 13/24/2 per commit
 right/wrong/split). This arm carries no verdict by the protocol, and reading its commit list shows why it
 should not: its subjects are overwhelmingly error-handling fixes (a file that "could not be read", a
 directory walk that was "unreadable"), matched through words like *unreadable* in the body. It is a set of
 bug-fix commits, not a readability ground truth, and a 28% figure on it says nothing about the lens-defect
 explanation.
 
-**§3a decomposition.** Re-running §3a's command did **not** reproduce the published 484 pairs: with the
-same lens source it gives 409 pairs (157 up, 252 down, 38.4% right-direction), and 413 pairs (158 up, 255
-down, 38.3%) with the commit window pinned to the date §3a was committed (`--until`). The difference is in
-which commits the `git log --all` walk sees, not in the lens; both regenerations stay on the inverted side of
-40%, and the table below uses the pinned one.
+**§3a decomposition.** Re-running §3a's command against the pinned `v0.6.2` ref reproduces §3a's own headline
+exactly: 412 pairs (154 up, 258 down, 37.4% right-direction). The table below is that same population.
 
-| over the 413 regenerated pairs | wrong-direction (255) | right-direction (158) |
+| over the 412 pinned pairs | wrong-direction (258) | right-direction (154) |
 |---|---|---|
-| driver = Halstead volume term `ΔV·(−0.033)` | **232 (91.0%)** | 152 (96.2%) |
-| driver = lines term `ΔL·(+0.40)` | 23 (9.0%) | 6 (3.8%) |
+| driver = Halstead volume term `ΔV·(−0.033)` | **235 (91.1%)** | 148 (96.1%) |
+| driver = lines term `ΔL·(+0.40)` | 23 (8.9%) | 6 (3.9%) |
 | driver = entropy term `ΔE·(−1.5)` | 0 | 0 |
-| mean contribution: volume / entropy / lines | −3.04 / −0.06 / +0.18 | +20.63 / +0.20 / −4.89 |
-| function gained tokens | 236 | 3 |
-| function got longer in lines / shorter / same | 45 / 51 / 159 | 8 / 131 / 19 |
+| mean contribution: volume / entropy / lines | −3.07 / −0.06 / +0.18 | +19.79 / +0.20 / −4.91 |
+| function gained tokens | 239 | 3 |
+| function got longer in lines / shorter / same | 47 / 51 / 160 | 8 / 127 / 19 |
 
 Three things follow, all mechanical:
 
@@ -369,11 +398,11 @@ Three things follow, all mechanical:
    is *positive* (+0.40): holding volume fixed, a longer function scores *more* readable. So line count cannot
    be what pushed a pair the wrong way unless the function got shorter, and on average it pushed the other
    way (+0.18). The Halstead-volume term drove 91% of the wrong-direction pairs; entropy drove none.
-2. **Direction is almost entirely the sign of the token-count change.** On 389 of the 413 pairs (94.2%), the
-   lens's direction is predicted by whether the function lost tokens (ranked more readable) or gained them
-   (ranked less readable); 7 pairs kept the same token count.
-3. **The typical wrong-direction pair is a small addition.** Median over the 255: +5 tokens, 0 lines, Δz
-   −1.21 — a guard, a check, or an extra argument inside an unchanged line span, in a commit whose subject
+2. **Direction is almost entirely the sign of the token-count change.** On 388 of the 404 pairs whose token
+   count actually changed (96.0%), the lens's direction is predicted by whether the function lost tokens
+   (ranked more readable) or gained them (ranked less readable); 8 of the 412 pairs kept the same token count.
+3. **The typical wrong-direction pair is a small addition.** Median over the 258: +5 tokens, 0 lines, Δz
+   −1.26 — a guard, a check, or an extra argument inside an unchanged line span, in a commit whose subject
    said "refactor", "simplify" or "clean up".
 
 **Which explanation the data favours.** The lens-defect explanation is **untested**, not refuted: its
@@ -383,7 +412,7 @@ proxy-defect explanation predicts: the lens did exactly what its formula says �
 grew by a few tokens as less readable — on commits that mostly grew functions by a few tokens. Whether those
 small additions made the code more readable is precisely what a commit subject containing "refactor" does
 not tell us. §3a is therefore better read as *"on this history, `--readability`'s direction is the sign of
-the token-count change"* than as *"the lens is wrong 70% of the time"* — and the first statement is a
+the token-count change"* than as *"the lens is wrong 63% of the time"* — and the first statement is a
 narrower, checkable fact about the lens that does not depend on the label at all.
 
 **The stop rule did not trigger.** It needs a second independent proxy to come out inverted, and proxy (c)
@@ -392,7 +421,7 @@ narrowing is supported by the decomposition regardless of how the construct ques
 §2's middle band ("disclose that the lens is known to track length more than it tracks anything
 len-independent"), refined by what was measured — it tracks *token count*, not lines. As a **proposal for
 owner sign-off, not a change made here**, the legend could add: *"On ripwire's own history the ORDER between
-two versions of a function followed the sign of its token-count change in 94% of pairs; read a move as 'more
+two versions of a function followed the sign of its token-count change in 96% of pairs; read a move as 'more
 or fewer tokens', not as more or less readable."*
 
 **Next step.** Proxy (c) needs a corpus that actually contains declared-readability commits — Fakhoury et
@@ -400,9 +429,10 @@ al.'s 548-commit set is the natural one — scored with this same script by poin
 this same protocol (bands, n target, and the stop rule unchanged; the mask gap above fixed *before* that run
 and disclosed as a change).
 
-Re-run: `bench/readability_declared_pairs.py --bin build/ripwire` (proxy (c), both arms) and
-`bench/readability_declared_pairs.py --bin build/ripwire --decompose --until=2026-09-20T14:42:20-04:00`
-(the pinned §3a decomposition; omit `--until` for the unpinned 409-pair run).
+Re-run: `bench/readability_declared_pairs.py --bin build/ripwire` (proxy (c), both arms, `v0.6.2`-pinned by
+default) and `bench/readability_declared_pairs.py --bin build/ripwire --decompose` (the §3a decomposition, on
+the same pinned population as §3a itself). `--ref` points either command at a different immutable ref;
+`--until` still narrows within whichever ref is walked.
 
 ## 4. Precedent: we have already withdrawn a lens that failed exactly this kind of check
 
@@ -424,7 +454,7 @@ next reader will actually see them (this document and `--readability`'s own head
 `naminglens.h`'s header comment carries its own withdrawal), demote or remove the claim from any joined
 surface (`--ensemble`'s `rrank=` first), and do **not** quietly re-add a close cousin of it later without
 citing why this round's finding no longer applies. §3's numbers are not at that bar yet — proxy (a)'s
-70%-wrong-direction result on refactor commits is concerning enough that we think the human-rated study in
+63%-wrong-direction result on refactor commits is concerning enough that we think the human-rated study in
 §2 is now the right next step, not an optional nice-to-have.
 
 ## 5. What we would like help with
@@ -444,7 +474,7 @@ following, specifically:
    understandability? §2 proposes three bands calibrated against "does the lens earn the narrow claim it
    makes," not against "strong correlation is achievable" — is that the right frame, or does it let a weak
    metric off too easily?
-3. **Proxy (a)'s 70%-wrong-direction number** (§3a) is the most actionable finding in this document, and we
+3. **Proxy (a)'s 63%-wrong-direction number** (§3a) is the most actionable finding in this document, and we
    would like a sanity check on the method before we act on it: is commit-message mining (refactor/simplify/
    cleanup) too noisy a readability label on its own — conflating "the author changed something for reasons
    unrelated to readability" with "the author made it more readable" — and if so, what filter (a stricter

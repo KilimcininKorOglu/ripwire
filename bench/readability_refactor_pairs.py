@@ -49,6 +49,13 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BIN = os.environ.get("RIPWIRE_BIN", str(ROOT / "build" / "ripwire"))
 
+# The population must be pinned to ONE immutable ref, never `--all`: this clone's shared .git carries every
+# worktree's branches, so `--all` makes the candidate-commit population — and therefore the published
+# fraction — move whenever any unrelated lane is pushed. That is an instrument defect, not a measurement
+# (docs/research/readability-construct-validity.md §3a). v0.6.2 is the tag the shipped scoring binary was
+# built from; override with --ref for a different pinned population, but never pass --all here.
+DEFAULT_REF = "v0.6.2"
+
 REFACTOR_RE = re.compile(r"refactor|simplify|clean(\s|-)?up", re.IGNORECASE)
 SOURCE_EXT = {".h", ".hpp", ".cc", ".cpp", ".cxx"}
 
@@ -115,12 +122,14 @@ def git(*args: str) -> str:
     return proc.stdout
 
 
-def candidate_commits(max_commits: int, max_changed_lines: int) -> list[tuple[str, str]]:
+def candidate_commits(max_commits: int, max_changed_lines: int, ref: str = DEFAULT_REF) -> list[tuple[str, str]]:
     """(sha, subject) pairs, newest first, whose subject reads as a refactor/simplify/cleanup and whose
     total changed-line count over the whole commit is small enough that attributing a per-function score
-    delta to "the refactor" is defensible rather than noise from an unrelated bulk edit riding along."""
+    delta to "the refactor" is defensible rather than noise from an unrelated bulk edit riding along.
+
+    Walks exactly ONE immutable ref (default the v0.6.2 tag), never `--all`: see DEFAULT_REF's comment."""
     raw = git(
-        "log", "--format=%H\x1f%s", "--all", "-i",
+        "log", "--format=%H\x1f%s", ref, "-i",
         "--grep=refactor", "--grep=simplify", "--grep=clean up", "--grep=cleanup",
         "--", "src/*.h", "src/*.hpp", "src/*.cpp", "src/*.cc",
     )
@@ -184,10 +193,10 @@ def score_file(binary: str, scratch_dir: Path, basename: str, text: str) -> dict
     return rows
 
 
-def collect_pairs(binary: str, max_commits: int, max_changed_lines: int, scratch: Path) -> list[FnPair]:
+def collect_pairs(binary: str, max_commits: int, max_changed_lines: int, scratch: Path, ref: str = DEFAULT_REF) -> list[FnPair]:
     pairs: list[FnPair] = []
-    commits = candidate_commits(max_commits, max_changed_lines)
-    print(f"# {len(commits)} candidate refactor/simplify/cleanup commits (max_changed_lines={max_changed_lines})", file=sys.stderr)
+    commits = candidate_commits(max_commits, max_changed_lines, ref)
+    print(f"# {len(commits)} candidate refactor/simplify/cleanup commits (max_changed_lines={max_changed_lines}, ref={ref})", file=sys.stderr)
     before_dir = scratch / "before"
     after_dir = scratch / "after"
     for sha, subject in commits:
@@ -237,6 +246,10 @@ def main() -> int:
     ap.add_argument("--max-changed-lines", type=int, default=400,
                      help="skip commits whose total insertion+deletion count exceeds this (default 400) — "
                           "keeps the compared functions attributable to the named refactor")
+    ap.add_argument("--ref", default=DEFAULT_REF,
+                     help=f"walk history from exactly this ref (default {DEFAULT_REF!r}) — never --all, "
+                          "which makes the population move whenever any unrelated branch is pushed to a "
+                          "shared .git")
     ap.add_argument("--out", default=None, help="write the per-pair TSV here (default: stdout table only)")
     ap.add_argument("--json", action="store_true", help="print the summary as JSON instead of a table")
     ap.add_argument("--scratch", default=None, help="scratch directory (default: a fresh temp dir)")
@@ -248,7 +261,7 @@ def main() -> int:
 
     scratch = Path(args.scratch) if args.scratch else Path(tempfile.mkdtemp(prefix="rw_readpairs_"))
     try:
-        pairs = collect_pairs(args.bin, args.max_commits, args.max_changed_lines, scratch)
+        pairs = collect_pairs(args.bin, args.max_commits, args.max_changed_lines, scratch, args.ref)
     finally:
         if not args.scratch:
             shutil.rmtree(scratch, ignore_errors=True)
