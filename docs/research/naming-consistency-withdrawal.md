@@ -1,7 +1,8 @@
 # Naming-consistency detection: a withdrawal, reconstructed as evidence
 
 **Status: a first pass and a negative result.** This document does not propose a feature. It reconstructs
-one we built, measured on our own source, and withdrew before it shipped — and argues that the paper below
+one we built, shipped for one commit (`a63a9f15` → `7eeb976f`, both 2026-08-05), measured on our own
+source, and withdrew the same day, before any release carried it — and argues that the paper below
 explains *why* it failed, from the opposite direction of how the paper's own subjects failed. We are
 publishing the failure because we think it is a useful data point for anyone building a naming-quality
 tool, deep-learning-based or not, and because we would like to be told where this reasoning is wrong.
@@ -241,6 +242,10 @@ population, and this sample says nothing about its rate. **We are not claiming t
 inconsistent naming is 8% or lower everywhere — only that in this specific, disclosed, 38-function sample
 of reviewed real code, we found no clear counterexample, and we are telling you exactly how small and how
 skewed that sample is.**
+
+**A weakness not yet stated above: judging was done by a single reader (the author of this document),
+unblinded to which pairs the withdrawn rule itself had flagged, and no per-pair record of the 38
+judgments is published alongside this note.**
 
 We considered constructing known-bad examples to anchor the "what would a genuine violation even look
 like" question, and did not: manufacturing one and then reporting a rate against a set that includes it
