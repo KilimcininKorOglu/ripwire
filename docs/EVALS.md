@@ -9308,6 +9308,48 @@ what round one's own negative published — publishing MORE than registered on a
 manufacture a favorable result, and EVALS is the measurement record. The numbers stay out of README
 and every other public-facing surface, which is the constraint that actually binds.
 
+#### Instrument defect discovered after both rounds — dated note, 2026-09-22
+
+**Nothing above is deleted or restated.** Both MEASURED OUTCOME paragraphs above stand exactly as
+measured and published. This note discloses a defect in the instrument both rounds were measured
+with, and reports what the corrected instrument shows — which does not overturn either negative.
+
+**What was zeroed.** `deriveForConfidence` (`src/lexical.h`) set `out.marginPct = cut.hitCeiling ? 0 :
+cut.dropPct;`. `hitCeiling` is exactly the condition that also drives `confidence="low"` (the
+`!cut.hitCeiling || servedComplete` test in the same function), so `margin_pct=` was hard-zeroed on
+every `confidence="low"` row — and on any `confidence="high"` row that hits the ceiling but is
+`servedComplete`. `AdaptiveCut::dropPct`, and at full precision `rawDropFrac`, already held the true
+relative drop the whole time; `marginPct` discarded it rather than measuring zero. A concrete row from
+lane work: `confidence="low" margin_pct="0"` whose real cliff was a 60.6% drop (`margin_bp="6059"`
+under the fix below). Round one's combined score (`score = 0.0` if `confidence=="low"` else
+`1.0 + margin_pct/100`) collapses every `"low"` row to the same `0.0` regardless of the true gap —
+an instrument-resolution loss, not evidence the gap is zero.
+
+**Both rounds above were measured with this zeroing in place** — round one 2026-08-29, round two
+2026-08-30, both well before the fix. Round two's PRIMARY statistic (`scored/corpus`) never reads
+`margin_pct`, so its negative is not implicated by this defect; round one's combined score is.
+
+**The fix (`lane/for-margin-resolution`; NOT released — v0.6.2 is the latest tag).** Adds `margin_bp=`
+(integer hundredths of a percent, 0–10000, deterministic integer math, `round(rawDropFrac*10000)`,
+never zeroed by `hitCeiling`) alongside the existing root attributes, on the CLI XML root, `--json`,
+and the MCP `for` verb. `margin_pct=` itself is unchanged — this is additive disclosure, not a
+recalibration of shipped behavior.
+
+**Re-measured with the corrected instrument.** LocBench heldout, n=40 (disclosed skips: 266
+`no_snapshot`, 254 `wrong_split` — a floor, not a filtered sample): `margin_bp` alone scores AUROC
+**0.728** (file_hit) / **0.674** (func_hit) on this slice, against `confidence=`/`margin_pct=`'s
+**0.529** / **0.595** on the same slice. The corrected instrument carries materially more separating
+signal than the zeroed one it sits beside.
+
+**Stated plainly, this does not reopen either negative above.** The pre-registered operating-point band
+this investigation is held to (false-warn rate ≤ 0.20 at miss-recall ≥ 0.50;
+`docs/research/confidence-and-abstention.md` §5.2) is **NOT met on either grain**, `margin_bp` included
+— no threshold ships. The conclusion both rounds above reached — no operating point exists over this
+ranking's confidence/margin disclosure, on this benchmark mix — still stands. What changes is only the
+attribution: part of the near-chance reading was our own instrument discarding its own best signal, not
+solely an absence of signal in the ranking. 0.728 is one corpus, n=40, and is not itself an operating
+point.
+
 
 ## SWE-Explore exploration lane (2026-08-28) — PRE-REGISTERED, loss-first, before any measurement
 
