@@ -508,6 +508,60 @@ Re-run: `bench/readability_fixrate_validity.py --bin build/ripwire` (population 
 size-stratified, `v0.6.2`-pinned CUTOFF/UNTIL by default; `--out` writes the per-function TSV this section's
 numbers were computed from).
 
+### Results
+
+**Population and window.** 2,868 of 3,004 functions crawled at the cutoff (`4f5c310c`, 2026-09-03) matched
+between the `--readability` and `--metrics` passes (95.5%; 67 ambiguous matches dropped). The follow-up
+window to `v0.6.2` (2026-09-21) held 1,138 commits touching a `src/` file, 556 of them fix-shaped by the
+pre-registered regex (48.9%).
+
+**Raw (unstratified).**
+
+| outcome | arm | worst-quartile rate | rest rate | risk ratio (95% CI) |
+|---|---|---|---|---|
+| FIXED | readability (least-readable quartile, n=717) | 386/717 = 0.538 [0.502, 0.575] | 403/2151 = 0.187 [0.171, 0.204] | **2.87 [2.57, 3.21]** |
+| FIXED | complexity (highest-ccx quartile, n=717) | 339/717 = 0.473 [0.437, 0.509] | 450/2151 = 0.209 [0.193, 0.227] | **2.26 [2.02, 2.53]** |
+| MODIFIED | readability | 495/717 = 0.690 [0.656, 0.723] | 659/2151 = 0.306 [0.287, 0.326] | **2.25 [2.08, 2.44]** |
+| MODIFIED | complexity | 452/717 = 0.630 [0.594, 0.665] | 702/2151 = 0.326 [0.307, 0.346] | **1.93 [1.78, 2.10]** |
+
+Both signals separate from 1 by a wide margin on this population, on both outcome definitions — and, raw, the
+readability quartile's risk ratio is *larger* than the complexity quartile's on every row, not smaller.
+
+**Size-stratified** (terciles by lines-at-cutoff; n=956 each; quartile recomputed within each tercile):
+
+| tercile (lines) | outcome | readability RR (95% CI) | complexity RR (95% CI) |
+|---|---|---|---|
+| T1 (1–10) | FIXED | 3.30 [2.32, 4.70] | 0.80 [0.51, 1.24] |
+| T2 (10–26) | FIXED | 1.27 [0.995, 1.63] | **0.55 [0.40, 0.77]** |
+| T3 (27–1494) | FIXED | 1.90 [1.69, 2.14] | 1.39 [1.22, 1.58] |
+| T1 (1–10) | MODIFIED | 2.39 [1.88, 3.05] | 1.08 [0.82, 1.44] |
+| T2 (10–26) | MODIFIED | 1.23 [1.03, 1.47] | **0.79 [0.64, 0.98]** |
+| T3 (27–1494) | MODIFIED | 1.56 [1.44, 1.69] | 1.24 [1.13, 1.37] |
+
+**Read this plainly.** The pre-registered "most likely outcome" — the signal vanishing once size is held
+constant — did **not** happen. The readability risk ratio stays above 1, with a CI excluding 1, in five of
+six stratified rows; it only touches 1 in the FIXED/T2 row (lower bound 0.995), and even there the MODIFIED/T2
+row for the same tercile clears 1 (1.03). It attenuates from the T1 (smallest-function) band — where it is
+strongest, 3.30 and 2.39 — through T2, then rises again in T3. Complexity's within-band behavior is the more
+surprising result here: it is flat-to-inverted in T1 and *significantly below 1* in T2 (0.55 and 0.79, both
+CIs excluding 1) — meaning, within these two size bands, the highest-cognitive-complexity quartile was
+fixed/modified *less* often than the rest, the opposite of the trusted baseline's raw-population direction.
+Complexity only behaves as expected (RR > 1) in T3, the largest-function band.
+
+**What this does and does not show.** On the raw population, `--readability`'s ordering separates a fixed
+population by later-fix rate at least as well as the complexity control does, and the effect survives a
+lines-based size stratification better than complexity's own effect does. That is a real, actionable-looking
+signal on this corpus, under this outcome definition — the decision band above calls this a "keep," not a
+"withdraw." But the pre-registered caveat means this is not the full size-confound test: `z` is dominated by
+token volume, not lines (§3c), so a function can sit in the smallest LINE tercile while carrying a large
+TOKEN volume relative to its tercile-mates, and the lines-based stratification cannot separate "z predicts
+fixes independent of size" from "z still partly tracks a size axis lines does not capture." A token-count
+stratification (bucketing by `toks=` instead of `lines=`) is the natural next test and was not run in this
+round. Separately: complexity's inversion in T2 is itself worth a second look before this repository leans on
+"highest complexity" as a worklist filter for medium-sized functions — that result was not anticipated by
+this protocol and is reported exactly as measured, not smoothed over because it complicates the expected
+story.
+
 ## 5. Precedent: we have already withdrawn a lens that failed exactly this kind of check
 
 This is not the first deterministic proxy ripwire has shipped, measured, and had to reckon with. §9.0 of
