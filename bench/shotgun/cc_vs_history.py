@@ -28,7 +28,11 @@ for files in commits:
     if 1 <= len(files) <= cap:
         for f in files: hist[f].append(len(files))
 rows = []
-for f in indexed:
+for f in sorted(indexed):   # deterministic order: `indexed` is a set, and Python's hash-randomized
+                             # set iteration order otherwise leaks into the CC_file=0 tie-break below
+                             # (rows.sort is stable), so two runs of the SAME pinned map/history
+                             # produced different quintile tables — sort() fixes the population's
+                             # order to the file path, not the interpreter's hash seed
     if f in hist and len(hist[f]) >= 3:
         rows.append((len(inFiles.get(f, ())), statistics.mean(hist[f]), len(hist[f]), f))
 def spearman(xs, ys):

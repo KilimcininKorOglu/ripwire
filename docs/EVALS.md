@@ -13149,12 +13149,16 @@ scatter (mean files per commit, over the commits that touched the file):
 
 | corpus | files (map ∩ history, ≥ 3 commits) | ρ( CC_file , mean files/commit ) | mean files/commit by CC_file quintile, Q1 → Q5 |
 | --- | --- | --- | --- |
-| this repository, pinned `v0.6.2` | 545 | **+0.207** | 8.61 · 8.48 · 8.72 · 8.92 · 10.01 |
+| this repository, pinned `v0.6.2` | 545 | **+0.207** | 8.94 · 8.71 · 8.09 · 8.95 · 10.04 |
 | this repository, first recorded 2026-09-08 (unpinned) | 330 | +0.158 | 8.63 · 8.65 · 9.40 · 8.76 · 9.67 |
 | game tree — **RETRACTED**, not reproducible | 431 | +0.163 | 6.89 · 7.07 · 7.64 · 7.79 · 8.19 |
 
 Flat on both, and flat again on the pinned re-run: the static form does not predict the phenomenon, so it is
-not a flag; the half of it a reader can already see is `in=` / `amp=` on `--metrics`.
+not a flag; the half of it a reader can already see is `in=` / `amp=` on `--metrics`. (2026-09-22 review fix:
+`bench/shotgun/cc_vs_history.py`'s quintile split iterated a Python `set` — hash-randomized order, not content
+— so re-running the identical pinned recipe reproduced ρ and n exactly but reshuffled the Q1-Q5 scatter numbers
+run to run; the script now iterates `sorted(indexed)`, and the figures above are the deterministic result,
+confirmed stable across repeated fresh-seed re-runs.)
 
 ### (b) Per-file historical scatter as a repo-wide scan
 

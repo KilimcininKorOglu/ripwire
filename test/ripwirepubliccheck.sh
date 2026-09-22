@@ -1313,7 +1313,12 @@ for p in paths:
         m = GIT_LOGREV.search(line)
         if not m:
             continue
-        if not (ALL_TOKEN.search(line) or not PIN_SIGNAL.search(line)):
+        # test the PIN/--all signals against the line with the matched invocation text masked out —
+        # `for-each-ref`'s own command name contains a `\bref\b`-shaped substring, which otherwise
+        # satisfies PIN_SIGNAL by itself and makes every for-each-ref call read as pre-pinned,
+        # including the unpinned `for-each-ref ... | git log` shape arm 9 exists to catch
+        rest = line[:m.start()] + line[m.end():]
+        if not (ALL_TOKEN.search(rest) or not PIN_SIGNAL.search(rest)):
             continue   # a ref-shaped token is on this line — the floor calls it pinned
         loc = f'{p}:{i}'
         if any(r.match(loc) for r in okRe):
