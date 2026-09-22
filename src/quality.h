@@ -116,7 +116,7 @@ inline constexpr std::uint32_t subBarGrowthFloor( std::uint32_t bar ) noexcept {
 // ledger by rescoreAckRecord — see AckRecord::hasProvenance) are the SAME lookup, not two hand-kept copies
 // that can drift. The two facet-driven kinds (duplication / new-clone-of-reused-helper: decided by the
 // recognized clone idiom, not a bar) and the two presence kinds (dead-code / api-surface tier A: always
-// major, no materiality question) are deliberately absent — `materialityBarFor` returns nullptr for them.
+// major, no materiality question) are deliberately absent — findRowByKind over this table returns nullptr.
 struct MaterialityBar
 {
     std::string_view kind;
@@ -131,11 +131,18 @@ inline constexpr MaterialityBar kMaterialityBars[] = {
     { "params",     kParamBar, kMinorParamDelta, false },
 };
 
-inline const MaterialityBar* materialityBarFor( std::string_view kind ) noexcept
+// The linear scan behind every "kind → its declarative table row" lookup in this file — rescoreNumericMajor's
+// own lookup below and facetAttrName (kFacetAttrs, further down) are both this shape over a different small
+// constexpr table, so this is the one body instead of two. `Row` need only expose a `.kind` field comparable
+// to a string_view; the table is small (at most a handful of kinds) so a linear scan over a sorted-by-nothing
+// array beats any container overhead. No `materialityBarFor` wrapper around it: rescoreNumericMajor is its
+// only caller, and a one-line forwarding wrapper that short is itself clone-bait — measured turning this one
+// in: it duplication-matched three unrelated one-line forwarders elsewhere in the tree the moment it existed
+// as its own named symbol, for no reader benefit over calling findRowByKind at the one call site directly.
+template<class Row>
+inline const Row* findRowByKind( const Row* begin, const Row* end, std::string_view kind ) noexcept
 {
-    const auto* const end = std::end( kMaterialityBars );
-    const auto* const hit = std::find_if( std::begin( kMaterialityBars ), end,
-                                           [ kind ]( const MaterialityBar& b ) { return b.kind == kind; } );
+    const Row* const hit = std::find_if( begin, end, [ kind ]( const Row& r ) { return r.kind == kind; } );
     return hit != end ? hit : nullptr;
 }
 
@@ -161,7 +168,7 @@ inline std::optional<bool> rescoreNumericMajor( std::string_view kind, std::uint
                                                  std::optional<std::uint32_t> barOverride = std::nullopt,
                                                  std::optional<std::uint32_t> minorDeltaOverride = std::nullopt ) noexcept
 {
-    const MaterialityBar* mb = materialityBarFor( kind );
+    const MaterialityBar* mb = findRowByKind( std::begin( kMaterialityBars ), std::end( kMaterialityBars ), kind );
     if( mb == nullptr || now <= was )
     {
         return std::nullopt;
@@ -5348,10 +5355,14 @@ struct Regression
 // quality-delta emitter, its --json twin, and the MCP quality_delta emitter each held the same conditional
 // chain), which is the shape --quality-delta's own duplication kind exists to name; adding the fourth row
 // below is what made keeping three copies indefensible. nullptr = this kind publishes no facet attribute.
-// A declarative table, not a conditional chain (CONTRIBUTING.md §3). Scanned with find_if rather than a
-// hand-rolled loop: the loop spelling is the single most re-derived body in this tree (serialize.h's
-// bytesPerTokenFor, namingconsistency's groupFor, lanes' findClaimByKey, ingest's lookupLang all carry it)
-// and the duplication kind reported this function as a fifth copy of it the moment it was written that way.
+// A declarative table, not a conditional chain (CONTRIBUTING.md §3). Scanned via findRowByKind (ACK
+// PROVENANCE / RE-SCORE, near kMaterialityBars above) rather than a hand-rolled loop: the loop spelling is
+// the single most re-derived body in this tree (serialize.h's bytesPerTokenFor, namingconsistency's
+// groupFor, lanes' findClaimByKey, ingest's lookupLang all carry it), and this function's OWN find_if was
+// reported as a fifth copy of it the moment it was first written that way — sharing findRowByKind with
+// rescoreNumericMajor's own kMaterialityBars lookup (a genuine sibling: same file, same "kind → its
+// declarative row" shape, same reason to exist) resolves that without forcing a shared abstraction onto the
+// other four, unrelated ones.
 struct FacetAttr { std::string_view kind; const char* attr; };
 inline constexpr FacetAttr kFacetAttrs[] = {
     { "short-horizon-churn",        "churn"   },   // self / ambient
@@ -5365,9 +5376,8 @@ inline constexpr FacetAttr kFacetAttrs[] = {
 
 inline const char* facetAttrName( std::string_view kind ) noexcept
 {
-    const auto* const end = std::end( kFacetAttrs );
-    const auto* const hit = std::find_if( std::begin( kFacetAttrs ), end, [ kind ]( const FacetAttr& f ) { return f.kind == kind; } );
-    return hit != end ? hit->attr : nullptr;
+    const FacetAttr* const hit = findRowByKind( std::begin( kFacetAttrs ), std::end( kFacetAttrs ), kind );
+    return hit != nullptr ? hit->attr : nullptr;
 }
 
 // §P6.6: `sym` is a canonical id `path::scope::name` (resolve.h::canonicalId) whose PATH segment is
@@ -5823,23 +5833,50 @@ inline bool takeAckNamedToken( std::string& reason, std::string_view name, std::
     return true;
 }
 
-inline std::uint64_t takeAckCidPrefix( std::string& reason )
+// The GRAMMAR half shared by every numeric ack token (cid= below, now=/was= further down): parse `name`'s
+// value off the front of `reason` in `base`; a missing token is `false` with `reason` untouched, and a
+// PRESENT-but-malformed one is also `false`, `reason` restored to what it was, and `*wasMalformed` (when the
+// caller wants to know) set so it — not this shared parser — can decide whether that specific case is worth
+// its own DISCLOSE. It cannot decide that itself: cid='s degrade already has one (a ratchet-grandfathered
+// site — see takeAckCidPrefix); a brand-new one-argument DISCLOSE is a shape test/selfcheckcheck.sh refuses
+// on new code, and now=/was= below stay silent on purpose (the malformed text staying visible in `reason` is
+// still the disclosure a human reviewing the file sees — see takeAckUintPrefix's own comment).
+inline bool takeAckNumericToken( std::string& reason, std::string_view name, int base, std::uint64_t& valueOut, bool* wasMalformed = nullptr )
 {
-    const std::string untouched = reason;   // the restore point for the degrade below
-    std::string       hex;
-    if( !takeAckNamedToken( reason, "cid=", hex ) )
+    const std::string untouched = reason;
+    std::string       digits;
+    if( !takeAckNamedToken( reason, name, digits ) )
     {
-        return 0;
+        return false;
     }
     char*      stop = nullptr;
-    const auto v    = std::strtoull( hex.c_str(), &stop, 16 );
-    if( hex.empty() || stop == nullptr || *stop != '\0' )
+    const auto v    = std::strtoull( digits.c_str(), &stop, base );
+    if( digits.empty() || stop == nullptr || *stop != '\0' )
+    {
+        reason = untouched;
+        if( wasMalformed != nullptr )
+        {
+            *wasMalformed = true;
+        }
+        return false;
+    }
+    valueOut = v;
+    return true;
+}
+
+inline std::uint64_t takeAckCidPrefix( std::string& reason )
+{
+    std::uint64_t v         = 0;
+    bool          malformed = false;
+    if( takeAckNumericToken( reason, "cid=", 16, v, &malformed ) )
+    {
+        return v;
+    }
+    if( malformed )
     {
         DISCLOSE( "quality: unparseable cid= on an ack line — kept as reason text, content identity unavailable for that row" );
-        reason = untouched;
-        return 0;
     }
-    return v;
+    return 0;
 }
 
 // P1.4 — the provenance twin of takeAckCidPrefix: an optional leading `by=<scope spec>` token. Same degrade
@@ -5865,22 +5902,16 @@ inline std::string takeAckByPrefix( std::string& reason )
 }
 
 // RE-SCORE PROVENANCE — the read side of AckRecord's was=/now=/facet=/p= tokens (see the struct's own doc
-// comment for what each carries and why). A plain decimal `<uint>` token, same degrade rule as cid=/by=: a
-// value this binary could not have written is left in `reason` untouched and disclosed, never guessed at.
+// comment for what each carries and why). A plain decimal `<uint>` token, same shared parser as cid= above
+// (takeAckNumericToken) and the same "left in reason, untouched" degrade on a malformed value — but silent:
+// a value this binary could not have written stays visible as text in the file a human reviews (the same
+// disclosure cid='s DISCLOSE call spells out loud), without a NEW one-argument DISCLOSE call, a shape
+// test/selfcheckcheck.sh refuses on code that did not carry one already.
 inline bool takeAckUintPrefix( std::string& reason, std::string_view name, std::uint32_t& valueOut )
 {
-    const std::string untouched = reason;
-    std::string       digits;
-    if( !takeAckNamedToken( reason, name, digits ) )
+    std::uint64_t v = 0;
+    if( !takeAckNumericToken( reason, name, 10, v ) )
     {
-        return false;
-    }
-    char*      stop = nullptr;
-    const auto v    = std::strtoul( digits.c_str(), &stop, 10 );
-    if( digits.empty() || stop == nullptr || *stop != '\0' )
-    {
-        DISCLOSE( "quality: unparseable now=/was= on an ack line — kept as reason text, re-score provenance unavailable for that row" );
-        reason = untouched;
         return false;
     }
     valueOut = static_cast<std::uint32_t>( v );

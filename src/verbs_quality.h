@@ -1256,8 +1256,9 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                 // (rescoreNumericMajor) have silently diverged — see quality.h's MaterialityBar table, the one
                 // place both are meant to agree. ENSURES, not ASSUME: this is this function's OWN postcondition
                 // on the row it just built, not a fact something else already guarantees.
-                const std::optional<bool> rescored = quality::rescoreAckRecord( rec );
-                ENSURES( !rescored.has_value() || *rescored == !r.isMinor,
+                const std::optional<bool> rescored      = quality::rescoreAckRecord( rec );
+                const bool                rescoreAgrees = !rescored.has_value() || *rescored == !r.isMinor;   // plain bool, so the promise below is a bare accessor-free read
+                ENSURES( rescoreAgrees,
                          "ack provenance round-trip (write, read back, re-score) must reproduce the just-computed severity" );
             }
             if( ackWritten == 0 && !cfg.qualityAckOnly.empty() )
