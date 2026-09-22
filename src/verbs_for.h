@@ -445,6 +445,11 @@ struct ForLensNotes
     // real keys here rather than a string spliced somewhere JSON cannot reach).
     const char*        confidence;  // "high" | "low"
     int                marginPct;   // the whole-percent relative drop the confidence derives from (0 = none)
+    // R-MARGIN (lane/for-margin-resolution): the SAME drop at full precision, hundredths of a percent, never
+    // zeroed by hitCeiling the way marginPct is (docs/research/confidence-and-abstention.md found margin_pct=
+    // collapses to 0 for every "low" row — an instrument-resolution defect, not a genuinely-zero gap). Additive:
+    // marginPct's own contract and every existing reader of it are unchanged.
+    int                marginBp;
     int                coveragePct; // L-W: the XML root's coverage= (-1 = absent: nothing scored)
     bool               weak;
     // M10: gitstamp::stampAt(root) — the raw sha[+dirty] value, "" on multi-root/non-git (never "null" as
@@ -680,15 +685,16 @@ using rw::deriveForConfidence;
 //
 // No "--" anywhere: it rides inside an XML comment, where a double hyphen is ill-formed (G4).
 //
-//   compact      the compact dialect, whose confidence clause defines confidence=/margin_pct= and NOTHING else
-//                (budget_tokens= has never been defined there at any budget, so naming it as dropped would be
-//                the same lie in miniature), and whose sc= reading rides the un-droppable rows clause.
+//   compact      the compact dialect, whose confidence clause defines confidence=/margin_pct=/margin_bp= and
+//                NOTHING else (budget_tokens= has never been defined there at any budget, so naming it as
+//                dropped would be the same lie in miniature), and whose sc= reading rides the un-droppable
+//                rows clause.
 //   thin         the root carries coverage= (L-W present-only), whose clause rode the confidence sentence.
 //   routeWasOn   route= rode this answer, so its reading was there to lose.
 //   scWasOn      a served row carries sc=, so the sc= reading was there to lose (default dialect only).
 inline std::string legendDroppedNote( bool compact, bool thin, bool routeWasOn, bool scWasOn )
 {
-    std::string note = " [legend clauses: confidence=/margin_pct=";
+    std::string note = " [legend clauses: confidence=/margin_pct=/margin_bp=";
     if( thin )
     {
         note += "/coverage=";
@@ -763,7 +769,8 @@ inline constexpr std::string_view kForCompactLegendLayer =
 // say the same thing about route=, so they cannot drift into two readings of one code.
 inline constexpr std::string_view kForCompactLegendRoute = rw::kForRouteCodeLegend;
 inline constexpr std::string_view kForCompactLegendConfidence =
-    "; confidence=/margin_pct= head score drop (low=flat)";
+    "; confidence=/margin_pct= head score drop (low=flat), margin_bp= same drop at full precision "
+    "(0.01%, never zeroed)";
 inline constexpr std::string_view kForCompactLegendHops =
     "; h l= p= n=, c n= l= (joined for same-named callees, shown= counts them), noedge= no callee resolved";
 inline constexpr std::string_view kForCompactLegendBodies =
@@ -1119,6 +1126,7 @@ inline std::string forLensJsonHeader( std::string_view task, const ForLensNotes&
     h += ",\"confidence\":\"";
     h += notes.confidence;
     h += "\",\"margin_pct\":" + std::to_string( notes.marginPct );
+    h += ",\"margin_bp\":" + std::to_string( notes.marginBp );   // R-MARGIN: same fact, full precision, additive
     if( notes.coveragePct >= 0 )
     {
         h += ",\"coverage\":" + std::to_string( notes.coveragePct );   // L-W: the XML root's third ranking fact, same presence rule
@@ -2712,7 +2720,8 @@ std::optional<int> runForLens( const MainDispatch& d )
                                                                                               docMentionNote, lr.anchorLifts, lr.docMentionCount,
                                                                                               adaptiveNote, floorNote,
                                                                                               forConf.level,
-                                                                                              forConf.marginPct, forCoverageOn ? forCoverage : -1, forWeak,
+                                                                                              forConf.marginPct, forConf.marginBp,
+                                                                                              forCoverageOn ? forCoverage : -1, forWeak,
                                                                                               forAtStamp,
                                                                                               // abstention round 2: forCut is the SAME
                                                                                               // cut the confidence facts above derive

@@ -2348,6 +2348,16 @@ struct AdaptiveCut
     bool        hitCeiling = false;  // true ⇒ no knee beat the flat-tail heuristic; capped at ceiling (broad query)
     std::size_t positiveHits = 0;    // how many symbols scored > 0 for this query (the natural cap: a sharp query
                                      // often has FEWER positive hits than the ceiling — kept==positiveHits then)
+    // R-MARGIN (lane/for-margin-resolution): the GLOBAL scan's raw relative drop, full double precision,
+    // BEFORE the kMinCliffDrop threshold and BEFORE dropPct's hitCeiling zero-out. dropPct above answers "how
+    // big was the cut we actually made" (0 when there was no cut) — this answers "how big was the largest gap
+    // in the distribution, cut or not". Set unconditionally (both branches below, and left at its 0.0 default
+    // on the avail==0 early return, which is a genuine no-candidates zero). The confidence-calibration
+    // investigation (docs/research/confidence-and-abstention.md) found margin_pct= = 0 for 74/74 "low" rows on
+    // its LocBench corpus — NOT because the underlying gap is zero, but because deriveForConfidence discards
+    // dropPct whenever hitCeiling, and dropPct itself is already floored at kMinCliffDrop. This field is the
+    // instrument-resolution fix: the true gap, undiscarded and unfloored.
+    double      rawDropFrac = 0.0;
 };
 
 // scores: the lens rank vector (per-symbol, unsorted). floor/ceiling bound the kept count.
@@ -2414,6 +2424,10 @@ inline AdaptiveCut adaptiveCut( const std::vector<float>& scores, std::size_t fl
         if( drop > bestDrop ) { bestDrop = drop; }                                // the GLOBAL cliff: only its magnitude is read
         if( i < hardCeil && drop > bestCapDrop ) { bestCapDrop = drop; bestCapCutKept = i; }
     }
+    // R-MARGIN: the raw global drop, unconditionally — set before the threshold/hitCeiling branch below so
+    // it can never be discarded the way dropPct is. scanEnd==1 (avail==1: nothing to compare) leaves this
+    // at its 0.0 default, which is honest: no second score exists to measure a gap against.
+    cut.rawDropFrac = bestDrop;
 
     // require a MATERIAL cliff to cut below the ceiling (avoid cutting on trivial float noise). ~20% relative
     // drop is a conservative "conceptual query" knee; below that the tail is flat → keep ceiling.
@@ -2443,12 +2457,14 @@ inline AdaptiveCut adaptiveCut( const std::vector<float>& scores, std::size_t fl
     return cut;
 }
 
-// The legend clause that defines confidence=/margin_pct= (below). Named (lane r2-LO) so the session dictionary
-// (legenddict.h) quotes the same bytes the --for headers append.
+// The legend clause that defines confidence=/margin_pct=/margin_bp= (below). Named (lane r2-LO) so the
+// session dictionary (legenddict.h) quotes the same bytes the --for headers append.
 inline constexpr std::string_view kForConfidenceNote =
     " [confidence= derives from the ranked head's largest relative score drop (margin_pct=, whole "
     "percent, 0 = none; the same gap the adaptive flag cuts at). low = flat ranking: treat the set "
-    "as a starting point, not an answer]";
+    "as a starting point, not an answer. margin_bp= is the SAME drop at full precision (hundredths "
+    "of a percent, unrounded, scanned across the whole positive-score distribution) and is never "
+    "zeroed the way margin_pct= is under a flat/broad head — read it when margin_pct=0]";
 
 // ── Homonym-pool decline gate (T14; docs/research/adaptive-short-query.md on lane/research-adaptive-
 // shortquery, c04affc2 — investigation only, not merged) ───────────────────────────────────────────────
@@ -2490,10 +2506,15 @@ inline bool isNameExactRouteTag( const char* routeTag ) noexcept
 
 struct ForConfidence
 {
-    std::string attrs;      // ` confidence="high|low" margin_pct="N"` — root facts, every ladder rung
-    std::string note;       // the legend clause defining both (legend-coverage contract)
+    std::string attrs;      // ` confidence="high|low" margin_pct="N" margin_bp="N"` — root facts, every ladder rung
+    std::string note;       // the legend clause defining all three (legend-coverage contract)
     const char* level = ""; // "high" | "low" — the JSON dialect's key value
     int         marginPct = 0;
+    // R-MARGIN: the true drop at full precision, hundredths of a percent (0.01% resolution), read from
+    // AdaptiveCut::rawDropFrac — UNLIKE marginPct, never zeroed by hitCeiling. Integer (never a formatted
+    // float) so the attribute is bit-for-bit deterministic across platforms/compilers (G2/determinism
+    // contract) rather than trusting float-to-text shortest-round-trip formatting to agree everywhere.
+    int         marginBp = 0;
 };
 
 // homonymDecline: true when isAdaptiveHomonymDecline fired on this same cut — confidence must not claim
@@ -2507,8 +2528,12 @@ inline ForConfidence deriveForConfidence( const rw::AdaptiveCut& cut, int served
     const bool servedComplete = cut.positiveHits > 0 && cut.positiveHits <= std::size_t( servedTopN );
     out.level     = homonymDecline ? "low" : ( !cut.hitCeiling || servedComplete ) ? "high" : "low";
     out.marginPct = cut.hitCeiling ? 0 : cut.dropPct;
-    char attrBuf[ 48 ];
-    rw::formatTo( attrBuf, sizeof( attrBuf ), " confidence=\"{}\" margin_pct=\"{}\"", out.level, out.marginPct );
+    // R-MARGIN: bp = round( rawDropFrac * 10000 ), integer arithmetic only (no float formatting). rawDropFrac
+    // is a fraction in [0,1] (see adaptiveCut), so bp is bounded to [0,10000] — 5 digits, worst case.
+    out.marginBp = int( cut.rawDropFrac * 10000.0 + 0.5 );
+    char attrBuf[ 96 ];
+    rw::formatTo( attrBuf, sizeof( attrBuf ), " confidence=\"{}\" margin_pct=\"{}\" margin_bp=\"{}\"", out.level, out.marginPct,
+                  out.marginBp );
     out.attrs = attrBuf;
     // no "--" anywhere (rides inside an XML comment, where "--" is ill-formed — G4). TERSE on purpose:
     // this rides EVERY --for header and its bytes are charged under an explicit budget, so each word

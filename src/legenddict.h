@@ -206,7 +206,7 @@ inline std::string coreDictionaryText()
 // present in an answer with no definition the reader holds. Lines: attr TAB element (* = any) TAB source.
 inline constexpr std::string_view kForRosterAttrs[] =
 {
-    "confidence", "margin_pct", "coverage", "dropped_positive", "budget_bytes", "lens",
+    "confidence", "margin_pct", "margin_bp", "coverage", "dropped_positive", "budget_bytes", "lens",
 };
 
 inline std::string rosterText()

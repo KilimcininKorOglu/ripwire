@@ -16,6 +16,18 @@
 #   RIPWIRE_BIN=build_base/ripwire test/forrootlegendcheck.sh   # red-first: arms 1/2/4 MUST fail here —
 #     a pre-fix binary emits root= on --for's <ctx> with no legend defining it, in EITHER dialect.
 #
+# ── arm 6 (lane/for-margin-resolution) ──────────────────────────────────────────────────────────────
+# margin_bp= is the RESOLUTION fix for margin_pct=: docs/research/confidence-and-abstention.md found
+# margin_pct= collapses to "0" for 74 of 74 confidence="low" rows on its LocBench corpus — not because
+# the underlying score gap is zero, but because deriveForConfidence (src/lexical.h) discards the
+# measured drop whenever the ranking hits its ceiling. margin_bp= is the SAME drop at full precision
+# (hundredths of a percent), never zeroed that way. Arm 6 proves the resolution actually exists: two
+# queries that are INDISTINGUISHABLE under the old attribute (both confidence="low" margin_pct="0")
+# must be told apart by the new one. RED-FIRST: on any binary before this lane, margin_bp= does not
+# exist on the root AT ALL — every `margin_bp="` grep below fails immediately, so this arm fails in
+# full, not just on the numeric comparison. Run `RIPWIRE_BIN=build_base/ripwire test/forrootlegendcheck.sh`
+# against a pre-lane binary to see it fail.
+#
 # Exits non-zero on any failure; prints PASS/FAIL per check and ALL PASS on success.
 # DO NOT edit regression.sh — this is a standalone gate invoked from there.
 
@@ -149,6 +161,105 @@ PY_EOF
 # ── arm 5: determinism ───────────────────────────────────────────────────────────────────────────────
 OUT1B="$( "$BIN" "$ROOT" --for="rank symbols by pagerank" --no-cache 2>/dev/null )"
 if [ "$OUT1" = "$OUT1B" ]; then ok "arm5: CLI --for output is byte-identical run-to-run"; else no "arm5: CLI --for output is not deterministic"; fi
+
+# ── arm 6: margin_bp= carries REAL resolution that margin_pct= cannot (lane/for-margin-resolution) ────
+# fixture: one corpus, two queries. Query B hits a 40-symbol "strong" tier (all 4 query terms) plus a
+# 5-symbol "weak" tier (1 of 4 terms) — 45 positive hits against a 40 ceiling, so the served head is the
+# strong tier and the real cliff sits at rank 40/41, just beyond it (hitCeiling, margin_pct="0" by
+# design). Query A hits two tiers of EQUAL strength (all 4 of its own terms, 40 + 5 symbols) — also 45
+# positive hits against the same ceiling, also hitCeiling, also margin_pct="0", but genuinely flat: no
+# cliff anywhere. --no-route pins the raw subtoken+body scorer so neither query can be re-routed.
+MTMP="$( mktemp -d )"; trap 'rm -rf "$TMP" "$MTMP"' EXIT
+mkdir -p "$MTMP/corpus"
+i=1; while [ "$i" -le 40 ]; do n=$( printf '%02d' "$i" )
+    printf 'def stageFnA%s( ctx ):\n    """alpha beta gamma delta processing stage marker."""\n    return ctx.run()\n\n' "$n" >> "$MTMP/corpus/strongB.py"
+    i=$(( i + 1 ))
+done
+i=1; while [ "$i" -le 5 ]; do n=$( printf '%02d' "$i" )
+    printf 'def stageFnB%s( ctx ):\n    """alpha only unrelated filler marker."""\n    return ctx.run()\n\n' "$n" >> "$MTMP/corpus/weakB.py"
+    i=$(( i + 1 ))
+done
+i=1; while [ "$i" -le 40 ]; do n=$( printf '%02d' "$i" )
+    printf 'def stageFnC%s( ctx ):\n    """epsilon zeta eta theta processing stage marker."""\n    return ctx.run()\n\n' "$n" >> "$MTMP/corpus/flatA1.py"
+    i=$(( i + 1 ))
+done
+i=1; while [ "$i" -le 5 ]; do n=$( printf '%02d' "$i" )
+    printf 'def stageFnD%s( ctx ):\n    """epsilon zeta eta theta processing stage marker."""\n    return ctx.run()\n\n' "$n" >> "$MTMP/corpus/flatA2.py"
+    i=$(( i + 1 ))
+done
+attr_of(){ printf '%s' "$1" | grep -oE '<ctx [^>]*' | head -1 | grep -oE "$2=\"[^\"]*\"" | head -1 | sed "s/$2=\"//;s/\"//"; }
+
+RUNB="$( "$BIN" "$MTMP/corpus" --for="alpha beta gamma delta" --no-route --no-cache 2>/dev/null )"
+RUNA="$( "$BIN" "$MTMP/corpus" --for="epsilon zeta eta theta" --no-route --no-cache 2>/dev/null )"
+confB="$( attr_of "$RUNB" confidence )"; mpB="$( attr_of "$RUNB" margin_pct )"; mbpB="$( attr_of "$RUNB" margin_bp )"
+confA="$( attr_of "$RUNA" confidence )"; mpA="$( attr_of "$RUNA" margin_pct )"; mbpA="$( attr_of "$RUNA" margin_bp )"
+
+[ "$confB" = "low" ] && [ "$confA" = "low" ] \
+    && ok "arm6: both fixture queries are confidence=\"low\" (the shape margin_bp= exists to see inside)" \
+    || no "arm6: fixture assumption broke — confB=$confB confA=$confA (expected low, low)"
+[ "$mpB" = "0" ] && [ "$mpA" = "0" ] \
+    && ok "arm6: both fixture queries collapse to margin_pct=\"0\" — indistinguishable on the OLD attribute" \
+    || no "arm6: fixture assumption broke — mpB=$mpB mpA=$mpA (expected 0, 0 — re-anchor the fixture)"
+if [ -n "$mbpB" ] && [ -n "$mbpA" ]; then
+    ok "arm6: margin_bp= is present on both roots (mbpB=$mbpB mbpA=$mbpA)"
+    if [ "$mbpB" -ge 2000 ] 2>/dev/null && [ "$mbpA" -le 500 ] 2>/dev/null && [ "$mbpB" -gt "$mbpA" ] 2>/dev/null; then
+        ok "arm6: margin_bp= tells the two queries apart (cliff-beyond-cap=$mbpB vs genuinely-flat=$mbpA) — the resolution fix works"
+    else
+        no "arm6: margin_bp= did not separate the two fixture queries (mbpB=$mbpB mbpA=$mbpA) — resolution fix is not working"
+    fi
+else
+    no "arm6: margin_bp= is MISSING from the root (mbpB='${mbpB}' mbpA='${mbpA}') — pre-lane binary, or the attribute regressed"
+fi
+
+# the legend must define margin_bp= wherever it defines margin_pct= (both dialects' short clauses)
+printf '%s' "$RUNB" | grep -q 'margin_bp=' \
+    && ok "arm6: the legend defines margin_bp= (CLI)" \
+    || no "arm6: margin_bp= rides the root with no legend clause defining it (CLI)"
+
+# --json dialect carries the same fact
+JSONB="$( "$BIN" "$MTMP/corpus" --for="alpha beta gamma delta" --no-route --no-cache --json 2>/dev/null )"
+printf '%s' "$JSONB" | grep -q '"margin_bp":' \
+    && ok "arm6: the --json dialect carries margin_bp=" \
+    || no "arm6: --json is missing margin_bp= (dialect parity break)"
+
+# the MCP \`for\` twin carries the SAME value — dialect parity (same pattern as arm4's root= check)
+python3 - "$BIN" "$MTMP/corpus" "$mbpB" <<'PY_EOF' \
+    && ok "arm6: MCP \`for\` twin's <ctx> carries the SAME margin_bp= as the CLI" \
+    || no "arm6: MCP \`for\` twin's margin_bp= is missing or disagrees with the CLI (dialects have drifted)"
+import json, sys, subprocess
+BIN, CORPUS, EXPECT = sys.argv[1], sys.argv[2], sys.argv[3]
+reqs = [
+    { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} },
+    { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+      "params": { "name": "for", "arguments": { "task": "alpha beta gamma delta" } } },
+]
+blob = ''.join( json.dumps( r ) + '\n' for r in reqs ).encode( 'utf-8' )
+proc = subprocess.run( [ BIN, '--mcp', CORPUS ], input=blob, capture_output=True, timeout=30 )
+body = ''
+for line in proc.stdout.decode( 'utf-8', 'replace' ).splitlines():
+    line = line.strip()
+    if not line.startswith( '{' ):
+        continue
+    try:
+        reply = json.loads( line )
+    except Exception:
+        continue
+    if reply.get( 'id' ) == 2:
+        try:
+            body = reply['result']['content'][0]['text']
+        except Exception:
+            body = ''
+        break
+sys.exit( 0 if ( body and ( 'margin_bp="%s"' % EXPECT ) in body ) else 1 )
+PY_EOF
+
+if command -v xmllint >/dev/null 2>&1; then
+    printf '%s' "$RUNB" | xmllint --noout - 2>/dev/null \
+        && ok "arm6: xml well-formed with margin_bp= present (G4)" \
+        || no "arm6: xml malformed with margin_bp= present"
+else
+    printf '  SKIP  arm6: xml well-formed (no xmllint)\n'
+fi
 
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; }
 echo "FAILURES PRESENT"; exit 1
