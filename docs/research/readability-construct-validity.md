@@ -329,6 +329,81 @@ No LLM judgment is used anywhere in this section — not for labels, not for spo
 cites CoReEval for why: an LLM readability judge fixates on surface features, which is the very construct
 question under test.
 
+#### Results (computed after the protocol above was committed and pushed)
+
+**Proxy (c), primary arm: n not reached — no verdict.** The pre-registered subject-line rule selected **4
+commits yielding 4 directional pairs** against a target of 100 (3 ranked more readable after, 1 less; 3/1 per
+commit). Under the protocol that is reported as "n not reached" and draws no band. It is also worse than
+small: **none of the four is a readability declaration.** Two match `readab` inside *unreadable* (commits
+about files the tool could not read), and two match the lens's own name in a form the mask did not anticipate
+(`readability-wave1`, a lane name). The mask gap is a defect of the pre-registered rule, disclosed here and not
+patched after the fact. The honest summary: **this repository's `src/` history holds no commit whose subject
+declares a readability improvement**, so proxy (c) cannot be run on this corpus at all.
+
+**Secondary arm: descriptive only, and not a second proxy.** Subject and body together selected 58 commits and
+153 directional pairs, of which the lens ranked AFTER more readable on 43 (28.1%; 16/31/3 per commit
+right/wrong/split). This arm carries no verdict by the protocol, and reading its commit list shows why it
+should not: its subjects are overwhelmingly error-handling fixes (a file that "could not be read", a
+directory walk that was "unreadable"), matched through words like *unreadable* in the body. It is a set of
+bug-fix commits, not a readability ground truth, and a 28% figure on it says nothing about the lens-defect
+explanation.
+
+**§3a decomposition.** Re-running §3a's command did **not** reproduce the published 484 pairs: with the
+same lens source it gives 409 pairs (157 up, 252 down, 38.4% right-direction), and 413 pairs (158 up, 255
+down, 38.3%) with the commit window pinned to the date §3a was committed (`--until`). The difference is in
+which commits the `git log --all` walk sees, not in the lens; both regenerations stay on the inverted side of
+40%, and the table below uses the pinned one.
+
+| over the 413 regenerated pairs | wrong-direction (255) | right-direction (158) |
+|---|---|---|
+| driver = Halstead volume term `ΔV·(−0.033)` | **232 (91.0%)** | 152 (96.2%) |
+| driver = lines term `ΔL·(+0.40)` | 23 (9.0%) | 6 (3.8%) |
+| driver = entropy term `ΔE·(−1.5)` | 0 | 0 |
+| mean contribution: volume / entropy / lines | −3.04 / −0.06 / +0.18 | +20.63 / +0.20 / −4.89 |
+| function gained tokens | 236 | 3 |
+| function got longer in lines / shorter / same | 45 / 51 / 159 | 8 / 131 / 19 |
+
+Three things follow, all mechanical:
+
+1. **The inversion is a token-count signal, not a length signal.** In the Posnett fit the lines coefficient
+   is *positive* (+0.40): holding volume fixed, a longer function scores *more* readable. So line count cannot
+   be what pushed a pair the wrong way unless the function got shorter, and on average it pushed the other
+   way (+0.18). The Halstead-volume term drove 91% of the wrong-direction pairs; entropy drove none.
+2. **Direction is almost entirely the sign of the token-count change.** On 389 of the 413 pairs (94.2%), the
+   lens's direction is predicted by whether the function lost tokens (ranked more readable) or gained them
+   (ranked less readable); 7 pairs kept the same token count.
+3. **The typical wrong-direction pair is a small addition.** Median over the 255: +5 tokens, 0 lines, Δz
+   −1.21 — a guard, a check, or an extra argument inside an unchanged line span, in a commit whose subject
+   said "refactor", "simplify" or "clean up".
+
+**Which explanation the data favours.** The lens-defect explanation is **untested**, not refuted: its
+distinguishing prediction needs a declared-readability ground truth, and this corpus does not contain one.
+What the data does settle is the mechanism behind §3a's number, and that mechanism is the shape the
+proxy-defect explanation predicts: the lens did exactly what its formula says — it ranked a function that
+grew by a few tokens as less readable — on commits that mostly grew functions by a few tokens. Whether those
+small additions made the code more readable is precisely what a commit subject containing "refactor" does
+not tell us. §3a is therefore better read as *"on this history, `--readability`'s direction is the sign of
+the token-count change"* than as *"the lens is wrong 70% of the time"* — and the first statement is a
+narrower, checkable fact about the lens that does not depend on the label at all.
+
+**The stop rule did not trigger.** It needs a second independent proxy to come out inverted, and proxy (c)
+produced no verdict. The shipped `--readability` flag and its help text are unchanged by this section. One
+narrowing is supported by the decomposition regardless of how the construct question resolves, and falls in
+§2's middle band ("disclose that the lens is known to track length more than it tracks anything
+len-independent"), refined by what was measured — it tracks *token count*, not lines. As a **proposal for
+owner sign-off, not a change made here**, the legend could add: *"On ripwire's own history the ORDER between
+two versions of a function followed the sign of its token-count change in 94% of pairs; read a move as 'more
+or fewer tokens', not as more or less readable."*
+
+**Next step.** Proxy (c) needs a corpus that actually contains declared-readability commits — Fakhoury et
+al.'s 548-commit set is the natural one — scored with this same script by pointing it at that checkout, under
+this same protocol (bands, n target, and the stop rule unchanged; the mask gap above fixed *before* that run
+and disclosed as a change).
+
+Re-run: `bench/readability_declared_pairs.py --bin build/ripwire` (proxy (c), both arms) and
+`bench/readability_declared_pairs.py --bin build/ripwire --decompose --until=2026-09-20T14:42:20-04:00`
+(the pinned §3a decomposition; omit `--until` for the unpinned 409-pair run).
+
 ## 4. Precedent: we have already withdrawn a lens that failed exactly this kind of check
 
 This is not the first deterministic proxy ripwire has shipped, measured, and had to reckon with. §9.0 of
