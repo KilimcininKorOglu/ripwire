@@ -15,7 +15,7 @@ Usage:
 import argparse, json, shutil, subprocess, sys, time
 from pathlib import Path
 
-from _common import git                                # one definition, shared across bench/slice
+from _common import git, archive_tree                  # one definition, shared across bench/slice
 
 
 def main():
@@ -37,12 +37,9 @@ def main():
     out, resolved, ambiguous, other = [], 0, 0, 0
     for r in sample:
         tree = work / r[ "instance_id" ]
-        shutil.rmtree( tree, ignore_errors=True ); tree.mkdir( parents=True )
-        tar = subprocess.run( [ "git", "-C", r[ "repo_dir" ], "archive", r[ "base_commit" ] ],
-                              capture_output=True )                 # bytes, not text: git() decodes
-        if tar.returncode != 0:
+        shutil.rmtree( tree, ignore_errors=True )
+        if not archive_tree( r[ "repo_dir" ], r[ "base_commit" ], tree ):
             continue
-        subprocess.run( [ "tar", "-x", "-C", str( tree ) ], input=tar.stdout, check=True )
         t0 = time.perf_counter()
         p = subprocess.run( [ binary, str( tree ), f"--slice={r['selector']}" ],
                             capture_output=True, text=True, errors="replace" )

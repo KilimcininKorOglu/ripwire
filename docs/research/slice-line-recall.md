@@ -435,8 +435,129 @@ python3 bench/slice/locbench_gold.py        --assets <assets> --json gold.json
 python3 bench/slice/run_slice_linerecall.py --gold gold.json --bin build/ripwire --work <scratch> --json results.json
 python3 bench/slice/inspect_slice_misses.py --results results.json --gold gold.json
 python3 bench/slice/probe_wholerepo_selector.py --gold gold.json --bin build/ripwire --work <scratch> --sample 16
+python3 bench/slice/run_cross_fn_reach.py    --assets <assets> --bin build/ripwire --work <scratch> --json crossfn.json
 ```
 
 `<assets>` is a directory holding `datasets/<dataset>.json` and one or more directories of
 `owner__repo` checkouts. Nothing is downloaded and no checkout is written to. Gold is built without
 invoking ripwire, so it cannot move when the binary does.
+
+---
+
+## 10. ARISE rung 3 — is cross-function reach worth building? (protocol pre-registered 2026-09-22)
+
+**Status: PROTOCOL COMMITTED, no result yet.** This commit adds §§10.1–10.3 and the decision bands in
+§10.3 in full; §10.4 (Results), §10.5 (Verdict) and §10.6 (What this does not tell us) are headings
+only, exactly as the 2026-09-20 round's pre-registration commit (`3d994cda`) left its own Results
+section empty — the proof that the bands were fixed before any harness ran is that this commit
+contains no number the harness could have produced. A follow-up commit fills them in.
+
+### 10.1 The question
+
+§R3 measured that **70.8 % of this corpus's gold lines (6,809 of 9,615) sit in fixes touching more
+than one function**, out of reach of an intra-procedural primitive *by construction* — the single
+largest number in this document. ripwire already builds a call graph for every other verb in the
+catalog. Before spending any engineering on extending `--slice` across call boundaries, this round
+asks the cheap question first: **using the call graph the tool already has, how much of that 6,809
+would a cross-function extension actually recover, and at what hop depth?**
+
+### 10.2 Method
+
+**Same population, same pin.** Reuses `bench/slice/locbench_gold.py`'s dataset and gold rule (§2, §1.1
+G2) — the LocBench V1 test-560 rows at each row's own `base_commit` — restricted to the **208
+multi-function rows already counted in §R3's 6,809**, at the *same* checkouts as the rest of this note
+(one directory containing all `owner__repo` checkouts and `datasets/rows_czlll__Loc-Bench_V1_test_560.json`,
+passed as `--assets`; not committed, not named here — see §2's own `<assets>` convention). This
+composes with the published ceiling: it is the same denominator, not a resample.
+
+**Whole tree, not the one-file trick.** `run_slice_linerecall.py`'s one-file tree is sound only because
+`--slice` is declared intra-procedural — a cross-function question cannot reuse it, because the
+enclosing function of a gold line outside the seed can live in a different file from the seed
+entirely. The tree is materialized **read-only** with `git archive <base_commit> | tar -x` into scratch
+(the checkout is never written to, nothing is cloned) — `probe_wholerepo_selector.py`'s existing
+technique, factored into `_common.archive_tree()` so both scripts share one definition.
+
+**Seed = `edit_functions[0]`.** The dataset gives a patch's edited functions as a bare list, not a
+ranked one. The first-listed function is used as the seed — deterministic, stated before measuring,
+and the same convention `locbench_gold.py`'s `carry_row` already uses for the single-function
+population (`efs[0]`). The selector is spelled with the **full relative path**, not the basename
+`selector_for()` uses for the one-file trick: on a whole tree a bare basename is exactly the ambiguity
+source §R6 priced (12.5 % of real-checkout selectors refuse); the patch's own path is already a unique
+qualifier, so this removes a chunk of that refusal rate by construction rather than by luck.
+
+**Reachability, per row:**
+
+1. Resolve the seed via `--expand=SEED` against the whole tree; refusal drops the row (counted).
+2. Compute every gold line of the row (§1.1 G2, unchanged) across **every file the patch touches**,
+   not only the seed's file.
+3. A gold line inside the seed's own resolved span is **hop0** — reported apart from the rest,
+   because it was already reachable by today's single-function slice had one been pointed at this row
+   at all; the existing methodology never attempts a multi-function row, so this is a footnote on the
+   ceiling, not new reach.
+4. Every other gold line: `--at=FILE:LINE` names its **true** enclosing symbol — not the dataset's own
+   `edit_functions` naming, which the task can list imprecisely — or refuses (no indexed definition:
+   an import line, a decorator, a module constant, a comment). A refusal is its own bucket,
+   `no_enclosing_symbol`, disclosed apart from `unreachable`: extending call-graph reach cannot help a
+   line that names no enclosing call at all, so folding the two together would overstate what a
+   cross-function extension could ever buy.
+5. Distinct enclosing symbols are **deduped per row** — one `--path=SEED,@FILE:LINE` call per symbol,
+   not per gold line, and every gold line under that symbol inherits its verdict. `--path` is a
+   directed shortest call-path with its own `hops=`/`reachable=`, which is a closer fit to "how many
+   hops would a call-graph-extended slice need to walk" than reconstructing depth from `--impact`'s
+   transitive-but-undated reach set or from repeated 1-hop `--callers=`/`--callees=` BFS — both of
+   which this round could have used instead and neither of which reports a per-target hop count
+   directly. **Direction matters and is deliberate**: `--path=SEED,TARGET` asks whether *walking
+   outward from the seed's own calls* reaches TARGET, which is exactly what a call-graph-extended
+   slice would do; it does *not* find a shared-caller sibling relationship (two functions invoked
+   by a common third function but not by each other) — `--connect` would, and §10.6 says what that
+   means for the reading.
+6. For a symbol `--path` calls **unreachable**, `--callers=@FILE:LINE` and `--callees=@FILE:LINE` are
+   both checked: `count="0"` on both is the honesty disclosure the protocol requires — it reads
+   exactly like a symbol reached only by dynamic dispatch, a callback, or a macro (the same blind spots
+   named on every graph verb in `docs/COMMANDS.md`), and this round cannot tell the two apart from the
+   outside.
+7. `--cache=PATH` is passed on every call against one row's tree — the first call cold-parses and
+   writes it, later calls against the same unchanged tree read it back.
+
+**Reported, per gold line of the 6,809:** `hop0` / `hop1` / `hop2` / `hop3plus` / `unreachable` /
+`no_enclosing_symbol` / not measured (no checkout, no commit, seed selector refused) — every bucket a
+share of 6,809, summing to it exactly, because a count that cannot be a total is a floor and a
+floor is disclosed, never silently dropped from the denominator.
+
+**Reported, per instance (row):** "fully covered at reach = N" — every one of the row's gold lines is
+either `hop0` or at or under N hops — for N ∈ {1, 2, 3}, as a share of the **measured** rows (the
+denominator here is rows this round could actually resolve a seed for, not all 208, because an
+unmeasured row has no "fully covered" verdict to report, and reporting one against the full 208 would
+manufacture a number this round never produced).
+
+### 10.3 Pre-registered decision, before any number exists
+
+The question this buys an answer to is **marginal**: of the gold lines a single-function slice cannot
+reach today, how many would a call-graph extension **newly** reach? `hop0` lines are already reachable
+in principle (§10.2 step 3) and are not the extension's credit to claim; `no_enclosing_symbol` lines
+cannot be reached by any amount of call-graph walking. So the decision metric is:
+
+**`extend_2 = (hop1 + hop2) / 6809`** — the share of the published ceiling a reach-2 extension would
+newly recover.
+
+- **`extend_2 ≥ 50 %`** — strong case: build it.
+- **`extend_2 < 20 %`** — kills it: the ceiling barely moves for the engineering cost.
+- **`20 % ≤ extend_2 < 50 %`** — inconclusive: report it, do not build from this number alone; it
+  needs a cost estimate (§7's `--slice-flow=both`'s own redundancy finding is the cautionary
+  precedent — a rung that sounded obviously useful and measured provably redundant).
+
+`hop0`, `hop3plus`, `unreachable`, `no_enclosing_symbol` and the not-measured share are reported beside
+`extend_2`, every one of them as its own share of 6,809, so the bands are graded against a number nothing
+else in this section can quietly inflate.
+
+### 10.4 Results
+
+*(pending — filled in by the follow-up commit that runs `bench/slice/run_cross_fn_reach.py`)*
+
+### 10.5 Verdict
+
+*(pending)*
+
+### 10.6 What this does not tell us
+
+*(pending)*

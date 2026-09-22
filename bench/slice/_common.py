@@ -7,6 +7,7 @@ copy; --quality-delta named the clone pairs, so they live here instead.
 """
 
 import io, subprocess, tokenize
+from pathlib import Path
 
 
 def sh( args, cwd=None, ok_fail=False ):
@@ -31,6 +32,18 @@ def git( repo, *args, ok_fail=False ):
 def line_text( lines, n ):
     """the 1-based n-th source line, or "" when n is outside the file."""
     return lines[ n - 1 ] if 0 < n <= len( lines ) else ""
+
+
+def archive_tree( repo, commit, dest ):
+    """materialize repo@commit READ-ONLY into dest via `git archive | tar -x` — the checkout is never
+    written to and nothing is cloned. True on success; dest is left present but possibly incomplete
+    on failure, matching probe_wholerepo_selector.py's original inline version this replaces."""
+    tar = subprocess.run( [ "git", "-C", str( repo ), "archive", commit ], capture_output=True )
+    if tar.returncode != 0:
+        return False
+    Path( dest ).mkdir( parents=True, exist_ok=True )
+    r = subprocess.run( [ "tar", "-x", "-C", str( dest ) ], input=tar.stdout, capture_output=True )
+    return r.returncode == 0
 
 
 def name_lines( source ):
