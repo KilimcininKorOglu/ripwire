@@ -446,11 +446,11 @@ invoking ripwire, so it cannot move when the binary does.
 
 ## 10. ARISE rung 3 — is cross-function reach worth building? (protocol pre-registered 2026-09-22)
 
-**Status: PROTOCOL COMMITTED, no result yet.** This commit adds §§10.1–10.3 and the decision bands in
-§10.3 in full; §10.4 (Results), §10.5 (Verdict) and §10.6 (What this does not tell us) are headings
-only, exactly as the 2026-09-20 round's pre-registration commit (`3d994cda`) left its own Results
-section empty — the proof that the bands were fixed before any harness ran is that this commit
-contains no number the harness could have produced. A follow-up commit fills them in.
+**Status: RUN, 2026-09-22.** §§10.1–10.3 (the protocol and the decision bands) were committed in
+`21737125` with §10.4–§10.6 as headings only — that commit contains no number the harness could have
+produced, the same ordering proof the 2026-09-20 round's own pre-registration commit (`3d994cda`) used.
+This amendment, made strictly after that commit, fills in §10.4–§10.6 from
+`bench/slice/run_cross_fn_reach.py`'s output and changes nothing in §10.1–§10.3.
 
 ### 10.1 The question
 
@@ -552,12 +552,114 @@ else in this section can quietly inflate.
 
 ### 10.4 Results
 
-*(pending — filled in by the follow-up commit that runs `bench/slice/run_cross_fn_reach.py`)*
+**Binary** `ripwire 0.6.1 (dev, built_from=81b7322ce)` — plain dev build, no `-DCMAKE_BUILD_TYPE`, same
+assets as the rest of this note (§2). **Population.** 208 dataset-level multi-function rows / 6,809
+gold lines — recomputed independently by this round's own harness and it matches §R3's published ceiling
+exactly, which is the composability check §10.2 promised.
 
-### 10.5 Verdict
+**Availability cascade** (rows, out of the 208):
 
-*(pending)*
+| stage | rows | note |
+| --- | ---: | --- |
+| multi-function rows | **208** | the §R3 ceiling population |
+| …no local checkout | 80 | same 90/165-repository availability ceiling as §R1 |
+| …`base_commit` absent from the checkout | 2 | |
+| …seed selector (`edit_functions[0]`) refused on the whole tree | 4 | **3.2 %** of the 126 real-checkout candidates — well under §R6's 12.5 % basename-refusal rate; the full-path qualifier (§10.2) is doing the work that number predicted |
+| **carried** | **122** | 2,913 gold lines, 42.8 % of the 6,809 ceiling |
+
+**Gold-line distribution, every bucket a share of the full 6,809 ceiling — they sum to it exactly:**
+
+| bucket | gold lines | share of 6,809 | meaning |
+| --- | ---: | ---: | --- |
+| not measured | 3,896 | 57.2 % | no checkout / no commit / seed refused (cascade above) |
+| `hop0` | 572 | 8.4 % | inside the seed's own span — already reachable today, a footnote on the ceiling, not new reach |
+| **`hop1`** | **291** | **4.3 %** | one call hop from the seed |
+| **`hop2`** | **127** | **1.9 %** | two call hops |
+| `hop3plus` | 58 | 0.9 % | three or more hops |
+| `unreachable` | 1,559 | 22.9 % | `--path` found no directed call path at all |
+| `no_enclosing_symbol` | 306 | 4.5 % | outside the seed, and `--at` found no indexed definition there either — an import line, a decorator, a module constant, a comment; no amount of call-graph walking reaches these |
+
+2,035 of the 2,341 outside-seed gold lines resolved to a real enclosing symbol via `--at` (the rest are
+the 306 `no_enclosing_symbol` lines above); those 2,035 lines deduped to **513 distinct enclosing
+symbols**, one `--path` call each, and every line inherited its symbol's hop verdict.
+
+**The decision metric:**
+
+**`extend_2 = (hop1 + hop2) / 6809 = 418 / 6809 = 6.14 %`**
+
+(`extend_1 = 4.27 %`, `extend_3 = 6.99 %` — depth 3 buys less than one more point over depth 2, which
+is itself the point: whatever is reachable at all is mostly reachable in one hop or not in three.)
+
+**Instance-level: share of the 122 measured rows fully covered if reach extended to N** (every gold
+line in the row is `hop0` or at/under N hops — a `no_enclosing_symbol` line anywhere in the row makes
+it uncoverable at any N):
+
+| reach | rows fully covered | share of 122 |
+| ---: | ---: | ---: |
+| 1 | 2 | 1.6 % |
+| 2 | 3 | 2.5 % |
+| 3 | 6 | 4.9 % |
+
+**Graph-limits disclosure, as required by §10.2 step 6 and the protocol's own honesty rule.** Of the
+1,559 `unreachable` gold lines, 252 (**16.2 %, gold-line-weighted** — a line inherits its symbol's
+verdict, and a symbol with several gold lines is counted once per line, not once) sit behind a symbol
+with `count="0"` on BOTH `--callers` and `--callees`. Read literally: about one unreachable gold line in
+six sits in a function with no recorded edge into or out of it at all — indistinguishable, from the
+outside, between "this function truly stands alone" and "the only calls into or out of it go through
+dynamic dispatch, a callback, or a macro the name-based graph does not see" (the same blind spot named
+on every graph verb in `docs/COMMANDS.md`). **The other 83.8 % of unreachable gold lines sit behind a
+symbol that DOES have edges elsewhere in the graph** — not a leaf — and is still unreached by a
+*directed* path from the seed; the most likely structural reading is the one §10.2 step 5 named before
+measuring: sibling functions a patch edits together because a common caller uses both, not because
+either calls the other. A directed
+`--path` cannot see that relationship by design; `--connect` could, and did not run here (§10.6).
+`graph_ambiguous=` ranged 0–34,114 across the 122 trees (mean 3,176, median 2,392) and
+`graph_unresolved=` 0–11,208 (mean 1,040, median 146) — both scale with repository size, and both are
+resolver gauges over the WHOLE tree, not specific to any one call queried.
+
+### 10.5 Verdict, against the bands fixed in §10.3 before any of this was measured
+
+**`extend_2 = 6.14 %`, which is under the 20 % kill line — not close to it.** Even the most generous
+read (`extend_3 = 6.99 %`, or crediting every `hop0` line as if the extension bought it too, which it
+did not) stays under 15 %. At the instance level the picture is the same: extending reach to depth 3
+still leaves 95 % of measured multi-function rows with at least one gold line the extension cannot
+touch. **Kill it** — cross-function reach via the existing directed call graph would recover a small,
+single-digit slice of the 70.8 % ceiling, not the "close most of the gap" outcome that would justify
+the engineering. This is a **measured** answer to the question §10.1 asked cheaply before building
+anything, and it came back negative.
+
+The one caveat that keeps this from being a flat no: `unreachable` is 22.9 % of the ceiling versus
+`hop1`+`hop2` at 6.1 %, and §10.4's graph-limits paragraph says 83.8 % of unreachable symbols have
+graph edges *somewhere* — just not on a directed path from the seed. If a meaningful share of that
+22.9 % is actually a shared-caller sibling relationship a *directed* extension is the wrong shape for,
+an **undirected** join (`--connect`, or a bidirectional reach) could still be worth pricing separately.
+This round did not measure that — see §10.6 — and the bands above were pre-registered for the directed
+question only.
 
 ### 10.6 What this does not tell us
 
-*(pending)*
+- **Directed reach only.** `--path=SEED,TARGET` asks whether walking outward from the seed's own calls
+  reaches the target. It cannot find a shared-caller sibling (two functions a common third function
+  calls, never calling each other) — `--connect` could, and this round did not run it over the
+  unreachable population. §10.5's one open caveat is exactly this gap; the 6.14 % verdict is a verdict
+  on directed extension, not on every shape a cross-function join could take.
+- **57.2 % of the ceiling was never measured**, for the same repository-availability reason as the
+  rest of this note (§R1): only 90 of 165 repositories have a local checkout. The `extend_2` figure is
+  computed against the FULL 6,809 denominator specifically so this gap reads as an honest floor rather
+  than vanishing into a smaller, rosier-looking base — but a measurement over the other 57.2 % could
+  still move the number, in either direction.
+- **`edit_functions[0]` is one seed choice, not the best one.** A different, better-informed pick
+  (the function with the most gold lines, or the one PageRank ranks highest) could reach more; this
+  round deliberately used the cheapest, most defensible rule and did not search over seed choices.
+- **A leaf-looking unreachable symbol (16.2 % of them) is not proof of isolation** — §10.4 already
+  says this cannot be told apart from a dynamic-dispatch/callback/macro blind spot from the outside;
+  reading it as "the code really has no callers" would overstate what the graph knows.
+- **This is still the given-the-correct-seed question**, the same limit §6 already states for the rest
+  of the note: an agent doing real cross-repository localization does not start from a known-correct
+  `edit_functions[0]`, so even a favorable `extend_2` would not transfer directly to end-to-end
+  localization accuracy — it would only bound what the *primitive* could contribute once a seed is
+  already in hand.
+- **Cost was not priced.** The bands in §10.3 were deliberately about the ceiling only; even had
+  `extend_2` cleared 50 %, this round says nothing about the byte or latency cost of a cross-function
+  slice, which would need its own measurement before a build decision — the same discipline §R6 already
+  applied to the one-file-tree deviation.
