@@ -511,10 +511,13 @@ FLINES="$( grep -o '<s l="[0-9]*" k="[a-z]*" t="[a-z-]*"[ a-z="0-9,-]*><' "$ORD/
 printf '%s' "$OROOT" | grep -q ' order="defuse"' \
     && ok "(order) the root states the row order: order=\"defuse\"" \
     || no "(order) the root does not state the row order (expected order=\"defuse\"): $OROOT"
-grep -q 'order="defuse"' "$ORD/o.xml" && grep -o '<!--[^>]*-->' "$ORD/o.xml" | grep -q 'order=defuse\|order="defuse"' \
+# the legend is everything before the root (a legend spells <s …> rows, so a [^>]* comment match would stop short)
+grep -q 'order="defuse"' "$ORD/o.xml" && sed 's/<slice .*//' "$ORD/o.xml" | grep -q 'order=defuse\|order=\\"defuse\\"\|order="defuse"' \
     && ok "(order) order= is defined in the same document's legend" || no "(order) order= rides with no legend definition"
-"$BIN" "$ORD" --slice=mix:x --legend=compact --no-cache 2>/dev/null | grep -o '<!--[^>]*-->' | grep -q 'order=defuse' \
+"$BIN" "$ORD" --slice=mix:x --legend=compact --no-cache 2>/dev/null | sed 's/<slice .*//' | grep -q 'order=defuse' \
     && ok "(order) the compact legend defines order= too" || no "(order) the compact legend does not define order="
+"$BIN" "$ORD" --slice=mix:x --legend=full --no-cache 2>/dev/null | sed 's/<slice .*//' | grep -q 'order=\\\?"defuse' \
+    && ok "(order) the full legend defines order= too" || no "(order) the full legend does not define order="
 [ "$FLINES" = "4,2,5," ] \
     && ok "(order) a flow run's seed rows keep the same declared order" \
     || no "(order) a flow run's seed rows emit '$FLINES', expected 4,2,5"
