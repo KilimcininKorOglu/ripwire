@@ -1161,10 +1161,11 @@ rather than blurring it:
   Siegmund, ICSE 2021, [doi:10.1109/ICSE43902.2021.00056](https://doi.org/10.1109/ICSE43902.2021.00056)) —
   `--readability` emits volume and stops there; difficulty and effort are computed nowhere in this
   tree. **Unvalidated against human judgement, stated plainly rather than assumed:** this is a
-  deterministic ordering signal, not a checked one. Our own proxy measurement — 484 matched
+  deterministic ordering signal, not a checked one. Our own proxy measurement — 412 matched
   before/after function pairs mined from 80 refactor/simplify/cleanup commits in this repository's own
-  history — found the lens agrees with the commit's implied readability direction on only 30.2% of
-  pairs, worse than chance. That is a construct-validity finding about the ordering claim, not a bug in
+  history, pinned to the `v0.6.2` tag rather than `git log --all` so the population cannot drift when an
+  unrelated branch is pushed — found the lens agrees with the commit's implied readability direction on
+  only 37.4% of pairs (154 of 412), worse than chance. That is a construct-validity finding about the ordering claim, not a bug in
   the arithmetic (a separate self-consistency check confirms the formula computes exactly what it says
   it computes); the lens itself is unchanged pending a proper human study, and `--help=--readability`
   carries the same caveat where a CLI reader meets it.

@@ -6145,8 +6145,8 @@ These are the exact `kind=` strings the binary emits, from `src/quality.h`:
 `complexity` · `verbosity` · `nesting` · `params` · `duplication` · `dead-code` · `api-surface` ·
 `error-masking` · `short-horizon-churn` · `new-clone-of-reused-helper`
 
-Note that some user-facing summaries abbreviate four of these (`dup`, `dead`, `churn`,
-`clone-of-reused-helper` / `reuse-decline`). **Match against the strings above** when grepping real
+Note that some user-facing summaries abbreviate three of these (`dup`, `dead`, `churn`), and older
+text calls the last one `clone-of-reused-helper` or `reuse-decline`. **Match against the strings above** when grepping real
 output.
 
 The verb reports only what a change made *worse*, against git HEAD. `--quality-ack` records a
