@@ -1168,10 +1168,9 @@ rather than blurring it:
   37.4%, ran the commit's own direction); a separate self-consistency check confirms the formula
   computes exactly what it says it computes, so this is a construct-validity finding about the
   ordering claim, not an arithmetic bug. (First recorded as 484 pairs / 30.2% from an unpinned `git
-  log --all` walk that does not reproduce — see [`docs/EVALS.md` §8](docs/EVALS.md) and
-  `docs/research/readability-construct-validity.md` §3a/§3c on
-  `lane/research-readability-validity` @`9aecbc96`.) The lens itself is unchanged pending a proper
-  human study, and `--help=--readability` carries the same figures where a CLI reader meets them.
+  log --all` walk that does not reproduce — full derivation, the instrument fix and the retracted
+  figure: [`docs/EVALS.md` §8](docs/EVALS.md).) The lens itself is unchanged pending a proper human
+  study, and `--help=--readability` carries the same figures where a CLI reader meets them.
 - **`--naming-consistency`** is the *lexical* family's one exception to "evidence, never advice": every
   other lens in this panel tells you WHAT is wrong, never a computed fix. Case-style consistency is
   the one property with a corpus-derivable answer — on this repository's `src/`, camelCase is the
