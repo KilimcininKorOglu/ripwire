@@ -13,15 +13,16 @@ implementations** — nothing in `src/readability.h` runs a model or a judge:
   ripwire's readability lens is a deterministic, closed-form formula (Halstead volume, token entropy, the
   Posnett sigmoid fit) instead of a model call, and why the underlying evidence is disclosed (`vol=`, `ent=`,
   `posnett=`) rather than a single opaque number.
-- A study of prompt-side style constraints on LLM code generation found they help but plateau — part of why
-  ripwire's readability-adjacent gate (`--quality-delta`'s `verbosity` kind) runs **after** each edit, against
-  the actual diff, rather than living inside a generation prompt as one more instruction competing with the
-  rest of the prompt for effect.
+- A study of prompt design's association with LLM-generated code readability found the overall role of
+  prompt design bounded (Ye, Ran, Xu & Zhou, arXiv:2605.13280) — part of why ripwire's readability-adjacent
+  gate (`--quality-delta`'s `verbosity` kind) runs **after** each edit, against the actual diff, rather than
+  living inside a generation prompt as one more instruction competing with the rest of the prompt for
+  effect.
 
 Both are cited in the readability design note — an internal working document, not part of this
-repository — at its §7, as the "Readability
-Spectrum" prompt-constraint finding and as "LLM self-judges … fixate on surface features (CoReEval)" —
-see the reference list at the end of this document for both arXiv identifiers. That design log already states
+repository — at its §7, as the prompt-design-bounded finding (Ye et al., arXiv:2605.13280) and as "LLM
+self-judges … fixate on surface features (CoReEval)" — see the reference list at the end of this document
+for both arXiv identifiers. That design log already states
 the honesty bound this document expands on: *"Everything here is a lens, never a verdict."* This document is
 the follow-through on that bound — checking it empirically rather than repeating it.
 
@@ -506,8 +507,9 @@ following, specifically:
   Halstead volume specifically tracks measured cognitive load.
 - Vitale, T. et al. (2025) — cited in the readability design note §0 as finding up to a third of classic
   readability ground-truth labels self-contradictory.
-- The "Readability Spectrum" prompt-style-constraint study, arXiv:2605.13280 — style constraints in a
-  generation prompt help but plateau; cited in the readability design note §7.
+- Ye, H., Ran, F., Xu, W. & Zhou, M. *Characterizing Readability Issue Patterns and the Role of Prompt
+  Design in LLM-Generated Code.* arXiv:2605.13280 — prompt design's role in generated-code readability is
+  bounded; cited in the readability design note §7.
 - CoReEval, arXiv:2510.16579 — LLM self-judges of code readability fixate on surface features; cited
   alongside the prompt-constraint study in the readability design note §7 as the joint reason
   `--quality-delta`'s gate is deterministic and external to the model, applied to the diff.
