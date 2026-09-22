@@ -45,7 +45,9 @@ fi
 # ---- assertions ----
 
 # 1. pure="1" attribute appears somewhere in the output at all.
-if printf '%s' "$OUTPUT" | grep -qF 'pure="1"'; then
+# here-strings, not `printf | grep -q`: under pipefail a writer killed by grep -q's early exit would
+# turn a match into a FAIL (see deckcheck §P9)
+if grep -qF 'pure="1"' <<<"$OUTPUT"; then
     pass 'pure="1" attribute is present in output'
 else
     fail 'pure="1" attribute is missing from output entirely'
@@ -124,7 +126,7 @@ else
 fi
 
 # 6. struct Counter appears in the output (sanity check that the fixture is being parsed)
-if echo "$OUTPUT" | grep -qF 'struct Counter'; then
+if grep -qF 'struct Counter' <<<"$OUTPUT"; then
     pass 'struct Counter appears in output (fixture parsed correctly)'
 else
     fail 'struct Counter missing from output (fixture not parsed?)'

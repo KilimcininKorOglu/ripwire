@@ -261,10 +261,14 @@ echo "deckcheck: scanned ${#SOURCES[@]} file(s), ${usedCount} distinct --flag to
 # ── §P9 "amp= definition": --help must define amp= numerically and distinguish it from --impact's
 # reaches=, not just print the bare token — a stray-flag scan (the rest of this gate) can't catch a
 # documented-but-undefined attribute, so this is a narrow, separate content assertion.
-HELPTXT="$( "$BIN" --help=all 2>&1 )"
-printf '%s' "$HELPTXT" | grep -q 'amp = |direct callers|' \
+# Both probes read the --help capture already on disk, never `printf "$HELPTXT" | grep -q`: grep -q exits
+# at its first match while printf is still writing ~200 KB, and under bash 3.2 with this gate's EXIT trap
+# the writer gets EPIPE (`printf: write error: Broken pipe` on stderr) instead of a silent SIGPIPE. The
+# verdict then rode on a write that had failed — correct only because no pipefail was set; with it, a
+# real match read as a FAIL. A file operand has no writer to fail, so the grep status is the whole verdict.
+grep -qF -- 'amp = |direct callers|' "$TMP/help.txt" \
     && ok_amp=1 || ok_amp=0
-printf '%s' "$HELPTXT" | grep -q 'NOT the same quantity as --impact'"'"'s reaches=' \
+grep -qF -- "NOT the same quantity as --impact's reaches=" "$TMP/help.txt" \
     && ok_ampvsreaches=1 || ok_ampvsreaches=0
 if [ "$ok_amp" = 1 ] && [ "$ok_ampvsreaches" = 1 ]; then
     echo "  PASS  --help defines amp= numerically and distinguishes it from --impact's reaches="
