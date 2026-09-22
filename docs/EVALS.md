@@ -6877,7 +6877,7 @@ Listed because the reason is more useful than the silence.
   deterministically: **412 function pairs, 154 right-direction (37.4%)**. The mechanism behind the
   inversion is not "the lens is wrong 63% of the time" — it is that the sign of a function's
   token-count change predicts the lens's direction in **96.0%** of pairs (388/404 whose token count
-  changed), with the Halstead-volume term driving 91.1% of the wrong-direction pairs. Full protocol,
+  changed), with the Halstead-volume term driving 91.1% of the 258 wrong-direction pairs (62.6%). Full protocol,
   the instrument-fix note, and the decomposition: `docs/research/readability-construct-validity.md`
   §3a/§3c — a draft investigation, PR [#313](https://github.com/redhat-et/ripwire/pull/313) (open;
   cited here for the derivation only, nothing shipped depends on it merging). The shipped `--help`

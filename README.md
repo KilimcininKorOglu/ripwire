@@ -1163,9 +1163,9 @@ rather than blurring it:
   tree. **A ranking lens, never a grade, and here is what it actually orders:** on ripwire's own
   history at the pinned `v0.6.2` tag (412 function pairs mined from 80 refactor/simplify/cleanup
   commits), the order between two versions of a function followed the sign of its token-count change
-  in 96.0% of pairs — read a move as *more or fewer tokens*, not as *more or less readable*. Halstead
-  volume drove 91.1% of the pairs where the lens ran opposite the commit's implied direction (154/412,
-  37.4%, ran the commit's own direction); a separate self-consistency check confirms the formula
+  in 96.0% of pairs — read a move as *more or fewer tokens*, not as *more or less readable*. Of the 412,
+  154 (37.4%) ran the commit's implied direction and 258 (62.6%) ran opposite it; Halstead volume drove
+  91.1% of those 258; a separate self-consistency check confirms the formula
   computes exactly what it says it computes, so this is a construct-validity finding about the
   ordering claim, not an arithmetic bug. (First recorded as 484 pairs / 30.2% from an unpinned `git
   log --all` walk that does not reproduce — full derivation, the instrument fix and the retracted
