@@ -8612,7 +8612,11 @@ families may ship rows but earn no measured claim from this round.
 **The corpus problem, settled — the reason this registration exists.** The survey lane described "a
 pinned 38-instance corpus". **It is not pinned in any file**: `bench/slice/run_slicerecall.py`
 MINES at run time — newest-first fix-shaped commits from the `--repo` tree's own history, cap 40 —
-so the instance set is a function of the HEAD it runs at. Settled here, from the harness code and a
+so the instance set is a function of the HEAD it runs at. (2026-09-22: the harness now takes `--ref`,
+default `v0.6.2` — an immutable point, not a bare HEAD — and records the resolved ref+sha in its own
+output; this turns (b) below from operator discipline into the harness's own default. The `b156027`
+numbers already recorded here are unaffected — they were pinned by hand, the same mechanism `--ref`
+now automates.) Settled here, from the harness code and a
 read-only count: **(a)** the paired design is real — all arms run per instance inside ONE
 invocation with one binary, so a v3−v2 delta computed within one invocation is a valid paired
 statistic under any drift; but validity-under-drift is not enough, because the newest-first cap
