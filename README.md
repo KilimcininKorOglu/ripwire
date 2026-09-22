@@ -2795,7 +2795,8 @@ before it runs a command. Build the binary first. The prompts measure against th
 
 The prompts cover a full audit, a gap analysis from real use, a capture audit, a head-to-head
 comparison, a ranking evaluation, a language improvement pass, a zero-context onboarding study, a
-sibling sweep, a command tour, and a presentation build. The index is `prompts/README.md`.
+sibling sweep, a command tour, a presentation build, adding a new language, a quality-panel
+calibration round, and a COBOL corpus measurement. The index is `prompts/README.md`.
 
 If the tool answers incorrectly on your codebase, run `prompts/improve-for-my-language.md`. The
 prompt harvests your session transcript and produces one finding per event with its evidence. Open

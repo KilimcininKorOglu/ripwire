@@ -41,7 +41,7 @@ header, so every number below has a binary attached to it.
 
 ## What has already been measured, and on what
 
-Every COBOL number this project holds came from **716 public files, 27.8 MB**: NIST, CardDemo, an
+Every COBOL number this project holds came from **716 public files**: NIST, CardDemo, an
 OMP course set, and IBM, Microsoft and exercism samples. That is a convenience sample, not a census,
 and its shape is the reason this round exists — sample code under-represents the constructs real
 shops live in.
@@ -51,13 +51,15 @@ The recommended configuration is a **two-pass, two-grammar merge**:
 - **Pass A — `yutaro-sakamoto/tree-sitter-cobol`, the PR #41 branch, patched.** It carries two
   scanner bugs you will hit immediately: an out-of-bounds read in `start_with_word` that a sanitizer
   build catches, and an infinite loop at end of file when the last line is under six columns — a
-  one-byte file hangs. Patch both before you measure anything, and say in your report that you did.
-- **Pass B — `barrettotte/treesitter-ibmi`** (MIT; COBOL, DDS, RPG and CL in one grammar). Its
-  compiled object is 23 KB against pass A's 16.4 MB. Known bug: a token splits words, producing
-  `P` + `ERFORM`; the workaround is to glue adjacent tokens before matching.
+  one-byte file hangs. Patch both before you measure anything. **Record the exact commit you forked
+  from, and include or link the patch content itself, in your report** — a branch moves, and
+  "patched" without a pinned commit and a diff is not reproducible.
+- **Pass B — `barrettotte/treesitter-ibmi`** (MIT; COBOL, DDS, RPG and CL in one grammar). Known
+  bug: its `picture` token splits words such as `PERFORM`; the workaround is to glue adjacent tokens
+  before matching. Record its commit too — the same reproducibility requirement as pass A.
 - **Merged BY ROLE, not by best tree.** Structure from one pass, edges from the other.
 - **Plus tier-2 edges**: PERFORM, CALL and COPY targets read from pass B's error-free *token*
-  stream, used only for paragraphs whose pass A tree failed. Two false edges over the 716 files.
+  stream, used only for paragraphs whose pass A tree failed.
 - **Plus an offset-preserving reference-format normaliser** — it blanks the sequence and indicator
   areas without moving a single byte offset, so every span the extraction reports still points at
   the real file.
@@ -68,18 +70,17 @@ whichever pass produced the cleaner tree for each file *looks* better — 95% of
 no statement nodes at all. A file can be clean and edge-free at the same time. If your own merge
 strategy is scored on tree cleanliness, you are measuring the wrong thing.
 
-Measured on the public 716, strict-clean, against a hand-checked set of 182 untuned rows:
+Measured on the public 716, strict-clean, against a hand-checked lexical reference:
 
 | Quantity | Measured |
 | --- | --- |
-| Definitions | 98.7 / 100 |
-| PERFORM edges | 100 / 100 |
-| CALL edges | 100 / 100 |
-| COPY edges | 100 / 100 |
+| PERFORM, CALL and COPY edges | 100% recall and precision (combined, against the lexical reference) |
 | Files fully covered | 96.7% |
-| Programs parsed | 98.9% |
-| Copybooks parsed | 98.9% |
-| Cost | 1.76 s, against 1.03 s for the single pass, over 27.8 MB |
+
+The definition accuracy, the parse rate split by artifact kind, and the wall-clock cost were not
+carried forward from the original round with an instrument attached to them, so this page does not
+restate them as numbers here. That is exactly what Part 1 below re-derives, with a denominator on
+each one — including the hand-checked sample size, which was not preserved either.
 
 The stack emits a per-file disclosure record, and **the aggregate of that record is the report this
 prompt is asking for**: whether pass A was clean, including zero-width hidden errors; which
@@ -101,14 +102,20 @@ corpora you added and where they came from, so the next run can reproduce yours.
 You cannot report recall without a truth set, and you do not need an expensive one.
 
 This project built its truth with a **lexical oracle**: a small script that scans the raw bytes for
-PERFORM, CALL and COPY and records every target it can see, independent of any parse tree. That
-produced 105,906 rows, and the rows were hand-checked. Do the same thing, and then stop: **a
-hand-checked sample of a few hundred rows is enough to place a recall number**, and building more
-instrument than that is the classic way this round turns into a project. Sample across artifact
-kinds rather than taking the first few hundred rows of one file.
+PERFORM, CALL and COPY and records every target it can see, independent of any parse tree. The rows
+were hand-checked. Do the same thing, and then stop: **a hand-checked sample of a few hundred rows is
+enough to place a recall number**, and building more instrument than that is the classic way this
+round turns into a project. Sample across artifact kinds rather than taking the first few hundred
+rows of one file.
 
-Say how many rows you checked and how you sampled them. A recall figure without its denominator and
-its sampling rule is an impression.
+Build a **definitions oracle the same way**, for 1.2(2) below: scan the raw bytes for `PROGRAM-ID`,
+paragraph names and `SECTION` headers, hand-check a sample the same way, and use it to decide whether
+a definition the stack reports is real. Nothing upstream of this prompt has built that oracle yet, so
+it is the one instrument in Part 1 you are establishing from nothing rather than reproducing — state
+your rule if you build it differently.
+
+Say how many rows you checked, for both oracles, and how you sampled them. A recall or
+false-definition figure without its denominator and its sampling rule is an impression.
 
 ### 1.2 — the numbers
 
@@ -142,6 +149,14 @@ Our gap list for COBOL is **guesswork about what real IBM i shops use**. It is:
 **Report how often each one appears** — a count of occurrences and a count of files containing at
 least one, per corpus. That reorders our roadmap directly, and no amount of reading the standard
 substitutes for it.
+
+Count on the raw source text, not the parse tree: a case-insensitive literal match for each
+construct's keyword or clause, skipping comment lines (column 7 holds `*` or `/` in fixed format) and
+skipping matches inside string literals. Every match increments the occurrence count, including
+repeats within one paragraph; a file counts once toward "files containing at least one" no matter how
+many matches it holds. If your corpus needs a different rule — free format has no column 7 to skip,
+for instance — state the rule you used instead; an unstated counting rule is what makes two runs of
+this section incomparable.
 
 Run this on the public corpus and expect the answer to be skewed: **public sample code
 under-represents CICS and embedded SQL badly**, because teaching material and demo applications are
@@ -230,8 +245,8 @@ retiring the fork sooner rather than later.
 One document, ordered: setup header, Part 1 numbers, Part 1b numbers if you ran it, the Part 2
 answer. Then:
 
-- **Every number carries its denominator and its instrument.** "98.7 / 100 on hand-checked rows
-  sampled across three corpora" is a result; "definitions are good" is not.
+- **Every number carries its denominator and its instrument.** "96.7% of 716 files fully covered,
+  hand-checked against a lexical reference" is a result; "definitions are good" is not.
 - **A zero is a measurement; absent is not zero.** A count that cannot be a total is a floor and
   says so. Dynamic CALL is a floor. Bytes-not-parsed is a total.
 - **Report the losses in their own section**, not folded into an average. The corpus where the parse
