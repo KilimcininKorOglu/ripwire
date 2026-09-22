@@ -42,8 +42,14 @@ narrative write-up):
   4. STATISTIC: fix-rate (and modified-rate) in the least-readable quartile (bottom 25% by z) vs the rest,
      Wilson-interval per proportion, risk ratio with a Katz log-CI — reported beside the identical statistic
      for the highest-ccx quartile vs the rest, on the SAME population, as the trusted-signal baseline.
-     Repeated within three size (lines-at-cutoff) terciles, with the least-readable/highest-ccx quartile
-     recomputed WITHIN each tercile, to test whether either signal survives controlling for size.
+     Repeated within three size terciles TWICE: once by `lines`-at-cutoff, once by `toks`-at-cutoff (Halstead
+     N, --readability's own toks= — the size measure the lens actually consumes for its volume term, not a
+     proxy for it), with the least-readable/highest-ccx quartile recomputed WITHIN each tercile. The first
+     round of this script (see the paired doc's §4) stratified by lines only; a lines-based stratification
+     does not hold the confound constant, because z tracks the SIGN of the token-count change on 96.0% of
+     this repo's own refactor pairs (§3c), not the line-count change — a function can gain tokens with no
+     line change at all. The token-stratified arm is the decisive one for the size-confound question; the
+     line-stratified arm is kept alongside it because the two disagreeing would itself be informative.
 
   5. DECISION BANDS (restated from the paired doc's own pre-registration): the least-readable quartile's
      raw fix-rate CI excludes a risk ratio of 1 and the effect does not vanish once stratified by size ->
@@ -98,6 +104,9 @@ class FnRow:
     name: str
     start_line: int
     lines: int
+    toks: int          # Halstead N (operator+operand count) — --readability's own toks=, the exact
+                        # integer z's volume term is computed from; the size measure the lens actually
+                        # consumes, not a proxy for it.
     z: float
     ccx: int
     fixed: bool = False
@@ -131,14 +140,14 @@ def crawl_population(binary: str, src_root: Path) -> dict[tuple[str, str], FnRow
     read_root = run_xml(binary, src_root, "--readability", "--limit=100000")
     met_root = run_xml(binary, src_root, "--metrics", "--top-k=100000")
 
-    readab: dict[tuple[str, str], list[tuple[int, int, float]]] = {}  # (path,name) -> [(start,lines,z)]
+    readab: dict[tuple[str, str], list[tuple[int, int, int, float]]] = {}  # (path,name) -> [(start,lines,toks,z)]
     for fn in read_root.findall("fn"):
         p = fn.get("p")
         path, _, lineno = p.rpartition(":")
         toks, vocab = int(fn.get("toks")), int(fn.get("vocab"))
         vol_exact = toks * math.log2(vocab) if vocab > 0 else 0.0
         z = rp.z_score(vol_exact, int(fn.get("lines")), float(fn.get("ent")))
-        readab.setdefault((path, fn.get("n")), []).append((int(lineno), int(fn.get("lines")), z))
+        readab.setdefault((path, fn.get("n")), []).append((int(lineno), int(fn.get("lines")), toks, z))
 
     metrics: dict[tuple[str, str], list[int]] = {}  # (path,name) -> [loc, loc, ...]  (one per sc match)
     metrics_ccx: dict[tuple[str, str, int], int] = {}
@@ -158,7 +167,7 @@ def crawl_population(binary: str, src_root: Path) -> dict[tuple[str, str], FnRow
         locs = metrics.get(key)
         if not locs:
             continue
-        for start, lines, z in entries:
+        for start, lines, toks, z in entries:
             if lines not in locs:
                 continue
             ccx = metrics_ccx.get((key[0], key[1], lines))
@@ -167,7 +176,7 @@ def crawl_population(binary: str, src_root: Path) -> dict[tuple[str, str], FnRow
             if key in pop:
                 ambiguous += 1
                 continue
-            pop[key] = FnRow(path=key[0], name=key[1], start_line=start, lines=lines, z=z, ccx=ccx)
+            pop[key] = FnRow(path=key[0], name=key[1], start_line=start, lines=lines, toks=toks, z=z, ccx=ccx)
     print(f"# population: {len(pop)} matched functions ({ambiguous} ambiguous matches dropped)", file=sys.stderr)
     return pop
 
@@ -316,8 +325,10 @@ def report_arm(label: str, worst: list[FnRow], rest: list[FnRow], outcome: str) 
     }
 
 
-def size_terciles(rows: list[FnRow]) -> list[list[FnRow]]:
-    ordered = sorted(rows, key=lambda r: r.lines)
+def size_terciles(rows: list[FnRow], key=lambda r: r.lines) -> list[list[FnRow]]:
+    """Terciles by `key` (default: lines-at-cutoff; pass `lambda r: r.toks` for the token-count measure
+    the lens itself consumes)."""
+    ordered = sorted(rows, key=key)
     n = len(ordered)
     t1 = ordered[: n // 3]
     t2 = ordered[n // 3: 2 * n // 3]
@@ -344,17 +355,21 @@ def print_report(pop: list[FnRow], meta: dict) -> None:
             print(f"  {arm['label']}: worst {arm['worst_k']}/{arm['worst_n']} = {arm['worst_rate']:.3f} "
                   f"{fmt_ci(arm['worst_ci'])}  vs rest {arm['rest_k']}/{arm['rest_n']} = {arm['rest_rate']:.3f} "
                   f"{fmt_ci(arm['rest_ci'])}  RR={arm['risk_ratio']:.3f} {fmt_ci(arm['rr_ci'])}")
-        print("  -- size-stratified (terciles by lines-at-cutoff, quartile recomputed within each) --")
-        for i, band in enumerate(size_terciles(pop), start=1):
-            wz, rz = quartile_split(band, key=lambda r: r.z)
-            wc, rc = quartile_split(band, key=lambda r: -r.ccx)
-            lo_lines = min(r.lines for r in band) if band else 0
-            hi_lines = max(r.lines for r in band) if band else 0
-            a = report_arm("readability", wz, rz, outcome)
-            b = report_arm("complexity", wc, rc, outcome)
-            print(f"    T{i} (n={len(band)}, lines {lo_lines}-{hi_lines}):"
-                  f" readab RR={a['risk_ratio']:.3f} {fmt_ci(a['rr_ci'])}  |"
-                  f" complexity RR={b['risk_ratio']:.3f} {fmt_ci(b['rr_ci'])}")
+        for strat_label, strat_key, unit_key, unit_name in (
+            ("lines-at-cutoff", (lambda r: r.lines), (lambda r: r.lines), "lines"),
+            ("toks-at-cutoff (Halstead N, --readability's own toks=)", (lambda r: r.toks), (lambda r: r.toks), "toks"),
+        ):
+            print(f"  -- size-stratified (terciles by {strat_label}, quartile recomputed within each) --")
+            for i, band in enumerate(size_terciles(pop, key=strat_key), start=1):
+                wz, rz = quartile_split(band, key=lambda r: r.z)
+                wc, rc = quartile_split(band, key=lambda r: -r.ccx)
+                lo_u = min(unit_key(r) for r in band) if band else 0
+                hi_u = max(unit_key(r) for r in band) if band else 0
+                a = report_arm("readability", wz, rz, outcome)
+                b = report_arm("complexity", wc, rc, outcome)
+                print(f"    T{i} (n={len(band)}, {unit_name} {lo_u}-{hi_u}):"
+                      f" readab RR={a['risk_ratio']:.3f} {fmt_ci(a['rr_ci'])}  |"
+                      f" complexity RR={b['risk_ratio']:.3f} {fmt_ci(b['rr_ci'])}")
 
 
 def main() -> int:
@@ -397,20 +412,29 @@ def main() -> int:
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
-            f.write("path\tname\tstart_line\tlines\tz\tccx\tfixed\tmodified\n")
+            f.write("path\tname\tstart_line\tlines\ttoks\tz\tccx\tfixed\tmodified\n")
             for r in pop:
-                f.write(f"{r.path}\t{r.name}\t{r.start_line}\t{r.lines}\t{r.z:.6f}\t{r.ccx}\t{int(r.fixed)}\t{int(r.modified)}\n")
+                f.write(f"{r.path}\t{r.name}\t{r.start_line}\t{r.lines}\t{r.toks}\t{r.z:.6f}\t{r.ccx}\t{int(r.fixed)}\t{int(r.modified)}\n")
         print(f"# wrote {len(pop)} rows to {args.out}", file=sys.stderr)
 
     if args.json:
         def arm_json(rows, key):
             worst, rest = quartile_split(rows, key=key)
             return {o: report_arm("x", worst, rest, o) for o in ("fixed", "modified")}
+        def strat_json(strat_key):
+            return [
+                {"n": len(band),
+                 "readability": arm_json(band, lambda r: r.z),
+                 "complexity": arm_json(band, lambda r: -r.ccx)}
+                for band in size_terciles(pop, key=strat_key)
+            ]
         print(json.dumps({
             "meta": meta,
             "n_population": len(pop),
             "readability": arm_json(pop, lambda r: r.z),
             "complexity": arm_json(pop, lambda r: -r.ccx),
+            "stratified_by_lines": strat_json(lambda r: r.lines),
+            "stratified_by_toks": strat_json(lambda r: r.toks),
         }, indent=2, default=str))
     else:
         print_report(pop, meta)

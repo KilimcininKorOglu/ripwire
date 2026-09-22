@@ -562,6 +562,87 @@ round. Separately: complexity's inversion in T2 is itself worth a second look be
 this protocol and is reported exactly as measured, not smoothed over because it complicates the expected
 story.
 
+### Correction: the line-based stratification did not hold the confound constant
+
+The paragraph above named the gap and deferred the fix; this section runs it. The lines-based stratification
+just reported does not hold the actual confound constant: §3c already established that `z`'s direction
+tracks the SIGN of the token-count change on 96.0% of this repository's own refactor pairs, not the
+line-count change — the median wrong-direction pair there was +5 tokens, 0 lines. A function can gain a
+meaningful share of a size band's token volume with no line-count change at all, so two functions in the
+same LINE tercile can differ sharply in the unit `z` actually consumes. "Keep the ordering claim" was
+therefore not yet earned by the line-stratified result alone. This re-runs the identical stratified analysis
+by `toks=` — the Halstead N (operator+operand count) `--readability` itself emits, the exact integer the
+lens's own volume term is computed from, not a re-derived proxy — on the same population, same outcome
+definitions, same CIs, using the updated `bench/readability_fixrate_validity.py` (now captures `toks=` per
+function and stratifies by either measure).
+
+**Token-count stratification** (terciles by `toks`-at-cutoff; n=956 each; quartile recomputed within each
+tercile), reported beside the line-stratified table rather than replacing it:
+
+| tercile (toks) | outcome | readability RR (95% CI) | complexity RR (95% CI) |
+|---|---|---|---|
+| T1 (10–72) | FIXED | 2.28 [1.56, 3.33] | 1.01 [0.65, 1.57] |
+| T2 (73–191) | FIXED | 1.06 [0.82, 1.36] | **0.62 [0.46, 0.84]** |
+| T3 (191–8023) | FIXED | 1.89 [1.68, 2.13] | 1.38 [1.21, 1.58] |
+| T1 (10–72) | MODIFIED | 1.74 [1.33, 2.28] | 1.02 [0.75, 1.39] |
+| T2 (73–191) | MODIFIED | 1.05 [0.88, 1.26] | 0.85 [0.70, 1.04] |
+| T3 (191–8023) | MODIFIED | 1.59 [1.46, 1.72] | 1.27 [1.15, 1.39] |
+
+**Do the two stratifications agree?** No, and the disagreement is itself the finding. Line-stratified,
+readability's RR excluded 1 in five of six rows (only FIXED/T2 touched 1, at a lower bound of 0.995).
+Token-stratified — the measure the lens actually consumes — readability's RR excludes 1 in only **four** of
+six rows: it holds in T1 and T3 on both outcomes, but **both** T2 rows now include 1 (FIXED 1.06 [0.82,
+1.36]; MODIFIED 1.05 [0.88, 1.26]) — indistinguishable from no effect in the middle third of the token
+distribution, where the line-based version had reported a real (if borderline) signal. The line-based
+analysis was, exactly as suspected, partly reading a token-volume effect that a line-count band does not
+hold constant.
+
+**Restated verdict against the pre-registered bands, using the token-stratified result as decisive.** The raw
+(unstratified) separation stands unchanged (RR 2.87 [2.57, 3.21] fixed, 2.25 [2.08, 2.44] modified — both
+exceed the complexity control's 2.26 / 1.93 on the same population) and by itself would satisfy the "keep"
+band. But the token-stratified arm shows that separation is not uniform across the size range the lens
+itself measures: it is real and CI-excludes-1 at both ends (small-token and large-token thirds) and
+statistically silent in the middle third. That is neither this document's "keep exactly as-is" band (which
+requires the effect not to vanish under stratification, full stop) nor its "withdraw" band (which requires
+it to vanish in *every* tercile — it does not: T1 and T3 both hold). It matches the **middle band this
+document's own §2 already defined for exactly this shape of result**: "consistent on some function shapes
+and not others… disclose that the lens is known to track [size] more than it tracks anything
+[size]-independent, refined by what was measured." The verdict is therefore: **keep the ordering claim, but
+narrowed** — `--readability`'s later-fix signal on this corpus is not a uniform property of the ranking, it
+is concentrated at the size extremes (very small and very large functions, measured in tokens) and
+disappears for functions of middling token volume, where the raw quartile RR reported earlier is optimistic.
+An agent reading "least readable" as a worklist filter should expect the signal to be weakest for
+run-of-the-mill mid-sized functions — which is most of the codebase (T2 by construction) — and strongest at
+the tails. This is a materially weaker claim than "keep exactly as-is," and this document says so plainly
+rather than defaulting to the friendlier reading.
+
+**T2 diagnosis: is the complexity inversion explained by a file or symbol-kind concentration?** Complexity's
+below-1 risk ratio in the middle tercile is the more surprising result in both stratifications (line-based:
+0.55 fixed / 0.79 modified; token-based: 0.62 fixed / 0.85 modified, the modified arm no longer excluding 1
+under the token version). Checked cheaply, on both the line-T2 and token-T2 highest-ccx quartiles (n=239
+each): no file supplies more than 5% of either group (top file `src/docdrift.h` at 12–15 of 239), and no
+name-pattern keyword (`test`, `match`, `find`, `build`, `table`, `gen`, `classify`, `parse`, `check`, …)
+covers more than 3.3% — nothing resembling generated code, a table literal, or a test-fixture cluster
+dominates either quartile. The sampled names instead look like a broad mix of short, branch-dense helpers
+(classifiers, matchers, small validators: `walkAggregateBody`, `classifySkipHealth`,
+`sliceBuildAnchorOccs`) spread across ~40 different files with no concentration. **This is reported as
+unexplained.** A plausible but unverified guess — that dense, short decision functions get written once,
+exhaustively branch-tested, and rarely revisited — is not checked here and is not asserted as a finding; per
+this document's own rule, an anomaly without a cheap explanation is left as measured, not smoothed into a
+story.
+
+**External validity.** Every number in this section, both stratifications and the raw arm, comes from one
+repository's own history: `ripwire`'s own `src/` under this project's ~662 CI gates, quality-delta review and
+adversarial CI, much of it AI-authored under those gates. A later-fix rate measured here is a claim about
+*this corpus under this development process*, not a general claim about code, or even about AI-authored code
+generally — a codebase without this repository's gate density, review discipline, or authorship mix could see
+a different relationship (or none) between `z` and later-fix rate. Nothing in this section should be read as
+"readability predicts fixes" as a general software-engineering claim; it is "readability predicted fixes on
+this codebase, in this window, measured this way" — exactly the same scope limit §3's proxies already carry.
+
+Re-run (updated to also emit the token-stratified table and the per-function `toks=` column in `--out`):
+`bench/readability_fixrate_validity.py --bin build/ripwire`.
+
 ## 5. Precedent: we have already withdrawn a lens that failed exactly this kind of check
 
 This is not the first deterministic proxy ripwire has shipped, measured, and had to reckon with. §9.0 of
