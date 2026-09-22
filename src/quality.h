@@ -5286,9 +5286,13 @@ struct Regression
 // and the duplication kind reported this function as a fifth copy of it the moment it was written that way.
 struct FacetAttr { std::string_view kind; const char* attr; };
 inline constexpr FacetAttr kFacetAttrs[] = {
-    { "short-horizon-churn", "churn"   },   // self / ambient
-    { "api-surface",         "surface" },   // new-symbol / contract-change
-    { "duplication",         "idiom"   },   // the recognized clone-body shape (cloneidiom.h)
+    { "short-horizon-churn",        "churn"   },   // self / ambient
+    { "api-surface",                "surface" },   // new-symbol / contract-change
+    { "duplication",                "idiom"   },   // the recognized clone-body shape (cloneidiom.h)
+    { "new-clone-of-reused-helper", "idiom"   },   // T13/fix2 gave this kind duplication's idiom demotion (Regression::facet
+                                                    // is populated the same way, from the same CloneIdiomVerdict); this row was
+                                                    // missing, so a demoted row's idiom name never reached the reader even
+                                                    // though sev="minor" fired correctly — a disclosure gap, not a gating one.
 };
 
 inline const char* facetAttrName( std::string_view kind ) noexcept
