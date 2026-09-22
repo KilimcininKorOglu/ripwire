@@ -32,6 +32,8 @@
 #   (13) JS/TS destructuring binders are sliceable locals whose def is the pattern line: object,
 #        array, renamed (`y: yy`), defaulted (`z = 3`, its right side a read), rest, a destructured
 #        parameter, `for (const { k } of xs)`, and `({ x } = o)` as an assign
+#   (order) VAR-mode rows emit in the declared order (def-use coverage desc, then line) and the root says
+#        order="defuse" — the legend (both tiers) and --help define it; a flow run's seed rows keep that order
 #   (14) Python `global X` / `nonlocal X` row k="scope" t="global"|"nonlocal" — a scope declaration,
 #        neither read nor write — and introduce the name in the inventory with that role
 #
@@ -488,6 +490,36 @@ done
 "$BIN" --help=all 2>&1 | grep -q 'RIPWIRE_TEST_SLICE_RD_MAXITERS' \
     && no "(rd-bound) the arming hook is advertised in --help — it is a gate's hook, not a user surface (G5)" \
     || ok "(rd-bound) the arming hook appears in no --help text (G5)"
+
+# ── (order) --slice=SYM:VAR rows emit in the DECLARED order, and the root states it ─────────────────────────────
+# Measured (LocBench py, 478 (instance, variable) pairs): source order pinpoints a gold line WORSE than a random
+# shuffle of the same rows (MRR 0.525 vs 0.602), def-use coverage beats it (0.628). So the rows rank by coverage —
+# how many distinct sliceable locals share the line — descending, then line, then binding line, and the root says
+# order="defuse" so the reader never mistakes a ranking for source order (or the reverse). Fixture: l=4 names FOUR
+# locals, l=2 and l=5 name one each; source order is 2,4,5, the declared order is 4,2,5. A flow run keeps the same
+# seed rows in the same order (the flow rows keep their own stated (d=, l=, v=) order).
+ORD="$WORK/order"; mkdir -p "$ORD"
+printf 'def mix(a):\n    x = 1\n    y = 2\n    z = x + y + a\n    return x\n' >"$ORD/m.py"
+"$BIN" "$ORD" --slice=mix:x --no-cache >"$ORD/o.xml" 2>/dev/null
+"$BIN" "$ORD" --slice=mix:x --slice-flow=back --no-cache >"$ORD/f.xml" 2>/dev/null
+OROOT="$( grep -o '<slice [^>]*>' "$ORD/o.xml" )"
+OLINES="$( grep -o '<s l="[0-9]*"' "$ORD/o.xml" | tr -dc '0-9\n' | tr '\n' ',' )"
+FLINES="$( grep -o '<s l="[0-9]*" k="[a-z]*" t="[a-z-]*"[ a-z="0-9,-]*><' "$ORD/f.xml" | grep -v ' v="' | grep -o 'l="[0-9]*"' | tr -dc '0-9\n' | tr '\n' ',' )"
+[ "$OLINES" = "4,2,5," ] \
+    && ok "(order) mix:x rows emit 4,2,5 — coverage descending (l=4 names four locals), then line" \
+    || { no "(order) mix:x rows emit '$OLINES', expected 4,2,5 (coverage desc, then line)"; printf '%s\n' "$OROOT"; }
+printf '%s' "$OROOT" | grep -q ' order="defuse"' \
+    && ok "(order) the root states the row order: order=\"defuse\"" \
+    || no "(order) the root does not state the row order (expected order=\"defuse\"): $OROOT"
+grep -q 'order="defuse"' "$ORD/o.xml" && grep -o '<!--[^>]*-->' "$ORD/o.xml" | grep -q 'order=defuse\|order="defuse"' \
+    && ok "(order) order= is defined in the same document's legend" || no "(order) order= rides with no legend definition"
+"$BIN" "$ORD" --slice=mix:x --legend=compact --no-cache 2>/dev/null | grep -o '<!--[^>]*-->' | grep -q 'order=defuse' \
+    && ok "(order) the compact legend defines order= too" || no "(order) the compact legend does not define order="
+[ "$FLINES" = "4,2,5," ] \
+    && ok "(order) a flow run's seed rows keep the same declared order" \
+    || no "(order) a flow run's seed rows emit '$FLINES', expected 4,2,5"
+"$BIN" --help=all 2>&1 | grep -q 'order="defuse"' \
+    && ok "(order) --help documents order=\"defuse\"" || no "(order) --help does not document order=\"defuse\""
 
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"
