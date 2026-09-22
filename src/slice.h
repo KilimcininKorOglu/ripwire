@@ -6,7 +6,7 @@
 // MOTIVATION. ARISE (arXiv:2605.03117) measured statement-level definition-use edges exposed as a
 // queryable agent primitive at +17pp Function Recall@1 on SWE-bench Lite. ripwire's graph stops at
 // symbol granularity; this is the bounded v1 of that primitive: one definition, one variable, its
-// def/use statement rows in source order.
+// def/use statement rows, emitted in the order="defuse" ranking (sliceDefUseRowOrder).
 //
 // HONESTY CONTRACT (all four limits are stated in the emitted legend, never implied):
 //   • NAME-BASED — occurrences are identifier-name matches inside the definition's span. No alias
@@ -3071,10 +3071,8 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
     {
         out =
             "<!-- ripwire slice: NAME-BASED intra-procedural def-use slice of one variable inside ONE resolved definition (ARISE, "
-            "arXiv:2605.03117). ROWS: one <s> per LINE touching VAR, in the order the root's order= names — order=\"defuse\": ranked "
-            "by def-use COVERAGE (how many distinct sliceable locals the line names) descending, then line, then binding line; NOT "
-            "source order, which ranked a fix's lines below a random shuffle where this ranks above it (measured, docs/research) — "
-            "k= def|use|both|scope (both = the line writes AND "
+            "arXiv:2605.03117). ROWS: one <s> per LINE touching VAR, order=\"defuse\": most distinct locals on the line first, then line "
+            "(not source order) — k= def|use|both|scope (both = the line writes AND "
             "reads it, `x += y`; scope = a Python global/nonlocal statement: neither read nor write, it introduces the name and "
             "never anchors a flow), t= the strongest role on the line (param > decl > assign > call-arg > read > global/nonlocal), CDATA "
             "= the trimmed line. Bare slice=SYM lists the sliceable locals: <v n= l= t=/> per BINDING at its declaration "
