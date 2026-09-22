@@ -3219,17 +3219,21 @@ inline std::vector<std::uint32_t> sliceDefUseRowOrder( const SliceScan& scan, co
     {
         localNames.emplace_back( binding.name );
     }
-    std::sort( localNames.begin(), localNames.end() );
+    // svLess, not operator<: see infra/sortutil.h — the default string_view comparator aborts the Linux G1 leg.
+    // The sort and the binary_search below MUST name the same comparator.
+    std::sort( localNames.begin(), localNames.end(), rw::sortutil::svLess );
     std::vector<std::pair<std::uint32_t, std::string_view>> lineNames;
     lineNames.reserve( scan.all.size() );
     for( const SliceNamedOcc& no : scan.all )
     {
-        if( std::binary_search( localNames.begin(), localNames.end(), std::string_view( no.name ) ) )
+        if( std::binary_search( localNames.begin(), localNames.end(), std::string_view( no.name ), rw::sortutil::svLess ) )
         {
             lineNames.emplace_back( no.occ.line, no.name );
         }
     }
-    std::sort( lineNames.begin(), lineNames.end() );
+    std::sort( lineNames.begin(), lineNames.end(),
+               []( const std::pair<std::uint32_t, std::string_view>& x, const std::pair<std::uint32_t, std::string_view>& y )
+               { return x.first != y.first ? x.first < y.first : rw::sortutil::svLess( x.second, y.second ); } );
     lineNames.erase( std::unique( lineNames.begin(), lineNames.end() ), lineNames.end() );
 
     std::vector<std::uint32_t> coverage( rows.size(), 0 );
