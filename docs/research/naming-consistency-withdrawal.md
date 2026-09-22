@@ -313,3 +313,56 @@ publishing this specifically to ask about them rather than to announce a plan:
 We would welcome a critique of any of the four sections above — the reproduction in §2, the requirements
 argued for in §3, the sampling and judging in §4, or the inventory in §5 — and especially a pointer to
 where this reasoning has already been made more rigorously elsewhere.
+
+## 7. Cross-corpus check with the calibration probe
+
+`naming-body-mismatch` itself cannot be re-run — it was removed in the withdrawal commit, and nothing here
+reintroduces it. What can be re-run, on more evidence than ripwire's own history offers, is
+`--naming-calibration` (§9.5): the instrument that mines genuine `old -> new` renames from git history and
+asks whether the *currently shipped* naming-* rules fire on the abandoned spelling more than the chosen
+one. On ripwire's own history alone it previously stopped below its declared 30-pair floor (13 pairs) and
+correctly skipped rather than asserting anything. `bench/ensemblecal/` already tracks five corpora for a
+related calibration (§9's family-orthogonality measurement); pointing `--naming-calibration` at the same
+five, instead of only at ripwire, is a cheap strengthener neither measurement had run before.
+
+**Command**, run once per corpus root: `ripwire <corpus-root> --naming-calibration --legend=compact`.
+Binary: `ripwire 0.6.2 (dev, AppleClang 21.0.0.21000101, emit=std::print, built_from=15a20855c)`.
+
+| corpus | git history? | pairs | candidates | commits | rules fired (of 6 scoreable) | proxy on fires |
+| --- | --- | ---: | ---: | ---: | --- | --- |
+| ripwire | yes | 86 | 1 371 | 2 821 | none | — |
+| gameA | yes | 55 | 750 | 1 637 | naming-wordy=2, naming-case=1 | 0.000 (both on the *chosen* spelling) |
+| tree-sitter (vendored) | yes | 3 (below the 30-pair floor) | 1 371† | 2 821† | none | — |
+| rustCLI | **no** (`probed="0" r="not-a-git-repo"`) | — | — | — | — | — |
+| appleXR | **no** (`probed="0" r="not-a-git-repo"`) | — | — | — | — | — |
+
+† tree-sitter (vendored) is a subtree of ripwire's own repository, so `candidates`/`commits` are the same
+repo-wide walk filtered to paths under the vendored subtree; only 3 mined substitutions survive the join
+there, which is why it is reported separately rather than pooled with ripwire's row.
+
+`naming-series` and `naming-confusable` judge a relationship between co-visible names and cannot be scored
+from one pair (`scope="group-rule"`), so 6 of the 8 rules this instrument scores were eligible to fire at
+all. `naming-uninformative`, the rule that replaced the withdrawn one (§5), postdates this instrument and
+is not among the rules it scores either.
+
+Two of the five corpora present locally have no git history to mine — `rustCLI` and `appleXR`, the same
+"(no git)" trees `docs/EVALS.md` §9.1 already records for the ensemble calibration — so the probe reports
+`probed="0" r="not-a-git-repo"` on both and contributes nothing here. `tree-sitter (vendored)` reached
+`probed="1"` but stayed below its own 30-pair floor, the same failure mode as ripwire's original 13-pair
+run, and is reported rather than pooled. That leaves ripwire and gameA, each independently over the
+30-pair floor for the first time this instrument has been run outside ripwire's own history: **141 pooled
+labelled rename pairs, 846 rule-pair opportunities across the 6 scoreable rules, and 3 fires total** — all
+three on the *newly chosen* spelling rather than the abandoned one (proxy 0.000 on both fired rules in
+gameA; ripwire's own 86 pairs produced zero fires on any of the 6 rules).
+
+**Verdict.** This does not, and cannot, re-score `naming-body-mismatch` — it no longer exists to score, and
+this instrument only ever scored the other eight rules' direction. What it adds is independent evidence for
+the premise under §3 and §4: across 141 genuine rename events in two large, independent, real codebases —
+not ripwire's own 13-pair, below-floor sample — a name actually being replaced because it was wrong is rare
+enough that even the deterministic rules built to catch known-decidable naming defects almost never fire on
+it, and the three times they did, they pointed at the developer's own newly chosen name, not the one they
+abandoned. That is the opposite of what a 159-of-217 (73%) flag rate implies about how often real naming
+defects occur, so it **corroborates** the withdrawal's low-base-rate claim, by an independent method and a
+larger, more diverse sample than §4's. It does not by itself bound the base rate the way §4's direct manual
+judging does, and the two no-git corpora (`rustCLI`, `appleXR`) remain untested by this method — they would
+need a labelled sample built some other way.
