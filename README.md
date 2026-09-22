@@ -1160,14 +1160,18 @@ rather than blurring it:
   among the metrics shown to track measured cognitive load directly (Peitek, Apel, Parnin, Brechmann &
   Siegmund, ICSE 2021, [doi:10.1109/ICSE43902.2021.00056](https://doi.org/10.1109/ICSE43902.2021.00056)) —
   `--readability` emits volume and stops there; difficulty and effort are computed nowhere in this
-  tree. **Unvalidated against human judgement, stated plainly rather than assumed:** this is a
-  deterministic ordering signal, not a checked one. Our own proxy measurement — 484 matched
-  before/after function pairs mined from 80 refactor/simplify/cleanup commits in this repository's own
-  history — found the lens agrees with the commit's implied readability direction on only 30.2% of
-  pairs, worse than chance. That is a construct-validity finding about the ordering claim, not a bug in
-  the arithmetic (a separate self-consistency check confirms the formula computes exactly what it says
-  it computes); the lens itself is unchanged pending a proper human study, and `--help=--readability`
-  carries the same caveat where a CLI reader meets it.
+  tree. **A ranking lens, never a grade, and here is what it actually orders:** on ripwire's own
+  history at the pinned `v0.6.2` tag (412 function pairs mined from 80 refactor/simplify/cleanup
+  commits), the order between two versions of a function followed the sign of its token-count change
+  in 96.0% of pairs — read a move as *more or fewer tokens*, not as *more or less readable*. Halstead
+  volume drove 91.1% of the pairs where the lens ran opposite the commit's implied direction (154/412,
+  37.4%, ran the commit's own direction); a separate self-consistency check confirms the formula
+  computes exactly what it says it computes, so this is a construct-validity finding about the
+  ordering claim, not an arithmetic bug. (First recorded as 484 pairs / 30.2% from an unpinned `git
+  log --all` walk that does not reproduce — see [`docs/EVALS.md` §8](docs/EVALS.md) and
+  `docs/research/readability-construct-validity.md` §3a/§3c on
+  `lane/research-readability-validity` @`9aecbc96`.) The lens itself is unchanged pending a proper
+  human study, and `--help=--readability` carries the same figures where a CLI reader meets them.
 - **`--naming-consistency`** is the *lexical* family's one exception to "evidence, never advice": every
   other lens in this panel tells you WHAT is wrong, never a computed fix. Case-style consistency is
   the one property with a corpus-derivable answer — on this repository's `src/`, camelCase is the

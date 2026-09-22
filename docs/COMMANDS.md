@@ -1839,7 +1839,7 @@ $ ./build/ripwire . --clones
 
 **Answers:** rank functions least-readable first, by volume, token entropy and length per-function readability lens, LEAST readable first: vol= Halstead volume V (N*log2(eta)), ent= Shannon token entropy E, lines= L, posnett= sigmoid(8.87 - 0.033V + 0.40L - 1.5E) (Posnett/Hindle/Devanbu, MSR 2011).
 
-APPROXIMATION, disclosed: ONE token-class table serves every language (keywords + punctuation = operators, identifiers + literals = operands), with no per-grammar refinement, so V is cross-language and not a per-grammar Halstead count. The formula was fitted on snippets of 20 lines or fewer, so it is a RANKING lens, not a grade: read the ORDER of the rows, not the number on any one of them. Pages with limit=N (offset=M); default 40 rows. Declarations with no body are not measured. UNVALIDATED (t14-cleanup #8): this is a deterministic ORDERING signal that has not been checked against human judgement of readability. Our own proxy measurement — 484 matched before/after function pairs from 80 refactor/simplify/cleanup commits in this repo's own history — found the lens agrees with the commit's implied readability direction on only 30.2% of pairs, which is worse than chance and suggests the ranking may run backwards more often than not. Treated here as a signal to weigh, never a verdict; do not read a low posnett= as proof a function needs work.
+APPROXIMATION, disclosed: ONE token-class table serves every language (keywords + punctuation = operators, identifiers + literals = operands), with no per-grammar refinement, so V is cross-language and not a per-grammar Halstead count. The formula was fitted on snippets of 20 lines or fewer, so it is a RANKING lens, not a grade: read the ORDER of the rows, not the number on any one of them. Pages with limit=N (offset=M); default 40 rows. Declarations with no body are not measured. MEASURED (t14-cleanup #8, revised): a ranking lens, never a grade. On ripwire's own history at the pinned v0.6.2 tag (412 function pairs, mined from 80 refactor/simplify/cleanup commits) the order between two versions of a function followed the sign of its token-count change in 96.0% of pairs (388/404 whose token count changed); Halstead volume was the driver behind 91.1% of the pairs where the order ran opposite the commit's implied direction (154/412, 37.4% ran the commit's own direction). Read a move as more or fewer tokens, not as more or less readable. First recorded as 484 pairs / 30.2% from an unpinned, every-ref git-log walk that does not reproduce — see docs/EVALS.md §8 and docs/research/readability-construct-validity.md §3a/§3c (lane/research-readability-validity @9aecbc96). Do not read a low posnett= as proof a function needs work.
 
 **Try it**
 
@@ -4916,7 +4916,7 @@ $ ./build/ripwire --version
 ripwire 0.6.1 (dev, AppleClang 21.0.0.21000101, emit=std::print, built_from=f8d431396)
 ```
 
-**Shaped by:** `--impact`, `--verify`, `--metrics`, `--deps`, `--naming-locals`, `--arch`, `--dry-run`, `--doc-drift`
+**Shaped by:** `--impact`, `--verify`, `--metrics`, `--deps`, `--readability`, `--naming-locals`, `--arch`, `--dry-run`
 
 ---
 
