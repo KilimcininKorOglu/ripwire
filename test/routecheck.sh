@@ -111,6 +111,13 @@ CONCEPT="how does resolution work"
 # ladder trimmed used to appear in neither section), and the clause defining the tail says so. Verified before
 # re-pinning: with every comment and est_tokens= normalized out, old and new documents are byte-identical —
 # this fixture's head covers every file, so its tail is unchanged and every ranking byte is unmoved.
+# RE-PIN 2026-09-22 (lane/for-margin-resolution): 3776 -> 4028 B (+252 B). CAUSE: the ranking-confidence root
+# facts gain a third attribute, margin_bp= (the SAME score-drop statistic at full precision, hundredths of a
+# percent, never zeroed the way margin_pct= is under a flat/broad head — deriveForConfidence, src/lexical.h),
+# plus the sentence defining it in the shared legend clause; est_tokens= re-measures itself (1433 -> 1534).
+# Verified before re-pinning: with margin_bp=, its legend sentence and est_tokens= normalized out, the two
+# documents' <sigs>/<tail>/<bodies> sections are byte-identical — no ranking, body or route byte moved
+# (route-neutrality, this golden's purpose, untouched).
 # L1 (2026-09-19): the CLI default legend is compact; golden_for.xml was recorded from the full default and the --query arm
 # reads the full legend's "routed:" comment, so those two runs ask for the full legend.
 "$BIN" routefix --no-cache --for="$CONCEPT" --no-route --legend=full >"$TMP/concept_noroute.xml" 2>/dev/null

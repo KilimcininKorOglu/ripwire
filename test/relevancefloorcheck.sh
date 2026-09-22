@@ -170,11 +170,14 @@ fi
 echo "=== (4) byte ceiling on the fixture ==="
 # ═══════════════════════════════════════════════════════════════════════════
 # Pinned, not relative: the pre-fix binary answers this exact fixture in 5,307 B (recorded in the header).
-# 3000 leaves room for the shared legends (which are most of what is left) while staying far below any
-# padded answer. If a legend legitimately grows past this, re-pin in the same commit and say why.
+# 3200 leaves room for the shared legends (which are most of what is left) while staying far below any
+# padded answer. RE-PINNED 2026-09-22 (lane/for-margin-resolution): 3000 -> 3200, measured 3120 B — the
+# new margin_bp= root attribute plus its legend-clause words (~120 B on this fixture, confidence=/
+# margin_pct=/margin_bp='s always-present disclosure). If a legend legitimately grows past this, re-pin
+# in the same commit and say why.
 a_bytes="$( printf '%s' "$A_OUT" | wc -c | tr -d ' ' )"
-[ "$a_bytes" -lt 3000 ] && ok "(4) the floored bundle is $a_bytes B (< 3000; pre-fix was 5307 B on this fixture)" \
-                        || no "(4) the floored bundle is $a_bytes B, over the 3000 B ceiling"
+[ "$a_bytes" -lt 3200 ] && ok "(4) the floored bundle is $a_bytes B (< 3200; pre-fix was 5307 B on this fixture)" \
+                        || no "(4) the floored bundle is $a_bytes B, over the 3200 B ceiling"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (5) nothing matched ⇒ nothing claimed ==="
