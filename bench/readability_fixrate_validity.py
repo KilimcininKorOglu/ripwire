@@ -62,9 +62,19 @@ House rule this script exists under (bench/ANSWERQUALITY.md, bench/BENCHMARK.md)
 LEDGER, never a red CI gate. It reports numbers and exits 0 regardless of what they say; it is not wired into
 test/regression.sh.
 
+POST-HOC ADDITION (labelled as such, not pre-registered — prompted after seeing the tercile-stratified
+result disagree with the line-stratified one): terciles are wide enough that neither one holds the lens's
+own size unit (toks) constant within a band, so the script also reports (a) DECILES by toks — ten narrower
+bands, to see whether the effect shrinks toward RR=1 as the band narrows, which is what a residual-size
+effect would do and a genuine per-token-count-controlled readability effect would not — beside each
+decile's own internal token range, since "does RR track the range" is the actual question; and (b) a
+nearest-token-neighbour matched control: each least-readable-quartile function against its closest-toks
+match from the rest of the population, one-to-one, rather than against a whole band.
+
 Usage:
     bench/readability_fixrate_validity.py --bin build/ripwire
     bench/readability_fixrate_validity.py --bin build/ripwire --out pop_outcomes.tsv --json
+    bench/readability_fixrate_validity.py --load-tsv pop_outcomes.tsv   # re-stratify already-computed data
 
 Deterministic given a fixed git history (pinned CUTOFF/UNTIL refs) and a fixed binary: no randomness anywhere.
 """
@@ -72,6 +82,8 @@ Deterministic given a fixed git history (pinned CUTOFF/UNTIL refs) and a fixed b
 from __future__ import annotations
 
 import argparse
+import bisect
+import csv
 import json
 import math
 import re
@@ -325,15 +337,38 @@ def report_arm(label: str, worst: list[FnRow], rest: list[FnRow], outcome: str) 
     }
 
 
-def size_terciles(rows: list[FnRow], key=lambda r: r.lines) -> list[list[FnRow]]:
-    """Terciles by `key` (default: lines-at-cutoff; pass `lambda r: r.toks` for the token-count measure
-    the lens itself consumes)."""
+def size_ntiles(rows: list[FnRow], key=lambda r: r.lines, n: int = 3) -> list[list[FnRow]]:
+    """N equal-count bands by `key` (default: lines-at-cutoff, 3 = terciles; pass `lambda r: r.toks` for
+    the token-count measure the lens itself consumes, and n=10 for deciles — a POST-HOC refinement, see
+    the paired doc's third §4 subsection: terciles are wide enough that a tercile does not hold size
+    constant on its own, so a real readability effect and a residual-size effect both predict the same
+    tercile-level RR pattern; only a narrower band distinguishes them)."""
     ordered = sorted(rows, key=key)
-    n = len(ordered)
-    t1 = ordered[: n // 3]
-    t2 = ordered[n // 3: 2 * n // 3]
-    t3 = ordered[2 * n // 3:]
-    return [t1, t2, t3]
+    total = len(ordered)
+    bounds = [round(i * total / n) for i in range(n + 1)]
+    return [ordered[bounds[i]:bounds[i + 1]] for i in range(n)]
+
+
+def size_terciles(rows: list[FnRow], key=lambda r: r.lines) -> list[list[FnRow]]:
+    return size_ntiles(rows, key=key, n=3)
+
+
+def nearest_token_match(pop: list[FnRow], quartile: list[FnRow]) -> list[FnRow]:
+    """For each function in `quartile`, its nearest neighbour by `toks` among `pop` functions NOT in the
+    quartile (ties broken by the earlier one in token-sorted order; matching is WITH replacement — a
+    popular token count can supply more than one match, disclosed at the call site). A cheap alternative
+    to a fixed-width band: instead of asking "does the effect survive in a band this wide," it asks "does
+    it survive against a control matched almost exactly on the lens's own size unit.\""""
+    quartile_keys = {id(r) for r in quartile}
+    rest_sorted = sorted((r for r in pop if id(r) not in quartile_keys), key=lambda r: r.toks)
+    rest_toks = [r.toks for r in rest_sorted]
+    matches = []
+    for q in quartile:
+        i = bisect.bisect_left(rest_toks, q.toks)
+        candidates = [j for j in (i - 1, i) if 0 <= j < len(rest_sorted)]
+        best = min(candidates, key=lambda j: abs(rest_sorted[j].toks - q.toks))
+        matches.append(rest_sorted[best])
+    return matches
 
 
 def fmt_ci(ci: tuple[float, float]) -> str:
@@ -370,6 +405,29 @@ def print_report(pop: list[FnRow], meta: dict) -> None:
                 print(f"    T{i} (n={len(band)}, {unit_name} {lo_u}-{hi_u}):"
                       f" readab RR={a['risk_ratio']:.3f} {fmt_ci(a['rr_ci'])}  |"
                       f" complexity RR={b['risk_ratio']:.3f} {fmt_ci(b['rr_ci'])}")
+        print("  -- POST-HOC (prompted by the tercile result, not pre-registered): "
+              "DECILES by toks-at-cutoff, quartile recomputed within each decile --")
+        for i, band in enumerate(size_ntiles(pop, key=lambda r: r.toks, n=10), start=1):
+            wz, rz = quartile_split(band, key=lambda r: r.z)
+            a = report_arm("readability", wz, rz, outcome)
+            lo_t = min(r.toks for r in band) if band else 0
+            hi_t = max(r.toks for r in band) if band else 0
+            ratio = (hi_t / lo_t) if lo_t > 0 else float("inf")
+            print(f"    D{i:02d} (n={len(band)}, toks {lo_t}-{hi_t}, internal range {ratio:.2f}x):"
+                  f" readab RR={a['risk_ratio']:.3f} {fmt_ci(a['rr_ci'])}")
+        print("  -- POST-HOC: nearest-token-neighbour matched control "
+              "(least-readable quartile vs. its 1-NN-by-toks match from the rest) --")
+        worst_z, _rest_z = quartile_split(pop, key=lambda r: r.z)
+        matched = nearest_token_match(pop, worst_z)
+        wk, wn, wr = rate_block([getattr(r, outcome) for r in worst_z])
+        mk, mn, mr = rate_block([getattr(r, outcome) for r in matched])
+        _, w_lo, w_hi = wilson_interval(wk, wn)
+        _, m_lo, m_hi = wilson_interval(mk, mn)
+        rr, rr_lo, rr_hi = risk_ratio_ci(wk, wn, mk, mn)
+        mean_gap = (sum(r.toks for r in worst_z) - sum(r.toks for r in matched)) / len(worst_z) if worst_z else 0.0
+        print(f"    least-readable quartile {wk}/{wn} = {wr:.3f} {fmt_ci((w_lo, w_hi))}  vs matched control "
+              f"{mk}/{mn} = {mr:.3f} {fmt_ci((m_lo, m_hi))}  RR={rr:.3f} {fmt_ci((rr_lo, rr_hi))}"
+              f"  (mean token gap quartile-minus-match: {mean_gap:+.1f})")
 
 
 def main() -> int:
@@ -380,35 +438,50 @@ def main() -> int:
     ap.add_argument("--out", default=None, help="write the per-function TSV here")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--scratch", default=None)
+    ap.add_argument("--load-tsv", default=None,
+                     help="skip the population crawl and outcome-marking pass (the slow ~15-minute step) "
+                          "and re-load a previously written --out TSV instead — for re-stratifying "
+                          "(--strata, deciles, the matched control) on data already computed. The window/"
+                          "fix-commit counts in the report line are not available from a TSV alone and "
+                          "print as 'n/a'.")
     args = ap.parse_args()
 
-    if not Path(args.bin).is_file():
-        print(f"error: ripwire binary not found at {args.bin}", file=sys.stderr)
-        return 2
-
-    scratch = Path(args.scratch) if args.scratch else Path(tempfile.mkdtemp(prefix="rw_fixrate_"))
-    try:
-        pop_src = scratch / "population_src"
-        pop_src.mkdir(parents=True)
-        archive = subprocess.run(["git", "archive", args.cutoff, "--", "src"], cwd=str(rp.ROOT),
-                                  capture_output=True, timeout=60)
-        if archive.returncode != 0:
-            print(f"error: git archive {args.cutoff} -- src failed: {archive.stderr.decode()}", file=sys.stderr)
+    if args.load_tsv:
+        pop = []
+        with open(args.load_tsv, encoding="utf-8") as f:
+            for row in csv.DictReader(f, delimiter="\t"):
+                pop.append(FnRow(path=row["path"], name=row["name"], start_line=int(row["start_line"]),
+                                  lines=int(row["lines"]), toks=int(row["toks"]), z=float(row["z"]),
+                                  ccx=int(row["ccx"]), fixed=bool(int(row["fixed"])),
+                                  modified=bool(int(row["modified"]))))
+        meta = {"window_total": "n/a (--load-tsv)", "touch_commits": "n/a", "fix_commits": "n/a"}
+    else:
+        if not Path(args.bin).is_file():
+            print(f"error: ripwire binary not found at {args.bin}", file=sys.stderr)
             return 2
-        with tempfile.NamedTemporaryFile(suffix=".tar") as tf:
-            tf.write(archive.stdout)
-            tf.flush()
-            with tarfile.open(tf.name) as tar:
-                tar.extractall(pop_src)
+        scratch = Path(args.scratch) if args.scratch else Path(tempfile.mkdtemp(prefix="rw_fixrate_"))
+        try:
+            pop_src = scratch / "population_src"
+            pop_src.mkdir(parents=True)
+            archive = subprocess.run(["git", "archive", args.cutoff, "--", "src"], cwd=str(rp.ROOT),
+                                      capture_output=True, timeout=60)
+            if archive.returncode != 0:
+                print(f"error: git archive {args.cutoff} -- src failed: {archive.stderr.decode()}", file=sys.stderr)
+                return 2
+            with tempfile.NamedTemporaryFile(suffix=".tar") as tf:
+                tf.write(archive.stdout)
+                tf.flush()
+                with tarfile.open(tf.name) as tar:
+                    tar.extractall(pop_src)
 
-        pop_map = crawl_population(args.bin, pop_src)
-        commits = window_commits(args.until, args.cutoff)
-        meta = mark_outcomes(args.bin, pop_map, commits, scratch / "mark_scratch")
-        meta["window_total"] = len(commits)
-        pop = list(pop_map.values())
-    finally:
-        if not args.scratch:
-            shutil.rmtree(scratch, ignore_errors=True)
+            pop_map = crawl_population(args.bin, pop_src)
+            commits = window_commits(args.until, args.cutoff)
+            meta = mark_outcomes(args.bin, pop_map, commits, scratch / "mark_scratch")
+            meta["window_total"] = len(commits)
+            pop = list(pop_map.values())
+        finally:
+            if not args.scratch:
+                shutil.rmtree(scratch, ignore_errors=True)
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:

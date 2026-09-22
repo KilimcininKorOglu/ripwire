@@ -643,6 +643,91 @@ this codebase, in this window, measured this way" — exactly the same scope lim
 Re-run (updated to also emit the token-stratified table and the per-function `toks=` column in `--out`):
 `bench/readability_fixrate_validity.py --bin build/ripwire`.
 
+### Second correction (POST-HOC, not pre-registered): the tercile itself does not hold size constant
+
+**This subsection was prompted by looking at the token-stratified table above**, not written before it —
+labelled as such, per this document's own rule about what counts as pre-registration. The tercile result
+has a simpler reading than "keep, narrowed": T1 (10–72 tokens) spans a 7.2× internal range, T2 (73–191) spans
+2.6×, T3 (191–8023) spans 42×. The two terciles that show a readability signal are the two with the widest
+internal spread; the one that is silent is by far the narrowest. A tercile — even a token tercile — does not
+hold size constant, so "the effect survives at both extremes" is exactly what a *residual* size effect
+predicts too, not only what an independent readability effect would predict. The two hypotheses make
+different, testable predictions on narrower bands: a genuine readability effect should not shrink as the
+band narrows; a residual-size effect should shrink toward RR=1, at a rate that tracks how much internal
+range is left in the band.
+
+**Deciles by `toks`-at-cutoff** (same population, same outcome definitions, same CIs; quartile recomputed
+within each decile; `bench/readability_fixrate_validity.py --load-tsv pop_outcomes.tsv` re-derives this table
+from the already-computed per-function data in under a second — no re-crawl needed):
+
+| decile | toks range | internal range | n | FIXED RR (95% CI) | MODIFIED RR (95% CI) |
+|---|---|---|---|---|---|
+| D01 | 10–29 | 2.90× | 287 | 1.12 [0.31, 4.11] | 0.66 [0.23, 1.90] |
+| D02 | 29–47 | 1.62× | 287 | 1.49 [0.70, 3.18] | 1.27 [0.77, 2.09] |
+| D03 | 47–66 | 1.40× | 286 | 1.86 [1.03, 3.34] | 1.15 [0.73, 1.82] |
+| D04 | 66–89 | 1.35× | 287 | 1.00 [0.58, 1.71] | 1.00 [0.67, 1.47] |
+| D05 | 89–118 | 1.33× | 287 | 1.36 [0.88, 2.12] | 1.19 [0.84, 1.69] |
+| D06 | 118–157 | 1.33× | 287 | 0.81 [0.51, 1.28] | 0.78 [0.55, 1.09] |
+| D07 | 157–211 | 1.34× | 287 | 1.38 [0.92, 2.06] | 1.16 [0.88, 1.53] |
+| D08 | 212–300 | 1.42× | 286 | 0.92 [0.63, 1.33] | 0.96 [0.73, 1.26] |
+| D09 | 301–491 | 1.63× | 287 | **1.72 [1.37, 2.16]** | **1.36 [1.16, 1.60]** |
+| D10 | 492–8023 | **16.31×** | 287 | **1.47 [1.29, 1.68]** | **1.25 [1.15, 1.36]** |
+
+**Does RR track the internal range?** Yes, as the dominant pattern. Eight of the ten deciles (D01–D08, each a
+genuinely narrow 1.3×–2.9× band) show a CI that includes 1 on both outcomes, with point estimates scattered
+on both sides of 1 (0.81 to 1.86) — the shape of noise around no effect, not a consistent direction. The only
+two deciles whose CI excludes 1 on both outcomes are D09 and D10. D10 is not a narrow band at all: at 16.31×
+internal range it is wider than every tercile ever examined in this document, so a significant RR there is
+exactly what "the tercile does not hold size constant" predicts, one level down. D09 (1.63×) is narrower and
+its significance does not fit the range story as cleanly — at n=287 per decile with ten bands tested on two
+outcomes (20 tests), roughly one false positive at α=0.05 is expected by chance alone even under a true null,
+so D09 is reported without a confident causal reading in either direction, not folded into the "it's just
+size" story to make the pattern look cleaner than it is.
+
+**A second, independent check: nearest-token-neighbour matching.** For each of the 717 least-readable-quartile
+functions, its closest-toks match from the remaining 2,151 was found (§4's protocol, `nearest_token_match`).
+**This check came back unusable, and is reported as such rather than as evidence either way.** Only 46
+distinct functions serve as matches for all 717 quartile members: one function (`parseDeclarator`, 327 toks,
+itself FIXED) supplies 403 of the 717 matches (56.2%); a second (`printUsage`, 1,417 toks, also FIXED)
+supplies another 126 (17.6%) — together 73.8% of the "matched control" group is two always-fixed functions
+repeated hundreds of times, and the mean token gap between a quartile function and its nearest match is +136
+tokens (median 37, max 6,606) — not a close match at all for most of the quartile. The raw number this
+produces (matched-control fixed-rate 0.868 vs the quartile's own 0.538, RR 0.62) is **not reported as a
+finding**: it is an artifact of how sparse the "rest" population is near the token counts the least-readable
+quartile actually occupies, not a size-controlled comparison. That sparsity is itself informative in a
+different way — it confirms the quartile sits in a part of the token distribution the "rest" of the
+population barely reaches, which is what "the quartile is largely a size cut" predicts — but the RR number
+itself is discarded, not used.
+
+**Restated verdict, using the finest stratification with usable n as decisive.** The pre-registered bands
+(§4's Protocol) ask whether the effect vanishes once stratified by size. On deciles narrow enough to
+plausibly hold `toks` roughly constant (D01–D08), it does: eight independent CIs on each outcome, none
+excluding 1, point estimates with no consistent direction. The two bands that still show a significant
+effect are exactly the ones that still carry a wide internal size range (D10 unambiguously; D09 arguably, and
+flagged as not cleanly resolved). That is not "keep, narrowed" — this document's second-tier band required
+the effect to hold "for size-dominated differences" specifically and to be understood as tracking length; it
+is closer to, and is called, this document's **withdraw** band: **the raw and tercile-level separation this
+section reported earlier is better explained as a residual size effect, measured in the lens's own units,
+than as an independent later-fix signal.** The "keep, narrowed" verdict in the prior revision of this section
+is superseded by this one. `--readability`'s ordering does not appear to predict later fixes beyond what its
+own dominant token-count component already predicts on its own — which is the same mechanism §3c already
+found driving the lens's direction on refactor pairs. Per this document's own precedent (§5, `naminglens.h`),
+the correct response to a validation that comes back this way is to say so plainly rather than re-fit the
+analysis until it reads more favourably, which is what this subsection does: it withdraws its own prior
+verdict in the same document that made it, three commits later, rather than quietly.
+
+**What would change this again.** A genuine readability-independent signal, if one exists, would need to
+show up as a CI excluding 1 on a majority of narrow, size-matched bands — not on the single widest band, and
+not on a matching check that turned out to be degenerate. A larger population (a bigger corpus, or a longer
+follow-up window) would shrink the decile CIs enough to tell D09 apart from noise, and a working size-matched
+control (this repo's own "rest" population is too sparse near the quartile's own token range for 1-NN
+matching; a synthetic or cross-repo control pool would not have that gap) would settle the discarded check
+above properly instead of leaving it unresolved.
+
+Re-run: `bench/readability_fixrate_validity.py --bin build/ripwire` (full run, includes deciles and the
+matched-control check) or, on an already-written `--out` TSV, `bench/readability_fixrate_validity.py
+--load-tsv pop_outcomes.tsv` (re-stratifies in under a second, no re-crawl).
+
 ## 5. Precedent: we have already withdrawn a lens that failed exactly this kind of check
 
 This is not the first deterministic proxy ripwire has shipped, measured, and had to reckon with. §9.0 of
