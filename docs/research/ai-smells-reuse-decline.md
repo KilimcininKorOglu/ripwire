@@ -10,7 +10,7 @@ An investigation note, not a plan. It has three parts:
 3. Measurements on real trees, including the ones where the signal turned out to be weak.
 
 **Provenance.** Three of `--quality-delta`'s ten kinds — verbosity, duplication and reuse-decline —
-were shaped by Tsantalis, Zhu and Rigby, *AI-generated code smells*
+were shaped by Zhu, Tsantalis and Rigby, *AI-generated code smells*
 ([arXiv:2605.02741](https://arxiv.org/abs/2605.02741)), which is the row already recorded in
 [`LINEAGE.md`](../LINEAGE.md). Of those three, reuse-decline is the only one that is ours rather
 than a standard metric, and it is therefore the only one worth critiquing. Everything below about
@@ -247,10 +247,12 @@ that ledger as data.
 ## 2. Two smells we do not measure
 
 Both are **cross-context** in the sense our own backtest uses: the defect is not visible from any
-single function or file — you need a second site to see it at all. That study tagged 377 recorded
-defects from AI-authored code in this project, and of the 169 that could be tagged by locality,
-**88% were cross-context and 12% local**. On a human-authored comparison slice the same shape is
-present but far weaker (a fix-shape proxy put cross-context at 17–38%).
+single function or file — you need a second site to see it at all. That study recorded 377 defects
+from AI-authored code in this project, of which 292 were usable; of those, 169 could be tagged by
+locality (123, or 42.1% of the usable rows, could not). Of the 169 tagged, **149 (88%) were
+cross-context and 20 (12%) were local**. The same direction shows on a human-authored comparison
+slice, but we will not put a number on it: our two proxies for that external rate disagree, and
+neither has a written recipe.
 
 That is the whole argument for these two proposals. Per-function bars — length, nesting, parameter
 count, complexity — cannot see an 88%-cross-context population *by construction*, no matter how
