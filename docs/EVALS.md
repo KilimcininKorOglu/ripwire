@@ -6884,6 +6884,21 @@ Listed because the reason is more useful than the silence.
   text now states the pinned figures; this entry keeps the retracted number visible rather than
   silently replacing it.
 
+  **WITHDRAWN (2026-09-22): the ordering claim itself.** The 96.0%/token-count finding above answers
+  *why* the lens's direction moves; it does not by itself say whether that ordering predicts anything
+  actionable. `docs/research/readability-construct-validity.md` §4 tested that directly — whether a
+  least-readable-quartile function is more likely to be fixed later, on ripwire's own history — and at
+  raw and tercile level the association looked strong (RR 2.87). Stratified into ten narrow token-count
+  deciles, holding size roughly constant, it does not survive: **8 of the 10 deciles show a CI that
+  includes 1 on both outcomes** (point estimates 0.81–1.86, no consistent direction); the only two
+  deciles that stay significant are the two with the most leftover internal token-range spread (D10's
+  internal range is 16.3×). The reading is that the raw/tercile separation is a residual size effect,
+  measured in the lens's own units, not an independent later-fix signal — so the ordering claim
+  (`--readability` orders functions least-readable first) is withdrawn; the flag still orders by
+  Halstead volume/token entropy/length, it is just not claimed to order by readability. Full
+  derivation, the decile table, and the discarded nearest-neighbour check: same document §4, same PR
+  #313 (open; cited for the derivation only).
+
 ---
 
 ## 9. Ensemble family calibration — the measurement a preset must be derived from
