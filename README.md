@@ -1163,7 +1163,7 @@ rather than blurring it:
   tree. **Unvalidated against human judgement, stated plainly rather than assumed:** this is a
   deterministic ordering signal, not a checked one. Our own proxy measurement — 412 matched
   before/after function pairs mined from 80 refactor/simplify/cleanup commits in this repository's own
-  history, pinned to the `v0.6.2` tag rather than `git log --all` so the population cannot drift when an
+  history, pinned to the `v0.6.2` tag rather than a walk of every branch in the clone, so the population cannot drift when an
   unrelated branch is pushed — found the lens agrees with the commit's implied readability direction on
   only 37.4% of pairs (154 of 412), worse than chance. That is a construct-validity finding about the ordering claim, not a bug in
   the arithmetic (a separate self-consistency check confirms the formula computes exactly what it says
