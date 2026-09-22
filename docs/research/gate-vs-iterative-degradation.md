@@ -8,7 +8,7 @@ result that would prove the design's own premise wrong.
 
 ## The paper this responds to
 
-Kalyan Nakka, "Security Degradation in Iterative AI Code Generation: A Systematic Analysis of the
+Shivani Shukla, Himanshu Joshi and Romilla Syed, "Security Degradation in Iterative AI Code Generation: A Systematic Analysis of the
 Paradox," accepted IEEE-ISTAS 2025, [arXiv:2506.11022](https://arxiv.org/abs/2506.11022). The paper
 runs a controlled experiment — 400 code samples, 40 rounds, four prompting strategies — asking an
 LLM to iteratively "improve" its own code, and finds critical vulnerabilities increase 37.6% after
@@ -29,7 +29,7 @@ claim otherwise.
 `docs/LINEAGE.md` folds a work only when "the lesson taken from it can be named in one sentence
 **and** pointed at a real flag or source file" — a citation for something the paper *caused* us to
 build. That is not this. `--quality-delta` predates this note; nothing about it changed on reading
-Nakka 2025. Filing this as a lineage row would misrepresent the tool's history to buy a citation.
+Shukla et al. 2025. Filing this as a lineage row would misrepresent the tool's history to buy a citation.
 
 The actual record of this position is the design comment at the top of `src/quality.h` (the file
 that implements `--quality-delta`), which already states the mechanism this note is arguing from —
@@ -42,7 +42,7 @@ without citing this specific paper:
 
 That comment is design intent recorded where the code lives, not a claim staked in a document meant
 to be an honest ledger of external influence. This note is the first place the two are put side by
-side on purpose. If a later change actually adapts something from Nakka 2025 — the vulnerability
+side on purpose. If a later change actually adapts something from Shukla et al. 2025 — the vulnerability
 taxonomy, the round-count design, a specific finding — *that* change earns a `LINEAGE.md` row at the
 time it lands, not retroactively from this note.
 
@@ -186,7 +186,7 @@ the *trajectory* of repeated self-improvement — the shape of the curve across 
 only catch individual regressions after they already happened, leaving the underlying trajectory the
 same? These are different claims. A gate that catches every regression it sees but never changes what
 the model tries next iteration would still let the *next* unmeasured failure mode (the one the gate
-doesn't check) degrade freely — Nakka 2025's whole point is that *something* always degrades when
+doesn't check) degrade freely — Shukla et al. 2025's whole point is that *something* always degrades when
 only *some* things are measured.
 
 ### 2.1 The loop
@@ -218,7 +218,7 @@ Two arms per seed task, same model, same temperature, same seed code, same K:
   changes what ships. The trajectory question is about the *code the model chooses to write*, not
   about a merge gate.)
 
-K should be at least 10 — Nakka 2025 reports the divergence sharpening between iteration 5 and 10; a
+K should be at least 10 — Shukla et al. 2025 reports the divergence sharpening between iteration 5 and 10; a
 shorter loop cannot see whether a gate changes the *slope* rather than just one round's value.
 
 ### 2.2 What is measured each iteration
@@ -233,7 +233,7 @@ re-introduced two iterations later is still visible; see §2.3):**
 - All ten kinds' counts (`regressions`, `gating`, `minor`, per-`kind=` breakdown).
 - `api-new-surface` and `register-macro-excluded` as printed floors, for context.
 - Clone growth specifically (`duplication` + `new-clone-of-reused-helper` counts and the clone
-  groups' member counts) — Nakka 2025 doesn't measure this, but GitClear's agent-code findings that
+  groups' member counts) — Shukla et al. 2025 doesn't measure this, but GitClear's agent-code findings that
   motivate `--quality-delta`'s own kinds (cited in `src/quality.h`'s comments) do, and duplication is
   cheap to accumulate silently under an "improve this" prompt that never says "don't repeat
   yourself."
@@ -286,7 +286,7 @@ first measurement). Candidate instruments, all computed per seed task then aggre
    instrument that would catch a gate that looks clean on `--quality-delta`'s own gating count while
    debt still accumulates just under every bar — the concern §1.2 raises.
 4. **Security-finding trajectory**, same slope test as (1), on the scanner's output — this is the one
-   that actually tests Nakka 2025's claim in our setting, since none of ripwire's ten kinds are
+   that actually tests Shukla et al. 2025's claim in our setting, since none of ripwire's ten kinds are
    security checks.
 
 **Pre-registered thresholds, to be set with the actual seed-task count and iteration count once
@@ -374,7 +374,7 @@ the harness and gets numbers should report them beside this design, including if
   few lines for whoever has one available and wants to run this.
 - **The scanner choice per language**, pinned and justified — we picked Semgrep as the
   cross-language default in §2.2 but have not evaluated whether its default ruleset has the recall to
-  see what Nakka 2025's own taxonomy would flag.
+  see what Shukla et al. 2025's own taxonomy would flag.
 - **A second opinion on the confound design (§2.4).** Arm D (matched-content, wrong-target) is the
   one we're least sure earns its cost against arm C alone — if C is enough to isolate the effect,
   D is one fewer arm to run.
