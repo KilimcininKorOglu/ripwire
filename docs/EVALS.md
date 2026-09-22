@@ -6867,6 +6867,22 @@ Listed because the reason is more useful than the silence.
   prototyped on two corpora and rejected — see "Shotgun Surgery — two formulations measured" at the end of
   this document. What ships for the smell is the co-change check `--situ` / `--pr-context` already
   carried; its backtest numbers there are the only ones this project publishes about it.
+- **"484 matched pairs, 146 right-direction, 30.2%"** for `--readability`'s construct-validity proxy
+  (`--help=--readability`, this document, and README.md all carried it). It was first computed by
+  walking `git log --all` over a clone whose branch set changes every time a lane is pushed — a rerun
+  of the identical, unmodified script gave 413 pairs (38.3%) and, separately, 409 pairs (38.4%),
+  neither matching the published number and neither touching `src/readability.h`. A number that moves
+  when an unrelated lane is pushed is not measuring the lens; it is measuring which branches exist in
+  the shared `.git` right now. Pinned to the immutable `v0.6.2` tag, the same instrument reproduces
+  deterministically: **412 function pairs, 154 right-direction (37.4%)**. The mechanism behind the
+  inversion is not "the lens is wrong 63% of the time" — it is that the sign of a function's
+  token-count change predicts the lens's direction in **96.0%** of pairs (388/404 whose token count
+  changed), with the Halstead-volume term driving 91.1% of the 258 wrong-direction pairs (62.6%). Full protocol,
+  the instrument-fix note, and the decomposition: `docs/research/readability-construct-validity.md`
+  §3a/§3c — a draft investigation, PR [#313](https://github.com/redhat-et/ripwire/pull/313) (open;
+  cited here for the derivation only, nothing shipped depends on it merging). The shipped `--help`
+  text now states the pinned figures; this entry keeps the retracted number visible rather than
+  silently replacing it.
 
 ---
 
@@ -13868,3 +13884,81 @@ The detected root comes from the first transcript whose first line names it, whi
 scans until one matches instead of reading only the first file: 113 of the 628 do not name the absolute
 root on their first line — that is the complement of the 515 above, and it is not a claim that those 113
 print no banner, only that the root is not in it.
+
+## `--slice=SYM:VAR` def-use row order — PRE-REGISTERED 2026-09-22 (before any src/ change and before any number below was computed)
+
+`--slice=SYM:VAR` seed rows emitted in SOURCE order (the file's own line order), unstated on the root. The
+red-first gate arm (commit `48a4f071`) registered a rule and a decision procedure before any implementation
+code or any number existed:
+
+> **Rule under test: R1 def-use coverage.** A `--slice=SYM:VAR` row's score is the number of distinct
+> sliceable locals with an occurrence on that line; rows emit score-descending, then line ascending, then
+> binding line ascending (file is constant: one definition). Zero fitted parameters.
+>
+> **Measurement:** `bench/slice/run_slice_linerecall.py` from `lane/research-arise-slice` (LocBench V1 test,
+> Python single-function rows), plus one scratch arm that reads the EMITTED order: per (scored instance,
+> inventory variable) whose v1 rows hold a gold line, Recall@{1,3,5,10,20} and MRR of the `l=` values in
+> emission order against gold & rows, versus a uniform random permutation of the same rows (200 shuffles,
+> seed 20260920, own RNG). Population: every inventory variable (unseeded); the gold-touched subset is
+> reported beside it, never instead of it.
+>
+> **Decision:** ADOPT R1 ordering iff the new binary's emitted-order MRR beats the random control's MRR on
+> the all-inventory population. Otherwise stop ranking: emit in source order, and state that order in the
+> header as a presentation order, not a ranking.
+
+Neither the harness (`bench/slice/run_slice_linerecall.py`) nor the scratch arm that reads emission order is
+committed to this tree — both live on the unmerged `lane/research-arise-slice`, and the scratch arm is a
+43-line diff over that harness. The numbers below are reproduced from that harness's output and from an
+independent re-run against both binaries (base `15a20855` and this lane), not from a script this tree ships;
+`docs/research/slice-line-recall.md`, cited by an earlier draft of this feature, does not exist on `main` or
+on this lane and is not the record of this claim — this section is.
+
+## `--slice=SYM:VAR` def-use row order — MEASURED 2026-09-22 against the band above: **ADOPTED — the emitted-order MRR beats the random control**
+
+**Population, stated precisely (correcting the scratch arm's own label):** 478 (scored instance, inventory
+variable) pairs, from 173 LocBench V1 Python instances, **whose v1 rows hold a gold line** — not "every
+inventory variable, unseeded" as the scratch arm's `all_inventory` label implied. A pair with no gold line
+among its rows scores 0 under every candidate order, so the ADOPT/DON'T-ADOPT decision is unaffected either
+way; only the population's name was overstated.
+
+| arm | @1 | @3 | @5 | @10 | @20 | MRR |
+| --- | --- | --- | --- | --- | --- | --- |
+| source order (base `15a20855`, the "before") | 0.198 | — | — | — | — | 0.525 |
+| random control (200 shuffles, seed 20260920, sequential stream) | 0.268 | 0.676 | 0.827 | 0.939 | 0.983 | 0.602 |
+| def-use coverage (this lane, emitted order, the "after") | 0.285 | 0.743 | 0.847 | 0.937 | 0.983 | 0.628 |
+
+@3/@5/@10/@20 were not separately reported for source order at registration time — only MRR and @1 were
+measured for that arm; the table states that gap rather than filling it in.
+
+The registered decision is the MRR row: **0.628 > 0.602 > 0.525** — def-use coverage beats the random
+control, which beats source order. ADOPTED per the pre-registered rule.
+
+**The control's spread, so the margin has a scale.** Across the control's own 200 shuffles, the mean MRR's
+standard deviation is 0.0117 (the registered sequential RNG stream) / 0.0116 (an independent per-pair RNG,
+cross-check only); the emitted-order MRR exceeds 199 of those 200 shuffle means (197/200 under the
+independent RNG) — roughly +2.2σ. A paired bootstrap of (emitted MRR − that pair's own control mean) over
+the 478 pairs gives Δ = +0.026, 95% CI [0.004, 0.049] — excludes zero, narrowly.
+
+**The gain is concentrated at @1/@3, honestly split per pair.** Per pair against its own control mean:
+better on 182, WORSE on 227, tied on 69 — def-use coverage loses the per-pair comparison more often than it
+wins. The population-level win lives in where gold lands when the rule is right: @1/@3 favor def-use
+clearly, @10/@20 tie the shuffle (0.937 vs 0.939, 0.983 vs 0.983 — the shuffle is marginally ahead at @10).
+On average 43% of a pair's rows share the top def-use-coverage score, so line order (the tiebreak) still
+does real work inside that band.
+
+**In-sample, honestly.** Zero fitted parameters — the rule is a fixed count-and-sort, not tuned against this
+population — but the population itself is the LocBench V1 Python set the rule was measured on; there is no
+held-out split. **Python only.** The coverage count follows the `--slice` inventory exactly (as registered),
+and that inventory is uneven across languages the tool serves — Python lambda/JS arrow params are not
+inventory locals while Python nested-def/Rust closure params are, Python `self` counts as a param local
+while Rust `self` does not, Java/Python attribute identifiers share a name with same-spelled locals while
+C++/JS field/property identifiers do not. None of this was measured for C/C++, JS/TS, Go, Java, C#, Ruby,
+Rust, or Swift; the `order="defuse"` ranking ships for every served language on the strength of the Python
+measurement alone, stated here rather than left implicit.
+
+**Falsifiable claim, restated to match what the table shows:** *"Ranking `--slice=SYM:VAR` rows by def-use
+coverage puts a gold line first (rank 1) more often than a random shuffle of the same rows, on LocBench V1
+Python."* That is an @1 claim (0.285 vs 0.268), not a claim that the rule outranks a shuffle on every pair
+or at every depth — @10/@20 tie, and the per-pair split has more losses than wins. `--help` and
+`src/slice.h`'s `sliceDefUseRowOrder` comment are worded to this claim, not to the broader "ranks above it"
+a first draft of this feature shipped.

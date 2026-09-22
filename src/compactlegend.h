@@ -1017,6 +1017,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // slice: src/slice.h (the <slice> root emit, kSliceCountsAttrXml)
     { "sym", "sym=/lang=: the sliced definition's name and language; p= is its file:line", false, "slice", MapHeaderRead::No, {}, "slice" },   // also defines lang=
     { "vars", "vars=N: sliceable local bindings in the definition, one v row each; name one to slice it", false, "slice", MapHeaderRead::No, {}, "slice" },
+    { "order", "order=defuse: seed s rows (no v=) ranked by def-use coverage (distinct local names on the line) desc, then line; not source order — flow s rows (v=) keep their (d=,l=,v=) order", false, "slice", MapHeaderRead::No, {}, "slice" },   // slice.h sliceDefUseRowOrder
     { "counts", "counts=as-classified: defs=/uses=/vars=/steps= count what the name classifier rowed; neither floors nor totals", false, "slice", MapHeaderRead::No, {}, "slice" },
     // flags: src/darkflags.h (the <flags> root emit)
     { "gates", "gates=/dark_gates=: gate rows (never cut) / those whose default keeps the guarded code out of the build", false, "flags", MapHeaderRead::No, {}, "flags" },   // also defines dark_gates=

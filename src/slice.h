@@ -6,7 +6,7 @@
 // MOTIVATION. ARISE (arXiv:2605.03117) measured statement-level definition-use edges exposed as a
 // queryable agent primitive at +17pp Function Recall@1 on SWE-bench Lite. ripwire's graph stops at
 // symbol granularity; this is the bounded v1 of that primitive: one definition, one variable, its
-// def/use statement rows in source order.
+// def/use statement rows, emitted in the order="defuse" ranking (sliceDefUseRowOrder).
 //
 // HONESTY CONTRACT (all four limits are stated in the emitted legend, never implied):
 //   • NAME-BASED — occurrences are identifier-name matches inside the definition's span. No alias
@@ -3055,11 +3055,13 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
             "counts=as-classified — defs/uses/vars/steps count what the classifier rowed, neither floors nor totals. "
             "<s l k t [b] [pp] [rd]>: k=def|use|both|scope, t=param|decl|assign|call-arg|read|global|nonlocal, b=declaration line a "
             "shadowed name binds to (0=unbound), pp=1 build-dependent preprocessor region, rd=lines of the defs reaching a use row "
-            "(-=none) per reach=cfg (flow-sensitive; C-family, Python) | linear (source order; JS/TS, Go, Java, Rust). Inventory "
+            "(-=none) per reach=cfg (flow-sensitive; C-family, Python) | linear (source order; JS/TS, Go, Java, Rust). "
+            "order=defuse: <s> seed rows ranked by def-use coverage (distinct local names on the line) desc, then line — not "
+            "source order. Inventory "
             "<v n l t [seed]>, vars=count. "
             "bindings=shadow count; preproc_rows=lines dropped under #if 0; seed/var_from/seed_vars/seed=1 = line-seed disclosure. "
             "Flow rows add v=variable d=depth f=from-line; steps=flow rows, depth=bound, flow_truncated=1 bounded not complete, "
-            "flow_redundant=1 (both=, unseeded only) reaches no line the flat inventory does not — seed via --at=FILE:LINE for real reach. "
+            "flow_redundant=1 (both=, unseeded only) reaches no line the flat inventory does not — seed via at=FILE:LINE for real reach. "
             "Limits: a write hidden behind a call (receiver mutation, by-ref/out-param, macro) rows as a use; no alias analysis; "
             "the statement is the unit (nested bodies/?:/short-circuit fold, goto untracked); no control dependence; block "
             "scopes separated; C-family #if 0 dropped, other #if kept+flagged. Full legend: omit "
@@ -3069,7 +3071,8 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
     {
         out =
             "<!-- ripwire slice: NAME-BASED intra-procedural def-use slice of one variable inside ONE resolved definition (ARISE, "
-            "arXiv:2605.03117). ROWS: one <s> per LINE touching VAR, source order — k= def|use|both|scope (both = the line writes AND "
+            "arXiv:2605.03117). ROWS: one <s> per LINE touching VAR, order=\"defuse\": most distinct local names on the line first, then line "
+            "(not source order) — k= def|use|both|scope (both = the line writes AND "
             "reads it, `x += y`; scope = a Python global/nonlocal statement: neither read nor write, it introduces the name and "
             "never anchors a flow), t= the strongest role on the line (param > decl > assign > call-arg > read > global/nonlocal), CDATA "
             "= the trimmed line. Bare slice=SYM lists the sliceable locals: <v n= l= t=/> per BINDING at its declaration "
@@ -3136,7 +3139,7 @@ inline std::string sliceLegendText( const SliceEmitOpts& opts )
                 "rows are line-granular (a multi-statement line merges and may over-connect) while chaining is statement-anchored (a "
                 "statement spanning lines chains as ONE unit keyed on its first line); data dependence only — no control dependence: "
                 "the guard (if/loop) deciding whether a def executes is never a row. "
-                "flow_redundant=\"1\" (unseeded both=): adds no line beyond the flat inventory; seed --at= for real gain. -->";
+                "flow_redundant=\"1\" (unseeded both=): adds no line beyond the flat inventory; seed at= for real gain. -->";
         }
     }
     // H1: the residue clause, in BOTH dialects and as its own comment — opened `<!-- ripwire slice: ` so the compact layer
@@ -3196,6 +3199,72 @@ inline void sliceAppendReachAttr( std::string& out, const std::vector<std::uint3
         out += ( lineIndex != 0 ? "," : "" ) + std::to_string( lines[ lineIndex ] );
     }
     out += "\"";
+}
+
+// order="defuse" — the seed rows' EMISSION order. A row's score is its def-use COVERAGE: how many distinct local
+// NAMES (inventory NAMES — scan.all also holds unbound identifiers such as a called builtin, which are not locals and
+// do not count) have an occurrence on its line, every local, not just the seed. Rows emit score-descending, then
+// line, then binding line, then fold index — a total order, so nothing is left to container order. Zero parameters.
+// Why not source order: on LocBench py (478 instance x variable pairs, Python only) source order ranked a gold line
+// BELOW a random shuffle of the same rows (MRR 0.525 vs 0.602); this rule ranks above it (0.628), in-sample, zero
+// fitted parameters — pre-registration, population and honesty caveats in docs/EVALS.md, "`--slice=SYM:VAR` def-use
+// row order".
+inline constexpr const char* kSliceRowOrderName = "defuse";
+
+inline std::vector<std::uint32_t> sliceDefUseRowOrder( const SliceScan& scan, const std::vector<SliceLineRow>& rows )
+{
+    std::vector<std::string_view> localNames;
+    localNames.reserve( scan.bindings.size() );
+    for( const SliceBinding& binding : scan.bindings )
+    {
+        localNames.emplace_back( binding.name );
+    }
+    // svLess, not operator<: see infra/sortutil.h — the default string_view comparator aborts the Linux G1 leg.
+    // The sort and the binary_search below MUST name the same comparator.
+    std::sort( localNames.begin(), localNames.end(), rw::sortutil::svLess );
+    std::vector<std::pair<std::uint32_t, std::string_view>> lineNames;
+    lineNames.reserve( scan.all.size() );
+    for( const SliceNamedOcc& no : scan.all )
+    {
+        if( std::binary_search( localNames.begin(), localNames.end(), std::string_view( no.name ), rw::sortutil::svLess ) )
+        {
+            lineNames.emplace_back( no.occ.line, no.name );
+        }
+    }
+    std::sort( lineNames.begin(), lineNames.end(),
+               []( const std::pair<std::uint32_t, std::string_view>& x, const std::pair<std::uint32_t, std::string_view>& y )
+               { return x.first != y.first ? x.first < y.first : rw::sortutil::svLess( x.second, y.second ); } );
+    lineNames.erase( std::unique( lineNames.begin(), lineNames.end() ), lineNames.end() );
+
+    std::vector<std::uint32_t> coverage( rows.size(), 0 );
+    std::vector<std::uint32_t> order( rows.size() );
+    for( std::uint32_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex )
+    {
+        const auto lineLess = []( const std::pair<std::uint32_t, std::string_view>& e, std::uint32_t line ) { return e.first < line; };
+        const auto first    = std::lower_bound( lineNames.begin(), lineNames.end(), rows[ rowIndex ].line, lineLess );
+        auto       last     = first;
+        while( last != lineNames.end() && last->first == rows[ rowIndex ].line )
+        {
+            ++last;
+        }
+        coverage[ rowIndex ] = std::uint32_t( last - first );
+        order[ rowIndex ]    = rowIndex;
+    }
+    std::sort( order.begin(), order.end(), [ & ]( std::uint32_t a, std::uint32_t b )
+    {
+        if( coverage[ a ] != coverage[ b ] )
+        {
+            return coverage[ a ] > coverage[ b ];
+        }
+        if( rows[ a ].line != rows[ b ].line )
+        {
+            return rows[ a ].line < rows[ b ].line;
+        }
+        const std::uint32_t bindA = sliceBindingLine( scan, rows[ a ].bindingIdx );
+        const std::uint32_t bindB = sliceBindingLine( scan, rows[ b ].bindingIdx );
+        return bindA != bindB ? bindA < bindB : a < b;
+    } );
+    return order;
 }
 
 // the element BODY: the inventory (<v> per binding) or the seed rows + flow rows (<s> per line per
@@ -3268,11 +3337,11 @@ inline void sliceEmitBody( std::string& out, const SliceScan& scan, std::string_
             out += "]]></s>";
         };
 
-        // the seed variable's rows — the v1 emission, byte-stable with or without a flow
-        // (occ is already line-ascending — the walk is a pre-order pass over one file's AST)
+        // the seed variable's rows — the v1 emission, byte-stable with or without a flow. Folded line-ascending
+        // (occ is a pre-order pass over one file's AST), EMITTED in the order="defuse" ranking the root states
         const std::vector<SliceLineRow>                rows       = sliceFoldLines( scan.occ );
         const std::vector<std::vector<std::uint32_t>> reachLines = sliceRowReachLines( scan );
-        for( std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex )
+        for( const std::uint32_t rowIndex : sliceDefUseRowOrder( scan, rows ) )
         {
             const SliceLineRow& r = rows[ rowIndex ];
             out += "<s l=\"" + std::to_string( r.line ) + "\" k=\"";
@@ -3423,6 +3492,9 @@ inline std::string sliceBundleText( const IngestResult& ing, const std::string& 
                 out += " flow_redundant=\"1\"";
             }
         }
+        out += " order=\"";   // the seed rows' emission order — an ordering the reader cannot see is a quiet claim
+        out += kSliceRowOrderName;
+        out += "\"";
     }
 
     // H1: beside the counts it qualifies (vars=, or defs=/uses=), ahead of every trailing group; absent at zero.
