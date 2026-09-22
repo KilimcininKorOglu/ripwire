@@ -218,14 +218,19 @@ Ranked by how often they were actually observed (§3.1).
   `--quality-delta` has a demotion for exactly this: a group carrying a recognized `idiom=` that
   *also* shares no non-keyword identifier between any two members, sits in pairwise-distinct
   enclosing contexts, and stays under 80 normalized tokens is reported **minor** instead of gating.
-  **That demotion is applied to `duplication` and not to reuse-decline.** The reuse-decline
-  reporter passes `false` for the minor flag unconditionally, so an idiom collision that happens to
-  contain a pre-existing symbol with three callers gates at full severity. We believe this is an
-  oversight rather than a decision; it is the first thing we would change.
+  **That demotion was, at the time we drafted this note, applied to `duplication` and not to
+  `new-clone-of-reused-helper` (reuse-decline).** The reporter passed `false` for the minor flag
+  unconditionally, so an idiom collision that happened to contain a pre-existing symbol with three
+  callers gated at full severity. We read that asymmetry as an oversight, and it has since been
+  fixed and shipped in v0.6.2 (`5a316628`, "fix(quality-delta): reuse-decline gets duplication's two
+  clone-group demotions"): `new-clone-of-reused-helper` now reuses the same `CloneIdiomVerdict`
+  demotion `duplication` does. A behavioral gate for it, and a fix for a disclosure gap it exposed
+  (a demoted row carried `sev="minor"` but no `idiom=` attribute), are in review as a follow-up
+  change.
 - **Test-harness boilerplate.** `duplication` skips a group whose members are *all* test scripts —
   sibling shell gates repeat near-identical `setup`/`ok`/`no` boilerplate by convention.
-  **Reuse-decline has no such exemption either.** Same asymmetry, same reporter, same line of code
-  that is missing.
+  **`new-clone-of-reused-helper` lacked that exemption too** — same asymmetry, same reporter, same
+  line of code — and it is fixed by the same commit.
 - **Deliberate non-merge.** Two bodies that genuinely are near-identical, which the architecture
   forbids merging — a helper in a lower layer that a higher-layer header cannot include without
   inverting the include order, a verbatim copy kept in a verification translation unit precisely so
@@ -416,9 +421,9 @@ carrying most of the decision, and that threshold (§1.5) was never fitted.
 
 Reading the free-text reasons of all 62: 31 name an idiom-class or one-line/shape collision, and 20
 name a test gate, harness, fixture or probe translation unit. Those two categories are precisely the
-two demotions that `duplication` has and reuse-decline does not (§1.7). The categories overlap and
-the count is a keyword scan of the reason text, not a hand label — treat it as an order of magnitude,
-not a partition.
+two demotions that `duplication` had and `new-clone-of-reused-helper` lacked at the time this ledger
+was read (§1.7). The categories overlap and the count is a keyword scan of the reason text, not a
+hand label — treat it as an order of magnitude, not a partition.
 
 **Instrument B — replaying the kind over history.** `reuse_decline_replay.py` runs
 `--quality-delta=<parent>..<sha>` over a window of non-merge commits and counts rows per kind. See
@@ -533,10 +538,16 @@ members    mcp | mcp_call | mcp_call | mcp_call | mcp_call | mcp_call | mcp_call
 The commit adds one new shell gate script. That script carries the same `mcp_call` helper that
 twelve sibling gate scripts already carry, which is the house convention for these harnesses, so
 the member set changed and a new group was born. Every member is a test script — the exemption
-`duplication` applies and reuse-decline does not. **The kind's only firing in 150 commits is a row
-the sibling kind would have dropped.** One instance is not a rate; it is an existence proof for the
-asymmetry, and it agrees with the ledger reading in §3.1, where 20 of 62 accepted findings name a
-test gate, harness, fixture or probe translation unit.
+`duplication` applies and, at measurement time, `new-clone-of-reused-helper` did not. **The kind's
+only firing in 150 commits is a row the sibling kind would have dropped.** One instance is not a
+rate; it is an existence proof for the asymmetry, and it agrees with the ledger reading in §3.1,
+where 20 of 62 accepted findings name a test gate, harness, fixture or probe translation unit.
+
+That count was measured on the pre-fix binary. Replaying the same 150-commit window
+(`bench/aismells/reuse_decline_replay.py`) with the demotions from `5a316628` applied produces
+**0** `new-clone-of-reused-helper` rows: the one firing above is exactly the row the all-test-script
+skip removes. The kind's only recorded firing in this history was the false alarm its own asymmetry
+predicted, not a defect the demotion would have missed.
 
 Note also that the members span twelve different files — the cross-file case §2.1 is about, which
 the row itself has no way to say.
@@ -570,11 +581,13 @@ In rough order of how much a wrong answer would cost us. The first is the real a
    us: the failure mode the smell names is an agent *re-implementing* a helper's role, and token-level
    clone detection sees only the subset where it re-implemented it *similarly*. We would like to know
    whether that subset is a useful sample of the phenomenon or a biased one.
-3. **The two missing demotions.** `duplication` demotes recognized idioms and skips all-test-script
-   groups; reuse-decline does neither (§1.7), and the ledger's reasons suggest that is where most of
-   its noise comes from. We read this as an oversight and intend to fix it. Is there a reason it
-   should *not* be symmetric — an argument that an idiom collision involving a well-reused helper is
-   more serious rather than less?
+3. **The two demotions, now made symmetric.** `duplication` demotes recognized idioms and skips
+   all-test-script groups; `new-clone-of-reused-helper` had neither (§1.7), and the ledger's reasons
+   suggested that was where most of its noise came from. We read the asymmetry as an oversight; the
+   fix shipped in v0.6.2 (`5a316628`), and a behavioral gate plus an `idiom=` disclosure fix are in
+   review as a follow-up change. Is there an argument that an idiom collision involving a
+   well-reused helper should be *more* serious rather than less — in which case the demotion is the
+   wrong default, and we should revert it rather than have made it symmetric?
 4. **Cross-file duplication as a facet, not a kind** (§2.1). The per-repository spread in §3.2 is
    0%–94.5%, which we read as "report it, do not threshold it". Is there a defensible normalization —
    per language, per file-size distribution, per module granularity — that would make a threshold
