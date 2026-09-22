@@ -449,8 +449,16 @@ invoking ripwire, so it cannot move when the binary does.
 **Status: RUN, 2026-09-22.** §§10.1–10.3 (the protocol and the decision bands) were committed in
 `21737125` with §10.4–§10.6 as headings only — that commit contains no number the harness could have
 produced, the same ordering proof the 2026-09-20 round's own pre-registration commit (`3d994cda`) used.
-This amendment, made strictly after that commit, fills in §10.4–§10.6 from
-`bench/slice/run_cross_fn_reach.py`'s output and changes nothing in §10.1–§10.3.
+A second commit (`f18af585`) filled in §10.4–§10.6 from `bench/slice/run_cross_fn_reach.py`'s output.
+**AMENDMENT 2026-09-22 (b):** made after both of those, on review — `extend_2` was reported only
+against the full 6,809-line ceiling, of which 57.2 % was never measured; §10.4 and §10.5 now also
+report `extend_2` against the 2,913-line **measured** subset alone (14.35 %), so the verdict is checked
+against both denominators rather than resting on the one that could be challenged. Both stay under the
+pre-registered 20 % kill band. §10.5 also names the specific follow-up measurement (`--connect`-style
+undirected reach over the 83.8 % of unreachable lines that have graph edges but no directed path) that
+would need to change before this verdict does, and states the verdict's scope (LocBench Python
+multi-function fixes, `edit_functions[0]`-seeded, directed reach) explicitly. §10.1–§10.3 are
+unchanged.
 
 ### 10.1 The question
 
@@ -590,6 +598,21 @@ symbols**, one `--path` call each, and every line inherited its symbol's hop ver
 (`extend_1 = 4.27 %`, `extend_3 = 6.99 %` — depth 3 buys less than one more point over depth 2, which
 is itself the point: whatever is reachable at all is mostly reachable in one hop or not in three.)
 
+**Denominator sensitivity, stated before this is read as a verdict.** `extend_2` above is computed
+against the full 6,809-line ceiling, and 57.2 % of that ceiling was never measured (the availability
+cascade above). Scoring the unmeasured 57.2 % as non-extendable is the conservative choice — it favours
+killing the feature — so it is worth asking what `extend_2` is over the **measured subset alone**,
+where every line actually got a `--path` answer:
+
+**`extend_2 (measured) = (hop1 + hop2) / 2913 = 418 / 2913 = 14.35 %`**
+
+Both denominators are reported because a reader who does not trust the availability cascade should not
+have to take the ceiling-scoped number on faith. **14.35 % is still under the pre-registered 20 % kill
+band**, so the verdict does not depend on which denominator is used — it holds on the conservative
+figure (6.14 %) and on the more forgiving one (14.35 %) alike. Had the measured-subset figure landed at
+or above 20 %, §10.5 would have downgraded to inconclusive-pending-wider-measurement rather than kill,
+because the pre-registered bands decide this, not a preferred outcome.
+
 **Instance-level: share of the 122 measured rows fully covered if reach extended to N** (every gold
 line in the row is `hop0` or at/under N hops — a `no_enclosing_symbol` line anywhere in the row makes
 it uncoverable at any N):
@@ -619,22 +642,32 @@ resolver gauges over the WHOLE tree, not specific to any one call queried.
 
 ### 10.5 Verdict, against the bands fixed in §10.3 before any of this was measured
 
-**`extend_2 = 6.14 %`, which is under the 20 % kill line — not close to it.** Even the most generous
-read (`extend_3 = 6.99 %`, or crediting every `hop0` line as if the extension bought it too, which it
-did not) stays under 15 %. At the instance level the picture is the same: extending reach to depth 3
-still leaves 95 % of measured multi-function rows with at least one gold line the extension cannot
-touch. **Kill it** — cross-function reach via the existing directed call graph would recover a small,
-single-digit slice of the 70.8 % ceiling, not the "close most of the gap" outcome that would justify
-the engineering. This is a **measured** answer to the question §10.1 asked cheaply before building
-anything, and it came back negative.
+**Scope: this verdict is about LocBench's Python multi-function fixes, seeded at `edit_functions[0]`,
+under DIRECTED reach from that one seed — not a general claim about slicing, and not about Python
+patches in general.** It says what extending `--slice` across call boundaries would buy *this specific
+primitive on this specific corpus*, nothing wider.
 
-The one caveat that keeps this from being a flat no: `unreachable` is 22.9 % of the ceiling versus
-`hop1`+`hop2` at 6.1 %, and §10.4's graph-limits paragraph says 83.8 % of unreachable symbols have
-graph edges *somewhere* — just not on a directed path from the seed. If a meaningful share of that
-22.9 % is actually a shared-caller sibling relationship a *directed* extension is the wrong shape for,
-an **undirected** join (`--connect`, or a bidirectional reach) could still be worth pricing separately.
-This round did not measure that — see §10.6 — and the bands above were pre-registered for the directed
-question only.
+**`extend_2 = 6.14 %` over the full 6,809-line ceiling, `14.35 %` over the 2,913-line measured
+subset — both under the pre-registered 20 % kill line, so the verdict does not turn on which
+denominator is used.** Even the most generous read (`extend_3 = 6.99 %` ceiling-scoped / `16.3 %`
+measured-scoped, or crediting every `hop0` line as if the extension bought it too, which it did not)
+stays under the band. At the instance level the picture agrees: extending reach to depth 3 still
+leaves 95 % of measured multi-function rows with at least one gold line the extension cannot touch.
+**Kill it** — cross-function reach via the existing directed call graph would recover a small,
+single-digit-to-low-teens slice of the 70.8 % ceiling on either denominator, not the "close most of the
+gap" outcome that would justify the engineering. This is a **measured** answer to the question §10.1
+asked cheaply before building anything, and it came back negative on both readings of the denominator.
+
+**The specific measurement that would change this answer, named rather than left vague:** §10.4's
+graph-limits paragraph found that 83.8 % of unreachable gold lines sit behind a symbol that has *some*
+call-graph edge, just not on a directed path from the seed — the structural signature of a sibling
+function a patch touches via a shared caller, not via a call between the two. `--path` cannot see that
+relationship by design. **The next measurement, if this is revisited, is `--connect=SEED,TARGET` (or an
+equivalent undirected/bidirectional reach) over exactly that 83.8 % population**, asking how much of it
+joins through a shared caller. If that share turns out to be large and cheaply reachable, this verdict
+does not transfer — a directed-reach kill says nothing about an undirected join, and the two are
+different features with different costs. This round did not run that measurement; it is future work,
+not a caveat folded into the kill above.
 
 ### 10.6 What this does not tell us
 
