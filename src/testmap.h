@@ -29,6 +29,7 @@
 #include "sarif.h"       // rootPrefixOf / rootRelativeUri — the ONE relativizer every p= emitter already shares (A3)
 #include "infra/jsonesc.h" // rw::shSingleQuote — the ONE shell quoter; run= is a COMMAND, see spell() below
 #include "pythonrunner.h" // main-guard / pytest evidence; a .py extension alone is not a runner
+#include "jsrunner.h"     // #323: nearest package.json evidence (vitest/jest/node --test); a .ts/.js extension alone is not a runner
 #include "serialize.h"    // lane/t10-mcp-coverage: escapeXml — writeAffectedReport's ONE escaper (CLI ≡ MCP)
 #include "graphlegend.h"  // lane/t10-mcp-coverage: unprovenDefsVerbLegend/unprovenDefsAttrXml/graphCountFloorBrief/
                           // rootRelPathsLegend — writeAffectedReport's shared legend vocabulary
@@ -555,13 +556,28 @@ public:
     { return fileId < ing_->files.size() && runnerVerb( ing_->files[fileId] ) != nullptr ? spell( fileId ) : std::string(); }
 
 private:
-    // Candidate script kinds. Python's verb is provisional until spellUncached verifies runner evidence.
+    // #323: the JS/TS placeholder verb — NEVER emitted. runnerVerb()'s only job for these extensions is to
+    // mark the file a CANDIDATE (non-null ⇒ "index it", "it is self-runnable", the same two questions the
+    // .sh/.py rows answer); spellUncached() always overrides this exact pointer with jsrunner's evidence-
+    // derived verb, or refuses, before any concatenation happens. Comparing by pointer identity (not by
+    // re-checking the extension a second time) is safe and intentional: this is the one static object both
+    // sides of the table share, not two string literals that could be merged or not at the compiler's whim.
+    static constexpr const char* kJsEvidenceVerb = "js-evidence-pending";
+
+    // Candidate script kinds. Python's and JS/TS's verbs are provisional until spellUncached verifies runner
+    // evidence — a .py/.ts/.js extension alone never spells a command (a main-guard/pytest project, or a
+    // package.json naming vitest/jest/node --test, must say so first).
     /// Return the extension-based candidate interpreter, or nullptr for an unsupported script kind.
-    /// A Python candidate still needs main-guard or pytest evidence before a command can be emitted.
     static const char* runnerVerb( std::string_view path ) noexcept
     {
         struct RunnerRow { std::string_view ext; const char* verb; };
-        static constexpr RunnerRow kRunnerKinds[] = { { ".sh", "bash" }, { ".py", "python3" } };
+        static constexpr RunnerRow kRunnerKinds[] = {
+            { ".sh", "bash" }, { ".py", "python3" },
+            // #323: TS/JS test-file extensions (declaration files, ".d.ts", are never test code and are not
+            // listed) — same set resolve.h/ingest_crawl.h already recognize as TypeScript/JavaScript sources.
+            { ".ts", kJsEvidenceVerb }, { ".tsx", kJsEvidenceVerb }, { ".mts", kJsEvidenceVerb }, { ".cts", kJsEvidenceVerb },
+            { ".js", kJsEvidenceVerb }, { ".jsx", kJsEvidenceVerb }, { ".mjs", kJsEvidenceVerb }, { ".cjs", kJsEvidenceVerb },
+        };
         for( const RunnerRow& r : kRunnerKinds )
         {
             if( path.size() > r.ext.size() && path.compare( path.size() - r.ext.size(), r.ext.size(), r.ext ) == 0 )
@@ -611,7 +627,9 @@ private:
             // moment "" acquired a MEANING: run_unknown="1" asserts no runner is derivable, and for a row
             // whose own path is directly runnable that assertion is simply false. So the self-runnable case
             // now spells its own command, exactly as commandForScript already does for a shell gate.
-            // Missing Python evidence means unknown, not permission to borrow another file's runner.
+            // Missing Python evidence means unknown, not permission to borrow another file's runner. #323:
+            // the same rule for TS/JS — a test file's OWN nearest package.json decides its OWN command;
+            // missing/inconclusive evidence there is that file's own unknown, never another file's runner.
             return spell( fileId );
         }
 
@@ -700,7 +718,8 @@ private:
     }
 
     /// Validate a candidate script and format its disk path as one shell argument.
-    /// runnerFile must have a supported extension; Python without main-guard or pytest evidence yields empty.
+    /// runnerFile must have a supported extension; Python without main-guard or pytest evidence, or TS/JS
+    /// without a package.json naming vitest/jest/node --test, yields empty (never a guessed default).
     /// Commands are root-relative only for single-root scans, with quoting and option separation as needed.
     std::string spellUncached( std::uint32_t runnerFile ) const
     {
@@ -718,6 +737,23 @@ private:
                     return {};   // Django / unittest modules need a project runner; python3 may run zero tests.
                 }
                 verb = "pytest";
+            }
+        }
+        else if( verb == kJsEvidenceVerb )
+        {
+            // #323: the nearest package.json (walking up from the test file, like pytest's project search
+            // above) is the ONLY evidence this derives from — no extension-based default, ever. DISCLOSED to
+            // the reader by construction: an empty return here is exactly what runHint's "" ⇒ run_unknown="1"
+            // rule already reads as "not derivable" (testmap.h's M21(b) banner), so a repo with no manifest,
+            // or a manifest naming neither vitest, jest nor node's own runner, stays an honest unknown rather
+            // than a guessed default.
+            const std::string_view root = ing_->realPaths.empty() ? std::string_view( rootPrefix_ )
+                : std::string_view( ing_->rootPaths[ ing_->fileRoot[ runnerFile ] ] );
+            const std::string manifest = jsrunner::nearestPackageJson( disk, root );
+            verb = manifest.empty() ? nullptr : jsrunner::verbFor( jsrunner::detectFramework( manifest ) );
+            if( verb == nullptr )
+            {
+                return {};   // no package.json in the crawl boundary, or none of the three named runners it declares
             }
         }
         // A3: root-relative, like every p= beside it. rootRelativeUri strips a leading "./" unconditionally,

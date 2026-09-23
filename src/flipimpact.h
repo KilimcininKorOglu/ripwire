@@ -936,7 +936,10 @@ inline void computeRadius( const IngestResult& ing, const Graph& g, FlipResult& 
     res.testReach = forwardReach( g, testSeeds );
     for( NodeId h : res.hosts )
     {
-        if( h < res.testReach.size() && !res.testReach[h] )
+        // #324: the SAME exclusion --test-gate's untested list applies (model.h::isUntestableOwner) — a flag
+        // literal's innermost host can be a file's <file-scope> module scope (a top-level `if( FLAG )`, no
+        // enclosing function), and that synthetic owner can no more be "tested" here than it can there.
+        if( h < res.testReach.size() && !res.testReach[h] && !isUntestableOwner( ing.symbols[h].kind ) )
         {
             res.untested.push_back( h );
         }

@@ -1,0 +1,6 @@
+{
+  "name": "testgatenorunnerfix",
+  "private": true,
+  "scripts": { "test": "mocha" },
+  "devDependencies": { "mocha": "^10.2.0" }
+}

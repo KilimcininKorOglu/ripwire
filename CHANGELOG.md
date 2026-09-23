@@ -13,6 +13,30 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Fixed — `--test-gate` derives a TS/JS runner from package.json evidence, and never lists a file's own module scope as untested
+
+Two `--test-gate` defects, both reported against real TS/JS repos:
+
+`--test-gate` had no runner derivation for TypeScript/JavaScript test files — only `.sh`/`.py` were
+recognized — so every TS/JS `<t>` row carried `run_unknown="1"` and the gate could never clear on a
+TS/JS change with a test partner (one report measured 154 of 154 runs over three days hitting this on
+a vitest project). The runner is now derived the same evidence-first way Python's already is: the
+nearest `package.json` above the test file (walking up, so a monorepo/workspace test file's own
+manifest is used, not the repo root's) is read for a `scripts.test` entry or a `vitest`/`jest`
+dependency naming one of the three runners this recognizes — `vitest`, `jest`, or node's own built-in
+test runner. A manifest naming none of the three, or no manifest at all, stays the honest
+`run_unknown="1"` it already was — never a guessed default. New: `src/jsrunner.h`.
+
+`--test-gate` could also list a file's synthetic module-scope owner (`<file-scope>`, minted for a
+top-level call or an anonymous-callback body, #60) as an "untested" symbol — a row an agent could
+never discharge, since nothing in any language can call `<file-scope>` and no test can be written for
+it. `model.h::isUntestableOwner` now excludes it from every such obligation listing in one place:
+`--test-gate`'s untested rows and `--flags --flip`'s untested hosts, the two places a synthetic owner
+could reach a reader as an actionable item. It still counts toward the coarser `impacted=`/`hosts=`
+gauges, where it is a real caller in the blast radius — only the per-row obligation list changes.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

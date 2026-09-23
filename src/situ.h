@@ -1126,7 +1126,13 @@ inline TestGateResult computeTestGateFor( const IngestResult& ing, const Graph& 
             continue; // the changed symbols are the change, not its radius
         }
         ++r.impactedSymbols;
-        if( !isTestPath( rootRelPath( ing, f ) ) && !testReach[n] )
+        // #324: a <file-scope> (ModuleScope) owner can be a real CALLER in the blast radius (a top-level
+        // statement or anonymous-callback body calling the changed symbol) — it still counts toward
+        // impacted= above — but it is never listed as an UNTESTED obligation: nothing in any language can
+        // name it, so no test can ever be written FOR it, and a row an agent can never discharge is not an
+        // obligation, it is a permanent false alarm. model.h::isUntestableOwner is the ONE predicate this and
+        // flipimpact.h's own untested-hosts loop both apply, so the exclusion cannot drift between the two.
+        if( !isTestPath( rootRelPath( ing, f ) ) && !testReach[n] && !isUntestableOwner( ing.symbols[n].kind ) )
         {
             r.untested.push_back( n );
         }
@@ -1367,18 +1373,14 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     const bool        tgHasRows  = ( testRows > 0 || !r.untested.empty() );
     const std::string tgRootAttr = ( root.empty() || !tgHasRows ) ? std::string() : ( " root=\"" + ex( root ) + "\"" );
     // H2H-Graft F1: the evidence clause (testmap.h's ONE wording) rides the rows-gated half, like the run= rule.
-    // #60: exactly when a module-scope owner is one of the untested rows this report prints (it can never
-    // be a <t> test row — a test file's module scope is a caller, and the test rows are files).
-    // CodeRabbit 4057546105: "prints" is `[uw.begin, uw.end)`, which is what walkUntestedRows below emits —
-    // NOT all of r.untested. Scanning the whole set made a page with no owner on it pay for the reading
-    // anyway, which is the same paid-for-nothing defect this round already fixed for --for. The window is
-    // computed above and reused here so the predicate and the emitter cannot drift apart.
-    const bool tgHasModScope = std::any_of( r.untested.begin() + uw.begin, r.untested.begin() + uw.end,
-                                            [ & ]( NodeId n ) { return n < ing.symbols.size() && ing.symbols[ n ].kind == SymKind::ModuleScope; } );
-    rw::emitTo( out, "<!-- {}{}{}{}{}{}-->{}", kTestGateLegend,
+    // #324: a module-scope owner (<file-scope>) can no longer be one of the untested rows this report prints
+    // — computeTestGateFor excludes it (model.h::isUntestableOwner) before r.untested is even built, so there
+    // is no t="modscope" shape left for a reader of THIS listing to meet and no legend clause to spend bytes
+    // on here. (It remains a legitimate CALLER row elsewhere — --callers/--impact/--for still carry
+    // rw::modScopeLegend for their own t="modscope" rows; this document has none of those, only <u> rows.)
+    rw::emitTo( out, "<!-- {}{}{}{}{}-->{}", kTestGateLegend,
                   tgHasRows ? kTestGateRowLegend : "", std::string_view( kTestRowEvidenceLegend.data(), tgHasRows ? int( kTestRowEvidenceLegend.size() ) : 0 ),
                   runHintClauseIfRows( testRows, runsAreRootRelative( ing, root ) ),   // the ONE gate: this clause is about <t> rows, so an untested-only report pays nothing
-                  rw::modScopeLegend( tgHasModScope ),                // #60: exactly when a t="modscope" row is
                   rw::graphUnindexedLegend( g.unindexedFiles > 0 ),   // #66: exactly when the root carries the attribute
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where

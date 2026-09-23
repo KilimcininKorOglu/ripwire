@@ -180,5 +180,63 @@ perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" --test-gate=src/covered.cpp,test/test
     | grep -q '"p":"test/test_covered.cpp"[^}]*"changed":true' \
     && ok "(h4) the JSON twin carries \"changed\":true on the same row" || no "(h4) JSON twin lacks \"changed\":true"
 
+# ── (i)-(m) #323/#324: TS/JS runner derivation + the <file-scope> untested exclusion ────────────────────
+# Fixtures (committed, no git needed — same "changed set as an argument" shape the header comment describes):
+#   test/testgatevitestfix/    package.json{devDependencies:vitest, scripts.test:"vitest run"} + src/lib.ts
+#                              + src/lib.test.ts  -> run="npx vitest run src/lib.test.ts"
+#   test/testgatejestfix/      package.json{devDependencies:jest, scripts.test:"jest"}          -> run="npx jest src/lib.test.ts"
+#   test/testgatenodetestfix/  package.json{scripts.test:"node --test"}, .js sources             -> run="node --test src/lib.test.js"
+#   test/testgatenorunnerfix/  package.json{devDependencies:mocha, scripts.test:"mocha"} — NONE of the three
+#                              named runners: stays run_unknown="1", never a guessed default
+#   test/testgatefilescopefix/ the issue's own repro: lib.ts (vitest-covered) + main.ts calling add() at
+#                              module scope, reached by no test -> the untested list must NOT contain
+#                              <file-scope>, and the run= derivation applies at the same time (#323+#324
+#                              together, since #324's own repro is built on the #323 corpus)
+runjs(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$ROOT/test/$1" --test-gate="$2" --no-cache 2>/dev/null; }
+rcjs(){  perl -e 'alarm 15; exec @ARGV' "$BIN" "$ROOT/test/$1" --test-gate="$2" --no-cache >/dev/null 2>&1; echo $?; }
+
+I="$( runjs testgatevitestfix src/lib.ts )"; IEC="$( rcjs testgatevitestfix src/lib.ts )"
+{ [ "$IEC" = 4 ] && printf '%s' "$I" | grep -qF 'run="npx vitest run src/lib.test.ts"'; } \
+    && ok '(i) vitest: devDependencies+scripts.test evidence -> run="npx vitest run src/lib.test.ts"' \
+    || no "(i) vitest runner not derived (exit=$IEC): $I"
+
+J="$( runjs testgatejestfix src/lib.ts )"; JEC="$( rcjs testgatejestfix src/lib.ts )"
+{ [ "$JEC" = 4 ] && printf '%s' "$J" | grep -qF 'run="npx jest src/lib.test.ts"'; } \
+    && ok '(j) jest: devDependencies+scripts.test evidence -> run="npx jest src/lib.test.ts"' \
+    || no "(j) jest runner not derived (exit=$JEC): $J"
+
+K="$( runjs testgatenodetestfix src/lib.js )"; KEC="$( rcjs testgatenodetestfix src/lib.js )"
+{ [ "$KEC" = 4 ] && printf '%s' "$K" | grep -qF 'run="node --test src/lib.test.js"'; } \
+    && ok '(k) node:test: scripts.test="node --test" evidence -> run="node --test src/lib.test.js"' \
+    || no "(k) node --test runner not derived (exit=$KEC): $K"
+
+# (l) a package.json IS present but names none of the three runners (mocha) — must stay the honest unknown,
+#     never guess mocha's CLI shape and never fall back to a default. The obligation still gates (exit 4):
+#     an undecidable runner is not the same claim as "no obligation exists".
+L="$( runjs testgatenorunnerfix src/lib.ts )"; LEC="$( rcjs testgatenorunnerfix src/lib.ts )"
+{ [ "$LEC" = 4 ] && printf '%s' "$L" | grep -q 'run_unknown="1"' && ! printf '%s' "$L" | grep -q ' run="'; } \
+    && ok "(l) mocha-only evidence: no guessed runner, stays run_unknown=\"1\" (still gates, exit 4)" \
+    || no "(l) no-runner case wrong (exit=$LEC): $L"
+
+# (m) #324: the issue's own combined repro — the module-scope caller in main.ts must never appear as an
+#     untested obligation (it can never be tested), while the real vitest coverage of lib.ts still derives.
+M="$( runjs testgatefilescopefix src/lib.ts )"; MEC="$( rcjs testgatefilescopefix src/lib.ts )"
+{ [ "$MEC" = 4 ] && ! printf '%s' "$M" | grep -qF '<file-scope>' && [ "$( attr "$M" untested )" = 0 ] \
+      && printf '%s' "$M" | grep -qF 'run="npx vitest run src/lib.test.ts"'; } \
+    && ok '(m) #324: <file-scope> excluded from untested (untested=0), vitest run= still derived' \
+    || no "(m) file-scope case wrong (exit=$MEC untested=$( attr "$M" untested )): $M"
+
+# (n) xml well-formed for the new fixtures too
+if command -v xmllint >/dev/null 2>&1; then
+    jsxok=1
+    for X in "$I" "$J" "$K" "$L" "$M"; do
+        [ -n "$X" ] || continue
+        printf '%s' "$X" | xmllint --noout - 2>/dev/null || jsxok=0
+    done
+    if [ "$jsxok" = 1 ]; then ok "(n) xml well-formed (TS/JS runner + file-scope fixtures)"; else no "(n) xml malformed"; fi
+else
+    printf '  SKIP  (n) xml well-formed, TS/JS fixtures (no xmllint)\n'
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

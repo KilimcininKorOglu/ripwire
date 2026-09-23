@@ -1342,8 +1342,11 @@ $ ripwire . --test-gate          # exit code: 4
 ```
 
 A `run=` attribute appears only when a runner is derivable from real evidence — a test-dir script
-whose stem matches the harness, or whose text names it. A row with none says so — `run_unknown="1"`,
-never a guessed suite command — and a `<t>` or `<g>` row carries one or the other, never neither. A
+whose stem matches the harness, or whose text names it; for TypeScript/JavaScript, the nearest
+`package.json` above the test file naming `vitest`, `jest`, or node's own test runner (a
+`scripts.test` entry, or a `vitest`/`jest` dependency — never guessed from the `.ts`/`.js` extension
+alone). A row with none says so — `run_unknown="1"`, never a guessed suite command — and a `<t>` or
+`<g>` row carries one or the other, never neither. A
 `<g hops="2" n="3" p="a,b,c" run_unknown="1"/>` row is **two or more contiguous runner-less rows whose
 attributes are byte-identical**, served as one: `n=` is how many, `p=` is their paths verbatim in list
 order, and the disclosure is paid once per group rather than once per row. Everything else stays its own
@@ -1354,7 +1357,9 @@ over these rows counts test FILES: a `<g>` row is `n=` of them.
 `script_gates_unmodelled="332"` is the same discipline: script-to-binary is not a call edge, so those
 gates are invisible to this walk, and the number says so rather than letting `tests="2"` read as
 complete. The `<u>` rows are the untested blast radius: impacted symbols that no test in the corpus
-reaches.
+reaches — never a file's own `<file-scope>` module scope (a top-level statement or anonymous-callback
+body), since nothing in any language can name it and no test could ever be written for it; it still
+counts toward `impacted=` when it is a real caller in the blast radius, just never as an obligation.
 
 </details>
 
