@@ -336,6 +336,11 @@ command -v ripwire >/dev/null 2>&1 || exit 0
 prompt="$( printf '%s' "$input" | jq -r '.prompt // .user_prompt // .input // empty' 2>/dev/null )"
 cwd="$( printf '%s' "$input" | jq -r '.cwd // .workdir // empty' 2>/dev/null )"
 [ -n "$prompt" ] && [ -n "$cwd" ] && [ -d "$cwd" ] || exit 0
+# Route only inside a git work tree (issue #327). Outside one `--help-task` has no file list from git and
+# walks the whole tree under cwd: a session started in $HOME measured over 30 s for one prompt, past the
+# 8 s hook timeout the installer registers, on every prompt. The cost is routing in a small non-git
+# project too; a missed recommendation is the direction this hook already takes on every doubt.
+git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 session="$( printf '%s' "$input" | jq -r '.session_id // .conversation_id // empty' 2>/dev/null )"
 
 # A very long prompt is a paste, not a task description, and `--help-task` is not built to read one.

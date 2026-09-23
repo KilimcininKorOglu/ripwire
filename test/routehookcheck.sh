@@ -707,5 +707,32 @@ do
     fi
 done
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# O11 — the prompt router does not classify outside a git work tree (issue #327)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# Outside a git work tree `--help-task` has no file list from git and walks the whole tree under cwd.
+# A session started in $HOME measured over 30 s for one prompt, past the 8 s hook timeout, on every
+# prompt. A stub ripwire records each call, so the arm measures whether the hook CALLS the classifier,
+# not how fast one machine's tree happens to walk. RED on the pre-fix hook: the non-repo prompt
+# reached the stub. The repo prompt is the positive control: the stub is reachable, so an empty call
+# log for the non-repo prompt is not a stub that never runs.
+echo
+echo "=== O11: no classifier call outside a git work tree ==="
+O11BIN="$TMP/o11bin"; mkdir -p "$O11BIN"
+O11LOG="$TMP/o11.calls"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s"\n' "$O11LOG" >"$O11BIN/ripwire"
+chmod +x "$O11BIN/ripwire"
+H11="$TMP/h11"; mkdir -p "$H11"
+: >"$O11LOG"
+route_run "$H11" "$O11BIN:$PATH" "$( promptjson o11a "$NONREPO" "$RECPROMPT" )" >/dev/null 2>&1
+[ -s "$O11LOG" ] \
+    && no "O11 route: a prompt in a non-git cwd called ripwire: [$( tr '\n' ' ' <"$O11LOG" )]" \
+    || ok "O11 route: a prompt in a non-git cwd never calls ripwire"
+: >"$O11LOG"
+route_run "$H11" "$O11BIN:$PATH" "$( promptjson o11b "$REPO" "$RECPROMPT" )" >/dev/null 2>&1
+[ -s "$O11LOG" ] \
+    && ok "O11 route: a prompt in a git work tree still calls ripwire (O11's positive control)" \
+    || no "O11 route: a prompt in a git work tree never reached the stub, so O11 proved nothing"
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi
