@@ -569,9 +569,11 @@ meter_arg1=""
 # COST (issue #327). Each character read rebuilds the rest of the line (`${rw_line#?}`, and the suffix match
 # around it), so the scan grows with the cube of the line's length: 20 s for a 4,000-character line under macOS
 # bash 3.2, in front of the tool call it only counts. Two guards come first. A line that does not contain the
-# word holds no call, which is exact and ends the scan for nearly every command. A line longer than 1,024
+# word as written holds no call, and that check ends the scan for nearly every command. It reads the raw text,
+# before quote removal, so a command word the shell assembles from quoted or escaped fragments (`'rip''wire'`,
+# `rip\wire`, `"rip""wire"`) reads as no call: a MISSED call, never a false one. A line longer than 1,024
 # characters is not scanned and reads as no call — a MISSED call, the same direction as the limit above; 1,024
-# costs under half a second at worst. test/routehookcheck.sh O10 holds both.
+# costs under half a second at worst. test/routehookcheck.sh O10 holds the cost, O9 pins the assembled words.
 #
 # POSIX sh only, no bashisms: routehookcheck.sh extracts this block and runs it under `sh`.
 rw_cmd_word()

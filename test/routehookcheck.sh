@@ -678,8 +678,18 @@ o9 0 "grep -r 'ripwire;' src/"
 o9 0 'echo "a; ripwire b"'
 o9 0 '# ripwire .'
 o9 0 'echo hi > ripwire'
+# KNOWN LIMIT of the substring guard (issue #327), pinned so it cannot widen unnoticed. The guard tests the
+# raw line for the literal `ripwire`, before quote removal, so a command word the shell ASSEMBLES from quoted
+# or escaped fragments reads as no call. The lexer alone read each of these four as a call; they are missed
+# calls, never false ones. Quote removal still applies when the word appears whole, which the last two hold.
+o9 0 "'rip''wire' ."
+o9 0 'rip\wire .'
+o9 0 '"rip""wire" .'
+o9 0 'rip"wire" .'
+o9 1 '"ripwire" .'
+o9 1 "'ripwire' ."
 [ "$o9_bad" -eq 0 ] \
-    && ok "O9 command-word rule: $o9_n shapes read correctly (19 wrapped/sequenced/operator-attached calls, 9 appearances that run nothing)" \
+    && ok "O9 command-word rule: $o9_n shapes read correctly (21 wrapped/sequenced/operator-attached/quoted calls, 9 appearances that run nothing, 4 assembled words the guard misses by design)" \
     || no "O9 command-word rule: $o9_bad of $o9_n shapes read WRONG (listed above)"
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════

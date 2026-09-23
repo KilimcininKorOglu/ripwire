@@ -13,6 +13,34 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Fixed — the hooks' command-word rule no longer holds a Bash call for minutes on a long line (#327)
+
+`rw_is_ripwire_call`, the one rule the three hooks share to decide whether a Bash line runs ripwire, rebuilt
+the rest of the line for every character it read, so its cost grew with the cube of the line's length: 2.9 s at
+2,000 characters, 20.6 s at 4,000 and 155 s at 8,000 under macOS bash 3.2. The PreToolUse meter runs it on every
+Bash call, and one command carrying a heredoc held the call for 6 min 49 s. Two guards now run before the scan,
+and both can only turn a call into a missed one, never create a false one:
+
+- A line that does not contain the literal `ripwire` holds no call. The check reads the raw text before quote
+  removal, so a command word the shell assembles from quoted or escaped fragments (`'rip''wire' .`,
+  `rip\wire .`) now reads as no call; the scan alone read it as one.
+- A line longer than 1,024 characters is not scanned and reads as no call.
+
+For the substitution meter this is a numerator that can fall short on those two shapes
+(`docs/SUBSTITUTION_METER.md`, "Known undercount"). `test/routehookcheck.sh` O10 holds the cost (4,000
+characters: 20 s before, 0 s after) and O9 pins the four assembled-word shapes.
+
+### Fixed — the prompt routers no longer time out on every prompt outside a git work tree (#327)
+
+`hooks/ripwire-claude-route.sh` and `hooks/ripwire-codex-route.sh` ran `--help-task` for every prompt. Outside
+a git work tree it has no file list from git and walks the whole tree under `cwd`: a session started in `$HOME`
+still ran after 30 s, past the 8 s hook timeout, so Claude Code discarded the hook and printed a timeout warning
+on every prompt (0.08 s for the same prompt in a git repository). Both routers now exit before the classifier
+when git does not place `cwd` inside a work tree. A small non-git project gets no recommendation and
+writes no routing row either. `test/routehookcheck.sh` O11 holds it with a stub `ripwire` that records each call.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
