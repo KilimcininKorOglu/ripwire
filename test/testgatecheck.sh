@@ -220,11 +220,16 @@ L="$( runjs testgatenorunnerfix src/lib.ts )"; LEC="$( rcjs testgatenorunnerfix 
 
 # (m) #324: the issue's own combined repro — the module-scope caller in main.ts must never appear as an
 #     untested obligation (it can never be tested), while the real vitest coverage of lib.ts still derives.
+#     rv-test-gate-tsjs F3: the excluded owner is COUNTED, not silently dropped — untested_modscope="1".
 M="$( runjs testgatefilescopefix src/lib.ts )"; MEC="$( rcjs testgatefilescopefix src/lib.ts )"
-{ [ "$MEC" = 4 ] && ! printf '%s' "$M" | grep -qF '<file-scope>' && [ "$( attr "$M" untested )" = 0 ] \
+# F3's own untested_modscope= legend clause names "<file-scope>" in PROSE now (defining what the count is),
+# so the no-file-scope-row check is scoped to an actual <u sym=...> ROW, never a bare substring search over
+# the whole document (which would now false-positive on the legend's own defining sentence).
+{ [ "$MEC" = 4 ] && ! printf '%s' "$M" | grep -qF '<u sym="&lt;file-scope&gt;"' && [ "$( attr "$M" untested )" = 0 ] \
+      && [ "$( attr "$M" untested_modscope )" = 1 ] \
       && printf '%s' "$M" | grep -qF 'run="npx vitest run src/lib.test.ts"'; } \
-    && ok '(m) #324: <file-scope> excluded from untested (untested=0), vitest run= still derived' \
-    || no "(m) file-scope case wrong (exit=$MEC untested=$( attr "$M" untested )): $M"
+    && ok '(m) #324: <file-scope> excluded from untested (untested=0, untested_modscope=1), vitest run= still derived' \
+    || no "(m) file-scope case wrong (exit=$MEC untested=$( attr "$M" untested ) untested_modscope=$( attr "$M" untested_modscope )): $M"
 
 # (n) xml well-formed for the new fixtures too
 if command -v xmllint >/dev/null 2>&1; then
@@ -236,6 +241,122 @@ if command -v xmllint >/dev/null 2>&1; then
     if [ "$jsxok" = 1 ]; then ok "(n) xml well-formed (TS/JS runner + file-scope fixtures)"; else no "(n) xml malformed"; fi
 else
     printf '  SKIP  (n) xml well-formed, TS/JS fixtures (no xmllint)\n'
+fi
+
+# ── (o)-(u) rv-test-gate-tsjs fix round — F1 (lost shell-driver fallback), F2 (wrong runner), F3 (silent
+# pass, the fsonly half), F4 (false fail on non-test JS), F5 (marker package.json stops the walk) ──────────
+# Fixtures reused from the review's own $ORCH/tmp/rv-test-gate/fx/ (per the coordinator's instruction),
+# committed here as test/testgateNNNfix/ in this repo's existing naming convention.
+
+# (o1) F1: a TS/JS test file with NO package.json, but a test/*.sh DRIVER whose own text names it — the
+#      driver's evidence must not be discarded now that TS/JS has its own (empty, here) evidence path.
+O1="$( runjs testgateshdriverfix src/lib.ts )"; O1EC="$( rcjs testgateshdriverfix src/lib.ts )"
+{ [ "$O1EC" = 4 ] && printf '%s' "$O1" | grep -qF 'run="bash test/run_ts.sh"'; } \
+    && ok "(o1) F1: no package.json, a shell driver names the test file -> run=\"bash test/run_ts.sh\"" \
+    || no "(o1) F1 shell-driver fallback lost (exit=$O1EC): $O1"
+
+# (o2) F1: same driver, but a package.json now exists and names mocha (none of the three) — package.json
+#      evidence is inconclusive for TS/JS itself, and the SAME shell-driver fallback must still fire.
+O2="$( runjs testgateshdrivermochafix src/lib.ts )"; O2EC="$( rcjs testgateshdrivermochafix src/lib.ts )"
+{ [ "$O2EC" = 4 ] && printf '%s' "$O2" | grep -qF 'run="bash test/run_ts.sh"'; } \
+    && ok "(o2) F1: mocha package.json (inconclusive) + shell driver -> run=\"bash test/run_ts.sh\"" \
+    || no "(o2) F1 fallback lost with an inconclusive manifest present (exit=$O2EC): $O2"
+
+# (o3) F1 on --affected: TestRunnerIndex is the ONE shared class, so the fix must reach every surface built
+#      on it, not just --test-gate's own report.
+O3="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$ROOT/test/testgateshdriverfix" --affected=src/lib.ts --no-cache --legend=compact 2>/dev/null )"
+printf '%s' "$O3" | grep -qF 'run="bash test/run_ts.sh"' \
+    && ok "(o3) F1 on --affected: run=\"bash test/run_ts.sh\" (TestRunnerIndex is shared)" \
+    || no "(o3) F1 --affected did not carry the driver fallback: $O3"
+
+# (o4) F1 on the MCP affected tool — same shared class, the MCP surface too.
+if command -v python3 >/dev/null 2>&1; then
+    O4="$( python3 - "$BIN" "$ROOT/test/testgateshdriverfix" <<'PY'
+import json, subprocess, sys
+BIN, corpus = sys.argv[1], sys.argv[2]
+req = "\n".join([
+    json.dumps( { "jsonrpc": "2.0", "id": 1, "method": "initialize" } ),
+    json.dumps( { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": { "name": "affected", "arguments": { "path": corpus, "files": "src/lib.ts" } } } ),
+] ) + "\n"
+out = subprocess.run( [ BIN, "--mcp" ], input = req, capture_output = True, text = True, timeout = 15 ).stdout
+lines = [ l for l in out.splitlines() if l.strip() ]
+if not lines:
+    print( "__NO_OUTPUT__" ); sys.exit( 0 )
+r = json.loads( lines[ -1 ] )
+print( r.get( "result", {} ).get( "content", [ {} ] )[ 0 ].get( "text", "__NO_TEXT__:" + str( r ) ) )
+PY
+)"
+    printf '%s' "$O4" | grep -qF 'run="bash test/run_ts.sh"' \
+        && ok "(o4) F1 on the MCP affected tool: run=\"bash test/run_ts.sh\"" \
+        || no "(o4) F1 MCP affected did not carry the driver fallback: $O4"
+else
+    printf '  SKIP  (o4) F1 MCP affected check (no python3)\n'
+fi
+
+# (p1) F2: scripts.test is AUTHORITATIVE — mocha's own script, with vitest ALSO a devDependency, must never
+#      derive vitest (a stray dependency is not permission to override what CI actually runs).
+P1="$( runjs testgatemochavitestdepfix src/lib.ts )"; P1EC="$( rcjs testgatemochavitestdepfix src/lib.ts )"
+{ [ "$P1EC" = 4 ] && printf '%s' "$P1" | grep -q 'run_unknown="1"' && ! printf '%s' "$P1" | grep -q 'run="npx vitest'; } \
+    && ok "(p1) F2: mocha scripts.test + vitest devDependency -> run_unknown=\"1\" (scripts.test wins)" \
+    || no "(p1) F2 dependency wrongly overrode scripts.test (exit=$P1EC): $P1"
+
+# (p2) F2: "jest" as a SUBSTRING of an unrelated path token (jest-report-cleaner.js) must not match as a
+#      shell WORD; the script names neither vitest/jest/node --test -> run_unknown, never a guessed jest.
+P2="$( runjs testgatejestsubstringfix src/lib.ts )"; P2EC="$( rcjs testgatejestsubstringfix src/lib.ts )"
+{ [ "$P2EC" = 4 ] && printf '%s' "$P2" | grep -q 'run_unknown="1"' && ! printf '%s' "$P2" | grep -q 'run="npx jest'; } \
+    && ok "(p2) F2: 'jest' inside jest-report-cleaner.js is a substring, not a word -> run_unknown=\"1\"" \
+    || no "(p2) F2 substring match derived a runner it should not have (exit=$P2EC): $P2"
+
+# (p3) F2 / non-object scripts: scripts is an ARRAY, not an object — must not crash, and reads as "no
+#      scripts.test" (absent), so a real jest devDependency is the only evidence and correctly wins. NOT a
+#      red/green differentiator for this fixture specifically — topLevelObjectBody already refused a
+#      non-object scripts value before this round (both binaries agree), so this arm is coverage proving
+#      that "absent" reading is deliberate, not merely never having been exercised.
+P3="$( runjs testgatescriptsarrayfix src/lib.ts )"; P3EC="$( rcjs testgatescriptsarrayfix src/lib.ts )"
+{ [ "$P3EC" = 4 ] && printf '%s' "$P3" | grep -qF 'run="npx jest src/lib.test.ts"'; } \
+    && ok "(p3) F2: non-object scripts (array) does not crash, falls to the real jest dependency" \
+    || no "(p3) F2 non-object scripts mishandled (exit=$P3EC): $P3"
+
+# (q) F3: fx/fsonly — a module-scope-only change (no test file anywhere) must disclose untested_modscope="1"
+#     rather than a bare, unexplained untested="0" that reads as "nothing to do".
+Q="$( runjs testgatefsonlyfix src/lib.ts )"; QEC="$( rcjs testgatefsonlyfix src/lib.ts )"
+{ [ "$( attr "$Q" untested )" = 0 ] && [ "$( attr "$Q" untested_modscope )" = 1 ] && [ "$( attr "$Q" impacted )" = 1 ]; } \
+    && ok "(q) F3: fsonly discloses untested_modscope=\"1\" (impacted=1, untested=0, exit=$QEC unchanged)" \
+    || no "(q) F3 fsonly disclosure wrong (exit=$QEC untested=$( attr "$Q" untested ) untested_modscope=$( attr "$Q" untested_modscope ) impacted=$( attr "$Q" impacted )): $Q"
+
+# (r1) F4: a test-DIRECTORY helper/setup file (isTestPath true, but no .test./.spec. name) must NOT be
+#      spelled as a vitest target — vitest's own include-glob would never collect it either.
+R1="$( runjs testgatehelperfix test/util.ts )"; R1EC="$( rcjs testgatehelperfix test/util.ts )"
+{ [ "$R1EC" = 4 ] && printf '%s' "$R1" | grep -qF '<t p="test/util.ts" changed="1" run_unknown="1"/>' \
+      && printf '%s' "$R1" | grep -qF '<t p="test/setup.ts"' && ! printf '%s' "$R1" | grep -qF 'p="test/setup.ts"[^/]*run="npx' \
+      && printf '%s' "$R1" | grep -qF 'run="npx vitest run test/util.test.ts"'; } \
+    && ok "(r1) F4: helper/setup TS files stay run_unknown; the real util.test.ts still derives" \
+    || no "(r1) F4 helper/setup wrongly spelled runnable (exit=$R1EC): $R1"
+
+# (r2) F4: a .d.ts declaration file must never be spelled as a vitest/jest target, regardless of evidence.
+R2="$( runjs testgatedtsfix test/lib.d.ts )"; R2EC="$( rcjs testgatedtsfix test/lib.d.ts )"
+{ [ "$R2EC" = 4 ] && printf '%s' "$R2" | grep -qF '<t p="test/lib.d.ts" changed="1" run_unknown="1"/>'; } \
+    && ok "(r2) F4: .d.ts never spelled as a test target -> run_unknown=\"1\"" \
+    || no "(r2) F4 .d.ts wrongly spelled runnable (exit=$R2EC): $R2"
+
+# (s) F5: the NEAREST package.json is a bare module-type marker ({"type":"commonjs"}, no scripts/deps) —
+#     the walk must keep climbing to the root manifest's real vitest evidence, not stop and report unknown.
+S="$( runjs testgatetypemarkerfix src/lib.ts )"; SEC="$( rcjs testgatetypemarkerfix src/lib.ts )"
+{ [ "$SEC" = 4 ] && printf '%s' "$S" | grep -qF 'run="npx vitest run src/lib.test.ts"'; } \
+    && ok "(s) F5: a non-deciding marker package.json is skipped; the root manifest is used" \
+    || no "(s) F5 walk stopped at the marker manifest (exit=$SEC): $S"
+
+# (t) xml well-formed for the fix-round fixtures
+if command -v xmllint >/dev/null 2>&1; then
+    tok=1
+    for X in "$O1" "$O2" "$P1" "$P2" "$P3" "$Q" "$R1" "$R2" "$S"; do
+        [ -n "$X" ] || continue
+        printf '%s' "$X" | xmllint --noout - 2>/dev/null || tok=0
+    done
+    if [ "$tok" = 1 ]; then ok "(t) xml well-formed (fix-round fixtures)"; else no "(t) xml malformed"; fi
+else
+    printf '  SKIP  (t) xml well-formed, fix-round fixtures (no xmllint)\n'
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

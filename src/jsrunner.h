@@ -262,6 +262,35 @@ inline std::string stringValue( std::string_view body, std::string_view key )
     return {};
 }
 
+// rv-test-gate-tsjs F2: a byte that can continue an identifier/path SEGMENT — used to bound a word match
+// so "jest" inside "jest-report-cleaner.js" (a FILENAME) is not mistaken for a "run jest" command.
+inline bool isWordByte( char c ) noexcept
+{
+    return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c == '-';
+}
+
+/// Whether `word` occurs in `text` bounded on BOTH sides by a non-word byte or the string edge — "vitest"
+/// matches in "npx vitest run" (space both sides) and in "node_modules/.bin/jest" (a path separator, then
+/// the string end), never in "jest-report-cleaner.js" (a '-' immediately follows) or "myvitest" (a letter
+/// immediately precedes). rv-test-gate-tsjs F2: a runner name matched as a SUBSTRING of an unrelated token
+/// is not evidence the script text was ever ".find()"-shaped for before this fix.
+inline bool matchesWord( std::string_view text, std::string_view word )
+{
+    std::size_t pos = 0;
+    while( ( pos = text.find( word, pos ) ) != std::string_view::npos )
+    {
+        const bool leftOk  = pos == 0 || !isWordByte( text[pos - 1] );
+        const std::size_t end = pos + word.size();
+        const bool rightOk = end >= text.size() || !isWordByte( text[end] );
+        if( leftOk && rightOk )
+        {
+            return true;
+        }
+        ++pos;
+    }
+    return false;
+}
+
 } // namespace detail
 
 /// Whether `dependencies` or `devDependencies` (either one — testmap.h's callers do not care which) names
@@ -296,23 +325,39 @@ inline std::string testScript( std::string_view packageJson )
 // issue's own wording: "any ONE of these would help", not "every framework").
 enum class Framework : std::uint8_t { None, Vitest, Jest, NodeTest };
 
-/// Evidence-only framework detection: `scripts.test` naming a framework wins over a bare dependency (a repo
-/// can depend on vitest for its config types while its actual `test` script still runs something else), and
-/// node's OWN test runner has no package to depend on, so it is recognized ONLY by its scripts.test spelling.
+// npm's own generated placeholder (`npm init`'s default `scripts.test`) — present, but not really a script
+// a human wrote, so it reads the same as "absent" for evidence purposes (rv-test-gate-tsjs F2).
+inline bool isNpmPlaceholderScript( std::string_view script ) noexcept
+{
+    return script.find( "Error: no test specified" ) != std::string_view::npos;
+}
+
+/// Evidence-only framework detection. rv-test-gate-tsjs F2: a NON-EMPTY, non-placeholder `scripts.test` is
+/// AUTHORITATIVE — the script IS what a CI run of `npm test` executes, so once it names something, that
+/// something (or nothing recognized) is the answer, and a same-named DEPENDENCY never overrides it (a repo
+/// can depend on vitest for its config types while `scripts.test` runs mocha; a scripts.test that runs some
+/// OTHER file whose path happens to contain "jest" is not a jest invocation either — matchesWord bounds
+/// both). Dependencies are consulted ONLY when there is no real scripts.test to read: absent, empty, or
+/// npm's own placeholder. node's OWN test runner has no package to depend on, so it is recognized ONLY by
+/// its scripts.test spelling, inside the authoritative branch.
 inline Framework detectFramework( std::string_view packageJson )
 {
     const std::string script = testScript( packageJson );
-    if( script.find( "vitest" ) != std::string::npos )
+    if( !script.empty() && !isNpmPlaceholderScript( script ) )
     {
-        return Framework::Vitest;
-    }
-    if( script.find( "jest" ) != std::string::npos )
-    {
-        return Framework::Jest;
-    }
-    if( script.find( "node --test" ) != std::string::npos || script.find( "node --experimental-test-runner" ) != std::string::npos )
-    {
-        return Framework::NodeTest;
+        if( detail::matchesWord( script, "vitest" ) )
+        {
+            return Framework::Vitest;
+        }
+        if( detail::matchesWord( script, "jest" ) )
+        {
+            return Framework::Jest;
+        }
+        if( script.find( "node --test" ) != std::string::npos || script.find( "node --experimental-test-runner" ) != std::string::npos )
+        {
+            return Framework::NodeTest;
+        }
+        return Framework::None;   // scripts.test names something else entirely — never overridden by a dependency guess
     }
     if( hasDependency( packageJson, "vitest" ) )
     {
@@ -322,7 +367,39 @@ inline Framework detectFramework( std::string_view packageJson )
     {
         return Framework::Jest;
     }
-    return Framework::None;   // no scripts.test naming a known runner, no vitest/jest dependency: undecidable
+    return Framework::None;   // no scripts.test, no vitest/jest dependency: undecidable
+}
+
+/// Whether `path` matches vitest/jest's own default include-glob SHAPE — `.test.`/`.spec.` in the filename,
+/// or a `__tests__/` directory segment — and never a bare `.d.ts` declaration file. rv-test-gate-tsjs F4:
+/// isTestPath (filter.h) is deliberately BROADER (any file under a `test/`/`tests/` directory), which is
+/// right for "code a test author wrote" but wrong for "a file vitest/jest itself would collect as a test
+/// target" — a helper or a setup file living beside real tests matches isTestPath but not either runner's
+/// own glob, so spelling `npx vitest run test/setup.ts` would fail with "no test files found" in CI.
+inline bool looksLikeJsTestFile( std::string_view path ) noexcept
+{
+    if( path.ends_with( ".d.ts" ) )
+    {
+        return false;   // a TypeScript declaration file — never test code, whatever the rest of its name is
+    }
+    const std::size_t slash = path.rfind( '/' );
+    const std::string_view fn = ( slash == std::string_view::npos ) ? path : path.substr( slash + 1 );
+    if( fn.find( ".test." ) != std::string_view::npos || fn.find( ".spec." ) != std::string_view::npos )
+    {
+        return true;
+    }
+    // a whole __tests__ directory SEGMENT, bounded by '/' or the path's own edges (never a substring hit
+    // inside a longer directory name like "my__tests__stuff/")
+    std::size_t pos = 0;
+    while( ( pos = path.find( "__tests__/", pos ) ) != std::string_view::npos )
+    {
+        if( pos == 0 || path[pos - 1] == '/' )
+        {
+            return true;
+        }
+        ++pos;
+    }
+    return false;
 }
 
 /// The CLI verb for a detected framework, or nullptr for `Framework::None` — nullptr propagates to testmap.h
@@ -347,15 +424,23 @@ inline const char* verbFor( Framework fw ) noexcept
     return nullptr;   // Framework::None, or a byte past the enum: never a guessed verb
 }
 
-/// Search from `file`'s own directory through `root`, inclusive, for the nearest package.json and return its
-/// bytes, or "" when none is found. The walk is rw::dirwalk::ascendToRoot (shared with
-/// pythonrunner::hasPytestProject — same boundary and symlink rules); this predicate reads the first
-/// candidate's bytes instead of returning a bare bool. Monorepo/workspace test files are common (the issue's
-/// own point 1), so the search starts at the test file, not at the crawl root.
+/// Search from `file`'s own directory through `root`, inclusive, for the nearest package.json that can
+/// actually DECIDE a framework, and return its bytes — or, failing that, the nearest package.json found at
+/// all (so a caller still reads its honest "names none of the three" rather than a silent miss), or "" when
+/// none exists anywhere in the boundary. The walk is rw::dirwalk::ascendToRoot (shared with
+/// pythonrunner::hasPytestProject — same boundary and symlink rules). Monorepo/workspace test files are
+/// common (the issue's own point 1), so the search starts at the test file, not at the crawl root.
+///
+/// rv-test-gate-tsjs F5: a package.json with no scripts/dependencies evidence at all — a bare module-type
+/// marker (`{"type":"commonjs"}`) is a real, common pattern in mixed-module repos — used to END the search
+/// even though it decides nothing; the walk now keeps climbing past it toward a manifest that CAN decide
+/// (a workspace root's runner is hoisted to every package under it anyway, so the root manifest is exactly
+/// the right fallback).
 inline std::string nearestPackageJson( const std::string& file, std::string_view root )
 {
     namespace fs = std::filesystem;
-    std::string found;
+    std::string fallback;   // the NEAREST manifest found, even if it decides nothing (F5)
+    std::string decisive;
     rw::dirwalk::ascendToRoot( file, root, [ & ]( const fs::path& dir )
     {
         std::error_code sec;
@@ -369,10 +454,18 @@ inline std::string nearestPackageJson( const std::string& file, std::string_view
         {
             return false;
         }
-        found = std::move( bytes );
+        if( fallback.empty() )
+        {
+            fallback = bytes;
+        }
+        if( detectFramework( bytes ) == Framework::None )
+        {
+            return false;   // F5: no evidence HERE is not the same as no evidence anywhere above
+        }
+        decisive = std::move( bytes );
         return true;
     } );
-    return found;
+    return decisive.empty() ? fallback : decisive;
 }
 
 } // namespace rw::jsrunner

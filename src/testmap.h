@@ -573,8 +573,13 @@ private:
         struct RunnerRow { std::string_view ext; const char* verb; };
         static constexpr RunnerRow kRunnerKinds[] = {
             { ".sh", "bash" }, { ".py", "python3" },
-            // #323: TS/JS test-file extensions (declaration files, ".d.ts", are never test code and are not
-            // listed) — same set resolve.h/ingest_crawl.h already recognize as TypeScript/JavaScript sources.
+            // #323: TS/JS test-file EXTENSIONS — same set resolve.h/ingest_crawl.h already recognize as
+            // TypeScript/JavaScript sources. This is an EXTENSION table only: it still matches a ".d.ts"
+            // declaration file (a "d." prefix is invisible to a suffix check) or a non-test helper under a
+            // test/ directory, so neither is rejected HERE. rv-test-gate-tsjs F4: the actual "is this
+            // something vitest/jest would run" decision — never a .d.ts, and only a .test./.spec./
+            // __tests__/-shaped name — is resolveJsVerb's own jsrunner::looksLikeJsTestFile call, below;
+            // a rejected candidate still falls through to matchingRunner's shell/py-driver search (F1).
             { ".ts", kJsEvidenceVerb }, { ".tsx", kJsEvidenceVerb }, { ".mts", kJsEvidenceVerb }, { ".cts", kJsEvidenceVerb },
             { ".js", kJsEvidenceVerb }, { ".jsx", kJsEvidenceVerb }, { ".mjs", kJsEvidenceVerb }, { ".cjs", kJsEvidenceVerb },
         };
@@ -620,17 +625,30 @@ private:
     std::string derive( std::uint32_t fileId ) const
     {
         const std::string& target = ing_->files[ fileId ];
-        if( runnerVerb( target ) != nullptr )
+        const char*        verb   = runnerVerb( target );
+        if( verb != nullptr )
         {
             // M21(b) (capture-audit 2026-09-04): a runner script IS the command, and this used to return ""
             // — which was harmless while "" meant only "nothing to ADD to p=". It stopped being harmless the
             // moment "" acquired a MEANING: run_unknown="1" asserts no runner is derivable, and for a row
             // whose own path is directly runnable that assertion is simply false. So the self-runnable case
             // now spells its own command, exactly as commandForScript already does for a shell gate.
-            // Missing Python evidence means unknown, not permission to borrow another file's runner. #323:
-            // the same rule for TS/JS — a test file's OWN nearest package.json decides its OWN command;
-            // missing/inconclusive evidence there is that file's own unknown, never another file's runner.
-            return spell( fileId );
+            // Missing Python evidence means unknown, not permission to borrow another file's runner — a
+            // Python file's OWN main-guard/pytest evidence decides its OWN command, full stop.
+            //
+            // rv-test-gate-tsjs F1: TS/JS is DIFFERENT, on purpose, not by the same rule. A .sh/.py script
+            // is intrinsically runnable (bash/python3 need nothing but the path); a .ts/.js file is not —
+            // whether it is runnable at ALL depends on a package.json this repo may not even have, so
+            // "no package.json evidence" is not this file's own considered unknown the way "no main guard"
+            // is for Python — it is simply NO EVIDENCE YET, and a named shell/py driver mentioning this
+            // exact file (matchingRunner, below) is real evidence a TS/JS row should not be denied. Only
+            // .sh/.py keep the old short-circuit; a TS/JS command's own evidence, if any, still wins here
+            // first — this is a FALLBACK for the miss, never a preference over real JS evidence.
+            std::string command = spell( fileId );
+            if( !command.empty() || verb != kJsEvidenceVerb )
+            {
+                return command;
+            }
         }
 
         if( std::string command = matchingRunner( fileId, true ); !command.empty() )
@@ -730,8 +748,16 @@ private:
     // spellUncached so that function's own branching stays at its pre-#323 shape; nullptr here is DISCLOSED
     // by construction, since spellUncached's "" ⇒ runHint's run_unknown="1" rule (testmap.h's M21(b)
     // banner) already reads an empty command as "not derivable", never a guessed default.
+    // rv-test-gate-tsjs F4: a file whose NAME does not look like a vitest/jest target (never a helper, a
+    // setup file, or a `.d.ts`) is rejected before the manifest is even read — package.json evidence names
+    // WHICH runner exists, never WHICH files that runner would collect. A rejection here is not final: the
+    // caller (derive()) falls through to matchingRunner's shell/py-driver search, same as any other miss.
     const char* resolveJsVerb( std::uint32_t runnerFile, const std::string& disk ) const
     {
+        if( !jsrunner::looksLikeJsTestFile( disk ) )
+        {
+            return nullptr;
+        }
         const std::string manifest = jsrunner::nearestPackageJson( disk, evidenceRoot( runnerFile ) );
         return manifest.empty() ? nullptr : jsrunner::verbFor( jsrunner::detectFramework( manifest ) );
     }

@@ -200,6 +200,11 @@ test-gate | test-gate@at
 test-gate | test-gate@impacted
 test-gate | test-gate@tests_capped
 test-gate | test-gate@untested_capped
+# rv-test-gate-tsjs F3: untested_modscope=N is ALWAYS present (same shape as impacted= above — a
+# compactlegend.h kCompactAttributeReadings entry exists (test-gate@untested_modscope), but the
+# first-screen bare-text search does not find it on a page whose row-gated full-legend clause did not
+# fire; the compact default posture check (arm G) already counts the reading as a real definition).
+test-gate | test-gate@untested_modscope
 whereis | hit@date
 whereis | hit@tip
 # P3/P7's for-auto|d@next and for|d@next lines (ELEMENT-BLINDNESS closure, 2026-09-19, L2 round-1 lever B1):

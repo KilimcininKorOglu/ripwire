@@ -455,6 +455,11 @@ probeFor()
 # and does not ride an ok="1" answer). The bytes are attributed here, in the commit that adds them, per the rule above.
 # The ok="1" half is the whole point of that lane: a LEGALLY EMPTY comparison is a real run with changed="0", not a
 # refusal, and a reader of the default answer could not tell those apart without it.
+# RE-PINNED 2026-09-23 (rv-test-gate-tsjs fix round, F3): ripwire.test-gate/v1 1160 -> 1250 (measured 1239,
+# --test-gate=geometry.cpp). untested_modscope=N is now ALWAYS present (like impacted=/tests=/untested=
+# beside it), so its compactlegend.h completeness reading rides every --test-gate compact answer, not just
+# one gated on a real exclusion — the #324 disclosure this lane's own review found silent (exit 0 with
+# nothing explaining why on a module-scope-only change).
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -479,7 +484,7 @@ ripwire.zoom/v1                  410   394
 ripwire.tree/v1                  250   238
 ripwire.seams/v1                  720   703
 ripwire.handoff/v1                600   589
-ripwire.test-gate/v1             1160  1144
+ripwire.test-gate/v1             1250  1239
 ripwire.field-affinity/v1        3160  3143
 ripwire.skipped/v1               1510  1498
 ripwire.lint/v1                   340   324
@@ -877,7 +882,11 @@ echo
 # every attribute its answer emits (legendcoveragecheck (G)): --quality-delta's rename/ack counters, --test-gate's four
 # script-gate counts, --affected's seeds/reached, the schema= opener on every verb. Still under a quarter of the full bill
 # (33,407 B on this fixture), and the same rule: the next multiple of 100 B over the measured total.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,400 B (33,763 B in full on the fixture) ==="
+# RE-ANCHORED 2026-09-23 (rv-test-gate-tsjs fix round, F3): 7,400 → 7,500 B, measured 7,475. Same reading as the
+# ripwire.test-gate/v1 schema pin above: untested_modscope=N's compactlegend.h completeness clause is always
+# present, so the loop's --test-gate=geometry.cpp probe carries it too. Attributed on this fixture: --test-gate
+# alone moved +95 B (measured against the pre-change binary), the other nine verbs unmoved.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,500 B (33,763 B in full on the fixture) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -886,8 +895,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 7400 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,400 B; full: $fullBytes B)"
+[ "$loopBytes" -le 7500 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,500 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="

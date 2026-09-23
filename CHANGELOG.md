@@ -36,6 +36,44 @@ it. `model.h::isUntestableOwner` now excludes it from every such obligation list
 `--test-gate`'s untested rows and `--flags --flip`'s untested hosts, the two places a synthetic owner
 could reach a reader as an actionable item. It still counts toward the coarser `impacted=`/`hosts=`
 gauges, where it is a real caller in the blast radius — only the per-row obligation list changes.
+The excluded count is disclosed, not silent: `--test-gate` now carries `untested_modscope="N"` (XML
+and JSON) alongside `untested=`, so a change whose only reader is an untestable entrypoint reports why
+its `untested=` reads zero instead of reading like there was nothing to find.
+
+### Fixed — five defects in the TS/JS runner derivation above, found by independent review before merge
+
+- **A named shell/Python driver was losing to "unknown".** TS/JS test files now have their OWN evidence
+  path (`package.json`), and that path used to be preferred outright over a `test/*.sh` (or `.py`)
+  driver whose own text names the file — a real, previously-working signal. A TS/JS file with no
+  usable `package.json` evidence now falls through to that same driver search (shared by
+  `--test-gate`, `--affected`, and the MCP `affected` tool, which all read one `TestRunnerIndex`).
+- **A `scripts.test` that names no recognized runner was overridden by an unrelated dependency.** A
+  `mocha` project that happens to also list `vitest` in `devDependencies` (for its config types, say)
+  derived `npx vitest run …` — a command that would find no matching tests. `scripts.test`, once
+  present and not npm's own placeholder, is now authoritative: it decides the runner (or decides none),
+  and a same-named dependency never overrides it. Dependency evidence is consulted only when there is
+  no real `scripts.test` to read. Runner names are also matched as shell WORDS now, not substrings, so
+  a script naming an unrelated file that merely contains "jest" in its path no longer derives jest.
+- **Every `.ts`/`.js` file under a test directory was spelled as a vitest/jest target, including
+  non-tests.** A helper or setup file living beside real tests (or a `.d.ts` declaration file) matched
+  the extension check and got a `run=` command that would fail in CI ("no test files found") — vitest
+  and jest only collect files matching their own `.test.`/`.spec.`/`__tests__/` conventions. Only a
+  file matching that shape is now spelled as a runnable target; a `.d.ts` file is never one, regardless
+  of evidence.
+- **The nearest `package.json` could end the search before it decided anything.** A bare module-type
+  marker (`{"type":"commonjs"}`, common in mixed-module repos) sits between a test file and its real
+  runner evidence in some layouts; the walk now keeps climbing past a manifest that names neither
+  `scripts.test` nor a recognized dependency, instead of stopping there and reporting unknown.
+
+### Documented — TS/JS test runners this cannot yet derive (`run_unknown="1"` stays honest, not a bug)
+
+A handful of real, common TS/JS test-runner spellings are not covered by the three named in #323 and
+correctly read `run_unknown="1"`: node's own test runner invoked through `tsx` (a common way to run it
+against `.ts` files), `bun`'s test runner, and node's test runner against a `.ts` file on a node
+version too old to strip TypeScript types natively. None of these is guessed at; see #323's own
+discussion for a user-declared runner template, which would be the way to name one of these explicitly
+once implemented. `pnpm`/`yarn`-prefixed `scripts.test` entries derive correctly today, spelled as
+`npx …`, since `npx` finds a locally installed binary first.
 
 ## [0.6.2] — 2026-09-21
 
