@@ -269,3 +269,123 @@ which is where the two goals meet.
 The practical order when an answer is bigger than its ceiling: rank; cut below the cliff and disclose the cut with
 `next=`; if the head alone exceeds the ceiling, compress the legend, then the rows, then exceed with
 `over_ceiling="1"`. Silence is the only option not on the list.
+
+### 9.1 Addendum, 2026-09-23 — priority order is the mechanism; the ceiling only ever cuts what comes last
+
+Principle 2 says the ceiling bounds the tail, never the head. Between 2026-09-05 and 2026-09-23 the 0.6.0–0.6.2
+releases and the research lanes measured *how* that becomes true, and the answer is the same in every verb:
+**the head is only safe from a cut if it is emitted first, and "first" has to mean "the rows most likely to end
+the search", which is a verb-specific order, not source order and never path or id order.** The six principles
+above stand unchanged; what follows is the record of the ordering findings that make them mechanical, each with
+its number and its source, so the next default is set from the ledger rather than from taste.
+
+**Two quantities the ledger is kept in.** *Terminality* is principle 1's objective and the substitution meter's
+number: the share of a verb's calls not followed by a native read or grep within the next five tool calls
+(`bench/substitution_report.py` §5, the FIND band registered in `docs/EVALS.md` "Terminality round A"). The
+*chop rate* is the share of answers in which a §9 violation occurred: a HEAD row — a row the answer needed — was
+removed by a ceiling (principle 2), or content was removed with no `shown= total= capped=` and no `next=`
+(principle 3). A disclosed tail cut with a deterministic `next=` is **not** a chop; a silent one is, whatever its
+size. Bytes are the cost, and the honest byte unit is bytes-before-the-row-that-answers (the legend-once round's
+TTCA), because bytes after the answering row cost the agent little and bytes before it cost everything.
+`docs/research/answer-completeness.md` carries the pre-registered scoreboard for both quantities and the
+verb-by-verb inventory of where a cut can still be silent.
+
+**The findings, as worked examples of the principles.**
+
+1. **Rank before you trim, and carry the rank onto the row.** `--for` groups its bundle by file and sorts by line
+   inside the group, so once the payload ceiling trimmed it the ranker's order was gone. Assigning `r=` before
+   the trim and adding a file-grain tail moved SWE-Explore `hit_file_rate` at a 500-byte budget from 0.260 to
+   0.281 to 0.311 across the two changes (EVALS "Deep-tail serving (2026-08-29)"; instrument v2 the same day).
+   A round later found the compact bundle showing 4 of 40 candidates with the 36 trimmed rows served *nowhere*
+   — the tail listed only the files already shown — and re-pointing the tail at the trimmed rows, rank first,
+   moved completed questions from 11/30 to 14/30 and gold from 34 to 42 of 129 (EVALS "LANE 2", `9273f346`).
+   Principle 2 is not satisfied by having a rank; it is satisfied by emitting in it.
+
+2. **Spend a budget in rank order, never in document order.** `--recall` put its sections back in document order
+   and cut from the front: the #1-ranked section of the 616 KB `docs/COMMANDS.md`, at line 3,570 of 4,755, was
+   served at none of 1,500, 4,000, 12,000 or 40,000 tokens. Spending the budget in rank order fixed it
+   (CHANGELOG 0.6.0, `30b72ec0`). The same defect class in miniature: a 16-row callee cut that kept the lowest
+   node ids kept six STL rows and dropped the callees the query scored; it now keeps rows by query rank
+   (CHANGELOG 0.6.0). An ambiguous `--expand` emitted the ranked map before the bodies it was asked for, so the
+   body landed 86% into the document; the body now comes first (CHANGELOG 0.6.2, #289).
+
+3. **Answer first — the row the question names goes at the top.** When the task names a file with exactly one
+   declaration/implementation partner, `--for` emits that partner as its first row, and `--situ` moves partners
+   and siblings ahead of the blast radius (CHANGELOG 0.6.2). Precision over recall: absent, ambiguous or
+   convention-less names get no row and no reordering, because a wrong first row is worse than none.
+
+4. **Priority is verb-specific, and it has to be measured per verb.** Tests-to-run rows on `--affected`,
+   `--situ` and `--test-gate` were path-sorted, which put a hit at row ~60 of 127; ordering by
+   `changed=1`, then `partner=1`, then `hops=N` took one question from 6,233 to 2,073 bytes for 281 bytes of legend
+   (EVALS "Losses, bucketed", L2, `7dae6522`). `--rank-by=churn-decay` ordered `<recent>` by decayed weight and
+   missed the gold; newest-first found it (L3, `c7688421`). `--slice=SYM:VAR` emitted seed rows in source order;
+   def-use coverage order (`order="defuse"`) scores MRR 0.628 against 0.602 for a random-order control and 0.525
+   for source order on 478 pairs from 173 Python instances, Δ = +0.026 with a 95% CI of [0.004, 0.049] — better on
+   182 pairs, worse on 227, tied on 69 (EVALS "`--slice=SYM:VAR` def-use row order", pre-registered and measured
+   2026-09-22). That last result is the honest shape of an ordering win: real, small, and not uniform, so it is
+   adopted as a default and stated with its loss count rather than sold as a lift. The one attempt to rank
+   *further* — definitions before uses over the whole function span — was pre-registered and scored the next
+   day and **failed**: R3@1 0.034 against the random control's 0.042, Δ = −0.008, 95% CI [−0.031, 0.019], 1 of 4
+   registered conditions met, n = 173; nothing shipped and `order="defuse"` stays, because source order had
+   measured worse than random on the same rows (`docs/research/arise-line-ranking-prereg.md` §9 on
+   `lane/arise-result`, `13292db7`). An ordering claim is scoped to the pool it was measured on.
+
+5. **Shrink rather than pad, and refuse a cliff that is not one.** A `--for` quota that filled in path order
+   padded symbol-lookup bundles with zero-score rows that took 64–84% of the bytes; the relevance floor now stops
+   the head at the last row with any evidence and says how many it kept (EVALS, 2026-08-22, `13291b9`). The
+   converse defect: `--adaptive` cut `update` from 231 symbols to 6 and `run` from 148 to 10 at a gap that was
+   tie-break order among identically-named symbols, and claimed `confidence="high"` doing it. It now declines to
+   narrow when a name-exact pool exceeds `kAdaptiveHomonymPoolFloor` (50) and the cut is within twice the floor,
+   serves the default head, and says why (CHANGELOG 0.6.2; investigated first in
+   `docs/research/adaptive-short-query.md` on the `lane/research-adaptive-shortquery` branch). A cut is only a cliff cut if the ranker can say what produced the gap.
+
+6. **A disclosed stub is a cut, so it must be cheaper than what it replaces.** Round one collapsed every
+   `<lego>`/`<compose>` section to a counted stub; on long task texts the stub's task-echoing `next=` regularly
+   exceeded the section it replaced. The stub now fires only when
+   `len(section) > len(stub) + 251 B` (the legend clause, charged whole) and `--sections=lego,compose` restores
+   both byte-identically (CHANGELOG 0.6.2). Principle 3's "two known calls beat one call and three greps" holds
+   only when the second call is cheaper than the bytes it saved.
+
+7. **Price the ceiling in the unit you emit.** The `--for` ladder tested its ceiling at 2.36 bytes per token while
+   `est_tokens=` priced markup at 2.50 and bodies at 3.80, so rungs dropped legend clauses from documents that
+   already fit — 354 tokens of headroom at one budget; a 70-byte post-ladder splice went unpriced and bundles
+   shipped past the allowance with no rung fired at 14 of 111 budgets (CHANGELOG 0.6.1 #215; 0.6.0 `7caf968f`,
+   `3d98f84d`). An explicit `--token-budget` above the default let `<sigs>` grow from 1,782 to 9,483 bytes and
+   squeeze six served bodies down to two, until the signature side was capped at `kForPayloadBudgetBytes`
+   (EVALS "Auto-bundle section split under an explicit `--token-budget`", `4692076`). A mis-priced ceiling cuts
+   the head while reporting that it did not.
+
+8. **Bytes before the answering row is the cost that matters.** Making the legend a per-session dictionary on
+   MCP left every row byte-identical and every completeness attribute in place, and cut the bytes before the
+   first row from 421 to 73 (frozen set) and the median bytes-to-correct-answer by 39–62% across five question
+   sets, with zero complete answers or gold rows lost (the legend-once round; the 0.6.2 `ref` posture). The
+   compact-legend default did the same on the CLI: `--callers` 6,305 → 3,212 B, `--edit-check` 9,750 → 3,313 B,
+   rows unchanged (CHANGELOG 0.6.2). Neither changed a ranking; both moved the answer forward.
+
+9. **Below the symbol there is a granularity floor, and it binds only under tight budgets.** With the correct
+   function *given* and a 512-byte budget, delivering ranked slice lines put 32.1% of the gold lines in front of
+   the agent where the whole function body put 17.6% (n = 150 instances whose body does not fit; the filter
+   alone is worth +10.0 pp, the ranking a further +4.4 pp); the gap closes as the budget grows and is within
+   noise at 4 KB (`docs/research/slice-line-recall.md` R5, on the `lane/research-arise-slice` branch). The same note measured the
+   limit: 70.8% of that corpus's gold lines sit in multi-function fixes a single-function slice cannot reach by
+   construction, and extending reach across the directed call graph would recover 6.14% of that ceiling — under
+   the pre-registered 20% kill line, so it was not built (§10). Line granularity is a lever for the head under a
+   small budget, not a substitute for choosing the right function — and, after the `lane/arise-result` FAIL
+   above, the lever is the *filter* (which lines) more than the *order* (which first).
+
+10. **The stop-when-complete signal does not exist yet, and we say so.** `confidence=`/`margin_pct=` on `--for`
+    have a measured false-warn rate of 0.779 (74 of 92 held-out instances flagged low, 60 of them right at
+    file grain), so they cannot yet tell an agent to stop; `served_syms` — the served head's own row count —
+    was scored against the band *false-warn ≤ 0.20 at miss-recall ≥ 0.50* under a pre-registered orientation on
+    the fingerprinted 92 and **failed**: func-grain AUROC 0.278 [0.177, 0.385] under the registered direction, no
+    threshold clearing both floors (`docs/research/confidence-and-abstention.md` §5.4 and §10 on
+    `lane/served-syms-result`, `50c554e6`; the opposite orientation is a hypothesis for a fresh sample, not a
+    result). Until a signal meets that band on two samples, "terminate once the answer is complete" is a
+    hypothesis, and the tool answers in full and discloses.
+
+**What these add to the practical order at the end of §9.** Before "rank; cut below the cliff": *decide the
+verb's priority order and emit in it* — the named row, then rank, with `r=` on the row; *price the ceiling in the
+emitted unit*; *let the tail name what the head cut*. And one rule the rounds kept re-learning: **a
+`--top-k`, quota, fanout or page cap applied to a list in source, path or id order is a head cut waiting to
+happen**, because nothing ranks what it drops. Every such site is in the inventory in
+`docs/research/answer-completeness.md`, with whether it discloses today.
