@@ -430,6 +430,7 @@ inline void assignSymbols( IngestResult& result, std::vector<RawDef>& rawDefs, b
         // means the convention encloses it" — so a corrupt or hand-edited record errs toward the claim, never past it.
         s.testScope    = ( d.testScope != 0 ) ? 1 : 0;       // L8: an in-file test convention encloses this def
         s.internalLinkage = ( d.internalLinkage != 0 ) ? 1 : 0;   // C/C++ anonymous-namespace or namespace-scope `static` def (model.h)
+        s.scopeRootsStd   = ( d.scopeRootsStd   != 0 ) ? 1 : 0;   // #150: this def's full enclosing-namespace chain roots at std (model.h)
         s.maxNest      = d.maxNest;  // Q4: max control nesting (fns/methods)
         s.humps        = d.humps;   // nesting profile: regions reaching quality::kNestBar (model.h)
         s.deepLoc      = d.deepLoc; // nesting profile: lines inside them, a FLOOR (model.h)
@@ -909,6 +910,7 @@ inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, 
         ref.argCount    = r.argCount;        // B2.2: call-site positional arg count (when countable)
         ref.argCountKnown = r.argCountKnown; // B2.2: whether argCount is reliable (no spread/splat)
         ref.viaArrow    = r.viaArrow;    // a call written `->`; a compose ref's smart-pointer pointee (arm p)
+        ref.qualifierRootsStd = r.qualifierRootsStd;   // #150: the FULL written qualifier chain is rooted at std
         ref.fieldName   = std::move( r.fieldName );   // S5-E: the member variable name (e.g. "m_pool")
         ref.composeRel  = std::move( r.composeRel );  // S5-E: "creates" or "uses"
         ref.startByte   = r.startByte;                // shadow fix round: for the block-span containment test

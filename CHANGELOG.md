@@ -13,6 +13,39 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Fixed — a nested `std::` call (`std::ranges::move`, `std::chrono::duration_cast`) no longer binds an unrelated in-repo definition
+
+#134 stopped a FLAT `std::X(...)` call from binding a lone in-repo `X`, but its guard read only the call's
+IMMEDIATE qualifier segment: `std::ranges::move` arrives as qualifier `"ranges"`, indistinguishable from a
+user's own `mylib::ranges::move`, so the guard never applied and the call fell through to whatever in-repo
+`move` existed — at full confidence, with no `amb=`. Worse for a library that mirrors std's own layout
+(Boost.Chrono's `boost::chrono::duration_cast`, or any vendored `vendorlib::chrono::duration_cast`):
+`std::chrono::duration_cast` canonically hit that vendored definition, and a canonical hit was exempt from
+the guard by design. Both shapes are every C++20/23 codebase's normal spelling of algorithms
+(`std::ranges::`), time (`std::chrono::`) and paths (`std::filesystem::`), so `--callers`, `--impact` and
+every ranking computed over them inherited the false edges.
+
+The guard now reads the FULL written qualifier chain, not just the immediate segment, on both sides:
+`Reference::qualifierRootsStd` (a call's whole chain is rooted at `std`, `::std`, or a standard library's
+inline ABI namespace, at any nesting depth) and `Symbol::scopeRootsStd` (a definition's whole enclosing
+chain roots at `std`, including the C++17 `namespace std::ranges { … }` spelling). A candidate now survives
+only when its OWN chain is std-rooted too — so a std-rooted call can no longer canonically hit a vendored
+library that merely shares std's namespace layout — and a std-rooted call against a DECLARATION-ONLY std
+entity with no in-repo body (no real implementation anywhere in the corpus) is refused rather than bound to
+the forward declaration standing in for it. A namespace-alias or using-directive call (`namespace sr =
+std::ranges; sr::move(...)`, or an unqualified call after `using namespace std::chrono;`) is a stated,
+disclosed floor — its written qualifier never names `std` at all, so it is unaffected, unchanged from
+today's ladder. `kParserVer` moves 119 → 120 (two new per-record extraction facts) and `kCacheVersion` moves
+24 → 25, so any cache written by an earlier binary is refused and reparsed.
+
+The same "a qualified call binds by its immediate segment alone" shape was checked in Rust, C#, Python,
+Java/Kotlin and Go: Rust's `std::`/`core::` guard has the identical gap (tracked separately); C#, Python and
+Java capture no qualifier chain at all for these calls today, so the shared mechanism does not reach them
+without new capture work; Go's package-qualified calls are always exactly one segment, so the defect shape
+cannot arise there.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

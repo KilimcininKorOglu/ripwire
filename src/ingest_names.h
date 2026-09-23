@@ -668,6 +668,90 @@ inline std::string qualifierOfDefinition( TSNode nameNode, std::string_view src 
     return cppQualifierText( nameNode, src, /*isDefinition=*/true );
 }
 
+// #150 — NESTED std NAMESPACES. `qualifierOf`/`qualifierOfDefinition` above return only the IMMEDIATE scope
+// segment ("ranges" for `std::ranges::move`), which cannot be told from a user's own `mylib::ranges::move`:
+// that ambiguity is exactly the gap `keepStdQualifiedCandidates` (graph.h) could not close. These two
+// helpers answer a different, narrower question — is the chain ROOTED in namespace std, at any depth? — by
+// reading the FULL text tree-sitter already gives the outermost node, never by re-deriving it from the
+// (already-truncated) immediate qualifier.
+//
+// `nameNode` here is always the SAME @name node qualifierOf/qualifierOfDefinition read: for a call, the tags
+// query capture (queries/cpp/tags.scm's "QUALIFIED CALLS AT ANY DEPTH" pattern); for an out-of-line
+// definition, the definition pattern's own @name. tree-sitter-cpp nests qualified_identifier
+// RIGHT-recursively — `A::B::C` is qualified_identifier(scope: A, name: qualified_identifier(scope: B, name:
+// C)) — so `ts_node_parent( nameNode )` is ALWAYS the OUTERMOST qualified_identifier of the whole written
+// chain (the call's `function:` field, or the definition's `declarator:` field), and that parent's own TEXT
+// SPAN is the entire chain exactly as written, leading `::` included. Reading only its first segment is
+// therefore safe with a plain `find` (never the template-aware last-segment scanners used elsewhere in this
+// file): nothing can appear before a call's own root, template arguments included — a template argument
+// list is always part of a LATER segment, never a prefix of the first one.
+inline bool cppQualifiedChainRootsStd( TSNode nameNode, std::string_view src )
+{
+    const TSNode parent = ts_node_parent( nameNode );
+    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "qualified_identifier" ) || hasPhantomScopeSeparator( parent ) )
+    {
+        return false;
+    }
+    std::string_view text = nodeTextOf( parent, src );
+    if( text.starts_with( "::" ) )
+    {
+        text.remove_prefix( 2 );   // `::std::move` — the leading global-scope operator names no segment
+    }
+    const std::size_t      sep  = text.find( "::" );
+    const std::string_view root = sep == std::string_view::npos ? text : text.substr( 0, sep );
+    return root == "std";
+}
+
+// The definition-side twin for an IN-CLASS / in-namespace def (`namespace std { namespace ranges { … } }`,
+// or the C++17 nested spelling `namespace std::ranges { … }`) — the shape `cppQualifiedChainRootsStd` above
+// does not reach, because such a def's @name node is never the `name:` field of a qualified_identifier at
+// all. Walks EVERY enclosing namespace_definition out to the translation unit — not just the nearest one
+// enclosingScopeOf reads — because a class sitting inside std must not stop the walk: `namespace std {
+// struct Pair { auto first() {…} } }` needs `first`'s chain walked THROUGH Pair to reach std. Each
+// namespace level's OWN `name:` text is read for only its FIRST written segment, so `namespace std::ranges {
+// … }` (whichever way the grammar nests that C++17 spelling) and `namespace std { namespace ranges { … } }`
+// answer identically. An anonymous namespace (`namespace { … }`, `name:` null) is transparent — the walk
+// continues through it unchanged. The LAST namespace level found while climbing (i.e. the OUTERMOST one) is
+// what decides the answer, which is why `namespace mylib { namespace std { … } }` is correctly NOT
+// std-rooted: the outermost level there is "mylib", and the language itself permits reopening the real
+// `::std` only at file scope ([namespace.std]), never nested inside another namespace.
+inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
+{
+    std::string_view outermostNsRoot;
+    bool              sawNamespace = false;
+    for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        if( !kindIs( ts_node_type( p ), "namespace_definition" ) )
+        {
+            continue;
+        }
+        const TSNode nm = fieldChild( p, NodeField::Name );
+        if( ts_node_is_null( nm ) )
+        {
+            continue;   // anonymous namespace — transparent, keep climbing
+        }
+        const std::string_view text = nodeTextOf( nm, src );
+        const std::size_t      sep  = text.find( "::" );
+        outermostNsRoot = sep == std::string_view::npos ? text : text.substr( 0, sep );
+        sawNamespace    = true;
+    }
+    return sawNamespace && outermostNsRoot == "std";
+}
+
+// The definition-side dispatcher: an out-of-line qualified def (`std::SomeType::f() {…}`, rare but legal —
+// re-opening a std entity out of line) is std-rooted exactly as a CALL with the same written chain would be,
+// so it reuses cppQualifiedChainRootsStd verbatim rather than re-deriving the same rule; every other def
+// shape (in-class, in-namespace, a bare top-level function) falls back to the enclosing-owner walk.
+inline bool cppDefinitionRootsStd( TSNode nameNode, std::string_view src )
+{
+    const TSNode parent = ts_node_parent( nameNode );
+    if( !ts_node_is_null( parent ) && kindIs( ts_node_type( parent ), "qualified_identifier" ) && !hasPhantomScopeSeparator( parent ) )
+    {
+        return cppQualifiedChainRootsStd( nameNode, src );
+    }
+    return cppEnclosingChainRootsStd( nameNode, src );
+}
+
 // The qualifier the 3+-segment re-split keys a REFERENCE on, from the scope half of its captured text: the last
 // top-level segment, a template-id kept whole and canonical (`numeric_limits<std::size_t>` stays itself; the resolver
 // falls back to the family when nothing is keyed by it). PRECONDITION: `scopeText` holds no operator tail — it is the

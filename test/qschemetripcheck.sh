@@ -34,6 +34,13 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-23, lane/std-nested-binding-150 (#150) on origin/main 60b65f02: RE-DERIVED with UPDATE_GOLDEN=1
+#   (new hash 82d60238f7…08e7e9b). ONE manifest input moves: ingest_cache.h's kParserVer 119 -> 120 and
+#   kCacheVersion 24 -> 25 (RawRef gains `qualifierRootsStd`, RawDef gains `scopeRootsStd` — the two facts
+#   graph.h::keepStdQualifiedCandidates needs to tell a NESTED std:: call (`std::ranges::move`) from a
+#   same-shaped user namespace), mirrored in quality.h's kIngestParserVerMirror/kIngestCacheVersionMirror in
+#   the same commit (static_assert). This is an EXTRACTION-IDENTITY change only — no Snapshot dead-set/
+#   clone-group/blob-shape semantics moved, so kQSnapCacheScheme is untouched.
 # 2026-09-20, TRAIN 13 (integration/train-13 on main ae6e3e7a: lane/t13-contrib-finish a7281dea,
 #   lane/t13-honesty-fixes 0cf97744): RE-DERIVED ON THE FINAL MERGED TREE with UPDATE_GOLDEN=1.
 #   TWO manifest inputs move, both from the honesty lane:
