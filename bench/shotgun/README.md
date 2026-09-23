@@ -13,10 +13,11 @@ since 2026-09-08), would silently count a different population. `REF` below fixe
 does not, and cannot, recover which commit the published 2026-09-08 numbers actually walked.
 
 ```bash
-REF="${REF:-v0.6.2}"                       # an immutable point, never a bare HEAD — see "Pin the ref" above
+REF_NAME="${REF:-v0.6.2}"                  # an immutable point, never a bare HEAD — see "Pin the ref" above
+REF="$( git rev-parse "$REF_NAME^{commit}" )" # resolved ONCE: the walk, the record and the checkout all use this sha
 T="$( mktemp -d )"
 git log --format='COMMIT %H %ad %s' --date=short --name-only --no-merges "$REF" > "$T/log.txt"
-echo "shotgun: history walked from REF=$REF ($( git rev-parse --short "$REF^{commit}" ))" | tee "$T/ref.txt"
+echo "shotgun: history walked from REF=$REF_NAME ($REF)" | tee "$T/ref.txt"
 git -C . worktree add --detach --force "$T/wt" "$REF" >/dev/null   # the map must describe the SAME commit as log.txt
 ./build/ripwire "$T/wt" --top-k=100000 > "$T/map.xml"
 git -C . worktree remove --force "$T/wt"

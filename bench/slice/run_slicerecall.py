@@ -125,7 +125,7 @@ def main():
     repo = Path( a.repo ).resolve()
     bin_ = str( Path( a.bin ).resolve() )
     ref_sha = sh( [ "git", "rev-parse", f"{a.ref}^{{commit}}" ], cwd=repo ).stdout.strip()
-    cand = mine( repo, a.cap, a.subject_filter, a.ref )
+    cand = mine( repo, a.cap, a.subject_filter, ref_sha )   # the resolved sha, so the walk IS the recorded ref_sha
     print( f"mined {len(cand)} single-function fix-shaped candidates (pre-resolution) from "
            f"ref={a.ref} ({ref_sha[:9]})", file=sys.stderr )
 
