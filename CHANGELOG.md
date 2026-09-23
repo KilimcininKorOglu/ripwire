@@ -15,21 +15,26 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Fixed — `--doctor`'s `cache-dir` row no longer misreports a healthy Windows cache as unwritable and empty
+### Fixed — the whole Windows cache path, not just `--doctor`'s report of it
 
 On Windows with neither `TMPDIR` nor `XDG_CACHE_HOME` set, `--doctor` reported the cache directory `ok="0"`
 with `blobs="0" bytes="0" truncated="1"` for a cache that was in fact writable and populated (#326).
 `cacheDirLadder()`'s fallback tier returns a POSIX-spelled `/tmp/ripwire-<uid>`; `os::mkdir`/`os::lstat`/
 `os::chmod` — what the ladder itself calls to create and verify the directory — silently rebase that onto the
-real user temp directory on Windows, but the row's own writability probe (a bare `std::fopen`) and its blob/
-edit-lock scans (`std::filesystem::directory_iterator`) do not go through that rebase, so they measured a
-directory the tool never actually writes to (typically nonexistent on the current drive) while the real cache
-sat elsewhere, healthy. `rw::os::rebased_path()` exposes the same routing `os::open`/`os::stat`/`os::mkdir`
-already apply internally (identity on POSIX, where `/tmp` is already a real, directly usable directory); the
-probe, `doctorCacheStats`, and `doctorEditLockCount` now all read the one directory the cache actually uses,
-so the row's `dir=`/`hint=` also name the real cache location instead of a path the tool never touches. The
-writability probe still measures the only thing "writable" can honestly mean on either platform — creating
-and removing a real file — never a mode-bit check.
+real user temp directory on Windows, but anything reaching for the SAME directory string through
+`std::filesystem` or a bare `std::fopen`, bypassing `os::`, does not get that rebase and reads/writes a
+directory the tool never actually uses (typically nonexistent on the current drive). `--doctor`'s cache-dir
+probe and blob/edit-lock scans were the reported symptom, but not the only consumer: `resolveCacheBlobPath`
+(the one choke point nearly every cache-blob path in the tree routes through), the cache-eviction sweep
+(`evictOldCacheFamily`/`sweepStaleCacheBlobsOnce`), `--slice`'s and the MCP edit-preview's temp parse roots,
+the cross-branch blob-batch listing, the markitdown doc-bridge cache, and the remote-clone reuse cache all
+shared the exact same defect shape. Fixed at the source: `cacheDirLadder()` itself now returns the
+already-rebased spelling (via the new `rw::os::rebased_path()`, the same routing `os::open`/`os::stat`/
+`os::mkdir` already apply internally; identity on POSIX, where `/tmp` is already a real, directly usable
+directory), so every one of the consumers above is correct by construction — none of them needed their own
+fix. `--doctor`'s cache-dir row's `dir=`/`hint=` now also name the real cache location instead of a path the
+tool never touches, and its writability probe still measures the only thing "writable" can honestly mean on
+either platform — creating and removing a real file — never a mode-bit check.
 
 ## [0.6.2] — 2026-09-21
 
