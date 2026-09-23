@@ -6095,14 +6095,47 @@ inline std::string takeAckByPrefix( std::string& reason )
 // a value this binary could not have written stays visible as text in the file a human reviews (the same
 // disclosure cid='s DISCLOSE call spells out loud), without a NEW one-argument DISCLOSE call, a shape
 // test/selfcheckcheck.sh refuses on code that did not carry one already.
-inline bool takeAckUintPrefix( std::string& reason, std::string_view name, std::uint32_t& valueOut )
+// The only integer spelling this binary writes into the ledger's now=/was=/p=:<line> slots: one to ten ASCII
+// decimal digits, no sign, no whitespace, a value that fits std::uint32_t. Deliberately NOT strtoul/strtoull:
+// both accept a leading '-' and negate (now=-1 read back as 4294967295), a value past 32 bits was narrowed to
+// its low half (now=4294967296 read back as 0), and unsigned long is 64 bits on LP64 but 32 on Windows, so the
+// same committed line read back differently per platform. `out` is written only on success.
+inline bool parseAckLedgerUint32( std::string_view s, std::uint32_t& out ) noexcept
 {
-    std::uint64_t v = 0;
-    if( !takeAckNumericToken( reason, name, 10, v ) )
+    if( s.empty() || s.size() > 10 )
     {
         return false;
     }
-    valueOut = static_cast<std::uint32_t>( v );
+    std::uint64_t v = 0;
+    for( const char c : s )
+    {
+        if( c < '0' || c > '9' )
+        {
+            return false;
+        }
+        v = v * 10u + static_cast<std::uint64_t>( c - '0' );
+    }
+    if( v > std::numeric_limits<std::uint32_t>::max() )
+    {
+        return false;
+    }
+    out = static_cast<std::uint32_t>( v );
+    return true;
+}
+
+inline bool takeAckUintPrefix( std::string& reason, std::string_view name, std::uint32_t& valueOut )
+{
+    const std::string untouched = reason;
+    std::string       digits;
+    if( !takeAckNamedToken( reason, name, digits ) )
+    {
+        return false;
+    }
+    if( !VALIDATE( parseAckLedgerUint32( digits, valueOut ), "an ack ledger now=/was= value is plain decimal that fits 32 bits" ) )
+    {
+        reason = untouched;   // same visible-in-reason degrade as any other malformed token; never a fabricated value
+        return false;
+    }
     return true;
 }
 
@@ -6121,16 +6154,14 @@ inline void splitAckLocator( const std::string& token, std::string& pathOut, std
         pathOut = token;
         return;
     }
-    const std::string lineStr = token.substr( colon + 1 );
-    char*              stop   = nullptr;
-    const auto          v      = std::strtoul( lineStr.c_str(), &stop, 10 );
-    if( lineStr.empty() || stop == nullptr || *stop != '\0' )
+    std::uint32_t v = 0;
+    if( !VALIDATE( parseAckLedgerUint32( std::string_view( token ).substr( colon + 1 ), v ), "an ack ledger p= line is plain decimal that fits 32 bits" ) )
     {
-        pathOut = token;
+        pathOut = token;   // whole-token fallback: the text stays the path, the line stays unknown
         return;
     }
     pathOut = token.substr( 0, colon );
-    lineOut = static_cast<std::uint32_t>( v );
+    lineOut = v;
 }
 
 // The five re-score tokens together, ORDER-TOLERANT the same way cid=/by= are: renderAckRecords always
@@ -6417,11 +6448,16 @@ inline std::string ackProvenanceTokens( const AckRecord& r )
     {
         t << "prov=" << kAckProvReconToken << ' ';
     }
-    if( !r.facet.empty() )
+    // facet= and p= are single whitespace-delimited tokens, so a value that cannot be spelled as one is OMITTED,
+    // the same closed-set rule by= uses (scopeSpecIsSpellable). A repository path may contain a space: written
+    // verbatim, `p=my dir/a.py:1` read back as path `my`, line 0, with the rest pushed into the reason, and the
+    // next ack committed that damage. A newline would split the record in two. An absent locator is the honest
+    // degrade: nothing reads p= to decide anything, and the finding's own key still identifies the row.
+    if( !r.facet.empty() && scopeSpecIsSpellable( r.facet ) )
     {
         t << "facet=" << r.facet << ' ';
     }
-    if( !r.path.empty() )
+    if( !r.path.empty() && scopeSpecIsSpellable( r.path ) )
     {
         t << "p=" << r.path << ':' << r.line << ' ';
     }
