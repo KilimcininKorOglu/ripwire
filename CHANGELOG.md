@@ -25,7 +25,7 @@ canonical bytes — a canonical ledger is still left untouched), the same "heal 
 rule `--quality-ack` already applies when a run's report has zero findings at all. The refusal itself, and its
 exit code, are unchanged.
 
-
+## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
 
