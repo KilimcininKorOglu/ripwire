@@ -480,7 +480,11 @@ def md_miss_section( summary ):
 def md_served_syms_section( summary ):
     """docs/research/confidence-and-abstention.md §5.4 — the pre-registered served_syms procedure,
     scored (or refused) on THIS run's population. Reports every threshold's point, never only the
-    winner — see served_syms_signal.py's module docstring for why."""
+    winner — see served_syms_signal.py's module docstring for why. Fix round 1 (after
+    reports/rv-served-syms-prereg.md): four outcomes (fingerprint_mismatch / pass /
+    pass_fire_rate_rejected / fail), band_met and sr1_met reported separately (HIGH-3), the orientation
+    line states it is informed by a seen exploratory AUROC rather than a mechanism (HIGH-1), and §5.2's
+    separate AUROC band is reported per grain (MEDIUM-3)."""
     s = summary["served_syms_5_4"]
     L = [ "### §5.4 `served_syms` — the pre-registered procedure", "",
          "Fingerprint reproduced: **%s**." % s["fingerprint_ok"] ]
@@ -491,40 +495,51 @@ def md_served_syms_section( summary ):
             L.append( "| %s | — | — | %s |" % ( k, ok ) )
         L += [ "", "> %s" % s["public_sentence"], "" ]
         return L
-    L += [ "", "Orientation (§5.4.3): larger `served_syms` == more miss evidence (registered, not "
-          "fit). Gating grain (§5.4.2): **%s**." % s["gating_grain"], "",
-         "| grain | n | misses | AUROC | 95%% CI (repo-clustered bootstrap, n=%d resamples) |" %
+    L += [ "", "Orientation (§5.4.3): larger `served_syms` == more miss evidence — the raw value, "
+          "**informed by an exploratory AUROC already seen** (0.669/0.723 on this population, "
+          "computed once in a prior review), not a mechanism derivation and not blind. Gating grain "
+          "(§5.4.2): **%s**. §5.2's separate AUROC band (meets/weak/does-not-meet/directional-"
+          "refutation) is reported per grain below; it does not gate this outcome (§5.4.2)." %
+          s["gating_grain"], "",
+         "| grain | n | misses | AUROC | 95%% CI (n=%d resamples) | §5.2 rung |" %
          served_syms_signal.BOOTSTRAP_RESAMPLES,
-         "| --- | --- | --- | --- | --- |" ]
+         "| --- | --- | --- | --- | --- | --- |" ]
     for grain in ( "file_hit", "func_hit" ):
         g = s["grains"][grain]
-        L.append( "| %s%s | %d | %d | %s | [%s, %s] |" %
+        L.append( "| %s%s | %d | %d | %s | [%s, %s] | %s |" %
                  ( grain, " (gating)" if grain == s["gating_grain"] else "", g["n"], g["misses"],
                   md_num( g["auroc"], "%.4f" ), md_num( g["auroc_ci_lo"], "%.4f" ),
-                  md_num( g["auroc_ci_hi"], "%.4f" ) ) )
+                  md_num( g["auroc_ci_hi"], "%.4f" ), g["auroc_band_5_2"] or "n/a" ) )
     L += [ "", "#### Threshold sweep (%s, the gating grain) — every candidate `t`, none hidden" %
           s["gating_grain"], "",
-         "| t (warn iff served_syms ≥ t) | recall | false_warn | warn_rate | safe (§5.2 band + SR-1) |",
-         "| --- | --- | --- | --- | --- |" ]
+         "| t (warn iff served_syms ≥ t) | recall | false_warn | warn_rate | band (§5.2) | "
+         "safe (band + SR-1) |",
+         "| --- | --- | --- | --- | --- | --- |" ]
     for row in s["grains"][s["gating_grain"]]["sweep"]:
-        safe = ( row["false_warn"] is not None and row["false_warn"] <= served_syms_signal.FALSE_WARN_MAX
-                and row["recall"] is not None and row["recall"] >= served_syms_signal.RECALL_MIN
-                and row["warn_rate"] is not None and row["warn_rate"] <= served_syms_signal.FIRE_RATE_CEILING )
-        L.append( "| %d | %s | %s | %s | %s |" %
+        L.append( "| %d | %s | %s | %s | %s | %s |" %
                  ( row["threshold"], md_num( row["recall"] ), md_num( row["false_warn"] ),
-                  md_num( row["warn_rate"] ), "yes" if safe else "no" ) )
-    L += [ "", "**Outcome: %s.**" % s["outcome"].upper() ]
-    if s["chosen_threshold"] is not None:
+                  md_num( row["warn_rate"] ), "yes" if row["band"] else "no",
+                  "yes" if row["safe"] else "no" ) )
+    L += [ "", "**Outcome: %s.** band_met=%s, sr1_met=%s." %
+          ( s["outcome"].upper(), s["band_met"], s["sr1_met"] ) ]
+    if s["outcome"] == "pass":
         c, op = s["chosen_threshold"], s["operating_point_ci"]
-        L.append( "Chosen operating point (§5.4.4 tie rule): `t=%d` — false_warn=%.4f [%s, %s], "
-                 "recall=%.4f [%s, %s], warn_rate=%.4f. Grain honesty (SR-2): %s meets the band; "
-                 "%s %s." %
+        L.append( "Chosen operating point (§5.4.4 tie rule; band AND SR-1): `t=%d` — "
+                 "false_warn=%.4f [%s, %s], recall=%.4f [%s, %s], warn_rate=%.4f. Grain honesty "
+                 "(SR-2): %s meets the band; %s %s." %
                  ( c["threshold"], c["false_warn"],
                   md_num( op["false_warn"]["ci_lo"], "%.4f" ), md_num( op["false_warn"]["ci_hi"], "%.4f" ),
                   c["recall"],
                   md_num( op["recall"]["ci_lo"], "%.4f" ), md_num( op["recall"]["ci_hi"], "%.4f" ),
                   c["warn_rate"], s["gating_grain"], s["grain_honesty"]["other_grain"],
                   "also meets it" if s["grain_honesty"]["other_grain_pass"] else "does not" ) )
+    elif s["outcome"] == "pass_fire_rate_rejected":
+        b = s["best_band_only_threshold"]
+        L.append( "Best band-only point (SR-1 ignored): `t=%d` — false_warn=%.4f, recall=%.4f, "
+                 "warn_rate=%.4f (> the %.2f fire-rate ceiling — SR-1 rejects it as a shippable "
+                 "candidate; §5.4.4)." %
+                 ( b["threshold"], b["false_warn"], b["recall"], b["warn_rate"],
+                  served_syms_signal.FIRE_RATE_CEILING ) )
     L += [ "", "> %s" % s["public_sentence"], "" ]
     return L
 
@@ -564,18 +579,23 @@ def print_metric_lines( summary, rows ):
 
 def print_served_syms_lines( s ):
     """The §5.4 outcome, same greppable TSV convention. Split out so `print_metric_lines` stays the
-    report over the pre-existing signal and this is the report over the new one."""
+    report over the pre-existing signal and this is the report over the new one. Fix round 1: prints
+    band_met/sr1_met separately (HIGH-3) and the two "band met but not shippable" fields when the
+    outcome is pass_fire_rate_rejected, instead of only ever printing a chosen threshold or nothing."""
     print( "LOCBENCH\tcalib\tserved_syms_fingerprint_ok\t%s" % s["fingerprint_ok"] )
     if s["outcome"] == "fingerprint_mismatch":
         print( "LOCBENCH\tcalib\tserved_syms_outcome\tfingerprint_mismatch" )
+        print( "LOCBENCH\tcalib\tserved_syms_public_sentence\t%s" % s["public_sentence"] )
         return
     for grain in ( "file_hit", "func_hit" ):
         g = s["grains"][grain]
-        print( "LOCBENCH\tcalib\tserved_syms_%s_auroc\t%s [%s, %s] (n_resamples=%d)" %
+        print( "LOCBENCH\tcalib\tserved_syms_%s_auroc\t%s [%s, %s] (n_resamples=%d) auroc_band_5_2=%s" %
               ( grain, md_num( g["auroc"], "%.4f" ), md_num( g["auroc_ci_lo"], "%.4f" ),
-               md_num( g["auroc_ci_hi"], "%.4f" ), g["auroc_ci_resamples"] ) )
+               md_num( g["auroc_ci_hi"], "%.4f" ), g["auroc_ci_resamples"], g["auroc_band_5_2"] ) )
     print( "LOCBENCH\tcalib\tserved_syms_outcome\t%s" % s["outcome"] )
-    if s["chosen_threshold"] is not None:
+    print( "LOCBENCH\tcalib\tserved_syms_band_met\t%s" % s["band_met"] )
+    print( "LOCBENCH\tcalib\tserved_syms_sr1_met\t%s" % s["sr1_met"] )
+    if s["outcome"] == "pass":
         c = s["chosen_threshold"]
         op = s["operating_point_ci"]
         print( "LOCBENCH\tcalib\tserved_syms_operating_point\tt=%d false_warn=%.4f [%s, %s] "
@@ -585,6 +605,10 @@ def print_served_syms_lines( s ):
                c["recall"],
                md_num( op["recall"]["ci_lo"], "%.4f" ), md_num( op["recall"]["ci_hi"], "%.4f" ),
                c["warn_rate"] ) )
+    elif s["outcome"] == "pass_fire_rate_rejected":
+        b = s["best_band_only_threshold"]
+        print( "LOCBENCH\tcalib\tserved_syms_best_band_only\tt=%d false_warn=%.4f recall=%.4f "
+              "warn_rate=%.4f" % ( b["threshold"], b["false_warn"], b["recall"], b["warn_rate"] ) )
     print( "LOCBENCH\tcalib\tserved_syms_public_sentence\t%s" % s["public_sentence"] )
 
 

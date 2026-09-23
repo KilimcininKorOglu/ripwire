@@ -78,9 +78,35 @@ def test_fingerprint_rejects_auroc_outside_tolerance():
 
 
 def test_fingerprint_tolerates_rounding_noise():
-    # the doc's figures are 3dp; a run landing at 0.6223 (rounds to the same 0.622) must still pass.
-    ok, _detail = S.check_fingerprint( synthetic_summary( auroc_func=0.6223, auroc_file=0.5798 ) )
-    assert ok
+    # the pinned figures are the exact nearest AUROC-lattice point to the published value (fix round 1,
+    # HIGH-2), not the published rendering itself -- both published rounded forms must still pass.
+    ok, _detail = S.check_fingerprint( synthetic_summary( auroc_func=0.622, auroc_file=0.580 ) )
+    assert ok, _detail
+    ok2, _detail2 = S.check_fingerprint( synthetic_summary( auroc_func=0.6221, auroc_file=0.5805 ) )
+    assert ok2, _detail2
+
+
+def test_fingerprint_accepts_published_4dp_figures_and_their_exact_lattice_points():
+    """HIGH-2 (reports/rv-served-syms-prereg.md): the fingerprint must accept the ONLY published 4-dp
+    rendering of the file-grain figure (0.5805, from reports/rv-margin-resolution.md) and the exact
+    15-miss x 77-hit AUROC lattice point that rendering can only come from (670.5/1155). Mirrors the
+    reviewer's own C7/C7b/C7c cases."""
+    ok, det = S.check_fingerprint( synthetic_summary( auroc_file=0.5805, auroc_func=0.6221 ) )
+    assert ok, det["checks"]                                          # C7
+    ok, det = S.check_fingerprint( synthetic_summary( auroc_file=670.5 / 1155, auroc_func=1276.5 / 2052 ) )
+    assert ok, det["checks"]                                          # C7b -- exact lattice point
+    ok, det = S.check_fingerprint( synthetic_summary( auroc_file=670 / 1155, auroc_func=1276.5 / 2052 ) )
+    assert ok, det["checks"]                                          # C7c -- neighbouring lattice point
+
+
+def test_fingerprint_rejects_lattice_points_two_steps_out():
+    # 669.5/1155 is exactly TWO lattice steps (step = 0.5/1155) below the pinned 670.5/1155 -- outside
+    # the +-1-step tolerance (0.0006 admits 1 step = 0.000433, excludes 2 steps = 0.000866) by
+    # construction; the fingerprint must not admit it. (This was the OLD tolerance's own admissible
+    # point, pre-fix-round-1 -- confirming the fix narrowed rather than just shifted the window.)
+    ok, det = S.check_fingerprint( synthetic_summary( auroc_file=669.5 / 1155 ) )
+    assert not ok
+    assert det["checks"]["score_auroc_file_hit"] is False
 
 
 def test_score_served_syms_reports_fingerprint_mismatch_and_nothing_else():
@@ -91,6 +117,36 @@ def test_score_served_syms_reports_fingerprint_mismatch_and_nothing_else():
     assert "grains" not in out
     assert "chosen_threshold" not in out
     assert "pass" not in out
+
+
+def test_check_fingerprint_rows_len_check_is_optional_but_enforced_when_given():
+    """HIGH-2's 'count checks' / the reviewer's C9: `len(rows) == n_scored` was not checked at all
+    before fix round 1 -- `score_served_syms` always passes rows, so it now always enforces this, but
+    `check_fingerprint(summary)` alone (no rows) must stay callable for a caller that only wants to
+    check the summary in isolation (the reviewer's own C7/C7b/C7c call it this way)."""
+    summary = synthetic_summary()   # n_scored=92
+    ok_no_rows, det_no_rows = S.check_fingerprint( summary )                 # rows=None -> no rows check
+    assert ok_no_rows
+    assert "rows_len_matches_n" not in det_no_rows["checks"]
+
+    ok_matching, _ = S.check_fingerprint( summary, rows=[ object() ] * 92 )
+    assert ok_matching
+
+    ok_mismatched, det_mismatched = S.check_fingerprint( summary, rows=[ object() ] * 50 )
+    assert not ok_mismatched
+    assert det_mismatched["checks"]["rows_len_matches_n"] is False
+
+
+def test_score_served_syms_catches_row_count_mismatch_via_fingerprint():
+    """C9 (reports/rv-served-syms-prereg.md): before fix round 1, `score_served_syms` scored 50 rows
+    happily under a summary that claimed n_scored=92 -- the population fingerprint never checked its
+    OWN caller's row count. Now it must refuse via the ordinary fingerprint_mismatch path."""
+    rows50 = ( [ mkrow( "m/%d" % i, 30, file_hit=False, func_hit=False ) for i in range( 20 ) ]
+              + [ mkrow( "h/%d" % i, 5, file_hit=True, func_hit=True ) for i in range( 30 ) ] )
+    out = S.score_served_syms( synthetic_summary(), rows50 )   # summary says n_scored=92
+    assert out["outcome"] == "fingerprint_mismatch", out["outcome"]
+    assert out["fingerprint"]["checks"]["rows_len_matches_n"] is False
+    assert "grains" not in out
 
 
 # ── the >= confusion primitive and the threshold sweep (§5.4.4) ───────────────────────────────────────
@@ -125,16 +181,33 @@ def test_sweep_candidate_set_and_boundary_rows():
 
 def test_choose_operating_point_applies_fire_rate_self_reject():
     """t=10 has PERFECT recall/false-warn (1.0 / 0.0) but warns on 2 of 5 rows == 0.4 > the 0.25 fire-
-    rate ceiling (SR-1), so it must be rejected even though it would otherwise be the obvious pick.
-    Only t=12 (recall 0.5, false_warn 0.0, warn_rate 0.2) survives both the band and SR-1."""
+    rate ceiling (SR-1), so it must be rejected as the SHIPPABLE-track pick even though it would
+    otherwise be the obvious one. Only t=12 (recall 0.5, false_warn 0.0, warn_rate 0.2) survives both
+    the band and SR-1 -- but t=10 still counts toward band_met/best_band_only (HIGH-3's split)."""
     labels = [ True, True, False, False, False ]
     values = [ 10, 12, 3, 4, 5 ]
     table = S.sweep( labels, values )
-    chosen = S.choose_operating_point( table, n_rows=5 )
+    op = S.choose_operating_point( table, n_rows=5 )
+    assert op["band_met"] is True            # t=10 AND t=12 both satisfy false_warn<=0.2, recall>=0.5
+    assert op["sr1_met"] is True             # t=12 also clears the fire-rate ceiling
+    chosen = op["chosen"]
     assert chosen is not None
     assert chosen["threshold"] == 12
     assert chosen["recall"] == 0.5
     assert chosen["false_warn"] == 0.0
+    assert op["best_band_only"]["threshold"] == 10   # the band-only winner ignores SR-1 entirely
+
+
+def test_choose_operating_point_band_met_but_sr1_rejected():
+    """HIGH-3 / the reviewer's C6: a threshold can satisfy the owner's actual band (false_warn<=0.20,
+    recall>=0.50) while warning on more than 25% of rows. That must show up as band_met=True,
+    sr1_met=False, chosen=None (no shippable-track candidate) -- never as a bare 'band not met'."""
+    table = [ dict( threshold=30, recall=0.632, false_warn=0.111, warn_rate=0.326, tp=24, fn=14, fp=6, tn=48 ) ]
+    op = S.choose_operating_point( table, n_rows=92 )
+    assert op["band_met"] is True
+    assert op["sr1_met"] is False
+    assert op["chosen"] is None
+    assert op["best_band_only"] is not None and op["best_band_only"]["threshold"] == 30
 
 
 def test_choose_operating_point_tie_rule_prefers_larger_threshold():
@@ -146,14 +219,44 @@ def test_choose_operating_point_tie_rule_prefers_larger_threshold():
         dict( threshold=8, recall=0.6, false_warn=0.05, warn_rate=0.15, tp=3, fn=2, fp=1, tn=9 ),
         dict( threshold=2, recall=0.9, false_warn=0.50, warn_rate=0.60, tp=4, fn=1, fp=6, tn=4 ),  # out of band
     ]
-    chosen = S.choose_operating_point( table, n_rows=15 )
-    assert chosen is not None and chosen["threshold"] == 8
+    op = S.choose_operating_point( table, n_rows=15 )
+    assert op["chosen"] is not None and op["chosen"]["threshold"] == 8
 
 
 def test_choose_operating_point_none_when_nothing_qualifies():
     table = [ dict( threshold=t, recall=0.1, false_warn=0.9, warn_rate=0.5, tp=0, fn=0, fp=0, tn=0 )
              for t in ( 1, 2, 3 ) ]
-    assert S.choose_operating_point( table, n_rows=10 ) is None
+    op = S.choose_operating_point( table, n_rows=10 )
+    assert op["band_met"] is False
+    assert op["sr1_met"] is False
+    assert op["chosen"] is None
+    assert op["best_band_only"] is None
+
+
+# ── §5.2's AUROC band, reported not gating (MEDIUM-3) ─────────────────────────────────────────────────
+def test_auroc_band_5_2_rungs():
+    assert S.auroc_band_5_2( 0.75 ) == "meets"
+    assert S.auroc_band_5_2( 0.70 ) == "meets"              # inclusive at the boundary
+    assert S.auroc_band_5_2( 0.65 ) == "weak"
+    assert S.auroc_band_5_2( 0.60 ) == "weak"                # inclusive at the boundary
+    assert S.auroc_band_5_2( 0.50 ) == "does_not_meet"
+    assert S.auroc_band_5_2( 0.36 ) == "does_not_meet"
+    assert S.auroc_band_5_2( 0.35 ) == "does_not_meet_opposite_direction"   # HIGH-1(d)'s refutation rung
+    assert S.auroc_band_5_2( 0.10 ) == "does_not_meet_opposite_direction"
+    assert S.auroc_band_5_2( None ) is None
+    # §5.2's band (0.70/0.60) is deliberately NOT the same numbers as ARB round one's own auroc_band()
+    # (0.65/0.55) -- 0.62 must read "weak" under §5.2's band although it would "meet" ARB's.
+    assert S.auroc_band_5_2( 0.62 ) == "weak"
+
+
+def test_directional_refutation_never_flips_to_a_pass():
+    """C5-equivalent at the auroc_band_5_2 level: an AUROC at or below 0.35 is reported as a directional
+    refutation of the REGISTERED orientation, never silently re-read under the opposite one (which
+    would otherwise look like a strong 'meets')."""
+    assert S.auroc_band_5_2( 0.0 ) == "does_not_meet_opposite_direction"
+    # if this had been silently flipped to `1 - 0.0 = 1.0`, it would misreport as "meets" -- assert the
+    # actual rung is the refutation string, not a number anyone could mistake for a pass.
+    assert S.auroc_band_5_2( 0.0 ) != "meets"
 
 
 # ── orientation (§5.4.3) ────────────────────────────────────────────────────────────────────────────
@@ -225,13 +328,24 @@ def test_score_served_syms_end_to_end_pass():
     out = S.score_served_syms( summary, rows )
     assert out["outcome"] == "pass", out
     assert out["pass"] is True
+    assert out["band_met"] is True and out["sr1_met"] is True
     assert out["chosen_threshold"] is not None
     assert "worth replicating" in out["public_sentence"]
     assert "not 'shippable'" in out["public_sentence"]
     assert out["grain_honesty"]["gating_grain"] == "func_hit"
+    # MEDIUM-1: served_syms WAS scored exploratorily; the sentence must not claim it "was never
+    # scored" or call it "our best disclosed signal" (an untested comparison).
+    assert "was never scored" not in out["public_sentence"]
+    assert "our best disclosed signal" not in out["public_sentence"]
+    assert "0.669" in out["public_sentence"] and "0.723" in out["public_sentence"]
+    # HIGH-1(e): the orientation-informed-by-a-seen-number clause is in every non-mismatch sentence.
+    assert "not blind" in out["public_sentence"]
     # every candidate threshold's point must be present for both grains (nothing hidden but the winner)
     assert len( out["grains"]["func_hit"]["sweep"] ) >= 2
     assert len( out["grains"]["file_hit"]["sweep"] ) >= 2
+    # MEDIUM-3: §5.2's separate AUROC band is reported per grain, not just the operating-point band.
+    assert out["grains"]["func_hit"]["auroc_band_5_2"] in ( "meets", "weak", "does_not_meet",
+                                                            "does_not_meet_opposite_direction" )
 
 
 def test_score_served_syms_end_to_end_fail_on_no_signal():
@@ -245,8 +359,31 @@ def test_score_served_syms_end_to_end_fail_on_no_signal():
     out = S.score_served_syms( summary, rows )
     assert out["outcome"] == "fail", out
     assert out["pass"] is False
+    assert out["band_met"] is False
     assert out["chosen_threshold"] is None
     assert "does not reach the band" in out["public_sentence"]
+    assert "was never scored" not in out["public_sentence"]
+
+
+def test_score_served_syms_end_to_end_pass_fire_rate_rejected():
+    """HIGH-3 / the reviewer's C6, run through the full score_served_syms() pipeline: a threshold that
+    meets the owner's band but warns on > 25% of the population must produce its OWN outcome and
+    sentence -- never a silent 'pass' and never a false 'does not reach the band'."""
+    # 38 func misses, 24 of them at served_syms=30 (recall 24/38 = 0.632); 54 hits, 6 at 30
+    # (false_warn 6/54 = 0.111); warn_rate at t=30 is 30/92 = 0.326 > the 0.25 SR-1 ceiling.
+    rows = ( [ mkrow( "m/%d" % i, 30 if i < 24 else 5, file_hit=False, func_hit=False ) for i in range( 38 ) ]
+            + [ mkrow( "h/%d" % i, 30 if i < 6 else 5, file_hit=True, func_hit=True ) for i in range( 54 ) ] )
+    assert len( rows ) == 92
+    out = S.score_served_syms( synthetic_summary(), rows )
+    assert out["outcome"] == "pass_fire_rate_rejected", out
+    assert out["pass"] is False
+    assert out["band_met"] is True
+    assert out["sr1_met"] is False
+    assert out["chosen_threshold"] is None                      # no shippable-track candidate
+    assert out["best_band_only_threshold"]["threshold"] == 30
+    assert "meets the band and fails the fire-rate self-reject" in out["public_sentence"]
+    assert "does not reach the band" not in out["public_sentence"]
+    assert "was never scored" not in out["public_sentence"]
 
 
 TESTS = [
@@ -254,17 +391,25 @@ TESTS = [
     test_fingerprint_rejects_wrong_split,
     test_fingerprint_rejects_auroc_outside_tolerance,
     test_fingerprint_tolerates_rounding_noise,
+    test_fingerprint_accepts_published_4dp_figures_and_their_exact_lattice_points,
+    test_fingerprint_rejects_lattice_points_two_steps_out,
     test_score_served_syms_reports_fingerprint_mismatch_and_nothing_else,
+    test_check_fingerprint_rows_len_check_is_optional_but_enforced_when_given,
+    test_score_served_syms_catches_row_count_mismatch_via_fingerprint,
     test_confusion_ge_hand_computed,
     test_sweep_candidate_set_and_boundary_rows,
     test_choose_operating_point_applies_fire_rate_self_reject,
+    test_choose_operating_point_band_met_but_sr1_rejected,
     test_choose_operating_point_tie_rule_prefers_larger_threshold,
     test_choose_operating_point_none_when_nothing_qualifies,
+    test_auroc_band_5_2_rungs,
+    test_directional_refutation_never_flips_to_a_pass,
     test_orientation_direction_matters_for_auroc,
     test_bootstrap_auroc_ci_is_deterministic_and_sane,
     test_bootstrap_operating_point_ci_matches_point_estimate_math,
     test_score_served_syms_end_to_end_pass,
     test_score_served_syms_end_to_end_fail_on_no_signal,
+    test_score_served_syms_end_to_end_pass_fire_rate_rejected,
 ]
 
 
