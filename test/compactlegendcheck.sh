@@ -455,6 +455,10 @@ probeFor()
 # and does not ride an ok="1" answer). The bytes are attributed here, in the commit that adds them, per the rule above.
 # The ok="1" half is the whole point of that lane: a LEGALLY EMPTY comparison is a real run with changed="0", not a
 # refusal, and a reader of the default answer could not tell those apart without it.
+# RE-PINNED 2026-09-23 (train 17 fix round): ripwire.readability/v1 320 -> 350 (measured 332, the --readability probe).
+# The compact reading of the order changed from 'least readable first' to 'largest Halstead volume first (a size
+# proxy)' (compactlegend.h, +24 B): docs/EVALS.md section 8 withdrew the readability-ordering claim, and the legend
+# a reader meets first must not repeat it. readabilitycheck (G2) pins the wording. No other schema moved.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -465,7 +469,7 @@ ripwire.metrics/v1               1040  1021
 ripwire.deps/v1                   780   764
 ripwire.hotspots/v1               530   518
 ripwire.clones/v1                 810   799
-ripwire.readability/v1            320   308
+ripwire.readability/v1            350   332
 ripwire.nonlocal-state/v1         570   556
 ripwire.ensemble/v1              1930  1920
 ripwire.context-ratio/v1         1780  1762

@@ -108,6 +108,81 @@ constexpr std::uint32_t   kSubBarGrowthPct   = 100;   // UNDER the bar: a DOUBLI
 // with the bar it belongs to and there is no third number to keep in sync: ccx 10, loc 40.
 inline constexpr std::uint32_t subBarGrowthFloor( std::uint32_t bar ) noexcept { return ( bar * 2 ) / 3; }
 
+// ─── ACK PROVENANCE / RE-SCORE — the per-symbol numeric kinds' materiality, as ONE declarative table ─────
+//
+// kind → the three constants perSymbolKind already compares (was,now) against. Pulled out as a table
+// (CONTRIBUTING.md §3 "declarative constexpr tables over scattered switch/if") so the LIVE decision
+// (perSymbolKind, below) and the RE-SCORE decision (an ack row's stored `was=`/`now=`, read back off the
+// ledger by rescoreAckRecord — see AckRecord::provenance) are the SAME lookup, not two hand-kept copies
+// that can drift. The two facet-driven kinds (duplication / new-clone-of-reused-helper: decided by the
+// recognized clone idiom, not a bar) and the two presence kinds (dead-code / api-surface tier A: always
+// major, no materiality question) are deliberately absent — findRowByKind over this table returns nullptr.
+struct MaterialityBar
+{
+    std::string_view kind;
+    std::uint32_t    bar;
+    std::uint32_t    minorDelta;
+    bool              growthTiered;
+};
+inline constexpr MaterialityBar kMaterialityBars[] = {
+    { "complexity", kCcxBar,   kMinorCcxDelta,   true  },
+    { "verbosity",  kLocBar,   kMinorLocDelta,   true  },
+    { "nesting",    kNestBar,  0,                false },
+    { "params",     kParamBar, kMinorParamDelta, false },
+};
+
+// The linear scan behind every "kind → its declarative table row" lookup in this file — rescoreNumericMajor's
+// own lookup below and facetAttrName (kFacetAttrs, further down) are both this shape over a different small
+// constexpr table, so this is the one body instead of two. `Row` need only expose a `.kind` field comparable
+// to a string_view; the table is small (at most a handful of kinds) so a linear scan over a sorted-by-nothing
+// array beats any container overhead. No `materialityBarFor` wrapper around it: rescoreNumericMajor is its
+// only caller, and a one-line forwarding wrapper that short is itself clone-bait — measured turning this one
+// in: it duplication-matched three unrelated one-line forwarders elsewhere in the tree the moment it existed
+// as its own named symbol, for no reader benefit over calling findRowByKind at the one call site directly.
+template<class Row>
+inline const Row* findRowByKind( const Row* begin, const Row* end, std::string_view kind ) noexcept
+{
+    const Row* const hit = std::find_if( begin, end, [ kind ]( const Row& r ) { return r.kind == kind; } );
+    return hit != end ? hit : nullptr;
+}
+
+// The growth-vs-bar formula itself, factored out of perSymbolKind so it has exactly one body: the caller
+// already knows `now > was` and `now > bar` (perSymbolKind's own guards), and already has `growthPct` in
+// hand (it needs it for the sub-bar branch too), so this takes both rather than recomputing either.
+inline bool numericRegressionIsMajor( std::uint32_t was, std::uint32_t now, std::uint32_t bar, std::uint32_t minorDelta,
+                                       bool growthTiered, std::uint64_t growthPct ) noexcept
+{
+    const bool crossed = was <= bar;
+    return !growthTiered ? ( minorDelta == 0 || now - was >= minorDelta )
+                          : ( crossed || growthPct >= kMaterialGrowthPct );
+}
+
+// RE-SCORE, mechanical: given a (kind, was, now) triple alone — no re-ingest, no git history — recompute
+// whether this would be a MAJOR (gating-eligible) or minor finding under the kind's bar/minorDelta today.
+// nullopt means "cannot answer from these three values": either `kind` is not one of the four numeric bar
+// kinds (duplication/new-clone-of-reused-helper decide via `facet` — see AckRecord's doc comment — and
+// dead-code/api-surface tier A have no materiality question at all), or now<=was, which is not a regression
+// under any threshold. This is the whole payoff of storing was=/now= on the ack row: the knob sweep this
+// exists for calls it with a DIFFERENT bar/minorDelta than kMaterialityBars carries today.
+inline std::optional<bool> rescoreNumericMajor( std::string_view kind, std::uint32_t was, std::uint32_t now,
+                                                 std::optional<std::uint32_t> barOverride = std::nullopt,
+                                                 std::optional<std::uint32_t> minorDeltaOverride = std::nullopt ) noexcept
+{
+    const MaterialityBar* mb = findRowByKind( std::begin( kMaterialityBars ), std::end( kMaterialityBars ), kind );
+    if( mb == nullptr || now <= was )
+    {
+        return std::nullopt;
+    }
+    const std::uint32_t bar        = barOverride.value_or( mb->bar );
+    const std::uint32_t minorDelta = minorDeltaOverride.value_or( mb->minorDelta );
+    if( now <= bar )
+    {
+        return false;   // under the bar — never MAJOR (may still be a reported sev="minor" row; not this predicate's question)
+    }
+    const std::uint64_t growthPct = ( std::uint64_t( now - was ) * 100 ) / std::max( was, 1u );
+    return numericRegressionIsMajor( was, now, bar, minorDelta, mb->growthTiered, growthPct );
+}
+
 // Signal-to-noise round — the per-finding ACK RATCHET sidecar (`--quality-ack[=REASON]`): each line records one
 // deliberately-accepted finding; --quality-delta suppresses it (honestly, via acked="N") until the finding
 // WORSENS past the acked magnitude, at which point it reappears. Committable, like the baseline sidecar.
@@ -716,6 +791,17 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
     }
     return true;
 }
+
+// ONE clone group of the CURRENT tree, reduced to the two facts an ack row can be healed from: the
+// member-set hash that IS the ack identity for both clone kinds, and the idiom verdict that decides their
+// severity. computeDelta already computes both for every group it scans (exactIdioms/type3Idioms), so
+// exporting them costs a copy rather than a second clone pass — see its cloneIdiomsOut parameter, and
+// backfillCloneAckProvenance, the one consumer.
+struct CloneIdiomFact
+{
+    std::uint64_t hash = 0;
+    std::string   idiom;   // cloneIdiomName( vd.idiom ) — the same string Regression::facet carries
+};
 
 // hash a clone group by its SORTED member canonical ids — so "this set of functions is duplicated" is the
 // group's stable identity (adding a 3rd copy changes the set ⇒ a new group ⇒ reported as new duplication).
@@ -5280,10 +5366,14 @@ struct Regression
 // quality-delta emitter, its --json twin, and the MCP quality_delta emitter each held the same conditional
 // chain), which is the shape --quality-delta's own duplication kind exists to name; adding the fourth row
 // below is what made keeping three copies indefensible. nullptr = this kind publishes no facet attribute.
-// A declarative table, not a conditional chain (CONTRIBUTING.md §3). Scanned with find_if rather than a
-// hand-rolled loop: the loop spelling is the single most re-derived body in this tree (serialize.h's
-// bytesPerTokenFor, namingconsistency's groupFor, lanes' findClaimByKey, ingest's lookupLang all carry it)
-// and the duplication kind reported this function as a fifth copy of it the moment it was written that way.
+// A declarative table, not a conditional chain (CONTRIBUTING.md §3). Scanned via findRowByKind (ACK
+// PROVENANCE / RE-SCORE, near kMaterialityBars above) rather than a hand-rolled loop: the loop spelling is
+// the single most re-derived body in this tree (serialize.h's bytesPerTokenFor, namingconsistency's
+// groupFor, lanes' findClaimByKey, ingest's lookupLang all carry it), and this function's OWN find_if was
+// reported as a fifth copy of it the moment it was first written that way — sharing findRowByKind with
+// rescoreNumericMajor's own kMaterialityBars lookup (a genuine sibling: same file, same "kind → its
+// declarative row" shape, same reason to exist) resolves that without forcing a shared abstraction onto the
+// other four, unrelated ones.
 struct FacetAttr { std::string_view kind; const char* attr; };
 inline constexpr FacetAttr kFacetAttrs[] = {
     { "short-horizon-churn",        "churn"   },   // self / ambient
@@ -5297,9 +5387,8 @@ inline constexpr FacetAttr kFacetAttrs[] = {
 
 inline const char* facetAttrName( std::string_view kind ) noexcept
 {
-    const auto* const end = std::end( kFacetAttrs );
-    const auto* const hit = std::find_if( std::begin( kFacetAttrs ), end, [ kind ]( const FacetAttr& f ) { return f.kind == kind; } );
-    return hit != end ? hit->attr : nullptr;
+    const FacetAttr* const hit = findRowByKind( std::begin( kFacetAttrs ), std::end( kFacetAttrs ), kind );
+    return hit != nullptr ? hit->attr : nullptr;
 }
 
 // §P6.6: `sym` is a canonical id `path::scope::name` (resolve.h::canonicalId) whose PATH segment is
@@ -5524,6 +5613,46 @@ inline bool scopeCovers( const Scope& sc, const Regression& r )
 // string, collision-free, sorted) so the rewritten file is byte-stable. Unknown/malformed lines degrade+skip
 // exactly like readBaseline. Deliberately NOT pinned to a HEAD sha: an acked finding ("fixture, dead by
 // design") stays accepted across commits until the file is edited or the finding worsens.
+// ─── ACK PROVENANCE CONFIDENCE — how the row's was=/now=/facet= were arrived at ────────────────────────
+//
+// A tri-state, not the bool it replaces, because the ledger now has THREE honestly-different states and a
+// bool can only name two. `Measured` is a row whose provenance the ack path read off the live delta it was
+// accepting — the finding was in front of the binary at the moment the row was written. `Reconstructed` is
+// a row a later pass HEALED from facts about the tree as it stands TODAY (backfillCloneAckProvenance), for
+// a legacy row whose accept-time measurement was never recorded. The two must never be pooled in a
+// published number: a reconstructed row says "this is what the finding looks like now", which is a
+// different claim from "this is what was measured when it was accepted", and CLAUDE.md's honesty contract
+// is exactly the rule that a claim you cannot support must be labelled rather than rounded into one you can.
+//
+// `None` is a legacy row — nothing to re-score from, and NOT inferable from was/now alone: 0 is a
+// legitimate measured value (dead-code and both clone kinds always carry was=0), so an ABSENT token, not a
+// zero one, is the tell.
+//
+// FRESHNESS, the rule that keeps Reconstructed from rotting into a lie. A reconstruction describes the tree
+// on the day it was taken, and a marker alone would not stop a reader six months later from treating it as
+// a fact about the row. So it is a CACHE, not a record: backfillCloneAckProvenance RE-DERIVES every
+// Reconstructed row whose group it can still find, on every --quality-ack, so a value that can be checked
+// is never older than the last ack.
+//
+// A value it CANNOT check is left alone and counted, never cleared. Not finding a group proves nothing —
+// the scan may be scoped, capped, degraded, or run next to a different tree entirely — and deleting derived
+// data on the strength of a floor would be a worse error than carrying an unverified one, because it is not
+// reversible. The disclosure carries the unverified count for exactly this reason.
+//
+// Measured rows are never re-derived: a measurement outranks anything a later pass could compute, and that
+// ordering is what the whole axis means.
+enum class AckProvenance : std::uint8_t
+{
+    None = 0,        // legacy row — no now=/was= on the line at all
+    Measured,        // read off the live delta this row was accepted from
+    Reconstructed,   // healed from the CURRENT tree by a backfill pass — see backfillCloneAckProvenance
+};
+
+// The token `prov=` carries in the ledger. Omitted entirely for Measured, the same OMIT-when-default rule
+// cid=/by= follow and for the same reason: a repo whose rows are all measured keeps a ledger byte-identical
+// to the one it would have without this axis, so adding it moves zero bytes until a backfill actually runs.
+inline constexpr std::string_view kAckProvReconToken = "recon";
+
 struct AckRecord
 {
     std::string   kind;
@@ -5540,14 +5669,208 @@ struct AckRecord
     // malformed, and a separate record line would fire the reader's own malformed-line degrade on every one
     // of them. Empty rows are written byte-identically to the way they are written today.
     std::string   by;
+    // RE-SCORE PROVENANCE (round 2026-09-22) — the measured facet values that decided THIS finding's
+    // severity at the moment it was accepted, so a LATER run can re-evaluate it under a different threshold
+    // (the planned knob sweep) by reading the ledger alone, with no re-ingest and no git history replay.
+    // `was`/`now` are the exact (was,now) pair perSymbolKind compared against the kind's bar/minorDelta —
+    // see rescoreNumericMajor, which is the single formula both the live report and this re-score consult.
+    // `facet` is Regression::facet verbatim (idiom name / self·ambient / new-symbol·contract-change) for the
+    // kinds whose severity is not a bar comparison at all (duplication, new-clone-of-reused-helper — see
+    // kFacetAttrs). `path`/`line` mirror Regression's own P2.5 locator (empty path = none available, same
+    // honesty rule). Serialized as OPTIONAL named tokens (`now=`/`was=`/`facet=`/`p=<path>:<line>`), same
+    // shape and same reasoning as cid=/by= — see readAckRecords for the grammar and the legacy-row handling.
+    //
+    // `hasProvenance` is NOT serialized itself — it is the READ-side fact "did this line carry now=/was= at
+    // all", which is what tells a legacy row (written by a pre-provenance binary, or hand-edited down to the
+    // bare grammar) from a new one. It cannot be inferred from was/now alone: 0 is a legitimate measured
+    // value (dead-code and the two clone kinds always carry was=0), so an ABSENT token, not a zero one, is
+    // the tell. A caller doing mechanical re-scoring (see rescoreAckRecord) must read this flag and count a
+    // false as "cannot answer, legacy row" — never guess, and never treat it as a non-match (the hash key is
+    // still the only identity; this flag only gates whether the OPTIONAL extra facts are trustworthy).
+    //
+    // WHAT A LEGACY ROW CAN AND CANNOT GET BACK, measured on this repo's own 1,623-row ledger rather than
+    // assumed. No row anchors a COMMIT — `cid` identifies the symbol's at-accept-time body for forward
+    // matching, not which tree pair produced was/now, and `by` is an ownership scope, not a ref. That makes
+    // the answer DIFFER BY KIND, and the difference is the whole reason a backfill is possible at all:
+    //
+    //   * The two CLONE kinds (duplication, new-clone-of-reused-helper — 288 rows here, 62 of them the
+    //     reuse-decline kind) need no commit anchor, because their severity is not a bar comparison over
+    //     was/now at all: it is `facet`, the clone idiom verdict. Their ack key IS cloneGroupHash (the
+    //     sorted member canonIds), classifyCloneGroupIdioms runs over every clone group in the CURRENT tree
+    //     regardless of newness, and `was` is 0 BY CONSTRUCTION at both kinds' push_back sites. So today's
+    //     tree answers all three — see backfillCloneAckProvenance, which heals exactly these rows and marks
+    //     them AckProvenance::Reconstructed, never Measured.
+    //   * The four NUMERIC kinds (complexity/verbosity/nesting/params — 320 rows here) genuinely cannot be
+    //     healed from this file or from today's tree. `now` for a legacy row is at best `ackNow` itself (the
+    //     ratchet floor, which is exactly r.now at the row's LAST acceptance in the common single-ack case,
+    //     but indistinguishable from a stale carried-forward max after a re-ack); `was` has no stand-in and
+    //     cannot be recomputed without the two commits that were diffed. Those rows stay AckProvenance::None
+    //     and are reported as such rather than given a guessed value. Recovering them is a git-archaeology
+    //     pass over the COMMITTED ledger's own blame (320 rows blame to 86 distinct commits at b939ef4f, a
+    //     ~13-minute one-time crawl), which is a separate lane and would record a MEASURED was, not a
+    //     reconstructed one — a re-diff of the real tree pair is a measurement, so it must not reuse
+    //     prov=recon.
+    //   * The remaining 1,015 rows (short-horizon-churn, dead-code, api-surface, error-masking) have no
+    //     materiality question for a bar sweep to re-ask — none of them has a kMaterialityBars row at all, so
+    //     rescoreNumericMajor's lookup misses and no recovered was/now would change a verdict.
+    //
+    // See the ledger's own PROVENANCE header comment (renderAckRecords) for the reader-facing version.
+    std::uint32_t was           = 0;
+    std::uint32_t now           = 0;
+    std::string   facet;
+    std::string   path;
+    std::uint32_t line          = 0;
+    AckProvenance provenance    = AckProvenance::None;
     std::string   reason;
+
+    // "is there anything here to re-score at all" — the question every pre-existing call site asked of
+    // the bool this replaces, kept as a predicate so adding the confidence axis changed no caller's
+    // meaning. A caller that CARES which kind of provenance it has reads `provenance` directly.
+    bool hasProvenance() const noexcept { return provenance != AckProvenance::None; }
 };
+
+// The re-score entry point over a whole AckRecord: strips the P0.3 zero-magnitude origin suffix
+// (`:new-symbol`/`:preexisting`) off `kind` before the table lookup — that suffix is an ACK-IDENTITY
+// discriminator (ackKindToken), never one of the nine finding kinds rescoreNumericMajor's table knows about
+// — then defers to it. nullopt covers both "this row cannot be rescored" cases at once: no provenance at
+// all (a legacy row), or a facet-driven/presence kind rescoreNumericMajor's table does not cover.
+inline std::optional<bool> rescoreAckRecord( const AckRecord& r, std::optional<std::uint32_t> barOverride = std::nullopt,
+                                              std::optional<std::uint32_t> minorDeltaOverride = std::nullopt ) noexcept
+{
+    if( !r.hasProvenance() )
+    {
+        return std::nullopt;
+    }
+    std::string_view  bareKind = r.kind;
+    const std::size_t colon    = bareKind.find( ':' );
+    if( colon != std::string_view::npos )
+    {
+        bareKind = bareKind.substr( 0, colon );
+    }
+    return rescoreNumericMajor( bareKind, r.was, r.now, barOverride, minorDeltaOverride );
+}
 
 inline std::string ackMapKey( const std::string& kind, std::uint64_t key )
 {
     char hex[ 20 ];
     rw::formatTo( hex, sizeof( hex ), "{:016x}", static_cast<unsigned long long>( key ) );
     return kind + " " + hex;
+}
+
+// ─── THE LEGACY-ACK BACKFILL — what a row written before provenance existed CAN still get back ─────────
+//
+// THE PROBLEM. `--quality-ack` records provenance only for rows it WRITES, so a ledger that predates the
+// feature heals forward and no further: this repo's own 1,623 rows carry none, and the knob sweep the
+// provenance exists for can therefore re-score none of its own history. The obvious fix — anchor each row
+// to a commit and re-diff it — is a real one, but it is aimed at the NUMERIC kinds, and measuring first
+// showed that is not where the rows are: of the 1,623, only 320 are numeric-bar rows at all. The 288 CLONE
+// rows (62 of them the reuse-decline kind the sweep specifically wants) would be untouched by ANY recovered
+// was=, because neither clone kind has a kMaterialityBars row — rescoreNumericMajor's lookup misses, so their
+// severity is `facet` and no value of was/now changes it. A commit anchor would have been a correct answer
+// to a different question.
+//
+// WHAT MAKES THE CLONE KINDS HEALABLE WITHOUT GIT AT ALL. Three facts line up, and all three are needed:
+//   * their ack identity IS cloneGroupHash — the sorted member canonIds — so a row names a member SET that
+//     can be looked for in any tree, not a magnitude that only meant something against one baseline;
+//   * classifyCloneGroupIdioms runs over every clone group in the current tree regardless of newness, so
+//     the verdict is recomputable now (computeDelta exports it as CloneIdiomFact rather than paying for a
+//     second clone pass);
+//   * `was` is 0 BY CONSTRUCTION at both kinds' push_back sites — it is not being guessed at or defaulted,
+//     it is the only value either kind has ever written.
+//
+// WHAT THIS IS NOT. The member-set hash is over member IDENTITIES, not their bodies, so a group can still
+// hash the same today while the bodies that made it a clone have drifted. A healed facet is therefore the
+// answer to "would this group's idiom demote it NOW", not "did it demote it THEN" — a different question,
+// and for a threshold sweep arguably the more useful one, but not the same claim. That is exactly why these
+// rows are marked AckProvenance::Reconstructed and never Measured: pooling the two would publish a number
+// nobody can audit, which is the failure mode CLAUDE.md's honesty contract names.
+//
+// WHAT STAYS LEGACY, on purpose. A numeric row is not touched — `ackNow` is a plausible stand-in for its
+// `now`, but `was` has no stand-in at all, and half a triple would be worse than none (rescoreAckRecord
+// reads presence, not value). Recovering those needs the commit that accepted the row; the committed
+// ledger's own blame is that anchor, and it is a separate lane — see AckRecord's doc comment for the
+// measured cost and for why the LAST write, not the first appearance, is the commit to re-diff.
+//
+// IDEMPOTENT AND DETERMINISTIC, both by construction rather than by care: a row that already carries
+// provenance is never rewritten (so a second run is a no-op, and a Measured row can never be downgraded to
+// Reconstructed), `acks` is a btree_map so the walk is (kind,key) sorted, and `facts` is sorted+deduped by
+// its producer so the lookup is a binary search over a stable sequence.
+struct AckBackfill
+{
+    std::size_t resolved   = 0;   // legacy clone rows reconstructed from the current tree for the first time
+    std::size_t refreshed  = 0;   // already-reconstructed rows RE-DERIVED against this tree (see the freshness rule)
+    std::size_t unverified = 0;   // reconstructions this run could NOT re-derive — left exactly as they were, and said so
+    std::size_t unresolved = 0;   // legacy clone rows whose member set does not clone here — honestly left alone
+    std::size_t ineligible = 0;   // rows of a kind no current-tree fact can answer for (numeric, churn, presence)
+    // Rows this pass did not CONSIDER: a measurement outranks anything it could derive, so it returns before
+    // any other counter. Carried so the five counts above plus this one account for every row in the ledger —
+    // without it the disclosure prints numbers that visibly do not sum, and a reader who checks (one did) is
+    // left deciding between a transcription error and a real hole. An unexplained gap in a report whose whole
+    // claim is that its floors are honest costs more than the line it takes to close it.
+    std::size_t measured   = 0;
+};
+
+inline AckBackfill backfillCloneAckProvenance( gtl::btree_map<std::string, AckRecord>& acks,
+                                                const std::vector<CloneIdiomFact>& facts )
+{
+    // `facts` must arrive sorted by hash — the lookup below binary-searches it. NOT spelled as an EXPECTS:
+    // a promise may only call accessors (test/selfcheckcheck.sh arm C) and std::is_sorted is an O(n) scan,
+    // so asserting it here would cost the whole sequence on every call to restate what its single producer
+    // already guarantees unconditionally (computeDelta sorts and dedupes cloneIdiomsOut before returning).
+    AckBackfill out;
+    for( auto& [ mapKey, rec ] : acks )
+    {
+        (void) mapKey;   // the (kind,key) it was derived from — rec already carries both fields
+        if( rec.provenance == AckProvenance::Measured )
+        {
+            ++out.measured;   // a measurement outranks anything this pass could derive — never rewritten, only counted
+            continue;
+        }
+        // The ':new-symbol' / ':preexisting' suffix is an ACK-IDENTITY discriminator (ackKindToken), not a
+        // finding kind — strip it before the kind test, the same way computeStaleAcks does.
+        std::string_view  base  = rec.kind;
+        const std::size_t colon = base.find( ':' );
+        if( colon != std::string_view::npos )
+        {
+            base = base.substr( 0, colon );
+        }
+        if( base != "duplication" && base != "new-clone-of-reused-helper" )
+        {
+            ++out.ineligible;   // untouched, including a hand-planted prov= on a kind this pass does not own
+            continue;
+        }
+        const bool wasReconstructed = ( rec.provenance == AckProvenance::Reconstructed );
+        const auto hit              = std::lower_bound( facts.begin(), facts.end(), rec.key,
+                                                        []( const CloneIdiomFact& f, std::uint64_t k ) { return f.hash < k; } );
+        if( hit == facts.end() || hit->hash != rec.key )
+        {
+            // ABSENCE IS A FLOOR, NOT A VERDICT — and this is the one place it was tempting to forget it.
+            // An earlier draft WITHDREW a reconstruction whose group it could not find, on the reasoning that
+            // a value the tree cannot support should not survive. That is wrong for the same reason
+            // staleForCloneKind refuses to call a clone target "gone": `facts` carries what this run FOUND,
+            // and a run can fail to find a group because the scan was scoped or excluded, because a file hit
+            // the size cap, because a parse degraded — or because the ledger is simply being read next to a
+            // different tree, which is exactly what qackconcurrencycheck arm 7's transplant probe does, and
+            // what caught this. Destroying 231 rows on the strength of a floor is not a freshness rule, it is
+            // the guess CLAUDE.md's honesty contract forbids, made irreversibly.
+            //
+            // So nothing is cleared. The row keeps the values it had, and the run SAYS it could not verify
+            // them — an unverified count a reader can act on, rather than data silently deleted.
+            ++( wasReconstructed ? out.unverified : out.unresolved );
+            continue;
+        }
+        // `was` is 0 for both clone kinds at every site that writes one — this is the construction, not a
+        // default. `now` is the ratchet floor, which is the accepted `now` for a row acked once and a
+        // carried-forward max for one re-acked since; it is disclosed as reconstructed either way, and
+        // neither clone kind feeds a bar comparison, so no verdict can turn on the difference. `facet` is
+        // the load-bearing value: it is what decides these kinds' severity.
+        rec.was        = 0;
+        rec.now        = rec.ackNow;
+        rec.facet      = hit->idiom;
+        rec.provenance = AckProvenance::Reconstructed;
+        ++( wasReconstructed ? out.refreshed : out.resolved );
+    }
+    return out;
 }
 
 // ─── ACK RATCHET REASON CLOBBER (round 2026-08-29 fix) ─────────────────────────────────────────────────
@@ -5698,23 +6021,50 @@ inline bool takeAckNamedToken( std::string& reason, std::string_view name, std::
     return true;
 }
 
-inline std::uint64_t takeAckCidPrefix( std::string& reason )
+// The GRAMMAR half shared by every numeric ack token (cid= below, now=/was= further down): parse `name`'s
+// value off the front of `reason` in `base`; a missing token is `false` with `reason` untouched, and a
+// PRESENT-but-malformed one is also `false`, `reason` restored to what it was, and `*wasMalformed` (when the
+// caller wants to know) set so it — not this shared parser — can decide whether that specific case is worth
+// its own DISCLOSE. It cannot decide that itself: cid='s degrade already has one (a ratchet-grandfathered
+// site — see takeAckCidPrefix); a brand-new one-argument DISCLOSE is a shape test/selfcheckcheck.sh refuses
+// on new code, and now=/was= below stay silent on purpose (the malformed text staying visible in `reason` is
+// still the disclosure a human reviewing the file sees — see takeAckUintPrefix's own comment).
+inline bool takeAckNumericToken( std::string& reason, std::string_view name, int base, std::uint64_t& valueOut, bool* wasMalformed = nullptr )
 {
-    const std::string untouched = reason;   // the restore point for the degrade below
-    std::string       hex;
-    if( !takeAckNamedToken( reason, "cid=", hex ) )
+    const std::string untouched = reason;
+    std::string       digits;
+    if( !takeAckNamedToken( reason, name, digits ) )
     {
-        return 0;
+        return false;
     }
     char*      stop = nullptr;
-    const auto v    = std::strtoull( hex.c_str(), &stop, 16 );
-    if( hex.empty() || stop == nullptr || *stop != '\0' )
+    const auto v    = std::strtoull( digits.c_str(), &stop, base );
+    if( digits.empty() || stop == nullptr || *stop != '\0' )
+    {
+        reason = untouched;
+        if( wasMalformed != nullptr )
+        {
+            *wasMalformed = true;
+        }
+        return false;
+    }
+    valueOut = v;
+    return true;
+}
+
+inline std::uint64_t takeAckCidPrefix( std::string& reason )
+{
+    std::uint64_t v         = 0;
+    bool          malformed = false;
+    if( takeAckNumericToken( reason, "cid=", 16, v, &malformed ) )
+    {
+        return v;
+    }
+    if( malformed )
     {
         DISCLOSE( "quality: unparseable cid= on an ack line — kept as reason text, content identity unavailable for that row" );
-        reason = untouched;
-        return 0;
     }
-    return v;
+    return 0;
 }
 
 // P1.4 — the provenance twin of takeAckCidPrefix: an optional leading `by=<scope spec>` token. Same degrade
@@ -5737,6 +6087,147 @@ inline std::string takeAckByPrefix( std::string& reason )
         return {};
     }
     return val;
+}
+
+// RE-SCORE PROVENANCE — the read side of AckRecord's was=/now=/facet=/p= tokens (see the struct's own doc
+// comment for what each carries and why). A plain decimal `<uint>` token, same shared parser as cid= above
+// (takeAckNumericToken) and the same "left in reason, untouched" degrade on a malformed value — but silent:
+// a value this binary could not have written stays visible as text in the file a human reviews (the same
+// disclosure cid='s DISCLOSE call spells out loud), without a NEW one-argument DISCLOSE call, a shape
+// test/selfcheckcheck.sh refuses on code that did not carry one already.
+// The only integer spelling this binary writes into the ledger's now=/was=/p=:<line> slots: one to ten ASCII
+// decimal digits, no sign, no whitespace, a value that fits std::uint32_t. Deliberately NOT strtoul/strtoull:
+// both accept a leading '-' and negate (now=-1 read back as 4294967295), a value past 32 bits was narrowed to
+// its low half (now=4294967296 read back as 0), and unsigned long is 64 bits on LP64 but 32 on Windows, so the
+// same committed line read back differently per platform. `out` is written only on success.
+inline bool parseAckLedgerUint32( std::string_view s, std::uint32_t& out ) noexcept
+{
+    if( s.empty() || s.size() > 10 )
+    {
+        return false;
+    }
+    std::uint64_t v = 0;
+    for( const char c : s )
+    {
+        if( c < '0' || c > '9' )
+        {
+            return false;
+        }
+        v = v * 10u + static_cast<std::uint64_t>( c - '0' );
+    }
+    if( v > std::numeric_limits<std::uint32_t>::max() )
+    {
+        return false;
+    }
+    out = static_cast<std::uint32_t>( v );
+    return true;
+}
+
+inline bool takeAckUintPrefix( std::string& reason, std::string_view name, std::uint32_t& valueOut )
+{
+    const std::string untouched = reason;
+    std::string       digits;
+    if( !takeAckNamedToken( reason, name, digits ) )
+    {
+        return false;
+    }
+    if( !VALIDATE( parseAckLedgerUint32( digits, valueOut ), "an ack ledger now=/was= value is plain decimal that fits 32 bits" ) )
+    {
+        reason = untouched;   // same visible-in-reason degrade as any other malformed token; never a fabricated value
+        return false;
+    }
+    return true;
+}
+
+// `p=<path>:<line>` — the SAME p="path:line" spelling the live report emits (P2.5), read back off one
+// whitespace-free token. Split on the LAST ':' (repo paths are always '/'-separated — CONTRIBUTING.md's
+// "paths are /-separated inside the program" — so a genuine ':' inside one is not a spelling this binary
+// ever writes); when the suffix after it is not all-digits, there is no reliable line boundary, so the
+// WHOLE token is kept as the path and line stays 0 — a best-effort locator beats none, and a wrong line
+// number is a much smaller loss than dropping the locator outright. Never disclosed: unlike a malformed
+// cid=/now=, a mis-split path:line still answers "which file", the question this token exists for.
+inline void splitAckLocator( const std::string& token, std::string& pathOut, std::uint32_t& lineOut )
+{
+    const std::size_t colon = token.rfind( ':' );
+    if( colon == std::string::npos )
+    {
+        pathOut = token;
+        return;
+    }
+    std::uint32_t v = 0;
+    if( !VALIDATE( parseAckLedgerUint32( std::string_view( token ).substr( colon + 1 ), v ), "an ack ledger p= line is plain decimal that fits 32 bits" ) )
+    {
+        pathOut = token;   // whole-token fallback: the text stays the path, the line stays unknown
+        return;
+    }
+    pathOut = token.substr( 0, colon );
+    lineOut = v;
+}
+
+// The five re-score tokens together, ORDER-TOLERANT the same way cid=/by= are: renderAckRecords always
+// writes them now=,was=,prov=,facet=,p= (in that order), but a hand-edit or a 3-way merge can reorder them,
+// so the reader tries all five against whatever is left at the front of `reason`, in a loop, until a pass
+// takes nothing. Provenance is present iff BOTH now= and was= were present — the pair rescoreAckRecord's
+// table needs together; a lone one (a hand-truncated line) is treated as no provenance rather than a half-
+// answer. `prov=` then says WHICH of the two confidences it is (AckProvenance); absent means Measured,
+// which is what keeps a ledger of live-written rows byte-identical to one written without this axis.
+// `prov=`'s VALUE → the confidence it names, decided in one place so takeAckProvenance below stays a token
+// loop and nothing else. `hasPair` is "both now= and was= were present", because provenance is the PAIR:
+// without it there is nothing for a confidence to qualify, whatever prov= says.
+//
+// An UNRECOGNIZED value degrades to Reconstructed, never to Measured, and says so. Reading an unknown
+// confidence as the STRONGEST one would let a future spelling this binary does not know silently promote
+// itself into the audited-as-measured population — the exact direction the honesty contract forbids
+// guessing in. Same "degrade, do not fabricate" rule takeAckUintPrefix applies to an unparseable now=.
+inline AckProvenance ackProvenanceFor( bool hasPair, std::string_view provToken )
+{
+    if( !hasPair )
+    {
+        return AckProvenance::None;
+    }
+    if( provToken.empty() || provToken == "live" )
+    {
+        return AckProvenance::Measured;   // absent IS measured — that is what keeps a live-written ledger byte-identical
+    }
+    // Anything else — a hand-edit, or a spelling some future binary writes — lands here. It is NOT a trace
+    // site: a one-argument DISCLOSE ships nothing (Diagnostics.h §4b), there is no sink in a pure token
+    // parser to pass, and answerUnchanged would be a false claim because this choice DOES change the row's
+    // confidence class. The remedy is better than a trace and is already wired: a Reconstructed row is
+    // re-derived by the next backfill pass, so an unrecognized value either self-corrects into a spelling
+    // this binary wrote or is withdrawn outright — and the counts of both land on stderr.
+    return AckProvenance::Reconstructed;
+}
+
+// ONE pass of the token loop: take whichever re-score token is at the front of `reason` right now, or
+// report that none is. Split from the loop below because they are two jobs — which tokens exist and how one
+// is spelled, versus how many times to look — and the five spellings do not share a type (two uints, two
+// bare strings, one path:line pair), so a declarative table would have to carry a variant and five setters
+// to say what five named lines already say. Returns false the moment nothing matches, which is what ends
+// the loop; each token is guarded by its own "not taken yet" test so a repeated token is left in `reason`
+// rather than silently overwriting the first one.
+inline bool takeOneAckProvenanceToken( std::string& reason, AckRecord& rec, bool& gotNow, bool& gotWas, std::string& prov )
+{
+    std::string tok;
+    if( !gotNow && takeAckUintPrefix( reason, "now=", rec.now ) ) { gotNow = true; return true; }
+    if( !gotWas && takeAckUintPrefix( reason, "was=", rec.was ) ) { gotWas = true; return true; }
+    if( prov.empty() && takeAckNamedToken( reason, "prov=", prov ) ) { return true; }
+    if( rec.facet.empty() && takeAckNamedToken( reason, "facet=", rec.facet ) ) { return true; }
+    if( rec.path.empty() && takeAckNamedToken( reason, "p=", tok ) ) { splitAckLocator( tok, rec.path, rec.line ); return true; }
+    return false;
+}
+
+inline void takeAckProvenance( std::string& reason, AckRecord& rec )
+{
+    bool        gotNow = false, gotWas = false;
+    std::string prov;
+    for( int pass = 0; pass < 5; ++pass )   // at most 5 tokens, each taken at most once — 5 passes always suffices
+    {
+        if( !takeOneAckProvenanceToken( reason, rec, gotNow, gotWas, prov ) )
+        {
+            break;   // nothing matched this pass — no more re-score tokens at the front of reason
+        }
+    }
+    rec.provenance = ackProvenanceFor( gotNow && gotWas, prov );
 }
 
 // ─── THE READER-SIDE TWIN OF THE ACK REASON CLOBBER (2nd site, round 2026-08-30) ───────────────────────
@@ -5814,20 +6305,25 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
           // is hand-edited and 3-way merged, and a reader that only accepts one order silently loses a field
             cid = takeAckCidPrefix( reason );
         }
+
+        AckRecord rec;
+        rec.kind = kind; rec.key = key; rec.ackNow = ackNow; rec.cid = cid; rec.by = by;
+        takeAckProvenance( reason, rec );   // now=/was=/prov=/facet=/p= — order-tolerant; sets rec.provenance
         while( !reason.empty() && reason.back() == '\r' )
         {
             reason.pop_back(); // CRLF tolerance on the trailing field too
         }
+        rec.reason = reason;
 
         const std::string mapKey = ackMapKey( kind, key );
         const auto        it     = out.find( mapKey );
         if( it == out.end() )
         {
-            out[ mapKey ] = AckRecord{ kind, key, ackNow, cid, by, reason };
+            out[ mapKey ] = std::move( rec );
         }
         else
         {
-            mergeDuplicateAckRecord( it->second, AckRecord{ kind, key, ackNow, cid, by, reason } );
+            mergeDuplicateAckRecord( it->second, std::move( rec ) );
         }
     }
     return out;
@@ -5927,6 +6423,47 @@ struct SidecarWriteLock
     SidecarWriteLock& operator=( const SidecarWriteLock& ) = delete;
 };
 
+// RE-SCORE PROVENANCE, serialized: the `now= was= [prov=] [facet=] [p=]` run of tokens one ack row carries,
+// or "" for a legacy row. Its own function rather than four branches inside renderAckRecords, which is a
+// row FORMATTER and stays one — the ledger has grown three optional token families now (cid=, by=, and this
+// one), and the third is what made a fourth nested conditional in the writer indefensible.
+//
+// now=/was= are written together whenever the row carries provenance AT ALL — even when a value is
+// legitimately 0 (dead-code and both clone kinds always are). The token's PRESENCE, not its value, is what a
+// later reader (rescoreAckRecord) uses to tell a provenance-bearing row from a legacy one.
+//
+// prov= is written only for the WEAKER confidence. Measured emits nothing, so a ledger whose rows were all
+// written from a live delta is byte-identical to one written before the confidence axis existed — the same
+// OMIT-when-default rule cid=/by= follow, and what keeps qackconcurrencycheck arm 7's round-trip over the
+// real 1,623-row ledger from moving a single byte until a backfill actually runs.
+inline std::string ackProvenanceTokens( const AckRecord& r )
+{
+    if( !r.hasProvenance() )
+    {
+        return {};
+    }
+    std::ostringstream t;
+    t << "now=" << r.now << " was=" << r.was << ' ';
+    if( r.provenance == AckProvenance::Reconstructed )
+    {
+        t << "prov=" << kAckProvReconToken << ' ';
+    }
+    // facet= and p= are single whitespace-delimited tokens, so a value that cannot be spelled as one is OMITTED,
+    // the same closed-set rule by= uses (scopeSpecIsSpellable). A repository path may contain a space: written
+    // verbatim, `p=my dir/a.py:1` read back as path `my`, line 0, with the rest pushed into the reason, and the
+    // next ack committed that damage. A newline would split the record in two. An absent locator is the honest
+    // degrade: nothing reads p= to decide anything, and the finding's own key still identifies the row.
+    if( !r.facet.empty() && scopeSpecIsSpellable( r.facet ) )
+    {
+        t << "facet=" << r.facet << ' ';
+    }
+    if( !r.path.empty() && scopeSpecIsSpellable( r.path ) )
+    {
+        t << "p=" << r.path << ':' << r.line << ' ';
+    }
+    return t.str();
+}
+
 // the ledger's CANONICAL bytes for this map — what writeAckRecords publishes. Exposed on its own (H10,
 // capture-audit 2026-09-04) so an ack with nothing to accept can tell "the file is already canonical, leave
 // it alone" from "the file needs healing (duplicate, legacy or misfiled rows) — rewrite it" by comparing
@@ -5935,7 +6472,8 @@ inline std::string renderAckRecords( const gtl::btree_map<std::string, AckRecord
 {
     std::ostringstream f;
     f << "# ripwire quality acks v1 — written by --quality-ack; a finding stays suppressed until it worsens past its acked magnitude\n";
-    f << "# format: ack <kind> <16-hex-key> <ackNow> [cid=<16-hex-content-id>] [by=<scope that acked it>] <reason to end of line> — one per line, kept SORTED by (kind,key) on every write (merge-friendly)\n";
+    f << "# format: ack <kind> <16-hex-key> <ackNow> [cid=<16-hex-content-id>] [by=<scope that acked it>] [now=<uint> was=<uint>] [prov=recon] [facet=<token>] [p=<path>:<line>] <reason to end of line> — one per line, kept SORTED by (kind,key) on every write (merge-friendly)\n";
+    f << "# PROVENANCE: now=/was=/facet=/p= exist only on rows a provenance-aware binary WROTE OR REFRESHED (2026-09-22+); a legacy row heals FORWARD on its next --quality-ack. prov=recon marks a row a backfill RECONSTRUCTED from the CURRENT tree rather than measured when it was accepted: it answers 'would this be gating now', NOT 'was it gating then'. A recon row is a CACHE, not a dated record — every --quality-ack re-derives the ones whose clone group it can still find, so a checkable value is never older than the last ack; one whose group this run did NOT find is left untouched and counted as unverified on stderr, because not finding a group is a floor (scoped scan, capped file, different tree), never proof it is gone. Absent prov= means measured live, and a measurement is never overwritten by a reconstruction. Only the two clone kinds can be reconstructed (their key is a member-set hash, so today's idiom verdict is recomputable); a numeric row's was= still needs the commit that accepted it, which no field here records.\n";
     for( const auto& [ mapKey, r ] : acks )                       // btree order → byte-stable, always-sorted file (the merge-friendly guarantee)
     {
         char hex[ 20 ];
@@ -5957,7 +6495,7 @@ inline std::string renderAckRecords( const gtl::btree_map<std::string, AckRecord
         {
             f << "by=" << r.by << ' ';
         }
-        f << ( r.reason.empty() ? "(no reason given)" : r.reason ) << '\n';
+        f << ackProvenanceTokens( r ) << ( r.reason.empty() ? "(no reason given)" : r.reason ) << '\n';
     }
     return f.str();
 }
@@ -6977,7 +7515,8 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                                              const std::vector<std::string>& excludes = {},
                                              std::size_t maxFileBytes = kDefaultMaxFileBytes,
                                              std::size_t* registerMacroExcludedOut = nullptr,   // P2.2: honest disclosure count, additive+optional — see isDeadCandidate
-                                             std::size_t* apiNewSurfaceOut = nullptr )          // Q-DIAL-4: the api-surface new-symbol COUNT that replaced N never-gating rows
+                                             std::size_t* apiNewSurfaceOut = nullptr,          // Q-DIAL-4: the api-surface new-symbol COUNT that replaced N never-gating rows
+                                             std::vector<CloneIdiomFact>* cloneIdiomsOut = nullptr )   // every CURRENT-tree clone group's (hash, idiom), for the legacy-ack backfill
 {
     ASSUME( registerMacroExcludedOut == nullptr || registerMacroExcludedOut != apiNewSurfaceOut,
                  "computeDelta: registerMacroExcludedOut and apiNewSurfaceOut must be distinct" );   // both default to nullptr, so the object form would dereference null
@@ -7200,9 +7739,10 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             const std::uint64_t growthPct = ( std::uint64_t( now - was ) * 100 ) / std::max( was, 1u );
             if( now > bar )
             {
-                const bool crossed  = was <= bar;
-                const bool material = !growthTiered ? ( minorDelta == 0 || now - was >= minorDelta )
-                                                    : ( crossed || growthPct >= kMaterialGrowthPct );
+                // numericRegressionIsMajor is the SAME formula rescoreNumericMajor calls when a later run
+                // re-scores this row's stored was=/now= off the ack ledger (see AckRecord's doc comment) —
+                // one body, so the live report and a re-score can never silently disagree.
+                const bool material = numericRegressionIsMajor( was, now, bar, minorDelta, growthTiered, growthPct );
                 regs.push_back( { kindName, g.canonId[i], was, now, key, !material,
                                   {}, !existedAtBaseline( key ) } );          // origin: the finding IS this symbol
                 stampLoc( i );
@@ -7248,6 +7788,32 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // group that classifies but fails the rest of the conjunction gates as before, name and all.
     const std::vector<CloneIdiomVerdict> exactIdioms = classifyCloneGroupIdioms( ing, exactClones );
     const std::vector<CloneIdiomVerdict> type3Idioms = classifyCloneGroupIdioms( ing, type3Clones );
+
+    // THE BACKFILL EXPORT. Deliberately taken BEFORE either reporting lambda runs, and without any of their
+    // filters: a legacy ack row is healed by matching its member-set hash, and that row was accepted under a
+    // baseline this run knows nothing about, so the group it names is almost never "new" HERE. Filtering by
+    // newness — or by the all-test-script skip, or by the fan-in floor — would hide exactly the rows the
+    // backfill exists to reach. Sorted and deduped by hash so the consumer can binary_search it and so two
+    // runs over the same tree export byte-identical facts (the determinism contract; both clone passes are
+    // themselves deterministic, and a group found by BOTH passes hashes the same and must collapse to one).
+    if( cloneIdiomsOut != nullptr )
+    {
+        const auto collect = [ & ]( const std::vector<CloneGroup>& cgs, const std::vector<CloneIdiomVerdict>& vx )
+        {
+            for( std::size_t ci = 0; ci < cgs.size() && ci < vx.size(); ++ci )
+            {
+                cloneIdiomsOut->push_back( { cloneGroupHash( cgs[ci], ing, root ), std::string( cloneIdiomName( vx[ci].idiom ) ) } );
+            }
+        };
+        collect( exactClones, exactIdioms );
+        collect( type3Clones, type3Idioms );
+        std::sort( cloneIdiomsOut->begin(), cloneIdiomsOut->end(),
+                   []( const CloneIdiomFact& a, const CloneIdiomFact& b )
+                   { return a.hash != b.hash ? a.hash < b.hash : a.idiom < b.idiom; } );
+        cloneIdiomsOut->erase( std::unique( cloneIdiomsOut->begin(), cloneIdiomsOut->end(),
+                                            []( const CloneIdiomFact& a, const CloneIdiomFact& b ) { return a.hash == b.hash; } ),
+                               cloneIdiomsOut->end() );
+    }
 
     // ── Q-DIAL-5 (2026-09-10) — three shapes that are not THIS CHANGE'S duplication ─────────────────────
     // Duplication's gating precision over 40 replayed commits was 0%: 11 gating rows, 9 noise and 2 wrong.

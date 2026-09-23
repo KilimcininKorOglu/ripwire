@@ -23,6 +23,11 @@
 #   7. include closure: no quoted #include escapes the repo; no include path names the private tree
 #   8. no reference to an internal-pattern .md name that is ABSENT from this tree (a dangling pointer
 #      at a culled process doc); a reference to a .md that DOES ship is fine
+#   9. a tracked bench/, docs/, scripts/ or test/lib/ measurement script must not walk git history
+#      from an unpinned population (bare `git log`/`rev-list`, `--all`, `--branches`, `--remotes`,
+#      `for-each-ref`) — this repo's shared .git carries every worktree's branches, so an unpinned
+#      walk's own answer moves under it; allowlisted by (path, content hash of the matched line), never
+#      by whole file or by line number — a line-number key would false-RED on an unrelated edit above it
 #
 # Usage:  bash test/ripwirepubliccheck.sh
 # Exit:   0 = clean · 1 = at least one arm failed (offenders listed) · 2 = usage / missing tool.
@@ -1213,6 +1218,140 @@ if [ -s "$TMP/arm8" ]; then
     sed 's/^/          /' "$TMP/arm8"
 else
     ok "arm 8 — no dangling references to culled internal-pattern .md names"
+fi
+
+# ── arm 9: unpinned git-history walk in a tracked measurement script ──────────────────────────────
+# A harness that mines or counts commits over `git log --all` / `rev-list --all` / a bare `git
+# log`/`rev-list` with no ref / `--branches` / `--remotes` / `for-each-ref` walks a population this
+# tree does not own: the shared `.git` behind every worktree of this repo carries every OTHER lane's
+# branches too (291 at last count), and even a same-repo checkout's plain HEAD moves every time main
+# advances. A rerun of the IDENTICAL script then answers a different question without saying so —
+# measured directly, not hypothetically: `bench/readability_refactor_pairs.py`'s "484 matched pairs,
+# 30.2%" (retracted in docs/EVALS.md §8 note above arm 4; pinned to `v0.6.2` the same instrument gives
+# 412/37.4%) and `bench/slice/run_slicerecall.py`'s since-fixed "corpus problem" (docs/EVALS.md,
+# "The corpus problem, settled"). SCOPE, deliberately narrower than the rest of this file:
+# bench/, docs/, scripts/, test/lib/ only, and only .py/.sh source plus a shell-language-tagged
+# fenced code block in a .md (a bash RECIPE, not prose that happens to mention "git log" — arm 9 is
+# not a doc-drift checker). `src/`'s own git calls are githardencheck.sh's arm (L); the rest of
+# test/ exercises THOSE calls' product behaviour, not a published measurement's population.
+#
+# HEURISTIC, stated as one: a `git log`/`rev-list`/`for-each-ref` invocation on a line carrying none
+# of HEAD / --ref / a bare `ref` token / PIN / a 7-40 hex sha / a `vN.N[.N]` tag is unpinned; --all /
+# --branches / --remotes are ALWAYS unpinned regardless of what else is on the line. This is a FLOOR,
+# not a prover: it trusts a literal ref-shaped token as proof of intent, so `git log SOMEVAR` where
+# SOMEVAR is never actually a fixed point would still read clean. It misses population walks split
+# across two lines, and (by design) says nothing about src/ or the rest of test/.
+#
+# EXEMPT (path, content hash of the matched line) PAIRS — never a whole file, for the same reason arm 8
+# keeps its exemptions per-name: a blanket file exemption would hide a genuinely new unpinned walk
+# landing anywhere else in that file forever. Keyed by hash rather than by line number so an unrelated
+# edit elsewhere in the file (which shifts every line below it) cannot false-RED an already-vetted,
+# byte-for-byte-unchanged hit — proved live during review (2026-09-22): inserting one blank line above
+# bench/mine_traces.py's two exemptions, with neither exempted line itself touched, re-fired both under
+# the old (path, line-number) key. A hash key is inert to that shift and still re-fires the moment the
+# matched line's OWN text changes even by one character — which is exactly the case that should get
+# re-justified, so this is strictly more precise than the line-number key it replaces, not looser. The
+# line numbers below are commentary for a human reading this file today, not the match key; they will
+# drift as the file changes, same as any other comment.
+#   bench/cppbench/run_cppbench.py:160,164,290 — the base `git log` argv and its error message; the
+#       actual branch-scope choice (line 161, not matched — see below) is recorded in the checked-in
+#       `dataset.lock`'s `branch_scope`/`mining_stats` fields with a `content_sha256` the harness
+#       verifies before trusting the file, so the population a published number carries IS pinned —
+#       by content hash, not by ref — and a re-mine only happens on explicit `--refresh-dataset`.
+#   bench/ensemblecal/run_ensemblecal.py:172 — reads the commit DATE of the `sha` the `stability()`
+#       loop just `checkout`ed two lines above; the sha itself is already the pin and is recorded
+#       per-snapshot in the harness's own JSON output.
+#   bench/mine_traces.py:242,361 — `--only-committed`'s local-only, opt-in trace filter (module
+#       docstring: "Local-only, opt-in, LLM-free"); it mines the CALLER's own working tree by design
+#       and publishes nothing — there is no number here for a population to attach to.
+#   bench/roundc-h2h/derive_questions.py:34 — guarded by `assert head == PIN` (line 26) immediately
+#       above; the walk cannot run except at the asserted pin.
+#   bench/shotgun/cochange_history.py:4 — a DOCSTRING describing the input FORMAT `load_commits`
+#       expects, not an invocation; the actual recipe is bench/shotgun/README.md (fixed, see arm 9's
+#       own commit — REF defaults to v0.6.2 there).
+#   bench/substitution_report.py:75 — `"git-log"` is a SWEEP_CLASSES taxonomy label (a category
+#       name), not an invocation.
+#   docs/docs_commands_build.py:627,642 — generates prose ABOUT `git log` as an example of ambient
+#       non-document output for docs/COMMANDS.md; it never invokes git.
+ARM9_OK='bench/cppbench/run_cppbench.py:e5d3f485c59b0187
+bench/cppbench/run_cppbench.py:7e89ac16d50cd5d2
+bench/cppbench/run_cppbench.py:5d65fe73e9406e01
+bench/ensemblecal/run_ensemblecal.py:d97f1d2b710f35ab
+bench/mine_traces.py:8e357b3957f4460e
+bench/mine_traces.py:7ff5013c36d4b58d
+bench/roundc-h2h/derive_questions.py:3c59a07f84c2b48d
+bench/shotgun/cochange_history.py:eb47c55f978cf817
+bench/substitution_report.py:c3043030dc3e5473
+docs/docs_commands_build.py:fa972c42dc369a5c
+docs/docs_commands_build.py:f10f0b8021b7b6c2'
+python3 - "$TMP/tracked.z" "$ARM9_OK" > "$TMP/arm9" <<'PY'
+import hashlib, os, re, sys
+paths = [p.decode('utf-8', 'surrogateescape')
+         for p in open(sys.argv[1], 'rb').read().split(b'\0') if p]
+okSet = {l.strip() for l in sys.argv[2].splitlines() if l.strip()}
+SCOPE_RE = re.compile(r'^(bench/|docs/|scripts/|test/lib/)')
+SELF = 'test/ripwirepubliccheck.sh'
+GIT_LOGREV = re.compile(r'git[^|&;\n]{0,40}\b(log|rev-list|for-each-ref)\b')
+# CASE-SENSITIVE on purpose: under re.IGNORECASE `\bHEAD\b` matched the `| head -n 50` a shell recipe pipes
+# into, and an unpinned `git log --format=%H | head -n 50` read as pinned. Each accepted spelling is listed.
+PIN_SIGNAL = re.compile(r'\bHEAD\b|--ref\b|\b(?:ref|REF)\b|\bPIN\b|\b[0-9a-fA-F]{7,40}\b|\bv[0-9]+\.[0-9]+(?:\.[0-9]+)?\b')
+ALL_TOKEN = re.compile(r'--all\b|--branches\b|--remotes\b')
+FENCE_OPEN = re.compile(r'^```(bash|sh|shell|zsh)\s*$')
+FENCE_CLOSE = re.compile(r'^```\s*$')
+for p in paths:
+    if p == SELF or not SCOPE_RE.match(p):
+        continue
+    ext = os.path.splitext(p)[1]
+    if ext not in ('.py', '.sh', '.md'):
+        continue
+    try:
+        data = open(p, 'rb').read()
+    except OSError as e:
+        print(f'{p}: tracked in-scope file could not be read ({e.strerror}) — arm 9 did not scan it')
+        continue
+    if b'\0' in data:
+        continue   # binary, skip
+    lines = data.decode('utf-8', 'replace').split('\n')
+    inFence = False
+    for lineIndex, line in enumerate(lines):
+        i = lineIndex + 1
+        stripped = line.strip()
+        if ext == '.md':
+            if not inFence and FENCE_OPEN.match(stripped):
+                inFence = True; continue
+            if inFence and FENCE_CLOSE.match(stripped):
+                inFence = False; continue
+            if not inFence:
+                continue
+        if stripped.startswith('#'):
+            continue
+        m = GIT_LOGREV.search(line)
+        if not m:
+            continue
+        # test the PIN/--all signals against the line with the matched invocation text masked out —
+        # `for-each-ref`'s own command name contains a `\bref\b`-shaped substring, which otherwise
+        # satisfies PIN_SIGNAL by itself and makes every for-each-ref call read as pre-pinned,
+        # including the unpinned `for-each-ref ... | git log` shape arm 9 exists to catch
+        rest = line[:m.start()] + line[m.end():]
+        if not (ALL_TOKEN.search(rest) or not PIN_SIGNAL.search(rest)):
+            continue   # a ref-shaped token is on this line — the floor calls it pinned
+        # keyed by CONTENT, not by line number: an edit anywhere else in the file must not move this
+        # exemption off its target, and a real edit to this exact line must drop it back into the sweep
+        contentHash = hashlib.sha256(line.encode('utf-8', 'surrogateescape')).hexdigest()[:16]
+        if f'{p}:{contentHash}' in okSet:
+            continue   # allowlisted — this exact line's content is unchanged from the reviewed hit
+        print(f'{p}:{i}: unpinned {m.group(0)!r} — {line.strip()[:140]}')
+PY
+arm9rc=$?
+if [ "$arm9rc" -ne 0 ]; then
+    # an empty report from a scanner that crashed is not a clean sweep
+    no "arm 9 — the history-walk scanner exited $arm9rc, so the sweep did not run"
+    [ -s "$TMP/arm9" ] && sed 's/^/          /' "$TMP/arm9"
+elif [ -s "$TMP/arm9" ]; then
+    no "arm 9 — unpinned or unscannable git-history walk in a tracked measurement script:"
+    sed 's/^/          /' "$TMP/arm9"
+else
+    ok "arm 9 — every tracked measurement script's history walk is ref-pinned or allowlisted"
 fi
 
 printf 'ripwirepubliccheck: %s tracked file(s) swept\n' "$tracked"

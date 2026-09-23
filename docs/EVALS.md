@@ -6884,6 +6884,21 @@ Listed because the reason is more useful than the silence.
   text now states the pinned figures; this entry keeps the retracted number visible rather than
   silently replacing it.
 
+  **WITHDRAWN (2026-09-22): the ordering claim itself.** The 96.0%/token-count finding above answers
+  *why* the lens's direction moves; it does not by itself say whether that ordering predicts anything
+  actionable. `docs/research/readability-construct-validity.md` §4 tested that directly — whether a
+  least-readable-quartile function is more likely to be fixed later, on ripwire's own history — and at
+  raw and tercile level the association looked strong (RR 2.87). Stratified into ten narrow token-count
+  deciles, holding size roughly constant, it does not survive: **8 of the 10 deciles show a CI that
+  includes 1 on both outcomes** (point estimates 0.81–1.86, no consistent direction); the only two
+  deciles that stay significant are the two with the most leftover internal token-range spread (D10's
+  internal range is 16.3×). The reading is that the raw/tercile separation is a residual size effect,
+  measured in the lens's own units, not an independent later-fix signal — so the ordering claim
+  (`--readability` orders functions least-readable first) is withdrawn; the flag still orders by
+  Halstead volume/token entropy/length, it is just not claimed to order by readability. Full
+  derivation, the decile table, and the discarded nearest-neighbour check: same document §4, same PR
+  #313 (open; cited for the derivation only).
+
 ---
 
 ## 9. Ensemble family calibration — the measurement a preset must be derived from
@@ -8612,7 +8627,13 @@ families may ship rows but earn no measured claim from this round.
 **The corpus problem, settled — the reason this registration exists.** The survey lane described "a
 pinned 38-instance corpus". **It is not pinned in any file**: `bench/slice/run_slicerecall.py`
 MINES at run time — newest-first fix-shaped commits from the `--repo` tree's own history, cap 40 —
-so the instance set is a function of the HEAD it runs at. Settled here, from the harness code and a
+so the instance set is a function of the HEAD it runs at. (2026-09-22: the harness now takes `--ref`,
+default `v0.6.2` — an immutable point, not a bare HEAD — and records the resolved ref+sha in its own
+output; this turns (b) below from operator discipline into the harness's own default. The `b156027`
+numbers already recorded here are unaffected — they were pinned by hand, the same mechanism `--ref`
+now automates. To re-run that recorded measurement with today's harness, pass `--ref=b156027` as well
+as checking out `b156027`: the default `--ref` of `v0.6.2` would otherwise mine a later, different
+population.) Settled here, from the harness code and a
 read-only count: **(a)** the paired design is real — all arms run per instance inside ONE
 invocation with one binary, so a v3−v2 delta computed within one invocation is a valid paired
 statistic under any drift; but validity-under-drift is not enough, because the newest-first cap
@@ -13095,7 +13116,9 @@ tree (`grep -ril shotgun docs src README.md` was empty on 2026-09-08); the name 
 `test/docscommandscheck.sh` arm (I) keeps it there, and this section is the check's measurement. The
 **static** one — Lanza & Marinescu's CM×CC detection strategy — was prototyped on the call graph ripwire
 already builds and is **not built**: on two corpora it flags only stable hub APIs, and its per-file value
-correlates with how widely edits to that file actually scatter at Spearman **+0.16**. A third candidate, a
+correlates with how widely edits to that file actually scatter at Spearman **+0.21** (this repository, pinned
+`v0.6.2`; first recorded 2026-09-08, unpinned: +0.16 blended across both corpora — see the pinned re-run note
+below). A third candidate, a
 per-file "degree of scatter" scan over history, is not built either: its ranking is the directory layout read
 back, not a defect list.
 
@@ -13106,18 +13129,35 @@ repository (1,731 files, 15,220 symbols, 1,587 non-merge commits) and a private 
 (2,366 files, 48,771 symbols, 1,637 commits). Commits touching more than 30 files are dropped, the Code Maat
 bulk-commit rule every `--cochange` walk already applies.
 
+**Pinned re-run (2026-09-22, `REF=v0.6.2` = `15a20855c7`).** The 2026-09-08 walk above was a bare `git log`
+with no ref recorded — the same unpinned-population defect retracted elsewhere in this document for
+`bench/readability_refactor_pairs.py`'s "484 matched pairs". `bench/shotgun/README.md` now takes `REF`
+(default `v0.6.2`); re-run at that pin, **this repository** measures **2,171 files, 21,619 symbols, 2,930
+non-merge commits (2,884 kept, ≤30-file cap)** — a later, larger population (`v0.6.2` postdates the 2026-09-08
+run by two weeks of landed work), **not a reproduction** of the 1,731/15,220/1,587 figures above. Every "this
+repository" row in (a)-(c) below now carries both: the pinned figure, and *first recorded as* the 2026-09-08
+figure, which does not reproduce. The **private game tree** corpus cannot be pinned or re-measured from this
+repository: it is a private, unpushed local checkout with no ref or sha ever recorded against the 2026-09-08
+run, outside anything this tree's own gates can verify or reproduce. Its rows are **RETRACTED** as a
+reproducible figure — kept below only as the historical record, not current evidence. The `--top-k=100000` map
+is now built from a worktree checked out at the same ref the log was walked from (previously the map came from
+whatever the live checkout happened to be, a second, independent unpinned-population channel the 2026-09-08
+run never disclosed).
+
 ### (a) The static strategy — CM > 7 and CC > 5, over unambiguous call edges
 
 CM = distinct caller symbols, CC = distinct caller FILES (files stand in for the book's classes; both trees are
 C-family). Only a call edge whose callee name has exactly one in-corpus definition, or a same-file one, is
 credited. The alternative — crediting every `.size()` to every class that defines `size` — flags 263 / 2,655
-symbols with `empty` / `find` / `size` on top; that is a resolver artifact and is kept in the script only to
-show why the floor is the rule.
+symbols with `empty` / `find` / `size` on top (2026-09-08 corpus; not re-derived in the pinned round below —
+the resolver-artifact point stands regardless of the exact count, and this aside is not one of the pinned
+table rows); that is a resolver artifact and is kept in the script only to show why the floor is the rule.
 
 | corpus | callables | flagged (CM>7 ∧ CC>5) | CC p50 / p90 / p99 / max | top-45 rows, hand-classified |
 | --- | --- | --- | --- | --- |
-| this repository | 8,697 | **57** (0.66%) | 1 / 2 / 7 / 90 | 45 stable APIs — `svector::push_back` (90 files), `fastmath::min`, `DEGRADED_PATH_ALERT`, `VERIFY`, `escapeXml`, the paging helpers; **0** a maintainer would call a scatter defect |
-| game tree | 24,575 | **117** (0.48%) | 1 / 2 / 8 / 219 | 45 stable APIs — a test framework's `TEST_CASE` / `REQUIRE` / `CHECK`, vendored physics getters, SIMD `sqrt` / `abs`, `VERIFY`; **0** |
+| this repository, pinned `v0.6.2` (2026-09-22) | 11,677 | **92** (0.79%) | 1 / 2 / 6 / 102 | 45 stable APIs — `svector::push_back` (102 files), `emitTo`, `DISCLOSE`, `ASSUME`, the `model.h`/`graphlegend.h` helpers; **0** a maintainer would call a scatter defect |
+| this repository, first recorded 2026-09-08 (unpinned — does not reproduce) | 8,697 | 57 (0.66%) | 1 / 2 / 7 / 90 | 45 stable APIs — `svector::push_back` (90 files), `fastmath::min`, `DEGRADED_PATH_ALERT`, `VERIFY`, `escapeXml`, the paging helpers; 0 a maintainer would call a scatter defect |
+| game tree — **RETRACTED**, private corpus, not reproducible from here | 24,575 | 117 (0.48%) | 1 / 2 / 8 / 219 | 45 stable APIs — a test framework's `TEST_CASE` / `REQUIRE` / `CHECK`, vendored physics getters, SIMD `sqrt` / `abs`, `VERIFY`; 0 |
 
 The list is short enough to read, and every row is a hub that is *supposed* to have many callers. High fan-in
 says a contract change WOULD be wide; it says nothing about whether the contract changes. The number that tests
@@ -13126,18 +13166,24 @@ scatter (mean files per commit, over the commits that touched the file):
 
 | corpus | files (map ∩ history, ≥ 3 commits) | ρ( CC_file , mean files/commit ) | mean files/commit by CC_file quintile, Q1 → Q5 |
 | --- | --- | --- | --- |
-| this repository | 330 | **+0.158** | 8.63 · 8.65 · 9.40 · 8.76 · 9.67 |
-| game tree | 431 | **+0.163** | 6.89 · 7.07 · 7.64 · 7.79 · 8.19 |
+| this repository, pinned `v0.6.2` | 545 | **+0.207** | 8.94 · 8.71 · 8.09 · 8.95 · 10.04 |
+| this repository, first recorded 2026-09-08 (unpinned) | 330 | +0.158 | 8.63 · 8.65 · 9.40 · 8.76 · 9.67 |
+| game tree — **RETRACTED**, not reproducible | 431 | +0.163 | 6.89 · 7.07 · 7.64 · 7.79 · 8.19 |
 
-Flat on both. The static form does not predict the phenomenon, so it is not a flag; the half of it a reader can
-already see is `in=` / `amp=` on `--metrics`.
+Flat on both, and flat again on the pinned re-run: the static form does not predict the phenomenon, so it is
+not a flag; the half of it a reader can already see is `in=` / `amp=` on `--metrics`. (2026-09-22 review fix:
+`bench/shotgun/cc_vs_history.py`'s quintile split iterated a Python `set` — hash-randomized order, not content
+— so re-running the identical pinned recipe reproduced ρ and n exactly but reshuffled the Q1-Q5 scatter numbers
+run to run; the script now iterates `sorted(indexed)`, and the figures above are the deterministic result,
+confirmed stable across repeated fresh-seed re-runs.)
 
 ### (b) Per-file historical scatter as a repo-wide scan
 
 | corpus | files/commit, median · mean | commits touching ≥ 3 directories | per-file mean dirs/commit, p50 / p95 / max | what tops the ranking |
 | --- | --- | --- | --- | --- |
-| this repository | 2 · 3.95 | 30% | 3.22 / 7.79 / 14.4 | the 16 `skills/*/SKILL.md` files — one directory per skill, edited as a set |
-| game tree | 2 · 3.68 | 16% | 2.14 / 5.13 / 6.78 | a generated voice-line manifest family, one JSON per character |
+| this repository, pinned `v0.6.2` | 2 · 3.87 | 28% | 3.20 / 6.83 / 16.00 | the `skills/*/SKILL.md` files — one directory per skill, edited as a set |
+| this repository, first recorded 2026-09-08 (unpinned) | 2 · 3.95 | 30% | 3.22 / 7.79 / 14.4 | the 16 `skills/*/SKILL.md` files — one directory per skill, edited as a set |
+| game tree — **RETRACTED**, not reproducible | 2 · 3.68 | 16% | 2.14 / 5.13 / 6.78 | a generated voice-line manifest family, one JSON per character |
 
 Both tops are families a layout produces, and `--cochange=FILE` already lists each family's partners. A scan
 whose ranking is the directory tree is not a finding. Not built.
@@ -13152,14 +13198,17 @@ contained (the evaluation shape of Zimmermann et al.; 150-commit warm-up).
 
 | corpus | probes | ≥ 1 partner predicted | precision@8 | recall | a named partner is in the commit |
 | --- | --- | --- | --- | --- | --- |
-| this repository | 3,334 | 92% | **0.352** | 0.347 | 82% |
-| game tree | 2,516 | 89% | **0.427** | 0.429 | 81% |
-| this repository, partners with `deg ≥ 0.5` only | 3,334 | 65% | **0.541** | 0.218 | 71% |
-| game tree, `deg ≥ 0.5` only | 2,516 | 68% | **0.660** | 0.389 | 81% |
+| this repository, pinned `v0.6.2` | 6,978 | 93% | **0.313** | 0.309 | 77% |
+| this repository, `deg ≥ 0.5` only, pinned `v0.6.2` | 6,978 | 58% | **0.533** | 0.206 | 67% |
+| this repository, first recorded 2026-09-08 (unpinned) | 3,334 | 92% | 0.352 | 0.347 | 82% |
+| this repository, `deg ≥ 0.5` only, first recorded 2026-09-08 | 3,334 | 65% | 0.541 | 0.218 | 71% |
+| game tree — **RETRACTED**, not reproducible | 2,516 | 89% | 0.427 | 0.429 | 81% |
+| game tree, `deg ≥ 0.5` only — **RETRACTED**, not reproducible | 2,516 | 68% | 0.660 | 0.389 | 81% |
 
 Reference band: ROSE (Zimmermann, Weißgerber, Diehl & Zeller, TSE 2005) reports, at file granularity on
 Eclipse, roughly a quarter of the further files predicted and a correct location in its top three about two
-thirds of the time. The shipped rule sits in that band on both corpora.
+thirds of the time. The shipped rule sits in that band on the pinned run too (precision@8 0.31-0.53, recall
+0.21-0.31 across the two `deg` cuts) — narrower than 2026-09-08's 0.35-0.54, same conclusion.
 
 **Is an alarm a real forget?** History cannot label intent, but it can say whether the named partner was edited
 shortly after. For every commit where the check would have named a partner with `deg ≥ 0.5` that the commit did
@@ -13167,18 +13216,24 @@ not touch:
 
 | corpus | commits alarmed | a named partner is edited within the next 3 commits | per named file | chance: a random active file within 3 |
 | --- | --- | --- | --- | --- |
-| this repository | 54% | **56%** of alarmed commits | 31% (n = 2,210) | 1% |
-| game tree | 32% | **32%** | 20% (n = 1,218) | 2% |
+| this repository, pinned `v0.6.2` | 54% | **44%** of alarmed commits | 24% (n = 4,121) | 1% |
+| this repository, first recorded 2026-09-08 (unpinned) | 54% | 56% of alarmed commits | 31% (n = 2,210) | 1% |
+| game tree — **RETRACTED**, not reproducible | 32% | 32% | 20% (n = 1,218) | 2% |
 
-Thirty and sixteen times chance. The rate also climbs with the scatter of the change itself — on this repository
-46% for one-file commits, 60% at 4–7 files, 73% at 8–15 — which is the smell's definition read back from data:
-the wider a change already is, the more likely a site was missed.
+About twenty-four times chance on the pinned run (about thirty-one times chance, first recorded) — both far
+above the 1% baseline; the direction holds, the margin narrowed. The rate also climbs with the scatter of the
+change itself on the pinned run — 37% follow-up for 1-file commits, 39% at 2-3, 48% at 4-7, 58% at 8-15 (first
+recorded: 46% / — / 60% / 73% at the buckets that sentence named) — which is the smell's definition read back
+from data either way: the wider a change already is, the more likely a site was missed. (The 16-30-file bucket
+dips to 47% on the pinned run, n=83 — noted rather than smoothed; too small a bucket to read as a reversal.)
 
 **What this does not measure.** A follow-up edit is evidence the partner was in play, not proof the first commit
-was incomplete; a feature landed over several commits leaves the same trace. Single-file commits get an alarm at
-any `deg` 90% / 72% of the time, and at `deg ≥ 0.5` 37% / 23% — the row's own printed percentage ("co-edited in
-N% of commits") is what lets a reader discount a 2% partner. The default was not changed here: a floor would
-trade recall 0.35 → 0.22 for precision 0.35 → 0.54 on this repository, and no terminality number was taken for
+was incomplete; a feature landed over several commits leaves the same trace. Single-file commits get an alarm,
+pinned `v0.6.2` / this repository first recorded 2026-09-08 / game tree (**RETRACTED**, not reproducible): at
+any `deg` 91% / 90% / 72% of the time, and at `deg ≥ 0.5` 37% / 37% / 23% — the row's own printed percentage
+("co-edited in N% of commits") is what lets a reader discount a 2% partner. The default was not changed here: a
+floor would trade recall 0.31 → 0.21 for precision 0.31 → 0.53 on this repository, pinned `v0.6.2` (first
+recorded 2026-09-08: recall 0.35 → 0.22 for precision 0.35 → 0.54), and no terminality number was taken for
 either side (METHODOLOGY §9, principle 1).
 
 ### (d) The validation set neither formulation can see

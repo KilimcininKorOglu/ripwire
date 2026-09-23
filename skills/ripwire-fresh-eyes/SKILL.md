@@ -273,13 +273,15 @@ sections your question needs.
    **Per-function readability** — `ripwire <dir> --readability --legend=compact`
    `<readability functions="N" shown="40" capped="1"><fn p="…:512" n="buildGraph" lines="1244" toks="6753"
    ops="4359" vocab="382" vol="57923.4" ent="6.26" posnett="0.000"/>` — the Posnett/Hindle/Devanbu (MSR 2011)
-   closed-form model, **least readable first**: `vol=` Halstead volume, `ent=` Shannon token entropy,
-   `lines=` the definition's line span, `posnett=` the fitted sigmoid. Complements step 1: `--hotspots` ranks
-   by complexity × *churn* (where pain has been paid), this ranks by how hard the text is to *read* right
-   now, with no git history needed. Two caveats it states in its own legend and you should carry: one
-   token-class table serves every language, so `vol=` is a cross-language approximation; and the formula was
-   fitted on snippets of 20 lines or fewer, so on a 1,000-line function `posnett=` saturates at `0.000` —
-   **read the ORDER of the rows, never the number as a grade.**
+   closed-form model, rows ordered by Halstead volume, token entropy and length, largest first: `vol=`
+   Halstead volume, `ent=` Shannon token entropy, `lines=` the definition's line span, `posnett=` the fitted
+   sigmoid. It needs no git history. Three caveats to carry: one token-class table serves every language, so
+   `vol=` is a cross-language approximation; the formula was fitted on snippets of 20 lines or fewer, so on a
+   1,000-line function `posnett=` saturates at `0.000` — never read the number as a grade; and the claim
+   that the ORDER predicts which functions need a later fix is **withdrawn** — held to narrow token-count
+   bands the association disappears in 8 of 10 deciles, so the order is a size proxy, not an independent
+   readability signal (ripwire's `docs/EVALS.md` §8). Use it to find the largest, densest
+   bodies; use `--hotspots` (step 1) for where pain has actually been paid.
 
    **Reachable non-local mutable state** — `ripwire <dir> --nonlocal-state --legend=compact`
    `<fn p="src/infra/profilePmc.h:288" n="ensure_global_init" writes="2" reads="3" direct_writes="1"

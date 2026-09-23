@@ -32,7 +32,7 @@
 #     evaluateWideExpression( a,b,c )                                  ->  EXACTLY TWO families
 #         structural  NONE of the four absolute bars: ccx 1 < 15, loc 5 < 60, nest 0 < 4, params 3 < 5.
 #                     It fires structurally ONLY through the READABILITY RANK — one long, wide, high-entropy
-#                     expression is the least readable function in the corpus, so rrank=0. That isolates the
+#                     expression is the lowest-posnett= function in the corpus, so rrank=0. That isolates the
 #                     ordinal half of the structural family from the absolute half, which is the only way to
 #                     tell they are wired independently.
 #         historical  same file                                       -> hrank=0 churn=3

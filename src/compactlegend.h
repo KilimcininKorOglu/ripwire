@@ -170,7 +170,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "flags",        "flags",        "BUILT but DARK: <gate name= kind=compile|cmake|env default= dark= regions= loc= reads= p= l=> with <read p= l=> sites" },
     { "skillscan",    "scan-skills",  "injection/exfiltration/path-traversal scan of skill files: files= findings= skipped= verdict=" },
     { "fieldaffinity","field-affinity","fields read together but declared far apart vs 64-byte lines: <s n= p=> structs, <pair a= b= fns= dist=>, <finding k= f= g=>" },
-    { "readability",  "readability",  "Posnett/Hindle/Devanbu lens, least readable first: <fn p= n= lines= toks= ops= vocab= vol= ent= posnett=>" },
+    { "readability",  "readability",  "Posnett/Hindle/Devanbu lens, largest Halstead volume first (a size proxy): <fn p= n= lines= toks= ops= vocab= vol= ent= posnett=>" },
     { "nonlocal_state","nonlocal-state","per function, the non-local MUTABLE state it reaches: <fn p= n= writes= reads=> over <cell n= p= dir= via=> rows" },
     { "ensemble",     "ensemble",     "four orthogonal evidence families joined, ranked by DISTINCT families fired (no composite score): <s p= n= fam= of= fired=>" },
     { "contextratio", "context-ratio","LOCAL-REASONING lens: the share of a unit's context outside its file: <s p= n= sites= ents_out= ent_ratio= read_ratio=>" },

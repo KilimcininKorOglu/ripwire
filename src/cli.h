@@ -190,8 +190,10 @@ struct Config
     bool             hotspots          = false;            // --hotspots: complexity × recent git churn (maintenance-pain map)
     bool             clones            = false;            // --clones: token-normalized duplicate function bodies
     bool             readability       = false;            // --readability: the Posnett/Hindle/Devanbu (MSR 2011) lens — per function, Halstead
-                                                            // volume + token entropy + line span → P, emitted LEAST readable first. Pages through
-                                                            // limit/offset like the other report verbs; a ranking lens, never a grade (readability.h)
+                                                            // volume + token entropy + line span → P, emitted LARGEST Halstead volume/token-count/
+                                                            // length first (a size proxy — the readability-ordering claim is WITHDRAWN,
+                                                            // docs/EVALS.md §8). Pages through limit/offset like the other report verbs;
+                                                            // a ranking lens, never a grade (readability.h)
     bool             nonlocalState     = false;            // --nonlocal-state: per function, the non-local MUTABLE state it or its transitive
                                                             // callees reach — globals/statics/file-scope data — with READS and WRITES kept apart
                                                             // and the site or callee that explains each one. Unsound by construction (indirect
@@ -1378,8 +1380,9 @@ inline constexpr char kHelpHead[] =
         "                               A function whose extent failed a containment check is LEFT OUT of ccx=/score=/top= and\n"
         "                               counted: extent_suspect_syms= on its row, unranked_extent_suspect= for a file with none left\n"
         "    --clones                   token-normalized duplicate bodies\n"
-        "    --readability              rank functions least-readable first, by volume, token entropy and length\n"
-        "                               per-function readability lens, LEAST readable first: vol= Halstead volume V (N*log2(eta)),\n"
+        "    --readability              order functions by Halstead volume, token entropy and length, largest first\n"
+        "                               per-function lens, LARGEST Halstead volume/token-count/length first (a size proxy, not a\n"
+        "                               readability order — see WITHDRAWN below): vol= Halstead volume V (N*log2(eta)),\n"
         "                               ent= Shannon token entropy E, lines= L, posnett= sigmoid(8.87 - 0.033V + 0.40L - 1.5E)\n"
         "                               (Posnett/Hindle/Devanbu, MSR 2011). APPROXIMATION, disclosed: ONE token-class table serves\n"
         "                               every language (keywords + punctuation = operators, identifiers + literals = operands),\n"
@@ -1392,7 +1395,10 @@ inline constexpr char kHelpHead[] =
         "                               function tracked the sign of its token-count change in 96.0% of pairs (388/404 whose\n"
         "                               count changed). Read a move as more or fewer tokens, not as more or less readable;\n"
         "                               full derivation and history in docs/EVALS.md §8. Do not read a low posnett= as proof\n"
-        "                               a function needs work.\n"
+        "                               a function needs work. WITHDRAWN: the ordering claim (that a lower posnett= predicts a\n"
+        "                               later fix) is withdrawn -- stratified into narrow token-count bands, the later-fix\n"
+        "                               association disappears in 8 of 10 deciles (CIs include 1), so the order is a size proxy,\n"
+        "                               not an independent readability signal; derivation in docs/EVALS.md §8.\n"
         "    --nonlocal-state           per function, the non-local mutable state it can reach, most writes first\n"
         "                               per function, the NON-LOCAL MUTABLE STATE it can reach, MOST WRITES FIRST: writes= reads= are the\n"
         "                               distinct cells this function OR its transitive callees write / read; direct_writes= direct_reads=\n"

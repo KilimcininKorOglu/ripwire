@@ -580,7 +580,7 @@ inline constexpr const char* kPanelLegend =
     "Absolute bars: bar_ccx=cognitive complexity bar_loc=physical lines bar_nest=max nesting depth "
     "bar_params=param count; a row shows only the ones that crossed. Rankings fire for the worst decile of "
     "their OWN corpus (RELATIVE: 'worst in THIS corpus', never 'bad in absolute terms'): rrank=readability "
-    "rank (0 least readable) rcut=decile width rmeasured=functions measured; hrank=file churn rank (0 most "
+    "rank (0 lowest posnett=, the largest body) rcut=decile width rmeasured=functions measured; hrank=file churn rank (0 most "
     "changed) churn=in-window commit count hcut=decile width hranked=files with any in-window commit "
     "window=the churn window; crank=local-reasoning rank (0 reads most from outside its file) ccut=decile "
     "width cranked=functions resolving any outside definition. state has no threshold (fires on a direct "
