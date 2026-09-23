@@ -347,7 +347,7 @@ TWIN = {
     "--lint": "", "--hotspots": "", "--tree": "", "--deps": "", "--clones": "", "--communities": "",
     "--community": "", "--match": "", "--pattern": "", "--exercises": "", "--seams": "", "--zoom": "",
     "--external-surface": "", "--dead-code": "", "--graph-query": "", "--test-gate": "",
-    "--readability": "", "--ensemble": "", "--quality-panel": "", "--context-ratio": "",
+    "--biggest-first": "", "--ensemble": "", "--quality-panel": "", "--context-ratio": "",
     "--nonlocal-state": "", "--comment-coherence": "", "--naming-consistency": "", "--safe-delete": "",
     # P4 (L7): --pr-context joined the paging set for its changed-file window (--offset=N); CLI-only report verb.
     "--pr-context": "",

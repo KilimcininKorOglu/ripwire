@@ -82,11 +82,12 @@ done
 # omission from an accidental one. Anything NOT in this list is a flag a user can only find by reading
 # source, which is a documentation bug. Keep the reasons; a bare list rots into a dumping ground.
 #   --stable, --most-important-last, --no-auto-order  deprecated/hidden aliases of --order= (warn + redirect)
+#   --readability                                     deprecated/hidden alias of --biggest-first (warn + redirect)
 #   --anchor                                          RIPWIRE_DEV-gated, a recorded negative-result experiment
 #   --cochange-boost                                  EXPERIMENTAL opt-in; held-out was +0.0pp, default OFF
 #   --no-prefilter                                    debug: the full-scan soundness oracle for --regex
 #   --route                                           back-compat no-op (routing is the default now)
-ALLOW_UNDOC=" --stable --most-important-last --no-auto-order --anchor --cochange-boost --no-prefilter --route "
+ALLOW_UNDOC=" --stable --most-important-last --no-auto-order --readability --anchor --cochange-boost --no-prefilter --route "
 filtered=""
 for f in $undocumented; do
     case "$ALLOW_UNDOC" in *" $f "*) ;; *) filtered="$filtered $f" ;; esac

@@ -6,7 +6,7 @@
 // qualitypanel.h — `--quality-panel[=strict|default|lenient]`: THE SINGLE COMMAND.
 //
 // THE ASK. The quality signal in this tool is scattered across --ensemble, --context-ratio, --nonlocal-state,
-// --readability, --lint's two rule packs and --quality-delta. --ensemble is already the JOIN, but it joins only
+// --biggest-first, --lint's two rule packs and --quality-delta. --ensemble is already the JOIN, but it joins only
 // the four families wave 1 shipped; the wave-2 lenses are not in it. So the panel was real and incomplete. This
 // verb is the whole panel, reported ONCE, ranked ONCE.
 //

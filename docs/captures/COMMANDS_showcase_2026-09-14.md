@@ -4973,9 +4973,9 @@ ripwire: --run-timeout=SECONDS modifies --run-trace — pass it too (e.g. ripwir
 … [188 more display lines; full output is 18135 bytes on 1 raw line(s)]
 `````
 
-## `./build/ripwire . --readability --limit=8`
+## `./build/ripwire . --biggest-first --limit=8`
 
-*Per-function readability, LEAST readable first (Halstead volume, token entropy, lines, Posnett) — a RANKING lens, not a grade.*
+*Per-function size ranking, largest Halstead volume/token entropy/lines first — a size proxy, not a readability order (withdrawn, docs/EVALS.md §8) — a RANKING lens, not a grade.*
 
 `````
 <!-- ripwire readability: the Posnett/Hindle/Devanbu (MSR 2011) closed-form lens, one row per function or method, LEAST READABLE FIRST. p=path:line n=symbol name lines=L, the definition's physical line span toks=N, the operator+operand tokens of the whole definition (signature included) ops=N1, the operator half of toks (keywords and punctuation; the rest are identifiers and literals) vocab=eta, distinct tokens vol=Halstead volume V, N*log2(eta) ent=E, Shannon entropy of the token frequency distribution, in bits posnett=P, sigmoid(8.87 - 0.033V + 0.40L - 1.5E), the paper's published fit. ONE token-class table serves every language, so V is a cross-language APPROXIMATION, not a per-grammar count. P was fitted on snippets of 20 lines or fewer: read the ORDER, not the number, and never as a grade. The sigmoid SATURATES at the least-readable extreme (a high-volume function's argument clamps at +/-40), so several head rows can print posnett="0.000" alike; those ties (and every tie) break by vol= descending, so the ORDER stays real even where P itself has run out of visible precision. functions=functions and methods measured (a declaration with no body is not measured) shown=rows printed capped=1 when rows were dropped; raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it), which also prints total= has_more= next_offset= offset= limit= unreadable_files=indexed files this pass could not read; their functions are absent, so functions= is a FLOOR -->

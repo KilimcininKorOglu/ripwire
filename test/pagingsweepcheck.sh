@@ -706,7 +706,7 @@ TABLE = {
     "--graph-query":        ( [ '--graph-query=name("main")' ], None ),
     "--stray-content":      ( [ "--stray-content" ], None ),
     "--test-gate":          ( [ "--test-gate" ], "untested" ),
-    "--readability":        ( [ "--readability" ], None ),
+    "--biggest-first":      ( [ "--biggest-first" ], None ),
     "--ensemble":           ( [ "--ensemble" ], "syms" ),
     "--quality-panel":      ( [ "--quality-panel" ], "syms" ),
     "--context-ratio":      ( [ "--context-ratio" ], "syms" ),

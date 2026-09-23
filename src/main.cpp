@@ -26,7 +26,7 @@
 #include "situ.h"
 #include "handoff.h"               // --handoff: the continuation packet (verified + heuristic sections)
 #include "dmm.h"                   // --dmm: the Delta Maintainability Model scalar — the trendable complement to --quality-delta
-#include "readability.h"           // --readability: the Posnett (MSR 2011) per-function readability lens
+#include "readability.h"           // --biggest-first (was --readability): the Posnett (MSR 2011) per-function readability lens
 #include "commentcoherence.h"      // --comment-coherence: Steidl c_coeff + Scalabrino CIC, per documented function/method
 #include "contextratio.h"          // --context-ratio: the LOCAL-REASONING lens (outside-the-file share of a unit's context)
 #include "nonlocalstate.h"         // --nonlocal-state: per function, the non-local MUTABLE state it reaches (reads vs writes)
@@ -2789,7 +2789,7 @@ int runDefaultMap( const MainDispatch& d )
 //
 //   --index-out                                            pre-ingest, ahead of EVERY verb incl. the family
 //   --ensemble, --context-ratio                            runMaintenanceViews arms 1-2, ahead of --hotspots
-//   --readability, --comment-coherence, --nonlocal-state,   runQualityViews arms 1-6, ahead of --dead-code
+//   --biggest-first, --comment-coherence, --nonlocal-state, runQualityViews arms 1-6, ahead of --dead-code
 //   --quality-panel, --naming-calibration, --naming-consistency
 //   --handoff                                              runChangeViews arm 1, ahead of --situ
 //   --field-affinity                                       between --layout and --doc-drift
@@ -2846,7 +2846,7 @@ VerbPrecedence scanReportVerbPrecedence( const rw::Config& c )
         { "--owners",            c.owners                 }, { "--quality-baseline", c.qualityBaseline    },
         { "--quality-delta",     c.qualityDelta           }, { "--dmm",           c.dmm                   },
         // §F1: runQualityViews' six lenses, in its own arm order, all ahead of --dead-code
-        { "--readability",       c.readability            }, { "--comment-coherence", c.commentCoherence  },
+        { "--biggest-first",     c.readability            }, { "--comment-coherence", c.commentCoherence  },
         { "--nonlocal-state",    c.nonlocalState          }, { "--quality-panel", c.qualityPanel          },
         { "--naming-calibration", c.namingCalibration     }, { "--naming-consistency", c.namingConsistency },
         { "--dead-code",         c.deadCode               },   // the row order IS the dispatch order (test/dispatchordercheck.sh pins every pair) — never re-pair for layout

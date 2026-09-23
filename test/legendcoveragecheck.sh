@@ -167,7 +167,7 @@ ROSTER = [
     ("exemplar",           [SMALL, "--exemplar=rank symbols"]),
     ("hotspots",           [ROOT,  "--hotspots"]),
     ("clones",             [ROOT,  "--clones"]),
-    ("readability",        [SMALL, "--readability"]),
+    ("biggest-first",      [SMALL, "--biggest-first"]),
     ("ensemble",           [SMALL, "--ensemble"]),
     ("context-ratio",      [SMALL, "--context-ratio"]),
     ("naming-consistency", [SMALL, "--naming-consistency"]),

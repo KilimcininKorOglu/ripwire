@@ -213,7 +213,7 @@ function storyCards(s, { kick, head, stories, footText }){
     ["understand cold",  "What is this repo, and what matters in it?",          "--for  --tree  --lego  --exemplar  --recall  --pack-task  --token-budget"],
     ["navigate",         "Who calls this? Safe to change or delete? Which tests?", "--callers  --callees  --uses  --impact  --path  --connect  --affected  --situ  --test-gate  --from-trace  --pattern  --safe-delete"],
     ["detail ladder",    "Show me more — but only where it pays.",              "--detail  --pack-signatures  --outline  --expand  --compress"],
-    ["quality & risk",   "Where is the risk, and did I just add some?",         "--quality-panel  --quality-delta  --dmm  --readability  --ensemble  --context-ratio  --nonlocal-state  --field-affinity  --hotspots  --lint  --clones"],
+    ["quality & risk",   "Where is the risk, and did I just add some?",         "--quality-panel  --quality-delta  --dmm  --biggest-first  --ensemble  --context-ratio  --nonlocal-state  --field-affinity  --hotspots  --lint  --clones"],
     ["self-diagnosis",   "Is my setup actually working?",                       "--doctor  --skipped"],
     ["security",         "Is this agent skill file safe to install?",           "--scan-skill  --scan-skills"],
     ["knobs & modes",    "Shape, format, cache, budget.",                       "--json  --format  --mcp"],

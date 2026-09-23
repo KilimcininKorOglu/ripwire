@@ -1768,10 +1768,11 @@ std::optional<int> runQualityViews( const MainDispatch& d )
     std::vector<char>  qvRootEsc;
     const std::string  qvRootAttr   = qvSingleRoot ? ( " root=\"" + std::string( escapeXml( cfg.roots[0], qvRootEsc ) ) + "\"" ) : std::string();
 
-    // --readability: the Posnett/Hindle/Devanbu (MSR 2011) closed-form lens, per function, LEAST readable
-    // first (readability.h owns the measurement AND its emission, the way --handoff owns its packet). It
-    // reads only the symbol table and the files on disk, so it needs neither the graph nor git — and it is
-    // a LENS: exit 0 always, no verdict, no threshold.
+    // --biggest-first (was --readability): the Posnett/Hindle/Devanbu (MSR 2011) closed-form lens, per
+    // function, LARGEST Halstead volume/token-count/length first — a size proxy, not a readability order
+    // (the ordering claim is WITHDRAWN, docs/EVALS.md §8; readability.h owns the measurement AND its
+    // emission, the way --handoff owns its packet). It reads only the symbol table and the files on
+    // disk, so it needs neither the graph nor git — and it is a LENS: exit 0 always, no verdict, no threshold.
     if( cfg.readability )
     {
         return writeReadabilityReport( ing, cfg.pageLimit, cfg.pageOffset, qvRootPrefix, qvRootAttr );
@@ -1779,7 +1780,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
 
     // --comment-coherence: two published content measures per documented function/method (Steidl c_coeff
     // + Scalabrino CIC) — commentcoherence.h owns the measurement AND its emission, the same shape as
-    // --readability. Symbol table + files on disk only; no graph, no git; a LENS: exit 0 always.
+    // --biggest-first. Symbol table + files on disk only; no graph, no git; a LENS: exit 0 always.
     if( cfg.commentCoherence )
     {
         return writeCommentCoherenceReport( ing, cfg.pageLimit, cfg.pageOffset, qvRootPrefix, qvRootAttr );
@@ -1787,8 +1788,8 @@ std::optional<int> runQualityViews( const MainDispatch& d )
 
     // --nonlocal-state: per function, the non-local MUTABLE state it or its transitive callees reach, reads
     // and writes kept apart (nonlocalstate.h owns the discovery, the closure AND its emission, the way
-    // --readability does). It needs the symbol table, the value-use references and the call graph — but no
-    // git — and it is a LENS: exit 0 always, no verdict, no threshold, every count a disclosed floor.
+    // --biggest-first does). It needs the symbol table, the value-use references and the call graph — but
+    // no git — and it is a LENS: exit 0 always, no verdict, no threshold, every count a disclosed floor.
     if( cfg.nonlocalState )
     {
         return nonlocal::writeNonLocalStateReport( ing, g, cfg.pageLimit, cfg.pageOffset, qvRootPrefix, qvRootAttr );
@@ -1800,7 +1801,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
     }
 
     // --naming-calibration: §9.5 — the naming-* lint rules judged against the repo's OWN rename history
-    // (renamemine.h owns the mining, the join, the scoring AND the emission, the way --readability does).
+    // (renamemine.h owns the mining, the join, the scoring AND the emission, the way --biggest-first does).
     // It walks git and reads the symbol table; it needs no graph. Exit 0 always — a measurement, not a
     // verdict: test/namingcalibrationcheck.sh is where the per-rule floor lives.
     if( cfg.namingCalibration )

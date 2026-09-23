@@ -129,7 +129,7 @@ VERBS_XML=(
   "handoff:--handoff"
   "owners:--owners"
   "mentions:--mentions=area_of_triangle"
-  "readability:--readability"
+  "biggest-first:--biggest-first"
   "naming-consistency:--naming-consistency"
   "nonlocal-state:--nonlocal-state"
   "field-affinity:--field-affinity"
