@@ -643,7 +643,12 @@ inline std::string rebaseMsysTmp( std::string_view path, std::string_view native
 // its blob scan called std::filesystem::directory_iterator directly on cacheDirLadder()'s un-rebased "/tmp/ripwire-
 // <uid>" spelling, neither of which passes through NativePath, so on Windows both silently measured a directory
 // (the CURRENT DRIVE's "\tmp\ripwire-<uid>") that the cache never actually uses (rw::os::mkdir DID rebase, via this
-// same routing, so the real cache directory the tool writes to was elsewhere and always healthy).
+// same routing, so the real cache directory the tool writes to was elsewhere and always healthy). The cache-eviction
+// sweep (quality.h evictOldCacheFamily) and the shard layout (resolveCacheBlobPath) read that same spelling the same
+// way, so cacheDirLadder() now resolves it ONCE through rw::os::rebased_path, at the source, for every consumer. That
+// is only safe because this dispatch is idempotent: an answer it already gave starts with a drive letter (or the
+// "|unusable|" sentinel), never '/', so a second pass — every os:: call NativePath makes on the resolved path — is a
+// no-op. test/verify_os_win32_logic.cpp pins that property.
 inline std::string rebasedProgramPath( std::string_view path, std::string_view nativeTmp ) noexcept
 {
     if( path.empty() || path.front() != '/' )

@@ -452,6 +452,38 @@ TEST_CASE( "rebasedProgramPath: the exact shapes quality.h::cacheDirLadder's thr
     const std::string sentinel = rebasedProgramPath( "/dev/null/ripwire-cache-unavailable", nativeTmp );
     CHECK( sentinel.find( '|' ) != std::string::npos );
     CHECK( sentinel.find( "ripwire-cache-unavailable" ) != std::string::npos );
+// #326's sibling (the cache-eviction sweep): cacheDirLadder() now resolves its own spelling ONCE through this
+// dispatch, before os::mkdir creates the directory, so std::filesystem and os:: consumers read the same bytes. Every
+// os:: call the ladder and its callers then make hands that ALREADY-RESOLVED answer back through NativePath — i.e.
+// through this same dispatch a second time. The fix is only correct if that second pass is a no-op on every answer the
+// first can give: a drive-lettered temp path, an already-native TMPDIR tier, and the fail-closed sentinel. The oracle
+// is the contract itself ("empty means use `path` verbatim"), asserted on the dispatch's own outputs.
+TEST_CASE( "rebasedProgramPath: idempotent — an os:: caller handed an already-resolved cacheDirLadder() answer sees no second rewrite" )
+{
+    const std::string nativeTmp = "D:\\Temp\\";
+
+    // third tier, the one a plain cmd.exe/PowerShell user lands on (neither TMPDIR nor XDG_CACHE_HOME is set there):
+    // resolved once to the real temp directory, and that answer routes to "no rebase" when it comes back around.
+    const std::string once = rebasedProgramPath( "/tmp/ripwire-1001", nativeTmp );
+    CHECK( once == "D:/Temp/ripwire-1001" );
+    CHECK( rebasedProgramPath( once, nativeTmp ).empty() );
+    CHECK( rebasedProgramPath( once + "/ripwire-deadbeef0000aaaa-lean.bin", nativeTmp ).empty() );   // a blob under it: same
+    CHECK( rebasedProgramPath( once + "/locks", nativeTmp ).empty() );                                // the edit-lock subtree: same
+
+    // the ladder promises NO trailing slash (every caller appends "/<name>"): the rebase keeps that promise even
+    // when the native temp directory is spelled with one or several trailing separators, as GetTempPathW returns it.
+    CHECK( once.back() != '/' );
+    CHECK( rebasedProgramPath( "/tmp/ripwire-1001", "D:\\Temp\\\\" ) == "D:/Temp/ripwire-1001" );
+    CHECK( rebasedProgramPath( "/tmp/ripwire-1001", "D:\\Temp" ) == "D:/Temp/ripwire-1001" );
+
+    // first tier: a TMPDIR os::init_process already put in the program's spelling — no rewrite on either pass.
+    CHECK( rebasedProgramPath( "D:/Temp/ripwire", nativeTmp ).empty() );
+
+    // the fail-closed sentinel: rebasing it once yields the unopenable "|unusable|..." spelling; rebasing THAT
+    // again must not turn it into anything openable (it still does not start with '/', so: no rewrite).
+    const std::string sentinelOnce = rebasedProgramPath( "/dev/null/ripwire-cache-unavailable", nativeTmp );
+    CHECK( sentinelOnce.rfind( "|unusable|", 0 ) == 0 );
+    CHECK( rebasedProgramPath( sentinelOnce, nativeTmp ).empty() );
 }
 
 TEST_CASE( "extendedLengthPath: only an absolute, clean path gets the \\\\?\\ prefix" )
