@@ -2062,6 +2062,13 @@ inline constexpr const char* kDeclinedMapLegend =
     "<!-- hdr:declined=calls-tier-3-declined(two-or-more-same-language-defs,none-in-the-callers-file-or-dir,"
     "none-pinned-by-a-qualifier/receiver/include;no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->";
 
+// #157: the default map's own nest-refused disclosure — before this, a refused file's absence carried no signal
+// on the map's own header at all, only in the skipped verb's own report (if a reader thought to ask). Charged
+// to the map that carries nest_refused=, same rule as kDeclinedMapLegend two lines up.
+inline constexpr const char* kNestRefusedMapLegend =
+    "<!-- hdr:nest_refused=indexed-files-a-pre-parse-nesting-guard-refused(json/yaml/markdown/kotlin;memory-safety-or-"
+    "runaway-parse;contributes-no-symbols;absent-if-0;the-skipped-verb's-why=nest-refused-rows-name-them) -->";
+
 // §L10: sibs=/inc=/<calls> on an --expand <b> body (withFileContext=true — --expand's own two call sites,
 // never packBodies' other callers) had NO in-band definition anywhere — only in --help prose, which a
 // reader of the XML never sees. Printed once, right inside <bodies ...>, before the first <b> child, on
@@ -2530,6 +2537,12 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     {
         legend += kMacroBlankedHdrLegend;
     }
+    // #157: a file the nesting guard refused before this map was built — the header's nest_refused=, same
+    // absent-when-zero rule, charged only to the map that carries the attribute.
+    if( ing.crawlSkips.nestRefusedFiles > 0 )
+    {
+        legend += kNestRefusedMapLegend;
+    }
     // R-E fix (2026-08-19): root= was added to <r> with nothing defining it — legendcoveragecheck's arm (A)
     // named it on nine roster verbs at once (the default map, --around, and every map-* variant share this
     // legend). Spelled in THIS legend's own key=meaning dialect rather than as the prose sentence
@@ -2728,6 +2741,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         if( macroBlankedFiles > 0 )                            // member-macro re-parse: same absent-when-0 rule
         {
             stats += " macro_blanked_files=";  stats += std::to_string( macroBlankedFiles );
+        }
+        if( ing.crawlSkips.nestRefusedFiles > 0 )              // #157: same absent-when-0 rule, last of the parse-honesty gauges
+        {
+            stats += " nest_refused=";  stats += std::to_string( ing.crawlSkips.nestRefusedFiles );
         }
         stats += precAttr;  stats += rootsAttr;  stats += changedAttr;  stats += skippedAttr;  stats += unindexedAttr;
         stats += ignoredAttr;  stats += escapedAttr;  stats += fitAttr;
@@ -7443,6 +7460,7 @@ struct JsonMapHeader
     std::size_t                      declinedCount = 0;         // tier 3's declines — "declined":N, absent when 0
     std::size_t                      extentSuspectCount = 0;    // extent honesty: "extent_suspect_syms":N, absent when 0
     std::size_t                      macroBlankedCount  = 0;    // member-macro re-parse: "macro_blanked_files":N, absent when 0
+    std::size_t                      nestRefusedCount   = 0;    // #157: "nest_refused":N, the JSON twin of the XML nest_refused=, absent when 0
     bool                             isEstModelled      = false;   // MapEstimate: "est_measured":false, absent when measured
 };
 
@@ -7602,6 +7620,11 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
     if( h.macroBlankedCount > 0 )
     {
         w.write( "\"macro_blanked_files\":" + std::to_string( h.macroBlankedCount ) + "," );
+    }
+    // #157: the JSON twin of the XML header's nest_refused=, same absent-when-zero rule.
+    if( h.nestRefusedCount > 0 )
+    {
+        w.write( "\"nest_refused\":" + std::to_string( h.nestRefusedCount ) + "," );
     }
 
     // §P0.5d, JSON lane: the size-ceiling disclosure must reach --json consumers too — the XML header
@@ -7815,7 +7838,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         JsonWriter hw( dst );
         writeJsonMapHeader( hw, esc, JsonMapHeader{ ing, S, outTargets.size(), keep, estTokens, ambTotal,
                                                     unresolvedTotal, orderAttr, outProv, &ann, rootArg, locPinTotal, externalCalls, declinedTotal,
-                                                    extentSuspectTotal, macroBlankedFileCount( ing ), estimate.isModelled } );
+                                                    extentSuspectTotal, macroBlankedFileCount( ing ), ing.crawlSkips.nestRefusedFiles,
+                                                    estimate.isModelled } );
         hw.write( ",\"r\":[" );
     };
 

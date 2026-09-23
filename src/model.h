@@ -1170,6 +1170,15 @@ struct IngestResult
     CrawlSkips              crawlSkips;   // §L1 skip taxonomy + unindexed-ext histogram — see CrawlSkips
     std::vector<FileHealth> fileHealth;   // §L1 parse health, parallel to `files` — see FileHealth
 
+    // #157: fileId -> 1 when ingest's own pre-parse nesting guard (json/yaml/markdown/kotlin) refused this
+    // file, 0 otherwise. Parallel to `files`, EXACT (unlike crawlSkips.nestRefused's capped row list), so
+    // every OTHER corpus-reading parse site (the --match/--pattern/--lint structural-query walk in
+    // ingest_astquery.h) can stay consistent with ingest's own refusal by asking this array instead of
+    // re-deciding the question with a second, independently-maintained prescan. Empty on a lean/stub
+    // IngestResult that never ran the parse pool (a fileId past its size means "not captured", never "not
+    // refused" — every reader must bounds-check, the same discipline crawlSkips itself uses).
+    std::vector<std::uint8_t> nestRefusedFile;
+
     std::vector<Symbol>      symbols;      // definitions (NEVER a SymKind::Field — see fields)
     std::vector<Symbol>      fields;       // member-variable round (card A3): the FIELD side table. Symbol::id is the index
                                            // INTO THIS VECTOR (a FieldId, not a NodeId), kind == SymKind::Field, scope == the

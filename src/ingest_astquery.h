@@ -756,6 +756,13 @@ static void computeGrammarDisclosure( const IngestResult& ing, const std::vector
             std::size_t eligible = 0;
             for( std::size_t fileId = 0; fileId < ing.files.size(); ++fileId )
             {
+                // #157: a file the nesting guard refused is never scanned (see the walk's own skip above),
+                // so it must not count as "eligible" here — eligible_files= would otherwise claim a file was
+                // scanned that the same run's own refusal excluded from the walk.
+                if( fileId < ing.nestRefusedFile.size() && ing.nestRefusedFile[ fileId ] != 0 )
+                {
+                    continue;
+                }
                 const std::string ext = lowerExtensionOf( diskPath( ing, std::uint32_t( fileId ) ) );
                 const LangEntry*  fle = lookupLang( ext );
                 if( fle == nullptr || fle->grammar == nullptr )
@@ -1052,6 +1059,15 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
                 const std::size_t fileId = walkOrder[slot];
                 try
                 {
+                    // #157: stay consistent with ingest's own refusal — a file the nesting guard refused
+                    // before ingest ever extracted a fact from it must not be handed to THIS parse either,
+                    // or the structural-query walk (--match/--pattern/--lint) would return hits from content
+                    // the map itself declined to index. Ask ing.nestRefusedFile (model.h) rather than
+                    // re-running the prescan: same source of truth, no second guard to drift out of sync.
+                    if( fileId < ing.nestRefusedFile.size() && ing.nestRefusedFile[ fileId ] != 0 )
+                    {
+                        continue;
+                    }
                     const std::string& path = diskPath( ing, std::uint32_t( fileId ) );   // multi-root: labeled ing.files → on-disk path
                     const std::string ext = lowerExtensionOf( path );
                     const LangEntry* le = lookupLang( ext );
@@ -1364,6 +1380,12 @@ PatternFileCensus eligiblePatternFiles( const IngestResult& ing, const pattern::
     PatternFileCensus                      census;
     for( std::size_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
+        // #157: excluded from both eligible= and skipped= — the walk never reaches it (see the walk's own
+        // skip), so counting it as either would claim a fact about a file this run never scanned.
+        if( fileId < ing.nestRefusedFile.size() && ing.nestRefusedFile[ fileId ] != 0 )
+        {
+            continue;
+        }
         const std::string ext = lowerExtensionOf( diskPath( ing, std::uint32_t( fileId ) ) );
         const LangEntry*  le  = lookupLang( ext );
         if( le == nullptr || le->grammar == nullptr )

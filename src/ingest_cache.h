@@ -128,7 +128,19 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaArrow` (parser version 113, a u8 after
+constexpr std::uint32_t kCacheVersion = 25;           // 25 (#157): NO record field changed shape — bumped anyway
+                                                      //    because a v24-or-older cache can hold a NORMAL (real-hash,
+                                                      //    zero-fact) record for a json/yaml/markdown file the nesting
+                                                      //    guard refused. Pre-fix, only Kotlin's refusal was forgotten
+                                                      //    before the save (forgetNestRefusalsForCache); the other
+                                                      //    three warm-hit that record forever and would stay invisible
+                                                      //    even after this fix ships, on any cache built before it.
+                                                      //    Bumping rejects every pre-fix blob outright (T5's v2
+                                                      //    precedent, two comments up) so every refused file is
+                                                      //    re-scanned, re-refused and re-rowed once, cold, instead of
+                                                      //    staying silently hidden. quality.h's
+                                                      //    kIngestCacheVersionMirror moves in the SAME commit.
+                                                      // 24: RawRef gains `viaArrow` (parser version 113, a u8 after
                                                       //    `argCountKnown` in the ref record, kMinRefRecordBytes 39 -> 40)
                                                       //    — a call's member access was written `->`, and a compose
                                                       //    ref's type is the pointee of a std smart pointer member

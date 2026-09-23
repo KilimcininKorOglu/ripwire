@@ -373,8 +373,23 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     HashMap<std::string, FileFacts>().swap( cache );
 
     result.fileHealth = std::move( scan.health );   // §L1: after saveCache, before the (unmeasured) doc pass
-    collectNestRefusals( scan, result );             // the Kotlin nesting guard's refusals, as --skipped rows (ingest_prewarm.h)
+    collectNestRefusals( scan, result );             // the nesting guards' refusals, as --skipped rows (ingest_prewarm.h)
     collectExtractPartials( scan, result );          // files whose facts came back partial, as --skipped rows (ingest_prewarm.h)
+
+    // #157: the EXACT per-file twin of the (capped) rows collectNestRefusals just wrote, so a caller that needs
+    // "was THIS fileId refused" (the --match/--pattern/--lint structural-query walk, ingest_astquery.h) can ask
+    // an O(1) array instead of re-running the prescan or scanning a possibly-truncated row list. Cheap: one byte
+    // per file, filled once, right beside the row collection it mirrors.
+    result.nestRefusedFile.assign( scan.nestRefusedBytes.size(), 0u );
+    for( std::size_t nestFileId = 0; nestFileId < scan.nestRefusedBytes.size(); ++nestFileId )
+    {
+        result.nestRefusedFile[ nestFileId ] = scan.nestRefusedBytes[ nestFileId ] != 0 ? 1u : 0u;
+    }
+    // ENSURES, not a degrade: every reader of nestRefusedFile (ingest_astquery.h's structural-query walk)
+    // bounds-checks it defensively against a SHORTER-than-files array from an older/lean IngestResult, but
+    // THIS ingest path must always hand back one flag per crawled file — a silent short array here would
+    // turn every one of those defensive checks into a silent "never refused" for every file past its end.
+    ENSURES( result.nestRefusedFile.size() == result.files.size(), "ingest: nestRefusedFile must be sized one entry per crawled file" );
 
     // ── doc post-pass (P1-B): every collected document file (notebook/html/csv/…) becomes a docText
     //    override + one whole-file Section node — parallel extract, deterministic ascending-fileId merge

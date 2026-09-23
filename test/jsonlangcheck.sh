@@ -206,6 +206,66 @@ printf '%s' "$OHOST" | grep -q 'deep_string\|realkey' \
     && ok "hostile nesting: brackets inside a JSON STRING do not count (quote-aware scan)" \
     || no "hostile nesting: quote-blind scan skipped a legitimate config file"
 
+# ═══════════════════════════════════════════════════════════════════════════
+echo
+echo "=== #157: a refused JSON file is rowed in --skipped cold AND warm, and --match refuses it consistently ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# The JSON twin of yamllangcheck.sh / mdsectioncheck.sh's #157 block. refuseNesting (ingest_prewarm.h) now
+# itemizes JSON's guard the same way it always did Kotlin's — a row in --skipped, forgotten from the cache
+# on save so a warm run re-refuses and re-rows it — and the structural-query walk behind --match checks the
+# same per-file refusal (IngestResult::nestRefusedFile) so it cannot return a hit from a file ingest refused.
+# BALANCED brackets this time (deep_data.json), unlike hostile_nest.json above: an unclosed "[[[[" would be
+# all ERROR nodes even if parsed, so it cannot prove --match is refusing the file rather than just finding
+# nothing to match. '['*600 + ']'*600 is 600 levels deep, well past kMaxJsonNestDepth=512.
+KGJ="$TMP/kgjson"; mkdir -p "$KGJ"
+python3 -c "open('$KGJ/deep_data.json','w').write('['*600 + ']'*600)"
+printf '{"kgsiblingkey": 1}\n' > "$KGJ/sibling.json"
+$BIN "$KGJ" --cache="$TMP/kgjson.cache" >"$TMP/kgj_cold.xml" 2>"$TMP/kgj_cold.err"; KGJ_COLD_RC=$?
+$BIN "$KGJ" --cache="$TMP/kgjson.cache" >"$TMP/kgj_warm.xml" 2>"$TMP/kgj_warm.err"; KGJ_WARM_RC=$?
+KGJ_LIVE=0
+if [ "$KGJ_COLD_RC" -eq 0 ] && [ "$KGJ_WARM_RC" -eq 0 ] && grep -q 'deep_data.json: json nesting' "$TMP/kgj_cold.err" \
+   && grep -q 'kgsiblingkey' "$TMP/kgj_warm.xml" && cmp -s "$TMP/kgj_cold.xml" "$TMP/kgj_warm.xml"; then
+    ok "(kg-json) presence: the cold run refuses deep_data.json on stderr; the warm run serves the same map from the cache, sibling indexed"
+    KGJ_LIVE=1
+else
+    no "(kg-json) presence: expected rc=0 twice, a cold refusal note for deep_data.json and a warm map identical to the cold one (cold rc=$KGJ_COLD_RC, warm rc=$KGJ_WARM_RC) — the arms below would be vacuous: $( head -2 "$TMP/kgj_cold.err" )"
+fi
+if [ "$KGJ_LIVE" -eq 1 ]; then
+    for mode in cold warm; do
+        if [ "$mode" = cold ]; then
+            $BIN "$KGJ" --no-cache --skipped >"$TMP/kgj_sk_$mode.xml" 2>/dev/null; SK_RC=$?
+        else
+            $BIN "$KGJ" --cache="$TMP/kgjson.cache" --skipped >"$TMP/kgj_sk_$mode.xml" 2>/dev/null; SK_RC=$?
+        fi
+        DJ_BYTES="$( wc -c < "$KGJ/deep_data.json" | tr -d ' ' )"
+        if [ "$SK_RC" -ne 0 ] || ! grep -q '<skipped indexed="2"' "$TMP/kgj_sk_$mode.xml"; then
+            no "(kg-json) $mode --skipped: exit $SK_RC or no <skipped indexed=\"2\"> report — the arm cannot observe the fix"
+        elif ! grep -qE "<f p=\"[^\"]*deep_data\\.json\" why=\"nest-refused\" bytes=\"$DJ_BYTES\" ext=\"\\.json\"/>" "$TMP/kgj_sk_$mode.xml"; then
+            no "#157 REGRESSED: $mode --skipped has no exact nest-refused row for deep_data.json (why=/bytes=$DJ_BYTES/ext=.json): $( grep -o '<f p="[^"]*deep_data[^/]*/>' "$TMP/kgj_sk_$mode.xml" )"
+        elif ! grep -q 'nest_refused="1"' "$TMP/kgj_sk_$mode.xml"; then
+            no "#157 REGRESSED: $mode --skipped header is missing nest_refused=\"1\": $( grep -o '<skipped [^>]*>' "$TMP/kgj_sk_$mode.xml" )"
+        elif ! grep -qF 'nest_refused= counts indexed files a pre-parse nesting guard' "$TMP/kgj_sk_$mode.xml"; then
+            no "#157 REGRESSED: $mode --skipped legend carries no nest_refused= clause"
+        else
+            ok "#157: $mode --skipped rows deep_data.json (why=\"nest-refused\" bytes=\"$DJ_BYTES\" ext=\".json\"), header nest_refused=\"1\", legend present"
+        fi
+        grep -qE '<f p="[^"]*sibling\.json" why="nest-refused"' "$TMP/kgj_sk_$mode.xml" \
+            && no "#157 REGRESSED: $mode --skipped rows sibling.json as nest-refused too — the guard is refusing the whole tree, not the one hostile file"
+    done
+fi
+$BIN "$KGJ" --no-cache --match='(array)' >"$TMP/kgj_match.xml" 2>"$TMP/kgj_match.err"; KGJ_M_RC=$?
+if [ "$KGJ_M_RC" -ne 0 ]; then
+    no "(kg-json) --match over the refused deep_data.json exited $KGJ_M_RC: $( head -2 "$TMP/kgj_match.err" )"
+elif ! grep -q 'deep_data.json: json nesting' "$TMP/kgj_match.err"; then
+    no "(kg-json) --match: the same run's ingest did not refuse deep_data.json — the arm cannot show the two paths agree"
+elif grep -q '<m p="deep_data\.json:' "$TMP/kgj_match.xml"; then
+    no "#157 REGRESSED: --match returns hits INSIDE deep_data.json in the same run whose ingest refused it — the bypass is back"
+elif ! grep -q 'nest_refused="1"' "$TMP/kgj_match.xml"; then
+    no "#157 REGRESSED: --match's answer does not disclose nest_refused=\"1\" over a tree holding one refused file: $( grep -o '<match [^>]*>' "$TMP/kgj_match.xml" )"
+else
+    ok "#157: --match returns zero hits inside the refused deep_data.json and discloses nest_refused=\"1\""
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 echo
 if [ "$fail" -eq 0 ]; then
