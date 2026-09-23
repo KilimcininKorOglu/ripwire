@@ -57,13 +57,31 @@ its `untested=` reads zero instead of reading like there was nothing to find.
 - **Every `.ts`/`.js` file under a test directory was spelled as a vitest/jest target, including
   non-tests.** A helper or setup file living beside real tests (or a `.d.ts` declaration file) matched
   the extension check and got a `run=` command that would fail in CI ("no test files found") — vitest
-  and jest only collect files matching their own `.test.`/`.spec.`/`__tests__/` conventions. Only a
-  file matching that shape is now spelled as a runnable target; a `.d.ts` file is never one, regardless
-  of evidence.
+  and jest only collect files matching their own `.test.`/`.spec.` naming, or a `__tests__/` directory
+  segment. Only a file matching that shape is now spelled as a runnable target; a `.d.ts` file is never
+  one, regardless of evidence.
 - **The nearest `package.json` could end the search before it decided anything.** A bare module-type
   marker (`{"type":"commonjs"}`, common in mixed-module repos) sits between a test file and its real
   runner evidence in some layouts; the walk now keeps climbing past a manifest that names neither
-  `scripts.test` nor a recognized dependency, instead of stopping there and reporting unknown.
+  `scripts.test` nor a recognized dependency, instead of stopping there and reporting unknown. A manifest
+  WITH a real `scripts.test` still ends the search immediately, whatever it names (even an unrecognized
+  runner): its own answer is final for that subtree and a workspace root's `vitest`/`jest` never
+  overrides a package that already answered "mocha" for itself — the same authority `scripts.test`
+  already has within one manifest, now honoured one level up a monorepo too.
+- **A `__tests__/`-only jest test file (no `.test.`/`.spec.` in its own name) was invisible to
+  `--test-gate` entirely** — not merely runner-unknown: its module scope read as an untestable owner, so
+  a change covered only through such a file exited 0 with nothing to run. `__tests__/` is now a
+  recognized test-path directory segment (`filter.h::isTestPath`, the ONE test-path convention every verb
+  shares — widened there, not duplicated), the same fix `looksLikeJsTestFile` already carried for it
+  unreachably. Checked empty of side effects on every other language: no `__tests__` directory exists
+  anywhere in this repo's own tree, so no existing fixture or pinned gate could have been counted as test
+  code by this convention before. jest's OTHER default pattern (a bare `test.js`/`spec.js` filename, no
+  leading dot or underscore) remains a narrower, separate, undocumented-no-longer gap — see below.
+- **`npm run <script>` / `yarn <script>` / `pnpm <script>` indirection inside `scripts.test` is honest-
+  unknown, not derived.** `scripts.test: "npm run test:unit"` with `scripts["test:unit"]: "vitest run"`
+  used to derive vitest via the (now-removed) dependency fallback; it is real, common indirection this
+  version does not follow. Stated as a floor below, not fixed — following it needs the same authoritative-
+  script rule one script-name hop deeper, which is a larger, separately-scoped change.
 
 ### Documented — TS/JS test runners this cannot yet derive (`run_unknown="1"` stays honest, not a bug)
 
@@ -73,7 +91,16 @@ against `.ts` files), `bun`'s test runner, and node's test runner against a `.ts
 version too old to strip TypeScript types natively. None of these is guessed at; see #323's own
 discussion for a user-declared runner template, which would be the way to name one of these explicitly
 once implemented. `pnpm`/`yarn`-prefixed `scripts.test` entries derive correctly today, spelled as
-`npx …`, since `npx` finds a locally installed binary first.
+`npx …`, since `npx` finds a locally installed binary first. A bare `test.js`/`spec.js` filename (no
+leading dot or underscore — jest's OTHER default `testMatch` shape, distinct from the now-recognized
+`__tests__/` directory convention above) is not yet a recognized test path either. `scripts.test`
+delegating through `npm run <script>` / `yarn <script>` / `pnpm <script>` to another entry in the same
+manifest (`"test": "npm run test:unit"`, `"test:unit": "vitest run"` — a common shape for a project
+with several test scripts) is read as this project's own authoritative-but-unrecognized answer and
+stays `run_unknown="1"` rather than being followed one level deeper into the target script's own
+value — a stated floor, not a guess. (A delegating script whose OWN name happens to literally contain
+`vitest`/`jest` as a word, e.g. `"npm run test:vitest"`, still derives correctly today — that is the
+existing word-match rule firing on the visible text, not indirection-following.)
 
 ## [0.6.2] — 2026-09-21
 

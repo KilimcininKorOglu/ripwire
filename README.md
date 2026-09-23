@@ -1342,13 +1342,18 @@ $ ripwire . --test-gate          # exit code: 4
 ```
 
 A `run=` attribute appears only when a runner is derivable from real evidence — a test-dir script
-whose stem matches the harness, or whose text names it; for TypeScript/JavaScript, a file matching
-vitest/jest's own test-name shape (`.test.`/`.spec.`/`__tests__/`, never a `.d.ts` declaration file)
-whose nearest `package.json` names `vitest`, `jest`, or node's own test runner — a non-empty, non-
-placeholder `scripts.test` entry is authoritative once present (it decides the runner, or decides
-none; a same-named dependency never overrides it), and dependencies are consulted only when there is
-no real `scripts.test` to read. A TS/JS file with no manifest evidence of its own still falls back to
-the SAME test-dir shell/Python driver search every other language uses — a named driver beats an
+whose stem matches the harness, or whose text names it; for TypeScript/JavaScript, a file already
+recognized as test code (`test/`/`tests/`/`__tests__/`, or a `_test./.test./_spec./.spec.` name — the
+`__tests__/` directory convention is shared with every language, the rest are TS/JS's own) whose name
+ALSO matches vitest/jest's own test-name shape (`.test.`/`.spec.`, or living under `__tests__/` at
+all, jest's own two default conventions — never a `.d.ts` declaration file) — whose nearest
+`package.json` names `vitest`, `jest`, or node's own test runner. Its own `package.json` is
+AUTHORITATIVE for the whole subtree below it: a non-empty, non-placeholder `scripts.test` entry
+decides the runner (or decides none — a same-named dependency never overrides it, whether that
+dependency sits in the same manifest or a parent one), and only a manifest with NEITHER a real
+`scripts.test` NOR a `vitest`/`jest` dependency is skipped in favour of one further up. A TS/JS file
+with no manifest evidence of its own still falls back to the SAME test-dir shell/Python driver search
+every other language uses — a named driver beats an
 unguessed default. A row with none says so — `run_unknown="1"`, never a guessed suite command — and a
 `<t>` or `<g>` row carries one or the other, never neither. A
 `<g hops="2" n="3" p="a,b,c" run_unknown="1"/>` row is **two or more contiguous runner-less rows whose

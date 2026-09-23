@@ -347,10 +347,48 @@ S="$( runjs testgatetypemarkerfix src/lib.ts )"; SEC="$( rcjs testgatetypemarker
     && ok "(s) F5: a non-deciding marker package.json is skipped; the root manifest is used" \
     || no "(s) F5 walk stopped at the marker manifest (exit=$SEC): $S"
 
+# (u1) rv-test-gate-tsjs G1 (regression from the F5 fix): a NESTED package with its own authoritative
+#      scripts.test (mocha, unrecognized) must NOT be overridden by an unrelated root manifest's jest —
+#      the walk stops at the FIRST manifest with a real scripts.test, recognized or not (F2's rule, one
+#      level up a monorepo). Before this fix the walk kept climbing past the "None" mocha manifest and
+#      reached the root's jest, deriving a command that finds no matching tests.
+U1="$( runjs testgatemonomochafix packages/a/src/lib.ts )"; U1EC="$( rcjs testgatemonomochafix packages/a/src/lib.ts )"
+{ [ "$U1EC" = 4 ] && printf '%s' "$U1" | grep -q 'run_unknown="1"' && ! printf '%s' "$U1" | grep -q 'run="npx jest'; } \
+    && ok "(u1) G1: a nested authoritative mocha script is not overridden by the root's jest -> run_unknown=\"1\"" \
+    || no "(u1) G1 nested authoritative script overridden (exit=$U1EC): $U1"
+
+# (u2) F5's own positive control, one level up a monorepo: a nested package.json that is a TRUE marker
+#      (no scripts.test, no vitest/jest dependency — just an unrelated "lodash" dependency and a "type"
+#      field) must still let the walk climb to the root's real vitest evidence. Distinguishes (u1)'s
+#      "authoritative-but-unrecognized STOPS the walk" from F5's own "decides-nothing CONTINUES it".
+U2="$( runjs testgatemonomarkerfix packages/a/src/lib.ts )"; U2EC="$( rcjs testgatemonomarkerfix packages/a/src/lib.ts )"
+{ [ "$U2EC" = 4 ] && printf '%s' "$U2" | grep -qF 'run="npx vitest run packages/a/src/lib.test.ts"'; } \
+    && ok "(u2) F5 control: a true marker (no script, unrelated dependency) still lets the walk reach the root" \
+    || no "(u2) F5 control broken by the G1 fix (exit=$U2EC): $U2"
+
+# (v) G2 (delta review, fixed as a real defect): jest's DEFAULT layout — a test file under a bare
+#     __tests__/ directory, no .test./.spec. in its own name — used to be invisible to --test-gate
+#     entirely (isTestPath did not recognize the directory, so the file's module scope read as an
+#     untestable owner and a COVERED change exited 0 with nothing to run: a false pass). __tests__/ is
+#     now a recognized test-path directory segment; the file is a <t> row with its own derived runner.
+V="$( runjs testgatejesttestsdirfix src/lib.js )"; VEC="$( rcjs testgatejesttestsdirfix src/lib.js )"
+{ [ "$VEC" = 4 ] && printf '%s' "$V" | grep -qF '<t p="src/__tests__/lib.js" hops="1" run="npx jest src/__tests__/lib.js"/>' \
+      && [ "$( attr "$V" untested )" = 0 ] && [ "$( attr "$V" untested_modscope )" = 0 ]; } \
+    && ok "(v) G2: a bare __tests__/ jest test file is a <t> row, not an untestable owner (exit 4, run=\"npx jest ...\")" \
+    || no "(v) G2 __tests__/ still invisible (exit=$VEC untested=$( attr "$V" untested ) untested_modscope=$( attr "$V" untested_modscope )): $V"
+
+# (w) G3: scripts.test delegating through `npm run <script>` to another entry in the same manifest is a
+#     STATED FLOOR, not a guess — pinned so it stays exactly this (never silently starts guessing from the
+#     dependency, and never crashes trying to follow the indirection) until a real fix follows it.
+W="$( runjs testgatenpmrunfix src/lib.ts )"; WEC="$( rcjs testgatenpmrunfix src/lib.ts )"
+{ [ "$WEC" = 4 ] && printf '%s' "$W" | grep -q 'run_unknown="1"' && ! printf '%s' "$W" | grep -q 'run="npx vitest'; } \
+    && ok "(w) G3: npm run <script> indirection stays the honest run_unknown=\"1\" floor" \
+    || no "(w) G3 indirection handling changed unexpectedly (exit=$WEC): $W"
+
 # (t) xml well-formed for the fix-round fixtures
 if command -v xmllint >/dev/null 2>&1; then
     tok=1
-    for X in "$O1" "$O2" "$P1" "$P2" "$P3" "$Q" "$R1" "$R2" "$S"; do
+    for X in "$O1" "$O2" "$P1" "$P2" "$P3" "$Q" "$R1" "$R2" "$S" "$U1" "$U2" "$V" "$W"; do
         [ -n "$X" ] || continue
         printf '%s' "$X" | xmllint --noout - 2>/dev/null || tok=0
     done

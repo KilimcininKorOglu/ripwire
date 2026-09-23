@@ -1,0 +1,1 @@
+{ "name": "x", "scripts": { "test": "npm run test:unit", "test:unit": "vitest run" }, "devDependencies": { "vitest": "^3" } }

@@ -332,6 +332,21 @@ inline bool isNpmPlaceholderScript( std::string_view script ) noexcept
     return script.find( marker ) != std::string_view::npos;
 }
 
+/// rv-test-gate-tsjs G1: whether `packageJson` has a REAL `scripts.test` — non-empty, not npm's own
+/// placeholder — regardless of whether that script names a runner this file recognizes. This is a
+/// DIFFERENT question from `detectFramework(...) != Framework::None`: a manifest whose `scripts.test`
+/// authoritatively runs mocha (unrecognized) and a manifest with NO `scripts.test` at all both return
+/// `Framework::None`, but only the first has actually DECIDED anything for its subtree — the second is a
+/// pure marker (a bare `{"type":"commonjs"}`) with nothing to decide. `nearestPackageJson` below needs to
+/// tell those apart: the first must END the walk (its own unrecognized runner is the honest answer,
+/// never overridable by a root manifest naming something else — F2's own rule, one level up), the second
+/// must not (F5's whole point).
+inline bool hasAuthoritativeScript( std::string_view packageJson )
+{
+    const std::string script = testScript( packageJson );
+    return !script.empty() && !isNpmPlaceholderScript( script );
+}
+
 /// Evidence-only framework detection. rv-test-gate-tsjs F2: a NON-EMPTY, non-placeholder `scripts.test` is
 /// AUTHORITATIVE — the script IS what a CI run of `npm test` executes, so once it names something, that
 /// something (or nothing recognized) is the answer, and a same-named DEPENDENCY never overrides it (a repo
@@ -376,6 +391,16 @@ inline Framework detectFramework( std::string_view packageJson )
 /// right for "code a test author wrote" but wrong for "a file vitest/jest itself would collect as a test
 /// target" — a helper or a setup file living beside real tests matches isTestPath but not either runner's
 /// own glob, so spelling `npx vitest run test/setup.ts` would fail with "no test files found" in CI.
+///
+/// rv-test-gate-tsjs G2 (delta review — fixed, not left as a follow-up): this function is only ever
+/// CALLED on a path isTestPath already accepted (TestRunnerIndex's own candidate gate, testmap.h).
+/// isTestPath (filter.h) now recognizes a bare `__tests__/` directory segment too (the SAME fix, applied
+/// where every other verb reaches it, since isTestPath is the one shared test-path convention this whole
+/// tool uses — not duplicated here), so the `__tests__/` branch below is reachable for a bare
+/// `src/__tests__/foo.js` (jest's own default convention, no `.test.` in the name) exactly as it already
+/// was for `src/__tests__/foo.test.ts`. jest's OTHER default pattern half — a bare `test.js`/`spec.js`
+/// filename with no leading dot or underscore — is a narrower, separate gap neither isTestPath nor this
+/// function closes; stated, not silent.
 inline bool looksLikeJsTestFile( std::string_view path ) noexcept
 {
     if( path.ends_with( ".d.ts" ) )
@@ -436,6 +461,22 @@ inline const char* verbFor( Framework fw ) noexcept
 /// even though it decides nothing; the walk now keeps climbing past it toward a manifest that CAN decide
 /// (a workspace root's runner is hoisted to every package under it anyway, so the root manifest is exactly
 /// the right fallback).
+///
+/// rv-test-gate-tsjs G1 (a regression the F5 fix above introduced): "decides nothing" is NOT the same
+/// test as `detectFramework(...) == Framework::None` — that also fires for a manifest whose OWN
+/// `scripts.test` authoritatively names an unrecognized runner (mocha, say), and climbing past THAT one
+/// let an unrelated root manifest's `jest`/`vitest` override a subtree that had already answered for
+/// itself (F2's own rule, one level up the tree, is exactly what this fix restores). The walk now stops
+/// at ANY manifest with a real `scripts.test` (`hasAuthoritativeScript`), recognized or not, and climbs
+/// past only a manifest with neither a real script NOR a decisive dependency — a true marker.
+///
+/// The one case this file DOES treat as deciding, on purpose, pinned here rather than left implicit: a
+/// manifest with NO `scripts.test` but a `vitest`/`jest` DEPENDENCY already makes `detectFramework`
+/// return non-`None` (the dependency-fallback branch), so it already stops the walk under the plain
+/// `decided` check below — a dependency with nothing wiring it into `scripts.test` is still read as this
+/// package's own evidence, not deferred to a root manifest. `test/testgatecheck.sh` arm (p1)
+/// (`fx/mochavitestdep`, mocha script + vitest dependency, single package) already pins the single-
+/// package half of this; monorepo arm (u2) below pins that the SAME rule holds one level up a tree.
 inline std::string nearestPackageJson( const std::string& file, std::string_view root )
 {
     namespace fs = std::filesystem;
@@ -458,11 +499,12 @@ inline std::string nearestPackageJson( const std::string& file, std::string_view
         {
             fallback = bytes;
         }
-        if( detectFramework( bytes ) == Framework::None )
+        const bool decided = detectFramework( bytes ) != Framework::None;
+        if( !decided && !hasAuthoritativeScript( bytes ) )
         {
-            return false;   // F5: no evidence HERE is not the same as no evidence anywhere above
+            return false;   // F5: a true marker (no script, no decisive dependency) decides nothing HERE
         }
-        decisive = std::move( bytes );
+        decisive = std::move( bytes );   // G1: an authoritative-but-unrecognized script also ends the walk
         return true;
     } );
     return decisive.empty() ? fallback : decisive;
