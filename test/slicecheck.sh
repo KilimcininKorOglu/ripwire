@@ -555,10 +555,14 @@ done
 printf '%s' "$DHELP" | grep -qi 'docs/EVALS.md' \
     && ok "(disclosure) --help=slice points the whole-function disclosure at docs/EVALS.md, not an unmerged branch" \
     || no "(disclosure) --help=slice must cite docs/EVALS.md for the whole-function result"
-grep -q 'WHOLE function span' "$ROOT/docs/EVALS.md" \
-    && grep -q '611ed7ab' "$ROOT/docs/EVALS.md" \
-    && ok "(disclosure) docs/EVALS.md carries the whole-function-span FAIL result and its signed result sha (611ed7ab)" \
-    || no "(disclosure) docs/EVALS.md must record the whole-function FAIL result with its signed result sha"
+# Grep the section heading and the verdict words, not a result sha: the sha names one signed head of
+# `lane/arise-result` and moves every time that branch is re-reviewed (611ed7ab -> 13292db7 already,
+# after the result review's conditions A/B landed) — a gate pinned to one sha goes stale on the NEXT
+# honest correction to that branch, which is exactly the kind of drift this arm must not itself commit.
+grep -q 'row order over the WHOLE function span' "$ROOT/docs/EVALS.md" \
+    && grep -q 'MEASURED 2026-09-23.*FAIL' "$ROOT/docs/EVALS.md" \
+    && ok "(disclosure) docs/EVALS.md carries the whole-function-span section and its FAIL verdict" \
+    || no "(disclosure) docs/EVALS.md must record the whole-function-span section with a FAIL verdict"
 
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

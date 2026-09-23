@@ -14040,9 +14040,14 @@ Python, 173 single-function instances (88 held-out repos), 498 variable instance
 `ripwire-arise-line-rank-v1`) — includes zero. 1 of 4 pre-registered PASS conditions held (R3@1 > R0@1
 only; margin ≥ 0.02 NO, CI excludes 0 NO, R3@1 > R1@1 NO). Per-instance vs the shipped rule: 2 better, 7
 worse, 164 tied. The narrow-pool arm (informational; moot once the wide pool failed) also did not clear:
-def-use-coverage MRR 0.630 vs R3's 0.596 on the same 484-pair population the ADOPT table above uses.
+`score_arise_narrowpool.py`'s own definition gives 506 pairs, defuse MRR 0.602, defrole 0.570 — NOT the
+ADOPT table's 478 pairs above, a DEFINITION difference (no span restriction, no `--expand`/gold-outside-
+span skips, and a regex-named-gold pair rule instead of "rows hold a gold line"), not tree drift or a
+re-run on the same rows. Filtered to EVALS' own definition, the SAME run gives 484 pairs, defuse MRR
+0.6295, defrole MRR 0.5963 — close to, but still not identical to, the ADOPT table's 478/0.628. `defrole
+< defuse` holds under both definitions.
 
-**Provenance.** Signed result commit `611ed7ab` on `origin/lane/arise-result` (unmerged; every number above
+**Provenance.** Signed result head `13292db7` on `origin/lane/arise-result` (unmerged; every number above
 is reproduced here, in the committed tree, so nothing that cites this section points at an unmerged
 branch). Independently re-run byte-identical to the committed output (result review, 2026-09-23).
 
