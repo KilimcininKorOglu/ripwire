@@ -320,21 +320,41 @@ with its numbers the way the two before it were:
 
 ---
 
-### 5.4 Pre-registration: `served_syms` (2026-09-23)
+### 5.4 Pre-registration: `served_syms` (2026-09-23; fix round 1 same day, after adversarial review)
 
-Written before this round's number exists. `served_syms` — `grade()`'s count of `<sigs><d>` rows in
-the `--for` bundle, i.e. the size of the served head — is not a new fact: it is already emitted,
-already disclosed to every caller, and already computed by `calibrate_confidence.py`'s `grade()`
-(`served_syms=len(head)`) for every scored row. It has simply never been scored as a miss detector
-against §5.2's band. A margin-resolution review (`reports/rv-margin-resolution.md`, HIGH-1,
-2026-09-22) reports, **as prior knowledge disclosed here rather than re-derived**, that `served_syms`
-scored **0.669 (file_hit) / 0.723 (func_hit)** AUROC on the pre-registered 92 and **0.769 / 0.791** on
-a separate, non-pre-registered 40-row sample — in both cases without ever computing an operating
-point, and without any record of which direction (larger or smaller `served_syms`) was treated as
-"more miss evidence" (the reviewer's scratch script is lost). This section fixes, in advance of that
-number being recomputed under a named procedure, everything §5.2's band needs to be checked honestly:
-which population, which statistic, which direction, which thresholds, which tie rule, and what each
-outcome may be said in public.
+Written before this round's number — a number *computed under this procedure* — exists. `served_syms`
+— `grade()`'s count of `<sigs><d>` rows in the `--for` bundle, i.e. the size of the served head — is
+not a new fact: it is already emitted, already disclosed to every caller, and already computed by
+`calibrate_confidence.py`'s `grade()` (`served_syms=len(head)`) for every scored row. It **has already
+been scored once, exploratorily** — it has never been scored against §5.2's band, under a named,
+reproducible procedure, with an operating point. A margin-resolution review
+(`reports/rv-margin-resolution.md`, HIGH-1, 2026-09-22) reports, **as prior knowledge disclosed here
+rather than re-derived**, that `served_syms` scored **0.669 (file_hit) / 0.723 (func_hit)** AUROC on
+the pre-registered 92 and **0.769 / 0.791** on a separate, non-pre-registered 40-row sample — in both
+cases without ever computing an operating point, and without any record of which direction (larger or
+smaller `served_syms`) was treated as "more miss evidence" (the reviewer's scratch script is lost).
+This section fixes, in advance of a number being computed *under this named procedure*, everything
+§5.2's band needs to be checked honestly: which population, which statistic, which direction, which
+thresholds, which tie rule, and what each outcome may be said in public.
+
+> **Fix round 1 (2026-09-23), after `reports/rv-served-syms-prereg.md` (VERDICT NOT READY).** Three
+> required changes, landed before any asset tree was scored under this section, so none of them can be
+> read as a reaction to a number: **HIGH-1** — §5.4.3 (below) previously derived the orientation from
+> `adaptiveCut`/`deriveForConfidence`'s `kept`/`hitCeiling` mechanism; that mechanism only runs under
+> `--adaptive`, which the registered invocation (§5.4.2) never passes, so the derivation described code
+> the scored bundle never executes. The orientation is now registered as the raw value, **informed by
+> the exploratory 0.669/0.723 AUROC already seen**, not derived from a mechanism — say so, not
+> "mechanistic". **HIGH-2** — the fingerprint's AUROC tolerance was centered on the 3-decimal-place
+> figure (0.580) with too tight a window to admit the only published 4-decimal-place rendering of the
+> same statistic (0.5805, `reports/rv-margin-resolution.md`); a true reproduction of the 92 on a
+> current binary had a real chance of being refused as "not the 92". Re-centered on the exact AUROC
+> lattice point nearest the published figure, with a tolerance sized to that lattice's own step.
+> **HIGH-3** — the fire-rate self-reject (SR-1) was folded into the band verdict, so a threshold that
+> genuinely met the owner's band (false-warn ≤ 0.20, recall ≥ 0.50) but warned on too many rows could
+> be reported as "does not reach the band" — false. Band-met and SR-1-met are now separate, each with
+> its own outcome and sentence (§5.4.6). Also: "was never scored" and "our best disclosed signal" are
+> removed from every sentence below (served_syms **was** scored, exploratorily — MEDIUM-1); §5.2's
+> separate AUROC band is now reported, though it does not gate here (MEDIUM-3).
 
 **Scope.** This is not a new instrument under §5.1 — `served_syms` is not proposed as a replacement
 for `confidence=`/`margin_pct=`, and §5.1's "not a recalibration" argument does not apply to it (it is
@@ -348,20 +368,39 @@ computed, the run must reproduce §3.3's own figures on the asset tree it points
 
 - `confidence=` split **74 low / 18 high** (n = 92),
 - misses **15** (file grain) / **38** (func grain),
-- `margin_pct=`/score AUROC **0.580** (file_hit) / **0.622** (func_hit).
+- rows scored equals the summary's own claimed count (`len(rows) == n_scored`),
+- `margin_pct=`/score AUROC printing as **0.580** (file_hit) / **0.622** (func_hit).
 
-All four numbers must match before a single `served_syms` figure is reported. **If any one of them
-does not reproduce, the run stops there** and reports exactly that — "the population on this asset
-tree is not the pre-registered 92" — with the actual figures it got instead. No `served_syms` AUROC,
-threshold, or operating point is reported "on the 92" from a run that failed this check, no matter how
-plausible the resulting numbers look. This is the general "check what the population IS, not just that
-the number reproduces" lesson, applied here as a mechanical gate rather than a habit to remember.
+**AUROC tolerance (revised, fix round 1 HIGH-2).** AUROC over an *m*-miss / *h*-hit population is
+`k / (m·h)` for half-integer `k` (Mann–Whitney with tie-averaging, exactly what this document's `auroc()`
+computes) — a *lattice*, not a continuum. "Prints as 0.580 at 3dp" and "prints as 0.5805 / 0.581"
+(`reports/rv-margin-resolution.md`, a later binary, same 92) can only both be true of one real number
+if that number is near the lattice point **670.5 / 1155** (15 misses × 77 hits = 1155 pairs;
+670.5/1155 = 0.580519). The fingerprint pins that exact point, with a **per-grain tolerance sized to
+the grain's own lattice step** (½ the pair count's reciprocal) so it admits the pinned point and its
+two immediate neighbours and nothing further out: file_hit tolerance **0.0006** (step 0.000433, so ±1
+step is admitted, ±2 is not); func_hit is pinned at **1276.5 / 2052** (38 × 54 = 2052 pairs;
+0.622076, printing as 0.622 / 0.6221) with tolerance **0.0003** (step 0.000244). A tolerance centered
+on a 3-decimal *rendering* of the statistic, rather than on the lattice point that rendering can
+actually come from, can reject the one number the figure was ever published as — which is what the
+original 0.0005-around-0.580 tolerance did to 0.5805 (`|0.5805 − 0.580| = 0.000500000000000056`,
+over the old bound by a floating-point hair). A **zero-tolerance exact match is not proposed**: the
+lattice point itself depends on which binary produced the published figure, and 15×77/38×54 fix the
+lattice; only the tolerance around it needed correcting.
 
-Every report of a result under this registration — PASS, FAIL, or fingerprint mismatch — **must name
-the asset tree it read (`--assets` path) and the binary's `built_from=` sha** (both already printed by
-`calibrate_confidence.py`'s `# calibrate_confidence — assets=... binary=...` stderr line and carried
-into `meta.binary_version`/`meta.assets` in its JSON output). A result that does not name both is not
-a report under this registration.
+All checks must pass before a single `served_syms` figure is reported. **If any one does not
+reproduce, the run stops there** and reports exactly that — "the population on this asset tree is not
+the pre-registered 92" — with the actual figures it got instead. No `served_syms` AUROC, threshold, or
+operating point is reported "on the 92" from a run that failed this check, no matter how plausible the
+resulting numbers look. This is the general "check what the population IS, not just that the number
+reproduces" lesson, applied here as a mechanical gate rather than a habit to remember.
+
+Every report of a result under this registration — PASS, FAIL, PASS-but-fire-rate-rejected, or
+fingerprint mismatch — **must name the asset tree it read (`--assets` path) and the binary's
+`built_from=` sha** (both already printed by `calibrate_confidence.py`'s
+`# calibrate_confidence — assets=... binary=...` stderr line and carried into
+`meta.binary_version`/`meta.assets` in its JSON output). A result that does not name both is not a
+report under this registration.
 
 #### 5.4.2 The statistic
 
@@ -387,40 +426,63 @@ record and cannot reappear later as this round's hypothesis if it happens to loo
 *(This is a place §5's existing registration was ambiguous — it registered the func-grain choice for
 its own new facts, not for scoring an already-shipped one — and resolving it this way, rather than
 requiring both grains or inventing an OR/AND rule, is flagged in the report as a decision for the
-reviewer.)*
+reviewer. Ruling, fix round 1: upheld — §5.2 verbatim says "the grain where any separation exists at
+all", and gating on func_hit follows that rather than loosening or tightening it.)*
 
-#### 5.4.3 Orientation — fixed now, mechanistically, not chosen on the 92
+**§5.2's separate AUROC band is reported, not gating here (added, fix round 1 MEDIUM-3).** §5.2
+registers two bands: the operating-point band used above, **and** a separate AUROC band (`≥ 0.70`
+meets · `[0.60, 0.70)` weak · `< 0.60` does not meet · `≤ 0.35` directional refutation). This section
+reports that second band per grain (the rung the point AUROC lands in) but does **not** gate any
+outcome on it — the owner's question here is the operating point, and using a looser or stricter rung
+to decide PASS/FAIL would be inventing a rule §5.2 did not register for this purpose. This reported
+rung is a *different* numeric band from `bench/arb/score_abstention_calibration.py`'s own
+`auroc_band()` (0.65/0.55/0.35 — the ARB round-one registration), which shares only the 0.35
+directional-refutation cut by coincidence; the two are not interchangeable and the code does not
+import one to compute the other.
 
-Registered **now**, from the code the mechanism already runs, **not** from any `served_syms` number on
-the 92 (none has been computed under this procedure yet): **larger `served_syms` is registered as more
-miss evidence.**
+#### 5.4.3 Orientation — the raw value, informed by a seen exploratory AUROC, not blind
 
-The mechanism (`src/lexical.h`'s `adaptiveCut`, `deriveForConfidence`): when the cliff scan finds no
-material within-cap drop (`bestCapDrop < 0.20`), `cut.hitCeiling = true` and `cut.kept = hardCeil` —
-the head is filled to the (near-)maximum the query's positive hits and the ceiling allow, i.e. `kept`
-(and therefore `served_syms`) sits at or near its largest achievable value for that query. That branch
-is exactly the one that yields `confidence="low"` on every row in the 92 (§3.3: "every `"high"` here
-was earned by the cliff branch"). When a material cliff **is** found within the cap, `cut.kept` is
-clamped down to the cliff rank (or the floor, whichever is larger) — a smaller, more selective head —
-and that is the branch `confidence="high"` comes from. §1/§3.3 already establish, as published fact
-and not as a number this round re-derives, that `confidence="low"` rows have the **lower** hit rate at
-both grains (file: 81.1% vs 94.4%; func: 51.4% vs 88.9%). Chaining those two already-published facts —
-"low confidence ⟺ hitCeiling ⟺ larger served_syms" and "low confidence ⟺ lower hit rate" — gives a
-mechanistic prediction for `served_syms` alone, without looking at a single `served_syms` row: **a
-larger served head predicts a more likely miss.**
+**Revised in fix round 1 (HIGH-1).** The original text of this subsection registered the orientation
+"mechanistically", from `adaptiveCut`/`deriveForConfidence`'s `kept`/`hitCeiling` fields: it argued
+that `confidence="low"` rows reach a larger `served_syms` because they hit the adaptive-cut ceiling
+rather than a cliff. That mechanism is real, but it is **not the mechanism the registered invocation
+runs.** Read with the binary (`--expand=src/verbs_for.h:runForLens`) rather than from memory of
+`lexical.h`: `forCut = adaptiveCut(...)` is computed on every `--for` call and is READ ONLY when
+`cfg.adaptive` is set — the source comment names it explicitly, *"DERIVED, NEVER SCORED … Disclosure
+only: nothing below reads `forCut` to change what is served."* Under the registered invocation
+(§5.4.2 — default `--for`, **no `--adaptive`**), `forTopN` starts at `kForLensDefaultTopN` (**40**),
+is then shrunk by `relevanceFloorCut` to the count of positive-score symbols when that is smaller, and
+is then trimmed further by `packSignatures` under the byte-budget ladder — none of which reads
+`cut.kept`, `cut.hitCeiling`, or the cliff rank. So "`confidence="low"` ⟺ `hitCeiling` ⟺ larger
+`served_syms`" has no first link under the bundle the 92 were actually scored on: the chain describes
+`--adaptive`'s behaviour and misattributes it to the registered one.
 
-This is stated as a commitment, not a hedge: the scoring code (§5.4.6) applies this orientation as a
-fixed constant. If the resulting AUROC comes out **below** 0.5, that is reported as a clean result
-under the registered orientation — an AUROC anti-correlated with the registered direction — and is
-**not** silently flipped to report `1 − AUROC` as if the round had registered the other way. Flipping
-after seeing the number is exactly the in-sample fishing this document exists to prevent.
+The orientation is therefore registered differently: **larger `served_syms` is registered as more miss
+evidence — the raw value, the harness's own convention, and *the direction under which the
+already-seen exploratory AUROC (0.669 file_hit / 0.723 func_hit, `reports/rv-margin-resolution.md`)
+was most plausibly computed* (that lost script's own orientation cannot be recovered, but a reader who
+knows a number > 0.5 was already observed under some direction can distinguish "which direction" from
+"blind").** Say this plainly rather than dress it as mechanistic: **the orientation is informed by a
+number that has already been seen, not chosen blind.** That is weaker than a mechanistic derivation
+and is disclosed as such — it is not "the registration is compromised", because the alternative this
+document's own author-brief offered in advance was exactly this path, labelled post-hoc, and that is
+the path taken.
 
-*(Decision for the reviewer: the task brief offered "state a mechanistic prediction now" or "register
-that orientation is chosen on the 92, labelled post-hoc." This registration takes the first path,
-because the mechanism above is derivable from source and from already-published §1/§3.3 numbers alone
-— it does not require reading a single new row of data. A reviewer who judges the chain weaker than
-this document treats it should say so and require the second path instead; that is a live
-disagreement, not a settled one.)*
+This is still stated as a commitment, not a hedge: the scoring code (§5.4.6) applies this orientation
+as a fixed constant, and two things follow from committing to it rather than re-deriving it per run:
+
+- If the resulting AUROC comes out **below** 0.5, that is reported as a clean result under the
+  registered orientation — an AUROC anti-correlated with the registered direction — and is **not**
+  silently flipped to report `1 − AUROC` as if the round had registered the other way. Flipping after
+  seeing the number is exactly the in-sample fishing this document exists to prevent.
+- **§5.2's own directional-refutation rung applies:** an AUROC **≤ 0.35** is reported as a directional
+  refutation of this orientation (`auroc_band_5_2()` returns `"does_not_meet_opposite_direction"`, a
+  distinct string from a bare "does not meet"), never re-read as evidence for the opposite direction
+  without a fresh registration.
+
+Every sentence this round licenses (§5.4.6) states the orientation was informed by the seen exploratory
+AUROC — never that it was chosen blind, and never "mechanistically", now that HIGH-1 has shown the
+mechanism argument does not describe the registered invocation.
 
 #### 5.4.4 Threshold procedure
 
@@ -440,28 +502,42 @@ so "warn on nothing" is always a representable point:
   more conservative, fewer-false-warnings choice at that recall — the same "ties broken toward the
   more conservative side" convention `sweep_thresholds`'s own F1 tie rule states, translated to this
   rule's `≥`-warns-on-large direction).
-- **Verdict rule, exactly.** Let `false_warn(t)` = the false-warn rate and `recall(t)` = the miss-recall
-  at threshold `t`, both computed on `func_hit` misses (§5.4.2). **PASS on the 92 iff `∃ t ∈ T` with
-  `false_warn(t) ≤ 0.20 ∧ recall(t) ≥ 0.50` on `func_hit`.** Every `t ∈ T` and its
-  `(false_warn, recall)` pair — on both `func_hit` and `file_hit` — is reported in full (the entire
-  sweep table), not only the chosen point: a table that shows only the winning threshold invites
-  exactly the in-sample cherry-pick this section exists to bound.
-- **Self-reject, carried from §5.3 and applied here:**
-  - **SR-1 (fire-rate ceiling, from §5.3 rule 2).** Any `t` reported as "the" operating point whose
-    `warn` rate on the 92 exceeds **25%** of rows is disqualified from being *the* chosen point even
-    if it satisfies the band — reported in the sweep table, but not selected. (`recall ≥ 0.50` with 15
-    file / 38 func misses out of 92 rows makes a low fire-rate and the recall floor jointly satisfiable
-    only if `served_syms` separates considerably better than chance; this is not assumed, only stated
-    as the arithmetic constraint the sweep must clear.)
-  - **SR-2 (grain honesty, from §5.3 rule 4).** A PASS on `func_hit` alone, with `file_hit` not meeting
+- **Verdict rule, exactly — `band_met` and `sr1_met` kept SEPARATE (revised, fix round 1 HIGH-3).** Let
+  `false_warn(t)` = the false-warn rate and `recall(t)` = the miss-recall at threshold `t`, both
+  computed on `func_hit` misses (§5.4.2). **The owner's question is one predicate:
+  `band_met := ∃ t ∈ T with false_warn(t) ≤ 0.20 ∧ recall(t) ≥ 0.50` on `func_hit`** — this alone is
+  what "PASS on the 92" means, and it is checked *without* reference to SR-1. SR-1 (below) is a
+  *separate*, also-registered condition on which `t` a report may recommend as shippable; it is never
+  allowed to change whether `band_met` is true. **A prior draft of this section folded SR-1 into the
+  band verdict** (a `t` satisfying the band but failing SR-1 was reported as "does not reach the band"
+  — false on that data, caught by adversarial review, `reports/rv-served-syms-prereg.md` HIGH-3) —
+  that folding is exactly what this revision undoes. Every `t ∈ T` and its `(false_warn, recall,
+  warn_rate)` triple — on both `func_hit` and `file_hit` — is reported in full (the entire sweep
+  table), not only the chosen point: a table that shows only the winning threshold invites exactly the
+  in-sample cherry-pick this section exists to bound.
+- **Self-reject, carried from §5.3 and applied here — SR-1 is REPORTED, not verdict-bearing for
+  `band_met`:**
+  - **SR-1 (fire-rate ceiling, from §5.3 rule 2).** `sr1_met := ∃ t` that satisfies `band_met`'s
+    predicate AND whose `warn` rate on the 92 is **≤ 25%**. SR-1 decides only whether a `t` may be
+    *recommended as a shippable candidate* — never whether the band itself is met. (`recall ≥ 0.50`
+    with 15 file / 38 func misses out of 92 rows makes a low fire-rate and the recall floor jointly
+    satisfiable only if `served_syms` separates considerably better than chance; this is not assumed,
+    only stated as the arithmetic constraint the sweep must clear.)
+  - **SR-2 (grain honesty, from §5.3 rule 4).** A real PASS on `func_hit`, with `file_hit` not meeting
     the band at the same or any threshold, is reported as exactly that — "meets on func_hit, not on
     file_hit" — never folded into a single grain-agnostic sentence.
   - **SR-3 (in-sample disclosure).** Any `t` found this way is chosen **in-sample** (it is selected by
-    looking at the 92's own sweep table). A PASS under this procedure licenses "worth replicating,"
-    never "shippable," until §5.2's replication runs the **same frozen `(orientation, t)`** —
-    unchanged, not re-swept — on a second sample of ≥ 92 fresh held-out instances. The orientation is
-    already frozen (§5.4.3); the threshold `t` freezes the moment this round's sweep picks it, and
-    is what the replication run receives as a fixed input, not what it re-derives.
+    looking at the 92's own sweep table). A real PASS under this procedure licenses "worth
+    replicating," never "shippable," until §5.2's replication runs the **same frozen `(orientation,
+    t)`** — unchanged, not re-swept — on a second sample of ≥ 92 fresh held-out instances. The
+    orientation is already frozen (§5.4.3); the threshold `t` freezes the moment this round's sweep
+    picks it, and is what the replication run receives as a fixed input, not what it re-derives.
+  - **Outcomes, from the `(band_met, sr1_met)` pair (§5.4.6 gives the exact sentences):**
+    `band_met=False` → **FAIL**; `band_met=True, sr1_met=True` → **PASS** (the shippable-track
+    threshold, tie rule above, is `chosen`); `band_met=True, sr1_met=False` → **PASS, FIRE-RATE
+    REJECTED** — the band is genuinely met, but every band-meeting `t` warns on too many rows to
+    recommend, so the report cites the best band-only point (`best_band_only`, same tie rule, SR-1
+    ignored) without calling it a chosen operating point.
 
 #### 5.4.5 Uncertainty
 
@@ -484,11 +560,18 @@ so "warn on nothing" is always a representable point:
 
 #### 5.4.6 What is reported, and what each outcome licenses
 
-| outcome | what is reported | the sentence it licenses in a public reply |
-| --- | --- | --- |
-| **Fingerprint mismatch** | which of the four §5.4.1 figures failed to reproduce, and what was measured instead; asset tree path and binary sha | *"served_syms has not been scored against the pre-registered band: the asset tree available today does not reproduce the pre-registered 92-instance population, so no number is reported as measured on it."* Nothing about `served_syms`'s discrimination or an operating point may be asserted. |
-| **FAIL** (fingerprint reproduces; no `t` meets the band on `func_hit`, or the only qualifying `t`s fail SR-1) | `func_hit`/`file_hit` AUROC with CI; the full threshold sweep; the disqualifying reason (band not met, or fire-rate ceiling) | *"served_syms, our best disclosed signal, was never scored; scored now on the pre-registered 92, it does not reach the band (false-warn ≤ 0.20 at miss-recall ≥ 0.50): AUROC \<X\> [CI] (func_hit), and no threshold clears both floors together."* A negative is a complete result and is reported with the same numbers a PASS would carry. |
-| **PASS** (fingerprint reproduces; some `t` meets the band on `func_hit`, survives SR-1) | the chosen `t`, its `(false_warn, recall)` with CI, `func_hit`/`file_hit` AUROC with CI, the full sweep table, and SR-2's grain-honesty statement | *"served_syms, our best disclosed signal, was never scored; scored now on the pre-registered 92 at threshold t=\<N\> served symbols, it reaches false-warn=\<X\> and miss-recall=\<Y\> on func_hit — inside the pre-registered band. This is an in-sample result on one 92-row sample (per §5.2) and licenses 'worth replicating,' not 'shippable': replication on ≥92 fresh held-out instances, at this same frozen threshold and orientation, has not been run."* No sentence produced under a PASS may drop the replication clause. |
+**Revised, fix round 1 (HIGH-3, MEDIUM-1).** Four outcomes, not three — `band_met` and `sr1_met`
+license different sentences, per §5.4.4 — and every sentence below states that `served_syms` **was**
+scored once already, exploratorily, rather than "was never scored" (MEDIUM-1: it was, at 0.669/0.723;
+what had not happened was scoring it against this band, under this procedure, with an operating
+point). "Our best disclosed signal" is likewise dropped — it asserts an untested comparison.
+
+| outcome | condition | what is reported | the sentence it licenses in a public reply |
+| --- | --- | --- | --- |
+| **Fingerprint mismatch** | any §5.4.1 check fails, including the row-count check | which check(s) failed and what was measured instead; asset tree path and binary sha | *"served_syms had never been scored against our pre-registered band — an exploratory AUROC (0.669 file_hit / 0.723 func_hit) had been computed once in a prior review, on this same 92, without an operating point or a recorded orientation. Scored now under a named procedure, with the orientation fixed in advance as the raw value — informed by that exploratory AUROC having already been seen, not blind (§5.4.3): the asset tree available today does not reproduce the pre-registered 92-instance population, so no number under this procedure is reported as measured on it."* Nothing about `served_syms`'s discrimination or an operating point may be asserted. |
+| **FAIL** | `band_met = False` (no `t` meets the band on `func_hit` at all) | `func_hit`/`file_hit` AUROC with CI and §5.2's AUROC-band rung; the full threshold sweep | opens with the same disclosure clause as above, then: *"…it does not reach the band (false-warn ≤ 0.20 at miss-recall ≥ 0.50) on func_hit: AUROC \<X\> [CI] (§5.2 rung: \<meets/weak/does_not_meet/does_not_meet_opposite_direction\>), and no threshold clears both floors together."* A negative is a complete result and is reported with the same numbers a PASS would carry. |
+| **PASS** | `band_met = True` **and** `sr1_met = True` | the chosen `t` (band AND SR-1), its `(false_warn, recall)` with CI and resample counts, `func_hit`/`file_hit` AUROC with CI, the full sweep table, SR-2's grain-honesty statement | opens with the same disclosure clause, then: *"…at threshold t=\<N\> served rows it reaches false-warn=\<X\> [CI] and miss-recall=\<Y\> [CI] on func_hit (\<a\>/10000 and \<b\>/10000 bootstrap resamples usable) — inside the pre-registered band and within the 25% fire-rate ceiling (warns on \<Z\>% of the 92). \<file_hit also/does not\> meet the same band. This is an in-sample result on one 92-row sample (per §5.2) and licenses 'worth replicating,' not 'shippable': replication on ≥92 fresh held-out instances, at this same frozen threshold and orientation, has not been run."* No sentence produced under a PASS may drop the replication clause. |
+| **PASS, fire-rate rejected** | `band_met = True` **and** `sr1_met = False` | the best band-only `t` (SR-1 ignored), its `(false_warn, recall, warn_rate)` | opens with the same disclosure clause, then: *"…it reaches the band at t=\<N\> served rows (false-warn=\<X\>, miss-recall=\<Y\> on func_hit) — but that threshold warns on \<Z\>% of the 92, above the 25% fire-rate ceiling §5.3 registered (carried into this round as SR-1). It meets the band and fails the fire-rate self-reject: not a candidate for shipping, and this sample has no in-band threshold that also clears SR-1."* This sentence may **never** say "does not reach the band" — the band was reached; SR-1, a separate condition, was not. |
 
 **Counts that cannot be totals are floors, and a zero means "none found."** Any skip bucket this round's
 run reports (`no_snapshot`, `wrong_split`, `index_fail`, `for_fail`, `parse_fail`, `timeout`,
