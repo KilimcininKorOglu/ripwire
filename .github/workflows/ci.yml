@@ -862,28 +862,13 @@ jobs:
           test "$syms"  -ge 15 || { echo "ci: the fixture crawl found $syms symbol(s), expected >= 15" >&2; exit 1; }
           case "$iters" in pr_iters=\"0\"|'') echo "ci: PageRank ran 0 iterations — the graph was empty ($iters)" >&2; exit 1 ;; esac
 
-      # #326: cacheDirLadder() (src/quality.h) is the one function every cache consumer in the tree builds a
-      # path from — --doctor's cache-dir row (probe + blob/lock scan), resolveCacheBlobPath (the choke point
-      # nearly every blob path routes through), evictOldCacheFamily/sweepStaleCacheBlobsOnce (cache-hygiene
-      # eviction), slicediff.h/editpreview.h's temp parse roots, crossref.h's blob-batch listing,
-      # ingest_docpass.h's doc-bridge cache, and main.cpp's remote-clone cache all take its return value. On
-      # Windows with neither TMPDIR nor XDG_CACHE_HOME set, that return value used to be the un-rebased
-      # "/tmp/ripwire-<uid>" literal — real and writable only through os::mkdir/os::lstat/os::chmod's own
-      # silent rebase onto the real user temp directory, which every one of the consumers above that reaches
-      # for it via std::filesystem or a bare std::fopen (bypassing os::) never got. Fixed at the SOURCE:
-      # cacheDirLadder() itself now returns the already-rebased spelling, so every consumer is correct by
-      # construction. This step reproduces the exact filed condition (both env vars unset), then proves TWO
-      # independent consumers end to end: --doctor's cache-dir row (probe + scan) and resolveCacheBlobPath's
-      # cache-hit path (a second identical crawl must reuse the SAME blob, not write a new one) — on unfixed
-      # code both would read/write a directory the tool never actually uses, so this fails loudly (ok="0",
-      # blobs="0", or a blob count that grows on the warm run) exactly the way the reporter's own machine did.
-      #
-      # NOT independently exercised here: evictOldCacheFamily's own scan (no CLI-observable signal exists for
-      # it without new instrumentation — its thresholds, kMaxCacheBlobCount=4096 / 30 days / 2 GiB, are not
-      # reachable by a CI smoke step). It shares the exact same fix by construction: sweepStaleCacheBlobsOnce
-      # is called with this same cacheDirLadder() return value (ingest_cache.h:2894), which the warm-run
-      # assertion below already proves is the real, in-use cache directory — so eviction's scan reaches the
-      # same real blobs this step just proved --doctor and resolveCacheBlobPath do.
+      # #326: cacheDirLadder() (src/quality.h) is the one function every cache consumer builds a path from —
+      # --doctor's cache-dir row, resolveCacheBlobPath (nearly every cache-blob path), cache eviction, --slice/
+      # edit-preview temp roots, crossref, the doc-bridge cache, and the remote-clone cache all took its
+      # un-rebased return, real only through os::mkdir's own silent Windows rebase. Fixed at the source:
+      # cacheDirLadder() now returns the already-rebased path, so every consumer is correct by construction.
+      # Reproduces the filed condition, then proves --doctor's report AND a warm-run cache hit
+      # (resolveCacheBlobPath) end to end; eviction shares the fix by construction (same dir=, see CHANGELOG).
       - name: "--doctor cache-dir and cache reuse must be TRUE (#326): no false unwritable/empty, no missed cache hit"
         run: |
           unset TMPDIR XDG_CACHE_HOME
@@ -898,9 +883,7 @@ jobs:
           [ -n "$blobs1" ] && [ "$blobs1" -ge 1 ] \
             || { echo "ci: #326 regressed — cache-dir row reports blobs=$blobs1 right after a crawl that just wrote there: $row" >&2; exit 1; }
 
-          # resolveCacheBlobPath: a second, identical (still non---no-cache) crawl must find and reuse the SAME
-          # blob rather than writing a new one — proves the choke point every cache-path builder routes through
-          # resolves to the real, in-use directory too, not just --doctor's own check above.
+          # a second identical crawl must reuse the SAME blob (resolveCacheBlobPath), not write a new one.
           ./build/ripwire.exe test/fixture > populate2.xml || { echo "ci: the warm crawl itself failed" >&2; exit 1; }
           cmp populate.xml populate2.xml || { echo "ci: cold and warm crawls of the same tree produced different bytes" >&2; exit 1; }
           ./build/ripwire.exe test/fixture --doctor > doctor2.xml
