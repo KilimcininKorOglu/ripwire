@@ -38,10 +38,10 @@ still worse than chance (PR #321, closed as superseded before it merged). A clos
 pinned population found the actual mechanism: the sign of a
 function's token-count change explains the lens's own direction in **96.0% of pairs (388/404 whose count
 changed)** — the caveat now cites that figure and names the tag (train 16, PR #322, merged 2026-09-22;
-ships in the next release). A follow-on study (`docs/research/readability-construct-validity.md` §4)
-then tested the ordering claim itself — whether a least-readable function is more likely to be fixed
-later — against ripwire's own history, and could not sustain it once stratified into ten narrow
-token-count deciles (8 of 10 show a CI that includes 1): the raw/tercile association is a residual size
+ships in the next release). A follow-on study then tested the ordering claim itself — whether a
+least-readable function is more likely to be fixed later — against ripwire's own history, and could not
+sustain it once stratified into ten narrow token-count deciles (8 of 10 show a CI that includes 1): the
+raw/tercile association is a residual size
 effect, not an independent readability signal. **The ordering claim is withdrawn outright**; the lens
 still orders functions by Halstead volume/token entropy/length, largest first, but is no longer claimed
 to order by readability. Full derivation: `docs/EVALS.md` §8.

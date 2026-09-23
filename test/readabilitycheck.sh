@@ -244,11 +244,13 @@ fi
 # printed at all when only the new spelling is used.
 "$BIN" "$ROOT" --biggest-first --limit=5 --no-cache             >"$TMP/h_new_out"  2>"$TMP/h_new_err"
 "$BIN" "$ROOT" --readability   --limit=5 --no-cache             >"$TMP/h_old_out"  2>"$TMP/h_old_err"
-"$BIN" "$ROOT" --biggest-first --limit=5 --no-cache --json      >"$TMP/h_new_json" 2>/dev/null
-"$BIN" "$ROOT" --readability   --limit=5 --no-cache --json      >"$TMP/h_old_json" 2>/dev/null
+"$BIN" "$ROOT" --biggest-first --limit=5 --no-cache --json      >"$TMP/h_new_json" 2>"$TMP/h_new_json_err"; h_new_json_rc=$?
+"$BIN" "$ROOT" --readability   --limit=5 --no-cache --json      >"$TMP/h_old_json" 2>"$TMP/h_old_json_err"; h_old_json_rc=$?
 "$BIN" "$ROOT" --biggest-first --limit=5 --no-cache --legend=compact >"$TMP/h_new_lc" 2>/dev/null
 "$BIN" "$ROOT" --readability   --limit=5 --no-cache --legend=compact >"$TMP/h_old_lc" 2>/dev/null
 "$BIN" "$ROOT" --readability --readability --limit=1 --no-cache >/dev/null 2>"$TMP/h_twice_err"
+
+wantNotice='ripwire: --readability is deprecated — use --biggest-first instead'
 
 if [ -s "$TMP/h_new_out" ]; then
     ok "(H) --biggest-first produced output on a real corpus"
@@ -261,10 +263,26 @@ if cmp -s "$TMP/h_new_out" "$TMP/h_old_out"; then
 else
     no "(H) stdout DIFFERS between --biggest-first and --readability (default XML) — the alias must not change the answer"
 fi
-if cmp -s "$TMP/h_new_json" "$TMP/h_old_json"; then
-    ok "(H) stdout is byte-identical between --biggest-first and --readability (--json)"
+# --json is REFUSED for this lens (not yet supported), on BOTH spellings — so a stdout `cmp` here would
+# be comparing two empty files, which passes regardless of whether the alias behaves correctly (a vacuous
+# assertion, rv-flag-biggest-first F4). Assert the REFUSAL itself is identical instead: same exit code,
+# empty stdout on both, and the refusal SENTENCE on stderr identical once the old spelling's one-shot
+# deprecation line (asserted separately below) is stripped off the top.
+if [ "$h_new_json_rc" = "1" ] && [ "$h_old_json_rc" = "1" ]; then
+    ok "(H) --json is refused (exit 1) for the lens on both spellings"
 else
-    no "(H) stdout DIFFERS between --biggest-first and --readability (--json)"
+    no "(H) --json refusal exit code differs: --biggest-first=$h_new_json_rc --readability=$h_old_json_rc (want 1/1)"
+fi
+if [ ! -s "$TMP/h_new_json" ] && [ ! -s "$TMP/h_old_json" ]; then
+    ok "(H) --json's refusal prints NO stdout on either spelling"
+else
+    no "(H) --json unexpectedly produced stdout on at least one spelling — the refusal is not clean"
+fi
+tail -n +2 "$TMP/h_old_json_err" >"$TMP/h_old_json_err_stripped"
+if head -n 1 "$TMP/h_old_json_err" | grep -qF "$wantNotice" && cmp -s "$TMP/h_new_json_err" "$TMP/h_old_json_err_stripped"; then
+    ok "(H) the --json refusal sentence on stderr is byte-identical between --biggest-first and --readability, once the old spelling's deprecation line is stripped"
+else
+    no "(H) the --json refusal sentence differs once the deprecation line is stripped: new=$( cat "$TMP/h_new_json_err" ) old(after strip)=$( cat "$TMP/h_old_json_err_stripped" )"
 fi
 if cmp -s "$TMP/h_new_lc" "$TMP/h_old_lc"; then
     ok "(H) stdout is byte-identical between --biggest-first and --readability (--legend=compact)"
@@ -278,7 +296,6 @@ else
     ok "(H) --biggest-first is silent on stderr"
 fi
 
-wantNotice='ripwire: --readability is deprecated — use --biggest-first instead'
 oldErrLines="$( wc -l <"$TMP/h_old_err" | tr -d ' ' )"
 if [ "$oldErrLines" = "1" ] && grep -qF "$wantNotice" "$TMP/h_old_err"; then
     ok "(H) --readability prints exactly one stderr line, the deprecation notice naming --biggest-first"
