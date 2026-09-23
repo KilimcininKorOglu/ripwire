@@ -34,6 +34,9 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-23 (PR #310, ruby-attr DSL lane): kParserVer 119 -> 120 (indexes the Ruby attr-family's name
+#   changes AND the inline-visibility lift; re-pin logic below). Only the extraction-identity declaration
+#   moves — kQSnapCacheScheme stays 14, kCacheVersion stays 24 — so no cached Snapshot MEANING changes.
 # 2026-09-20, TRAIN 13 (integration/train-13 on main ae6e3e7a: lane/t13-contrib-finish a7281dea,
 #   lane/t13-honesty-fixes 0cf97744): RE-DERIVED ON THE FINAL MERGED TREE with UPDATE_GOLDEN=1.
 #   TWO manifest inputs move, both from the honesty lane:

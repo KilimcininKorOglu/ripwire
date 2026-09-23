@@ -34,7 +34,8 @@ Static binding of `record.name = v` to the `name=` def: static-pinned (rubyattrs
 |---|---|
 | multi-symbol `attr_accessor :multi_a, :multi_b` | proven (multi_attr.rb) |
 | typed `attribute :quantity, :integer, default: 0` — metadata args define nothing | proven (typed_attr.rb; `respond_to?(:integer)` is false) |
-| plural `attributes :x, :y` | **MEASURED FLOOR — no class-level plural exists** in base Rails/ActiveModel (NoMethodError at runtime). Static capture stays as third-party-DSL forward-compat only. |
+| INLINE VISIBILITY: `private attr_reader :x` / `protected attr_accessor` / `public attr_writer` / `module_function attr_accessor` | static-pinned (priv_attr.rb) plus core-Ruby semantics: the argument evaluates FIRST (the macro runs, the method IS defined), then visibility applies — so the defs are exactly the macro's own |
+| plural `attributes :x, :y` | **MEASURED FLOOR — no class-level plural exists** in base Rails/ActiveModel (NoMethodError at runtime). Static capture is READERS-ONLY by measurement: the two dominant third-party owners, `ActiveModel::Serializer` and `jsonapi-serializer`, define read accessors only, and `dry-struct`'s singular `attribute :name, Types::String` defines a reader only — no setter is minted by the capture (pinned). |
 | `attributes :block_a do … end` — the do-block body (with its block parameter) defines nothing | static-pinned only; block_attr.rb is never executed (it would raise) — valid syntax so the static walk can prove the block-body guard |
 
 ## Measured findings (runtime truth)

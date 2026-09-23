@@ -2168,7 +2168,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
     if( le.lang == Lang::Elixir ) { elixirExpandImplementations( elixir, defs, firstDefOfFile, binds, firstBindOfFile ); }
     foldFieldDefs( defs, firstDefOfFile, le.lang );   // member-variable round: owner-less fields drop, Python fields fold to one per (class, name)
 
-    // Parser version 115 (test/rubyattrscheck.sh): the Ruby attr family's Var defs. Appended after the
+    // Parser version 120 (test/rubyattrscheck.sh): the Ruby attr family's Var defs. Appended after the
     // dead/field folds — neither touches Ruby (no preprocessor; Var is not a Field kind) — and inside the
     // same defs window, so the lex build and cache round-trip treat these defs like captured ones.
     if( le.lang == Lang::Ruby )

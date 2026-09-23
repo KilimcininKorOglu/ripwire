@@ -1312,6 +1312,7 @@ inline std::string_view fieldIdentifierText( TSNode n, NodeField field, std::str
 // disclosure lives in the CHANGELOG and the tags.scm header.
 inline constexpr std::array<std::string_view, 4> kRubyConstantDirectives = { "include", "extend", "prepend", "autoload" };
 inline constexpr std::array<std::string_view, 5> kRubyAttrFamilyNames    = { "attribute", "attributes", "attr_reader", "attr_writer", "attr_accessor" };
+inline constexpr std::array<std::string_view, 4> kRubyVisibilityNames    = { "module_function", "private", "protected", "public" };
 
 // A receiver-less `call` node's method-name TEXT when it is one of `names`, else empty — the shared reader of
 // the Ruby named directives (`obj.include X` / `obj.attr_writer :x` are somebody's own methods and read as
@@ -1355,16 +1356,23 @@ inline std::vector<std::string> rubyMixinTargets( TSNode n, std::string_view src
 }
 
 // Is this macro call at class-DSL position — a class/module/singleton_class body, optionally through the
-// macro call's OWN do/{ } block wrapper (`attributes :x do … end` parses as (block (call …) (do_block …)) — the
-// call is the block's first child, the body is its second, so unwrapping ONE step only when this node IS that
-// first child reaches the class body without ever entering a block body)? A method body, a lambda, or a block
+// macro call's OWN do/{ } block wrapper or an INLINE VISIBILITY wrapper? In tree-sitter-ruby 0.23.1 the call's
+// do/{ } block is a FIELD (`(call … block: (do_block (body_statement …)))`; `{ }` interposes `block_body`
+// between the field and its statements), so the call itself sits directly at the class body — the fixture
+// passes through the plain body_statement ascent and the `ownBlockWrapper` branch below is a conservatively-
+// unreachable guard against a future grammar that reintroduces a wrapping `block` node. An INLINE visibility
+// wrapper — `private attr_reader :x` (Ruby 3, RuboCop's Style/AccessModifierDeclarations: inline) — parses as
+// the family call being the SOLE argument of a receiverless private/protected/public/module_function call:
+// the visibility call's own parent chain must ALSO pass this gate (its argument is evaluated first — the
+// macro runs and the method IS defined — then visibility applies). A method body, a lambda, or a block
 // nested under anything else is not: a method body runs at call time, and a file top level
-// (`attr_accessor :x` outside any class — defines on Object) is walked to nothing. A `begin`/`if`-guarded macro
-// call is a disclosed floor (not unwrapped).
-inline bool rubyAttrAtClassBodyLevel( TSNode n ) noexcept
+// (`attr_accessor :x` outside any class — defines on Object) is walked to nothing. A `begin`/modifier-`if`-
+// guarded macro call and the do-block bodies of `included`/`class_methods`/`Struct.new`/`Class.new`/
+// `Module.new` or a non-modifier `if … then … end` are disclosed floors (not unwrapped).
+inline bool rubyAttrAtClassBodyLevel( TSNode n, std::string_view src ) noexcept
 {
     TSNode cur = n;
-    for( int guard = 0; guard < 4; ++guard )   // block wrapper + body_statement is the deepest real chain
+    for( int guard = 0; guard < 4; ++guard )   // visibility wrapper + block wrapper + body_statement is the deepest real chain
     {
         const TSNode p = ts_node_parent( cur );
         if( ts_node_is_null( p ) )
@@ -1375,6 +1383,21 @@ inline bool rubyAttrAtClassBodyLevel( TSNode n ) noexcept
         if( kindIs( pt, "class" ) || kindIs( pt, "module" ) || kindIs( pt, "singleton_class" ) )
         {
             return true;
+        }
+        if( kindIs( pt, "argument_list" ) )
+        {
+            // Inline visibility: the sole argument of a receiverless visibility call, and the VISIBILITY
+            // call's own parent chain must pass the same gate (next hop(s)) — this is what keeps
+            // `def m; private attr_reader :x; end` out (`private` inside a method body fails the ascent).
+            const TSNode outer = ts_node_parent( p );
+            if( !ts_node_is_null( outer ) && kindIs( ts_node_type( outer ), "call" )
+                && !rubyNamedDirective( outer, src, kRubyVisibilityNames ).empty()
+                && ts_node_named_child_count( p ) == 1 && ts_node_eq( ts_node_named_child( p, 0 ), cur ) )
+            {
+                cur = outer;   // one more ascent; the visibility call's own parent decides
+                continue;
+            }
+            return false;
         }
         const bool ownBlockWrapper = kindIs( pt, "block" ) && ts_node_eq( ts_node_named_child( p, 0 ), cur );
         const bool statementList   = kindIs( pt, "body_statement" );   // class bodies wrap multi-statement lists; the next hop decides

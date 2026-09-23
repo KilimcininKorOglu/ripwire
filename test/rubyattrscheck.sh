@@ -30,7 +30,12 @@
 #                             a method body, a receiver-qualified call, and file top level define nothing
 #   floor_attr.rb        DISCLOSED floors, all must stay undefinable: a `begin`/modifier-`if`-guarded call
 #                             is not class-DSL position; quoted (`:"x"`/`:'x'`), string, and splat/`%i[]`
-#                             arguments are not simple_symbol names — Ruby defines them, ripwire does not
+#                             arguments are not simple_symbol names; an `included`/`class_methods` (Concern),
+#                             `Struct.new`/`Class.new`/`Module.new` do-block body and a non-modifier
+#                             `if … then … end` block are not unwrapped — Ruby defines all of these, ripwire does not
+#   priv_attr.rb         the Ruby 3 INLINE-VISIBILITY lift: `private attr_reader :x` / `protected attr_accessor`
+#                             / `public attr_writer` / `module_function attr_accessor` DO define (the macro runs
+#                             before visibility applies, so the family macro still decides which side exists)
 #
 # Usage:  test/rubyattrscheck.sh   |   RIPWIRE_BIN=asan/ripwire test/rubyattrscheck.sh
 # Exit:   0 = clean · 1 = an arm failed · 2 = usage / missing prerequisite
@@ -75,6 +80,36 @@ callershead(){ "$BIN" "$FIX" --callers="$1" --no-cache 2>/dev/null | grep -oE "o
 [ "$( useshead multi_p2 )"  = 'of="multi_p2" defs="1" external="0" count="0"' ] \
     && ok 'capture: plural attributes — the SECOND symbol defines too (not first-symbol-only)' \
     || no "capture: multi_p2 defs: $( useshead multi_p2 )"
+undefinable 'multi_p1=' \
+    && ok 'floor: plural attributes is READERS-ONLY — multi_p1= stays undefinable (AMS/jsonapi-serializer/dry-struct define no setters; measured)' \
+    || no 'floor: multi_p1= — plural attributes minted a setter'
+undefinable 'multi_p2=' \
+    && ok 'floor: plural attributes readers-only — multi_p2= stays undefinable' \
+    || no 'floor: multi_p2= — plural attributes minted a setter'
+[ "$( useshead priv_name )"  = 'of="priv_name" defs="1" external="0" count="0"' ] \
+    && ok 'lift: private attr_reader :priv_name — the INLINE-VISIBILITY call IS class-DSL position; the reader defines (the macro runs before visibility applies)' \
+    || no "lift: priv_name defs: $( useshead priv_name )"
+undefinable 'priv_name=' \
+    && ok 'lift: private attr_reader — still reader-only: no priv_name= setter (the MACRO, not the visibility, decides the pair)' \
+    || no 'lift: priv_name= — attr_reader under a visibility call minted a setter'
+[ "$( useshead prot_pair )"  = 'of="prot_pair" defs="1" external="0" count="0"' ] \
+    && ok 'lift: protected attr_accessor — the accessor pair defines (reader side)' \
+    || no "lift: prot_pair defs: $( useshead prot_pair )"
+[ "$( useshead 'prot_pair=' )" = 'of="prot_pair=" defs="1" external="0" count="0"' ] \
+    && ok 'lift: protected attr_accessor — prot_pair= setter defines (writer side of the pair)' \
+    || no "lift: prot_pair= defs: $( useshead 'prot_pair=' )"
+undefinable pub_set \
+    && ok 'lift: public attr_writer — writer-only: no bare pub_set reader (the macro spells one side)' \
+    || no 'lift: pub_set — attr_writer under a visibility call minted a reader'
+[ "$( useshead 'pub_set=' )" = 'of="pub_set=" defs="1" external="0" count="0"' ] \
+    && ok 'lift: public attr_writer — pub_set= setter defines' \
+    || no "lift: pub_set= defs: $( useshead 'pub_set=' )"
+[ "$( useshead mod_acc )"   = 'of="mod_acc" defs="1" external="0" count="0"' ] \
+    && ok 'lift: module_function attr_accessor — both sides define (reader)' \
+    || no "lift: mod_acc defs: $( useshead mod_acc )"
+[ "$( useshead 'mod_acc=' )" = 'of="mod_acc=" defs="1" external="0" count="0"' ] \
+    && ok 'lift: module_function attr_accessor — mod_acc= setter defines' \
+    || no "lift: mod_acc= defs: $( useshead 'mod_acc=' )"
 undefinable integer \
     && ok 'capture: the singular attribute stops at the first named child — :integer (type arg) defines nothing' \
     || no 'capture: integer — a type-metadata argument minted a def'
@@ -101,6 +136,21 @@ for dyn in dq_name sq_name string_name splat_a; do
         && ok "floor: dynamic argument form — $dyn (quoted/string/splat) defines nothing; only simple_symbol does" \
         || no "floor: $dyn — a non-simple_symbol argument minted a def"
 done
+undefinable concern_included \
+    && ok 'floor: an `included do … end` body (ActiveSupport::Concern) defines nothing — a do_block body is not unwrapped' \
+    || no 'floor: concern_included — an included-block body minted a def'
+undefinable concern_class_method \
+    && ok 'floor: a `class_methods do … end` body (Concern) defines nothing' \
+    || no 'floor: concern_class_method — a class_methods-block body minted a def'
+undefinable struct_attr \
+    && ok 'floor: a `Struct.new(:s) do … end` body defines nothing' \
+    || no 'floor: struct_attr — a Struct.new-block body minted a def'
+undefinable classnew_attr \
+    && ok 'floor: a `Class.new do … end` body defines nothing' \
+    || no 'floor: classnew_attr — a Class.new-block body minted a def'
+undefinable ifthen_attr \
+    && ok 'floor: a non-modifier `if … then … end` block in a class body defines nothing (same floor as the pinned modifier form)' \
+    || no 'floor: ifthen_attr — an if-then block minted a def'
 
 # ── 2. THE CALLS STAY REFERENCES (disclosed posture, not silently dropped) ───────────────────────────
 for fam in attr_accessor attr_writer attr_reader attribute attributes; do
