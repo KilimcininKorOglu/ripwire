@@ -452,8 +452,10 @@ TEST_CASE( "rebasedProgramPath: the exact shapes quality.h::cacheDirLadder's thr
     const std::string sentinel = rebasedProgramPath( "/dev/null/ripwire-cache-unavailable", nativeTmp );
     CHECK( sentinel.find( '|' ) != std::string::npos );
     CHECK( sentinel.find( "ripwire-cache-unavailable" ) != std::string::npos );
+}
+
 // #326's sibling (the cache-eviction sweep): cacheDirLadder() now resolves its own spelling ONCE through this
-// dispatch, before os::mkdir creates the directory, so std::filesystem and os:: consumers read the same bytes. Every
+// dispatch, on every value it returns, so std::filesystem and os:: consumers read the same bytes. Every
 // os:: call the ladder and its callers then make hands that ALREADY-RESOLVED answer back through NativePath — i.e.
 // through this same dispatch a second time. The fix is only correct if that second pass is a no-op on every answer the
 // first can give: a drive-lettered temp path, an already-native TMPDIR tier, and the fail-closed sentinel. The oracle

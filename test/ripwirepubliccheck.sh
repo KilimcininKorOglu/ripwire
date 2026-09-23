@@ -673,7 +673,7 @@ test/verify_os_win32_logic.cpp:402:    CHECK( rebasedProgramPath( "C:/Users/x/pr
 test/verify_os_win32_logic.cpp:434:    CHECK( rebasedProgramPath( "/tmp/ripwire-1001", nativeTmp ) == "C:/Users/x/AppData/Local/Temp/ripwire-1001" );
 test/verify_os_win32_logic.cpp:439:    CHECK( rebasedProgramPath( "C:/Users/x/AppData/Local/Temp/ripwire", nativeTmp ).empty() );
 test/verify_os_win32_logic.cpp:445:    CHECK( rebasedProgramPath( "/tmp/ripwire", nativeTmp ) == "C:/Users/x/AppData/Local/Temp/ripwire" );
-test/verify_os_win32_logic.cpp:800:    CHECK( !isAcceptableShell( "C:/Users/x/AppData/Local/Microsoft/WindowsApps/bash.exe" ) );      // WSL alias'
+test/verify_os_win32_logic.cpp:802:    CHECK( !isAcceptableShell( "C:/Users/x/AppData/Local/Microsoft/WindowsApps/bash.exe" ) );      // WSL alias'
 hits="$( sweep '/Users/' || true )"
 if [ -n "$hits" ]; then
     hits="$( printf '%s\n' "$hits" | grep -vFx -- "$ARM2_EXEMPT_HITS" || true )"
