@@ -516,8 +516,14 @@ esac
 # Pinned to the TOKEN RUN the writer emits (`now=<n> was=<n>`, adjacent and right after the magnitude and
 # any cid=/by=), not to a bare substring: `was=` can legitimately appear later inside a reason, and a gate
 # that cannot tell a token from prose fails on correct behaviour — which is what it did before this line.
-if rt_row 4444444444444444 | grep -qE '^ack [a-z-]+ 4444444444444444 [0-9]+ (cid=[0-9a-f]+ )?(by=[^ ]+ )?(now=[0-9]+ was=|prov=)'; then
-    no "(9f) a half-pair row was treated as provenance-bearing"; printf '%s\n' "$( rt_row 4444444444444444 )"
+# The row must EXIST before its absence of provenance means anything: a rewrite that dropped it would leave
+# the grep below with nothing to match and read as a pass. Its siblings above fail on a missing row through
+# their case fall-through; this one is a negative check, so it says so explicitly.
+RT_HALF="$( rt_row 4444444444444444 )"
+if [ -z "$RT_HALF" ]; then
+    no "(9f) the half-pair row is missing after the rewrite — a legacy row must survive, and an absent row proves nothing about how it was read"
+elif printf '%s\n' "$RT_HALF" | grep -qE '^ack [a-z-]+ 4444444444444444 [0-9]+ (cid=[0-9a-f]+ )?(by=[^ ]+ )?(now=[0-9]+ was=|prov=)'; then
+    no "(9f) a half-pair row was treated as provenance-bearing"; printf '%s\n' "$RT_HALF"
 else
     ok "(9f) a row with now= but no was= reads as legacy — half a pair is never provenance"
 fi
