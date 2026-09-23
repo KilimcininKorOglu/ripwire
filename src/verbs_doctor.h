@@ -805,20 +805,16 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     // ---- check 3: cache-dir health — resolves, writable (create+delete a probe file), report
     // existing ripwire-* blob count + total bytes (eviction sanity: flag >50 blobs, informational) ----
     //
-    // #326: cacheDirLadder()'s own POSIX-spelled "/tmp/ripwire-<uid>" return is not necessarily a path any
-    // non-os:: call can open — on Windows it is Git for Windows' "/tmp", which os::mkdir/os::lstat/os::chmod (what
-    // the ladder itself calls to create and verify the directory) silently rebase onto the real user temp
-    // directory, but a bare std::fopen or std::filesystem call does not know to. The ladder's caller here used to
-    // be exactly that: std::fopen on the raw ladder string, and doctorCacheStats/doctorEditLockCount walking it
-    // with std::filesystem — three call sites all measuring a directory the cache never actually uses (typically
-    // nonexistent on the current drive), so a perfectly healthy, writable, populated cache reported ok="0"
-    // blobs="0". rw::os::rebased_path( dir ) is the SAME routing os::mkdir/os::open/os::stat apply internally
-    // (os_win32_logic.h's oswin::rebasedProgramPath) exposed for these three non-os:: consumers; identity on
-    // POSIX, where "/tmp" is already a real, directly usable directory. Once resolved, `dir` below is the actual
-    // path in use — the row's own `dir=`/hint= attributes name the real cache location, not a path the tool
-    // never touches.
+    // #326: on Windows, a bare std::fopen or std::filesystem call on cacheDirLadder()'s return value used to
+    // measure a directory the cache never actually uses (typically nonexistent on the current drive) — Git for
+    // Windows' "/tmp" is real only through os::mkdir/os::lstat/os::chmod's own silent rebase onto the real user
+    // temp directory, which a non-os:: call does not get. Fixed at the SOURCE (cacheDirLadder() itself now
+    // returns the already-rebased spelling via rw::os::rebased_path — see its own comment), so `dir` below is
+    // already the real, in-use path with no local rebase needed here: this row's `dir=`/hint= attributes and
+    // doctorCacheStats/doctorEditLockCount's scans all read the one path the cache actually uses, identically
+    // to every other cacheDirLadder() consumer in the tree.
     {
-        const std::string dir   = rw::os::rebased_path( cacheDirLadder().c_str() );
+        const std::string dir   = cacheDirLadder();
         const std::string probe = dir + "/.ripwire-doctor-probe-" + std::to_string( rw::os::getpid() );
         bool writable = false;
         // create+remove a real file — the only thing "writable" can honestly mean on either platform; a mode-bit
