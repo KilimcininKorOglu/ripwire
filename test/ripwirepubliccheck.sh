@@ -667,7 +667,10 @@ done
 # allowlist and is reported like any other hit, never silently waved through.
 ARM2_EXEMPT_HITS='test/verify_os_win32_logic.cpp:304:    CHECK( fromNative( u"c:\\Users\\x", 64, error, written ) == "C:/Users/x" );
 test/verify_os_win32_logic.cpp:361:    CHECK( rebaseMsysTmp( "/tmp/ripwire-1001", "C:\\Users\\x\\AppData\\Local\\Temp\\" ) == "C:/Users/x/AppData/Local/Temp/ripwire-1001" );
-test/verify_os_win32_logic.cpp:681:    CHECK( !isAcceptableShell( "C:/Users/x/AppData/Local/Microsoft/WindowsApps/bash.exe" ) );      // WSL alias'
+test/verify_os_win32_logic.cpp:391:    CHECK( rebasedProgramPath( doctorCacheDir, nativeTmp ) == "C:/Users/x/AppData/Local/Temp/ripwire-1001" );
+test/verify_os_win32_logic.cpp:401:    CHECK( rebasedProgramPath( "C:/Users/x/project", nativeTmp ) == oracle( "C:/Users/x/project" ) );
+test/verify_os_win32_logic.cpp:402:    CHECK( rebasedProgramPath( "C:/Users/x/project", nativeTmp ).empty() );
+test/verify_os_win32_logic.cpp:727:    CHECK( !isAcceptableShell( "C:/Users/x/AppData/Local/Microsoft/WindowsApps/bash.exe" ) );      // WSL alias'
 hits="$( sweep '/Users/' || true )"
 if [ -n "$hits" ]; then
     hits="$( printf '%s\n' "$hits" | grep -vFx -- "$ARM2_EXEMPT_HITS" || true )"
@@ -676,7 +679,7 @@ if [ -n "$hits" ]; then
     no "arm 2 — absolute /Users/ path in $( printf '%s\n' "$hits" | wc -l | tr -d ' ' ) place(s):"
     printf '%s\n' "$hits" | sed 's/^/          /'
 else
-    ok "arm 2 — no absolute /Users/ paths (3 Windows test-fixture literal(s) exempt by exact hit line)"
+    ok "arm 2 — no absolute /Users/ paths (6 Windows test-fixture literal(s) exempt by exact hit line)"
 fi
 
 # arm 2b — THE BINARY POPULATION. Arm 2 sweeps TEXT. Three tracked files are containers it cannot
