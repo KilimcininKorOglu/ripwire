@@ -524,10 +524,10 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
             }
 
             // hostile/degenerate nesting guard — MUST run BEFORE the parse (that is the whole point). #157:
-            // one call, one declarative table (ingest_prewarm.h kNestGuards), covering json/yaml/markdown/
-            // kotlin — json is a performance guard, the other three are MEMORY-SAFETY / PROCESS-SURVIVAL
-            // load-bearing (see ingest.h's per-ceiling comments for each defect's arithmetic; the vendored
-            // scanner patches under third_party/patches/ are the SECOND, independent layer for those three).
+            // one call (ingest_prewarm.h refuseNesting), covering json/yaml/markdown/kotlin — json is a
+            // performance guard, the other three are MEMORY-SAFETY / PROCESS-SURVIVAL load-bearing (see
+            // ingest.h's per-ceiling comments for each defect's arithmetic; the vendored scanner patches
+            // under third_party/patches/ are the SECOND, independent layer for those three).
             // Itemized in --skipped (why="nest-refused") for every language now, not just Kotlin.
             if( refuseNesting( *le, bytes, path.c_str(), fileId, scan ) )
             {
