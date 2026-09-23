@@ -138,6 +138,13 @@ resolve_arm()
 # control-operator branch, so the digit behind it is read as a command word. That can only ever cost a
 # MISSED call, in a line where `ripwire` sits in exactly that position, and never a false one.
 #
+# COST (issue #327). Each character read rebuilds the rest of the line (`${rw_line#?}`, and the suffix match
+# around it), so the scan grows with the cube of the line's length: 20 s for a 4,000-character line under macOS
+# bash 3.2, in front of the tool call it only counts. Two guards come first. A line that does not contain the
+# word holds no call, which is exact and ends the scan for nearly every command. A line longer than 1,024
+# characters is not scanned and reads as no call — a MISSED call, the same direction as the limit above; 1,024
+# costs under half a second at worst. test/routehookcheck.sh O10 holds both.
+#
 # POSIX sh only, no bashisms: routehookcheck.sh extracts this block and runs it under `sh`.
 rw_cmd_word()
 {
@@ -171,6 +178,8 @@ rw_cmd_word()
 
 rw_is_ripwire_call()
 {
+    case "$1" in *ripwire*) ;; *) return 1 ;; esac
+    [ "${#1}" -le 1024 ] || return 1
     rw_nl='
 '
     rw_tab="$( printf '\t' )"

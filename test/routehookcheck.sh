@@ -682,5 +682,30 @@ o9 0 'echo hi > ripwire'
     && ok "O9 command-word rule: $o9_n shapes read correctly (19 wrapped/sequenced/operator-attached calls, 9 appearances that run nothing)" \
     || no "O9 command-word rule: $o9_bad of $o9_n shapes read WRONG (listed above)"
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# O10 — the rule's cost does not grow with the command line (issue #327)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# The lexer rebuilds the rest of the line for every character it reads, so one long command cost
+# 2.9 s at 2,000 characters, 20.6 s at 4,000 and 155 s at 8,000 under macOS bash 3.2 — inside the
+# PreToolUse hook, in front of the Bash call it was only meant to count. RED on the pre-fix block,
+# measured while writing this: each line below took about 20 s. The answers are asserted too: a line
+# with no `ripwire` in it holds no call, and a line past the cap reads as none — a missed call,
+# never a false one, the same direction as the `2>&1` limit the block already discloses.
+echo
+echo "=== O10: a long command line costs the rule nothing ==="
+o10_long="$( head -c 4000 /dev/zero | tr '\0' 'a' | fold -w 60 | tr '\n' ' ' )"
+for o10_line in "$o10_long" "echo $o10_long; ripwire ."
+do
+    o10_t0="$( date +%s )"
+    o10_got="$( sh "$TMP/rule.sh" "$o10_line" 2>/dev/null )"
+    o10_dt=$(( $( date +%s ) - o10_t0 ))
+    case "$o10_line" in *ripwire*) o10_what="holding a call past the cap" ;; *) o10_what="without ripwire" ;; esac
+    if [ "$o10_dt" -le 2 ] && [ "$o10_got" = "0" ]; then
+        ok "O10 a ${#o10_line}-character line $o10_what answers 0 in ${o10_dt} s"
+    else
+        no "O10 a ${#o10_line}-character line $o10_what took ${o10_dt} s and answered [$o10_got] (want 0 within 2 s)"
+    fi
+done
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi
