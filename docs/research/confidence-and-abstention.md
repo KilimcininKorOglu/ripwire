@@ -320,6 +320,184 @@ with its numbers the way the two before it were:
 
 ---
 
+### 5.4 Pre-registration: `served_syms` (2026-09-23)
+
+Written before this round's number exists. `served_syms` — `grade()`'s count of `<sigs><d>` rows in
+the `--for` bundle, i.e. the size of the served head — is not a new fact: it is already emitted,
+already disclosed to every caller, and already computed by `calibrate_confidence.py`'s `grade()`
+(`served_syms=len(head)`) for every scored row. It has simply never been scored as a miss detector
+against §5.2's band. A margin-resolution review (`reports/rv-margin-resolution.md`, HIGH-1,
+2026-09-22) reports, **as prior knowledge disclosed here rather than re-derived**, that `served_syms`
+scored **0.669 (file_hit) / 0.723 (func_hit)** AUROC on the pre-registered 92 and **0.769 / 0.791** on
+a separate, non-pre-registered 40-row sample — in both cases without ever computing an operating
+point, and without any record of which direction (larger or smaller `served_syms`) was treated as
+"more miss evidence" (the reviewer's scratch script is lost). This section fixes, in advance of that
+number being recomputed under a named procedure, everything §5.2's band needs to be checked honestly:
+which population, which statistic, which direction, which thresholds, which tie rule, and what each
+outcome may be said in public.
+
+**Scope.** This is not a new instrument under §5.1 — `served_syms` is not proposed as a replacement
+for `confidence=`/`margin_pct=`, and §5.1's "not a recalibration" argument does not apply to it (it is
+not a function of the lexical score distribution; it is a count of rows). This is the overdue scoring
+of a signal that already ships, against the band §5.2 already set for a signal that would ship.
+
+#### 5.4.1 Population, identified by fingerprint, not by count
+
+"The 92" is not "however many rows this run happens to produce." Before any `served_syms` number is
+computed, the run must reproduce §3.3's own figures on the asset tree it points at:
+
+- `confidence=` split **74 low / 18 high** (n = 92),
+- misses **15** (file grain) / **38** (func grain),
+- `margin_pct=`/score AUROC **0.580** (file_hit) / **0.622** (func_hit).
+
+All four numbers must match before a single `served_syms` figure is reported. **If any one of them
+does not reproduce, the run stops there** and reports exactly that — "the population on this asset
+tree is not the pre-registered 92" — with the actual figures it got instead. No `served_syms` AUROC,
+threshold, or operating point is reported "on the 92" from a run that failed this check, no matter how
+plausible the resulting numbers look. This is the general "check what the population IS, not just that
+the number reproduces" lesson, applied here as a mechanical gate rather than a habit to remember.
+
+Every report of a result under this registration — PASS, FAIL, or fingerprint mismatch — **must name
+the asset tree it read (`--assets` path) and the binary's `built_from=` sha** (both already printed by
+`calibrate_confidence.py`'s `# calibrate_confidence — assets=... binary=...` stderr line and carried
+into `meta.binary_version`/`meta.assets` in its JSON output). A result that does not name both is not
+a report under this registration.
+
+#### 5.4.2 The statistic
+
+`served_syms(row) = row["served_syms"]`, read exactly as `calibrate_confidence.py`'s `grade()` already
+reads it (`len(head)`, where `head` is the `<sigs><d>` rows parsed by `served_head()`) — no
+re-parsing, no re-derivation. The invocation is unchanged from §3.2: one default
+`ripwire <repo> --for="<first 1200 chars of the issue>"` per instance, no `--top-k`, no `--adaptive`,
+no budget — the bundle an agent is actually handed. `served_syms` is a non-negative integer with no
+declared upper bound in the emitted contract (the adaptive cut's ceiling bounds it in practice, but
+that bound is an implementation detail of `adaptiveCut`, not part of what `--for` promises).
+
+**Positive classes — both grains, same definitions as §3.2/§3.3:** `file_hit` (a gold file is in the
+served head) and `func_hit` (a gold function is in the served head), read exactly as `grade()` already
+computes them. Both are scored, exactly as the prior-knowledge numbers in 5.4's header report both.
+
+**What the band is gated on.** §5.2 registered its AUROC/operating-point band with "positive class = a
+missed gold **function** — the grain where any separation exists at all." This round follows that
+choice rather than inventing a looser one: **`func_hit` is the sole gating grain.** A PASS requires the
+operating-point criterion (below) to be met on `func_hit`. `file_hit` is scored, reported in full
+(AUROC, CI, and its own threshold sweep), and **never gates a PASS** — it is exploratory in the exact
+sense §3.3's `coverage=`/`dropped_positive=` block already uses that word: reported so it is on the
+record and cannot reappear later as this round's hypothesis if it happens to look better.
+*(This is a place §5's existing registration was ambiguous — it registered the func-grain choice for
+its own new facts, not for scoring an already-shipped one — and resolving it this way, rather than
+requiring both grains or inventing an OR/AND rule, is flagged in the report as a decision for the
+reviewer.)*
+
+#### 5.4.3 Orientation — fixed now, mechanistically, not chosen on the 92
+
+Registered **now**, from the code the mechanism already runs, **not** from any `served_syms` number on
+the 92 (none has been computed under this procedure yet): **larger `served_syms` is registered as more
+miss evidence.**
+
+The mechanism (`src/lexical.h`'s `adaptiveCut`, `deriveForConfidence`): when the cliff scan finds no
+material within-cap drop (`bestCapDrop < 0.20`), `cut.hitCeiling = true` and `cut.kept = hardCeil` —
+the head is filled to the (near-)maximum the query's positive hits and the ceiling allow, i.e. `kept`
+(and therefore `served_syms`) sits at or near its largest achievable value for that query. That branch
+is exactly the one that yields `confidence="low"` on every row in the 92 (§3.3: "every `"high"` here
+was earned by the cliff branch"). When a material cliff **is** found within the cap, `cut.kept` is
+clamped down to the cliff rank (or the floor, whichever is larger) — a smaller, more selective head —
+and that is the branch `confidence="high"` comes from. §1/§3.3 already establish, as published fact
+and not as a number this round re-derives, that `confidence="low"` rows have the **lower** hit rate at
+both grains (file: 81.1% vs 94.4%; func: 51.4% vs 88.9%). Chaining those two already-published facts —
+"low confidence ⟺ hitCeiling ⟺ larger served_syms" and "low confidence ⟺ lower hit rate" — gives a
+mechanistic prediction for `served_syms` alone, without looking at a single `served_syms` row: **a
+larger served head predicts a more likely miss.**
+
+This is stated as a commitment, not a hedge: the scoring code (§5.4.6) applies this orientation as a
+fixed constant. If the resulting AUROC comes out **below** 0.5, that is reported as a clean result
+under the registered orientation — an AUROC anti-correlated with the registered direction — and is
+**not** silently flipped to report `1 − AUROC` as if the round had registered the other way. Flipping
+after seeing the number is exactly the in-sample fishing this document exists to prevent.
+
+*(Decision for the reviewer: the task brief offered "state a mechanistic prediction now" or "register
+that orientation is chosen on the 92, labelled post-hoc." This registration takes the first path,
+because the mechanism above is derivable from source and from already-published §1/§3.3 numbers alone
+— it does not require reading a single new row of data. A reviewer who judges the chain weaker than
+this document treats it should say so and require the second path instead; that is a live
+disagreement, not a settled one.)*
+
+#### 5.4.4 Threshold procedure
+
+`served_syms` is an integer, so its ROC curve is a step function with one candidate cut per distinct
+observed value — the same "every distinct score value is a candidate" convention
+`sweep_thresholds` (`bench/arb/score_abstention_calibration.py`) already uses, extended by one sentinel
+so "warn on nothing" is always a representable point:
+
+- **Candidates.** Let `V` be the sorted set of distinct `served_syms` values among the 92 scored rows.
+  The candidate threshold set is `T = V ∪ { max(V) + 1 }`. For each `t ∈ T`, the rule is
+  **`warn(row) ⟺ served_syms(row) ≥ t`** (the registered orientation, §5.4.3) — `t = max(V) + 1` warns
+  on no row (the "flag nobody" point, which `V` alone cannot represent) and `t = min(V)` warns on
+  every row.
+- **Tie rule.** Among every `t ∈ T` whose `(false_warn, recall)` satisfies the band (below), the
+  **reported operating point is the one with the highest `recall`**; if more than one `t` ties on
+  `recall`, the **larger `t` wins** (it warns on a subset of what the smaller one does, i.e. it is the
+  more conservative, fewer-false-warnings choice at that recall — the same "ties broken toward the
+  more conservative side" convention `sweep_thresholds`'s own F1 tie rule states, translated to this
+  rule's `≥`-warns-on-large direction).
+- **Verdict rule, exactly.** Let `false_warn(t)` = the false-warn rate and `recall(t)` = the miss-recall
+  at threshold `t`, both computed on `func_hit` misses (§5.4.2). **PASS on the 92 iff `∃ t ∈ T` with
+  `false_warn(t) ≤ 0.20 ∧ recall(t) ≥ 0.50` on `func_hit`.** Every `t ∈ T` and its
+  `(false_warn, recall)` pair — on both `func_hit` and `file_hit` — is reported in full (the entire
+  sweep table), not only the chosen point: a table that shows only the winning threshold invites
+  exactly the in-sample cherry-pick this section exists to bound.
+- **Self-reject, carried from §5.3 and applied here:**
+  - **SR-1 (fire-rate ceiling, from §5.3 rule 2).** Any `t` reported as "the" operating point whose
+    `warn` rate on the 92 exceeds **25%** of rows is disqualified from being *the* chosen point even
+    if it satisfies the band — reported in the sweep table, but not selected. (`recall ≥ 0.50` with 15
+    file / 38 func misses out of 92 rows makes a low fire-rate and the recall floor jointly satisfiable
+    only if `served_syms` separates considerably better than chance; this is not assumed, only stated
+    as the arithmetic constraint the sweep must clear.)
+  - **SR-2 (grain honesty, from §5.3 rule 4).** A PASS on `func_hit` alone, with `file_hit` not meeting
+    the band at the same or any threshold, is reported as exactly that — "meets on func_hit, not on
+    file_hit" — never folded into a single grain-agnostic sentence.
+  - **SR-3 (in-sample disclosure).** Any `t` found this way is chosen **in-sample** (it is selected by
+    looking at the 92's own sweep table). A PASS under this procedure licenses "worth replicating,"
+    never "shippable," until §5.2's replication runs the **same frozen `(orientation, t)`** —
+    unchanged, not re-swept — on a second sample of ≥ 92 fresh held-out instances. The orientation is
+    already frozen (§5.4.3); the threshold `t` freezes the moment this round's sweep picks it, and
+    is what the replication run receives as a fixed input, not what it re-derives.
+
+#### 5.4.5 Uncertainty
+
+- **AUROC.** Reported with a bootstrap 95% CI: resample the **distinct repositories** contributing to
+  the 92 with replacement, `len(repos)` draws per resample (the repository-clustered convention
+  `bench/agentloop/analyze.py`'s `clustered_bootstrap_lower` already uses, because the 92 are not 92
+  independent draws — the 92 are drawn from 88 held-out repositories, so a handful of repos
+  contribute two rows each), pool every row belonging to the resampled repos, recompute AUROC on the
+  pooled sample, and repeat. **Fixed seed `"ripwire-served-syms-prereg-v1"`, fixed 10,000 resamples**
+  (matching `analyze.py`'s own default `n_boot`). A resample whose pooled sample is single-class (all
+  hit or all miss on the gating grain) contributes no AUROC and is excluded from the CI's resample
+  count, which is reported alongside the CI (e.g. "9,812 of 10,000 resamples usable").
+- **Operating point.** At the *chosen* threshold `t` only (never re-swept per resample — the resample
+  answers "how stable is this specific `t`'s cell counts," not "would a fresh sweep pick a different
+  `t`"), the same repo-clustered bootstrap over `false_warn(t)` and `recall(t)`, same seed, same 10,000
+  resamples.
+- These intervals describe sampling variability on **this** 92-row draw; they are not a substitute for
+  §5.2's replication on an independent sample, and the pre-registration text reporting them must say
+  so in the same sentence that gives the interval.
+
+#### 5.4.6 What is reported, and what each outcome licenses
+
+| outcome | what is reported | the sentence it licenses in a public reply |
+| --- | --- | --- |
+| **Fingerprint mismatch** | which of the four §5.4.1 figures failed to reproduce, and what was measured instead; asset tree path and binary sha | *"served_syms has not been scored against the pre-registered band: the asset tree available today does not reproduce the pre-registered 92-instance population, so no number is reported as measured on it."* Nothing about `served_syms`'s discrimination or an operating point may be asserted. |
+| **FAIL** (fingerprint reproduces; no `t` meets the band on `func_hit`, or the only qualifying `t`s fail SR-1) | `func_hit`/`file_hit` AUROC with CI; the full threshold sweep; the disqualifying reason (band not met, or fire-rate ceiling) | *"served_syms, our best disclosed signal, was never scored; scored now on the pre-registered 92, it does not reach the band (false-warn ≤ 0.20 at miss-recall ≥ 0.50): AUROC \<X\> [CI] (func_hit), and no threshold clears both floors together."* A negative is a complete result and is reported with the same numbers a PASS would carry. |
+| **PASS** (fingerprint reproduces; some `t` meets the band on `func_hit`, survives SR-1) | the chosen `t`, its `(false_warn, recall)` with CI, `func_hit`/`file_hit` AUROC with CI, the full sweep table, and SR-2's grain-honesty statement | *"served_syms, our best disclosed signal, was never scored; scored now on the pre-registered 92 at threshold t=\<N\> served symbols, it reaches false-warn=\<X\> and miss-recall=\<Y\> on func_hit — inside the pre-registered band. This is an in-sample result on one 92-row sample (per §5.2) and licenses 'worth replicating,' not 'shippable': replication on ≥92 fresh held-out instances, at this same frozen threshold and orientation, has not been run."* No sentence produced under a PASS may drop the replication clause. |
+
+**Counts that cannot be totals are floors, and a zero means "none found."** Any skip bucket this round's
+run reports (`no_snapshot`, `wrong_split`, `index_fail`, `for_fail`, `parse_fail`, `timeout`,
+`non_ripwire_language`, `no_gold` — the same eight §3.2 already names) is a floor on how many instances
+were *available* to be skipped for that reason, never a claim that no more exist; a `0` in any of those
+buckets means the run found none under that reason on this disk, not that the failure mode cannot occur.
+
+---
+
 ## 6. Does abstention help the caller? — the downstream experiment we cannot run here
 
 The question ARB actually raises is not whether the signal is accurate; it is whether **an agent does
