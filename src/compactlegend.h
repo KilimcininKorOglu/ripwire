@@ -170,7 +170,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "flags",        "flags",        "BUILT but DARK: <gate name= kind=compile|cmake|env default= dark= regions= loc= reads= p= l=> with <read p= l=> sites" },
     { "skillscan",    "scan-skills",  "injection/exfiltration/path-traversal scan of skill files: files= findings= skipped= verdict=" },
     { "fieldaffinity","field-affinity","fields read together but declared far apart vs 64-byte lines: <s n= p=> structs, <pair a= b= fns= dist=>, <finding k= f= g=>" },
-    { "readability",  "readability",  "Posnett/Hindle/Devanbu lens, least readable first: <fn p= n= lines= toks= ops= vocab= vol= ent= posnett=>" },
+    { "readability",  "readability",  "Posnett/Hindle/Devanbu lens, largest Halstead volume first (a size proxy): <fn p= n= lines= toks= ops= vocab= vol= ent= posnett=>" },
     { "nonlocal_state","nonlocal-state","per function, the non-local MUTABLE state it reaches: <fn p= n= writes= reads=> over <cell n= p= dir= via=> rows" },
     { "ensemble",     "ensemble",     "four orthogonal evidence families joined, ranked by DISTINCT families fired (no composite score): <s p= n= fam= of= fired=>" },
     { "contextratio", "context-ratio","LOCAL-REASONING lens: the share of a unit's context outside its file: <s p= n= sites= ents_out= ent_ratio= read_ratio=>" },
@@ -1017,6 +1017,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // slice: src/slice.h (the <slice> root emit, kSliceCountsAttrXml)
     { "sym", "sym=/lang=: the sliced definition's name and language; p= is its file:line", false, "slice", MapHeaderRead::No, {}, "slice" },   // also defines lang=
     { "vars", "vars=N: sliceable local bindings in the definition, one v row each; name one to slice it", false, "slice", MapHeaderRead::No, {}, "slice" },
+    { "order", "order=defuse: seed s rows (no v=) ranked by def-use coverage (distinct local names on the line) desc, then line; not source order — flow s rows (v=) keep their (d=,l=,v=) order", false, "slice", MapHeaderRead::No, {}, "slice" },   // slice.h sliceDefUseRowOrder
     { "counts", "counts=as-classified: defs=/uses=/vars=/steps= count what the name classifier rowed; neither floors nor totals", false, "slice", MapHeaderRead::No, {}, "slice" },
     // flags: src/darkflags.h (the <flags> root emit)
     { "gates", "gates=/dark_gates=: gate rows (never cut) / those whose default keeps the guarded code out of the build", false, "flags", MapHeaderRead::No, {}, "flags" },   // also defines dark_gates=

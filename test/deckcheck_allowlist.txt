@@ -119,3 +119,4 @@
 --no-optional-locks	git's own global option, named in the CHANGELOG entry that records the prefix every git child now carries (`git --no-optional-locks -c core.fsmonitor=false`), not a ripwire flag
 --skip-worktree	git's own update-index option ("git update-index --skip-worktree"), quoted in the CHANGELOG entry for #228 part 1 as one of the checkout shapes whose index bit hides a tracked change from the identity basis — a foreign tool flag, not a ripwire flag
 --assume-unchanged	git's own update-index option, the sibling of --skip-worktree above and named in the same #228 CHANGELOG paragraph: both index bits hide a tracked path's bytes from git, so both refuse the identity basis — a foreign tool flag, not a ripwire flag
+--ref	bench/slice/run_slicerecall.py's own flag (argparse "--ref", default v0.6.2: the git ref the slice-recall mine walks history from) quoted in docs/EVALS.md's --slice-guards pre-registration corpus note — not a ripwire flag

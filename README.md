@@ -54,6 +54,14 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
+**ripwire 0.6.2 — complete, honest, fast lookups, and Windows.** Calls that live outside any named function now
+have a caller: on vue-core, 72.83% of call sites that `--callers`, `--impact` and `--test-gate` could not see.
+Answers got smaller where it counts: the compact legend is the default (`--legend=full` restores the old bytes
+byte-for-byte), and over MCP each definition is sent once per session instead of in every answer.
+`--quality-delta` is trustworthy on a clean tree again. Native Windows x64 now builds and gates with **both**
+clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the 647-gate suite doesn't run on
+Windows yet, and ASan compiles there but never executes.
+
 **ripwire 0.6.1 — the answers an agent reads got smaller.** A compact answer is 46–66% smaller per call, and on
 llvm-project the declined-call index drops from 114 MB to 368 KB with every count and every byte of output
 unchanged. `--in=DIR` scopes "what changed recently" to a directory. Elixir resolves natively by module, name and
@@ -1089,7 +1097,7 @@ stated reason, not an oversight:
 | --- | --- | --- | --- |
 | `--field-affinity` | which struct fields are read together but declared far apart; each loop's access shape (index vs pointer-chase) | its subject is a **type**, not a function — attributing a struct's finding to the functions touching it is a claim the lens never makes | `MainDispatch`: **12** findings at separation cost **92.88**; **1,374** loops classified, **5** genuine pointer-chases |
 | `cache-*` lint rules + `--with-profile` | cache-hostile access shapes (alloc-in-loop, `p=p->next`, `a[b[i]]`, node containers, …), then which are *measured* hot | rows are facts about **sites**, joined to per-scope hardware counters — not per-function evidence a family vote could count | aggressive rules: **0** hits in shipping `src/`; **327** findings adversarially triaged → **0** fix-worthy; the one open refactor settled by measurement (5.2 ms) |
-| `--readability` | least-readable-first ordering (Halstead volume, Posnett sigmoid) | the fitted score **saturates past 20 lines** — only the ordering is meaningful, and an ordering cannot vote in a count | ordering only, never a grade |
+| `--readability` | orders by Halstead volume, Posnett sigmoid (a size proxy — the readability-ordering claim is withdrawn) | the fitted score **saturates past 20 lines** — only the ordering is meaningful, and an ordering cannot vote in a count | ordering only, never a grade |
 | `--naming-consistency` | off-convention names, each with a computed `propose=` | the one lens that emits **advice** — a fix is not evidence, so it does not vote | camelCase dominant at **93.0%**; **136** names flagged with proposals |
 | `--lint --naming-locals` | the naming rules pointed at local variables inside already-flagged functions | **opt-in and unvalidated** — stays outside any join until a real-corpus audit clears it (the withdrawn-rule lesson) | +**973** findings that were structurally invisible before |
 
@@ -1147,19 +1155,26 @@ rather than blurring it:
   with a published closed form: Halstead volume (Halstead, *Elements of Software Science*, 1977) and
   the Posnett/Hindle/Devanbu sigmoid fit (MSR 2011, [doi:10.1145/1985441.1985454](https://doi.org/10.1145/1985441.1985454)),
   fitted on snippets of 20 lines or fewer — past that the fitted score saturates and only the
-  *ordering* stays meaningful, which is exactly how the verb is used: least-readable-first, never as a
+  *ordering* stays meaningful, which is exactly how the verb is used: largest-first, never as a
   grade. Halstead's volume specifically (not the later, less-trusted difficulty/effort derivatives) is
   among the metrics shown to track measured cognitive load directly (Peitek, Apel, Parnin, Brechmann &
   Siegmund, ICSE 2021, [doi:10.1109/ICSE43902.2021.00056](https://doi.org/10.1109/ICSE43902.2021.00056)) —
   `--readability` emits volume and stops there; difficulty and effort are computed nowhere in this
-  tree. **Unvalidated against human judgement, stated plainly rather than assumed:** this is a
-  deterministic ordering signal, not a checked one. Our own proxy measurement — 484 matched
-  before/after function pairs mined from 80 refactor/simplify/cleanup commits in this repository's own
-  history — found the lens agrees with the commit's implied readability direction on only 30.2% of
-  pairs, worse than chance. That is a construct-validity finding about the ordering claim, not a bug in
-  the arithmetic (a separate self-consistency check confirms the formula computes exactly what it says
-  it computes); the lens itself is unchanged pending a proper human study, and `--help=--readability`
-  carries the same caveat where a CLI reader meets it.
+  tree. **A ranking lens, never a grade, and here is what it actually orders:** on ripwire's own
+  history at the pinned `v0.6.2` tag (412 function pairs mined from 80 refactor/simplify/cleanup
+  commits), the order between two versions of a function followed the sign of its token-count change
+  in 96.0% of pairs — read a move as *more or fewer tokens*, not as *more or less readable*. Of the 412,
+  154 (37.4%) ran the commit's implied direction and 258 (62.6%) ran opposite it; Halstead volume drove
+  91.1% of those 258; a separate self-consistency check confirms the formula
+  computes exactly what it says it computes, so this is a construct-validity finding about the
+  ordering claim, not an arithmetic bug. (First recorded as 484 pairs / 30.2% from an unpinned `git
+  log --all` walk that does not reproduce — full derivation, the instrument fix and the retracted
+  figure: [`docs/EVALS.md` §8](docs/EVALS.md).) **WITHDRAWN:** the ordering claim is withdrawn —
+  stratified into narrow token-count bands, the later-fix association disappears in 8 of 10 deciles
+  (CIs include 1), so the order this verb produces is better explained as a residual size proxy,
+  measured in the lens's own units, than as an independent readability signal (derivation:
+  [`docs/EVALS.md` §8](docs/EVALS.md)). The lens's computation is unchanged pending a proper human
+  study, and `--help=--readability` carries the same figures where a CLI reader meets them.
 - **`--naming-consistency`** is the *lexical* family's one exception to "evidence, never advice": every
   other lens in this panel tells you WHAT is wrong, never a computed fix. Case-style consistency is
   the one property with a corpus-derivable answer — on this repository's `src/`, camelCase is the
@@ -1982,7 +1997,7 @@ it points at the installer's staged copy of the skills when the cwd is not a che
 
 ## Improve it with your agent
 
-[`prompts/`](prompts/) holds twelve **self-contained orchestrator prompts**: the loops this project is
+[`prompts/`](prompts/) holds thirteen **self-contained orchestrator prompts**: the loops this project is
 built with, written so a coding agent can run them. They encode the workflow rather than describing
 it.
 
@@ -2010,11 +2025,13 @@ Three worth starting with:
 | [`capture-audit.md`](prompts/capture-audit.md) | A fresh showcase capture read by parallel adversarial lenses, and the findings turned into family-wide gates. |
 
 <details>
-<summary>The other seven — head-to-head, ranking-eval from your own sessions, per-language, onboarding, sibling sweep, command tour, showcase build</summary>
+<summary>The other ten — head-to-head, ranking-eval from your own sessions, per-language, onboarding, sibling sweep, command tour, showcase build, add a language, quality-panel calibration, COBOL corpus measurement</summary>
 
-The other seven — a paired head-to-head against a competitor, a ranking-eval loop that mines real
+The other ten — a paired head-to-head against a competitor, a ranking-eval loop that mines real
 retrieval misses from your own sessions, a per-language improvement pass, a zero-context onboarding
-study, a sibling sweep, a live command tour, a showcase build — are listed with their audiences in
+study, a sibling sweep, a live command tour, a showcase build, the path a new language's grammar
+actually took, a quality-panel calibration round, and a COBOL two-pass corpus measurement — are
+listed with their audiences in
 [`prompts/README.md`](prompts/README.md). Each states its own scope and its honesty rules, and most name the gates they must leave green.
 
 </details>
@@ -2779,13 +2796,14 @@ files under `bench/`.
 
 ### 16. Improvement
 
-`prompts/` holds twelve **self-contained orchestrator prompts**. Each prompt is a workflow that a
+`prompts/` holds thirteen **self-contained orchestrator prompts**. Each prompt is a workflow that a
 coding agent can run against this repository. Each prompt writes a plan and stops for your approval
 before it runs a command. Build the binary first. The prompts measure against the binary.
 
 The prompts cover a full audit, a gap analysis from real use, a capture audit, a head-to-head
 comparison, a ranking evaluation, a language improvement pass, a zero-context onboarding study, a
-sibling sweep, a command tour, and a presentation build. The index is `prompts/README.md`.
+sibling sweep, a command tour, a presentation build, adding a new language, a quality-panel
+calibration round, and a COBOL corpus measurement. The index is `prompts/README.md`.
 
 If the tool answers incorrectly on your codebase, run `prompts/improve-for-my-language.md`. The
 prompt harvests your session transcript and produces one finding per event with its evidence. Open

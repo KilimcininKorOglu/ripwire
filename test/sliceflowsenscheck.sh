@@ -104,7 +104,7 @@ for (file, fn, var) in groups:
             edges += 0 if e["rd"] == "-" else len(e["rd"].split(","))
         # the source-order rule, re-derived from the tool's own rows: last unconditional def before the use + pp defs after it
         old = set()
-        for d in found:
+        for d in sorted(found, key=lambda d: d["line"]):   # the SOURCE-order rule walks lines ascending; rows emit order="defuse"
             if d["line"] >= row["line"] or d["k"] not in ("def", "both"):
                 continue
             if not d["pp"]:

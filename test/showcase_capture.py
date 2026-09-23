@@ -663,7 +663,7 @@ add(S2B, f"{BIN} . --run-timeout=5", "--run-timeout alone is refused loudly (it 
 
 S4B = "assess quality — the wider lens family"
 add(S4B, f"{BIN} . --quality-panel", "THE single wide-angle quality read: six families in one pass, an eligible/ranked shortlist rather than a firehose.", timeout=600)
-add(S4B, f"{BIN} . --readability --limit=8", "Per-function readability, LEAST readable first (Halstead volume, token entropy, lines, Posnett) — a RANKING lens, not a grade.")
+add(S4B, f"{BIN} . --readability --limit=8", "Per-function size ranking, largest Halstead volume/token entropy/lines first — a size proxy, not a readability order (withdrawn, docs/EVALS.md §8) — a RANKING lens, not a grade.")
 add(S4B, f"{BIN} . --comment-coherence --limit=8", "Functions WITH a doc comment, most name-restating first: c_coeff (high = the comment repeats the name) and cic (Jaccard of comment vs identifier vocabulary), both reported, never collapsed.")
 add(S4B, f"{BIN} . --context-ratio --limit=8", "The local-reasoning lens: to understand this symbol, how much must you know that is NOT in front of you (ent_ratio= edge share, read_ratio= token-weighted).")
 add(S4B, f"{BIN} . --nonlocal-state --limit=8", "Per function, the non-local MUTABLE state it can reach (transitively), most writes first — unsound by construction, and the legend says where.")

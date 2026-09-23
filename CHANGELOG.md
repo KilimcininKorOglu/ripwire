@@ -13,7 +13,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
-## [Unreleased]
+## [0.6.2] — 2026-09-21
 
 ### Added — Ruby's class-level attribute DSL (`attr_*`) defines Var symbols
 

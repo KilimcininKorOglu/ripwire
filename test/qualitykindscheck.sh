@@ -114,6 +114,12 @@ if [ "$OSH" = "$( dsh )" ]; then ok "short-horizon-churn: delta byte-identical r
 #   A helper accumulate() with fan-in ≥ 3 (called from three sites) is committed. The working tree adds a
 #   NEW function reinvent() whose body is a Type-1/2 clone of accumulate() — reuse-connectivity decline.
 #   Assert the new-clone-of-reused-helper kind fires (exit 2) and names the clone pair.
+#   3a/3b is also the CONTROL for 3c/3d below: a genuine reuse-decline (no recognized idiom, no shared
+#   test-script path) must keep gating at full severity — the fix must not blunt the kind, only narrow it.
+#   3c/3d extend this section to give reuse-decline the SAME two demotions `duplication` already has
+#   (src/quality.h reportReusedClones, which reads reportNewClones's own CloneIdiomVerdict/isTestScriptPath
+#   rather than a second copy of either test): idiom-class collisions demote to minor instead of gating, and
+#   a clone group entirely made of test SCRIPTS is skipped outright, the same as `duplication`.
 RC="$WORK/reuse"; mkdir -p "$RC/src"
 ( cd "$RC" && git init -q && git config user.email t@t && git config user.name t )
 # accumulate() has a distinctive ≥18-token body; it is called from c1/c2/c3 → in-edge fan-in = 3.
@@ -135,9 +141,146 @@ if [ "$( ecrc )" = 2 ]; then ok "reuse-connectivity: new clone of a reused helpe
 printf '%s' "$ORC" | grep -q 'kind="new-clone-of-reused-helper"' && printf '%s' "$ORC" | grep -q 'accumulate' \
     && ok "reuse-connectivity: new-clone-of-reused-helper flagged (reinvent duplicates accumulate, fan-in≥3)" \
     || { no "reuse-connectivity: new-clone-of-reused-helper missing"; printf '%s\n' "$ORC" | tr '>' '\n' | grep '<r '; }
+# CONTROL (3b, strengthened): accumulate()/reinvent() share no recognized idiom and no test-script path, so
+# this genuine reuse-decline must gate at FULL severity — gating="1", no sev="minor", no idiom= — proving the
+# demotions added in 3c/3d below narrow the kind and do not blunt it.
+RCROW="$( printf '%s' "$ORC" | tr '<' '\n' | grep '^r kind="new-clone-of-reused-helper"' )"
+printf '%s' "$RCROW" | grep -q 'gating="1"' \
+    && ok "reuse-connectivity CONTROL: a genuine (non-idiom, non-test-script) clone still gates at full severity" \
+    || no "reuse-connectivity CONTROL: genuine reuse-decline lost its gating attribute: $RCROW"
+printf '%s' "$RCROW" | grep -qE 'sev="minor"|idiom="' \
+    && no "reuse-connectivity CONTROL: genuine reuse-decline was wrongly demoted (sev=minor/idiom= present): $RCROW" \
+    || ok "reuse-connectivity CONTROL: no sev=\"minor\", no idiom= on the genuine finding"
 if [ "$ORC" = "$( drc )" ]; then ok "reuse-connectivity: delta byte-identical run-to-run (deterministic)"; else no "reuse-connectivity: non-deterministic delta"; fi
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$ORC" | xmllint --noout - 2>/dev/null; then ok "reuse-connectivity: xml well-formed"; else no "reuse-connectivity: xml malformed"; fi
+fi
+
+# 3c) IDIOM-CLASS COLLISION on a reused helper: altitudeBandOf() (a scalar threshold-ladder over a 4-band
+#     enum, fan-in=3 via 3 baseline callers) is committed. The working tree adds tankStateFor() — the SAME
+#     threshold-ladder shape in a different namespace/file, sharing NOT ONE non-keyword identifier with
+#     altitudeBandOf — the exact shape src/cloneidiom.h demotes for `duplication` (test/cloneidiomcheck.sh's
+#     ladder_demote fixture). Because the group also contains a fan-in≥3 PREEXISTING helper, this is ALSO a
+#     new-clone-of-reused-helper candidate; the fix requires it to demote (sev="minor", no gating) exactly
+#     like `duplication` does, via the SAME CloneIdiomVerdict — not a second idiom test of its own.
+ID="$WORK/idiom"; mkdir -p "$ID/src"
+( cd "$ID" && git init -q && git config user.email t@t && git config user.name t )
+cat > "$ID/src/altitude.cpp" <<'EOF'
+namespace flight
+{
+enum class AltitudeBand : unsigned char { Low, Mid, High, Danger };
+AltitudeBand altitudeBandOf( float y )
+{
+    if( y <  6.0f ) return AltitudeBand::Low;
+    if( y < 12.0f ) return AltitudeBand::Mid;
+    if( y < 16.0f ) return AltitudeBand::High;
+    return AltitudeBand::Danger;
+}
+int callA( float y ) { return int( altitudeBandOf( y ) ); }
+int callB( float y ) { return int( altitudeBandOf( y ) ); }
+int callC( float y ) { return int( altitudeBandOf( y ) ); }
+}
+EOF
+( cd "$ID" && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+did(){  ( cd "$ID" && "$BIN" . --quality-delta --no-cache 2>/dev/null ); }
+ecid(){ ( cd "$ID" && "$BIN" . --quality-delta --no-cache >/dev/null 2>&1; echo $? ); }
+
+[ "$( ecid )" = 0 ] && did | grep -q 'regressions="0"' \
+    && ok "reuse-connectivity idiom: clean tree → exit 0 (no duplicate yet)" \
+    || { no "reuse-connectivity idiom: clean tree should be clean (exit $( ecid ))"; did | tr '>' '\n' | grep '<r '; }
+
+cat > "$ID/src/tank.cpp" <<'EOF'
+namespace supply
+{
+enum class TankState : unsigned char { Empty, Reserve, Cruise, Brimming };
+TankState tankStateFor( float litres )
+{
+    if( litres <  20.0f ) return TankState::Empty;
+    if( litres <  90.0f ) return TankState::Reserve;
+    if( litres < 140.0f ) return TankState::Cruise;
+    return TankState::Brimming;
+}
+}
+EOF
+OID="$( did )"
+if [ "$( ecid )" = 0 ]; then ok "reuse-connectivity idiom: idiom collision on a reused helper does NOT gate (exit 0)"; else no "reuse-connectivity idiom: should stay exit 0, an idiom collision must demote not gate (got $( ecid ))"; fi
+IDROW="$( printf '%s' "$OID" | tr '<' '\n' | grep '^r kind="new-clone-of-reused-helper"' )"
+printf '%s' "$IDROW" | grep -q . \
+    && ok "reuse-connectivity idiom: new-clone-of-reused-helper still PRINTS (demoted, not deleted)" \
+    || { no "reuse-connectivity idiom: new-clone-of-reused-helper row missing entirely (demotion must still print)"; printf '%s\n' "$OID" | tr '>' '\n' | grep '<r '; }
+printf '%s' "$IDROW" | grep -q 'sev="minor"' \
+    && ok "reuse-connectivity idiom: row carries sev=\"minor\" (demoted)" \
+    || no "reuse-connectivity idiom: row is not sev=\"minor\": $IDROW"
+printf '%s' "$IDROW" | grep -q 'idiom="threshold-ladder"' \
+    && ok "reuse-connectivity idiom: row names its idiom (threshold-ladder)" \
+    || no "reuse-connectivity idiom: row does not name idiom=\"threshold-ladder\": $IDROW"
+printf '%s' "$IDROW" | grep -q 'gating="1"' \
+    && no "reuse-connectivity idiom: demoted row still carries gating=\"1\"" \
+    || ok "reuse-connectivity idiom: demoted row carries no gating=\"1\""
+if [ "$OID" = "$( did )" ]; then ok "reuse-connectivity idiom: delta byte-identical run-to-run (deterministic)"; else no "reuse-connectivity idiom: non-deterministic delta"; fi
+if command -v xmllint >/dev/null 2>&1; then
+    if printf '%s' "$OID" | xmllint --noout - 2>/dev/null; then ok "reuse-connectivity idiom: xml well-formed"; else no "reuse-connectivity idiom: xml malformed"; fi
+fi
+
+# 3d) ALL-TEST-SCRIPT SKIP on a reused helper: mcp_call() (a shell test-harness helper, fan-in=3 via 3
+#     baseline callers, ALL under test/) is committed. The working tree adds a sibling gate script whose
+#     helper is a Type-1/2 clone of mcp_call() — the house "every sibling gate repeats mcp_call()-style
+#     boilerplate" convention `duplication` already exempts (isTestScriptPath). Because every member of the
+#     group is a test script, the fix requires the row to be SKIPPED OUTRIGHT (never printed, not even
+#     minor) — the same continue `reportNewClones` takes, reused rather than re-implemented.
+TS="$WORK/testscript"; mkdir -p "$TS/test"
+( cd "$TS" && git init -q && git config user.email t@t && git config user.name t )
+cat > "$TS/test/hcheck.sh" <<'EOF'
+#!/usr/bin/env bash
+mcp_call() {
+    local a="$1"
+    local n=0
+    n=$(( n + 1 ))
+    n=$(( n + 2 ))
+    n=$(( n + 3 ))
+    n=$(( n + 4 ))
+    n=$(( n + 5 ))
+    n=$(( n + 6 ))
+    echo "$a:$n"
+}
+siteA() { mcp_call "x"; }
+siteB() { mcp_call "y"; }
+siteC() { mcp_call "z"; }
+siteA; siteB; siteC
+EOF
+( cd "$TS" && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+dts(){  ( cd "$TS" && "$BIN" . --quality-delta --no-cache 2>/dev/null ); }
+ects(){ ( cd "$TS" && "$BIN" . --quality-delta --no-cache >/dev/null 2>&1; echo $? ); }
+
+[ "$( ects )" = 0 ] && dts | grep -q 'regressions="0"' \
+    && ok "reuse-connectivity test-script: clean tree → exit 0 (no duplicate yet)" \
+    || { no "reuse-connectivity test-script: clean tree should be clean (exit $( ects ))"; dts | tr '>' '\n' | grep '<r '; }
+
+cat > "$TS/test/dupcheck.sh" <<'EOF'
+#!/usr/bin/env bash
+mcp_call_dup() {
+    local a="$1"
+    local n=0
+    n=$(( n + 1 ))
+    n=$(( n + 2 ))
+    n=$(( n + 3 ))
+    n=$(( n + 4 ))
+    n=$(( n + 5 ))
+    n=$(( n + 6 ))
+    echo "$a:$n"
+}
+EOF
+OTS="$( dts )"
+if [ "$( ects )" = 0 ]; then ok "reuse-connectivity test-script: all-test-script clone of a reused helper does NOT gate (exit 0)"; else no "reuse-connectivity test-script: should stay exit 0, all-test-script groups are skipped outright (got $( ects ))"; fi
+printf '%s' "$OTS" | grep -q 'kind="new-clone-of-reused-helper"' \
+    && no "reuse-connectivity test-script: new-clone-of-reused-helper fired on an all-test-script group (should be skipped outright)" \
+    || ok "reuse-connectivity test-script: new-clone-of-reused-helper is SKIPPED (no row at all, not even minor)"
+printf '%s' "$OTS" | grep -q 'regressions="0"' \
+    && ok "reuse-connectivity test-script: regressions=\"0\" (the skip drops the row, not just its severity)" \
+    || { no "reuse-connectivity test-script: expected regressions=\"0\""; printf '%s\n' "$OTS" | tr '>' '\n' | grep '<r '; }
+if [ "$OTS" = "$( dts )" ]; then ok "reuse-connectivity test-script: delta byte-identical run-to-run (deterministic)"; else no "reuse-connectivity test-script: non-deterministic delta"; fi
+if command -v xmllint >/dev/null 2>&1; then
+    if printf '%s' "$OTS" | xmllint --noout - 2>/dev/null; then ok "reuse-connectivity test-script: xml well-formed"; else no "reuse-connectivity test-script: xml malformed"; fi
 fi
 
 # ── 4) SELF vs AMBIENT CHURN (B10.2d, signal-to-noise round 2) ─────────────────────────────────────────────

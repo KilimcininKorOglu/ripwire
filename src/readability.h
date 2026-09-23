@@ -10,8 +10,9 @@
 //   E  token entropy              Shannon entropy of the definition's token-frequency distribution, in bits
 //   L  lines                      Symbol::loc, the definition's physical line span (already indexed; not recomputed)
 //   P  Posnett score              P = sigmoid( 8.87 - 0.033*V + 0.40*L - 1.5*E ), the paper's published fit
-// Rows are emitted LEAST readable first (ascending P) — the verb is a RANKING lens, which is the only claim
-// the literature supports for it (Scalabrino ASE'17 and Trockman MSR'18 both find no readability metric
+// Rows are emitted in ascending P, which puts the LARGEST volume/token count/length first — a size proxy:
+// the claim that this order predicts later fixes is WITHDRAWN (docs/EVALS.md §8, 8 of 10 token-count deciles
+// show no association). The verb is a RANKING lens, which is the only claim the literature supports for it (Scalabrino ASE'17 and Trockman MSR'18 both find no readability metric
 // correlates strongly with measured understandability; Fakhoury ICPC'19 finds the classic models miss real
 // readability-improving commits). So P is never a grade, never a gate, and never a verdict — it orders a
 // worklist, and the legend says so where the reader meets it.
@@ -217,7 +218,7 @@ inline ReadabilityScan computeReadability( const IngestResult& ing )
         scan.rows.push_back( row );
     }
 
-    // Least readable FIRST. Total order: P ascending, then V descending (bigger is harder at equal P), then
+    // Lowest P FIRST (largest bodies first). Total order: P ascending, then V descending (bigger is harder at equal P), then
     // the symbol id — already assigned in (file, line, name) order, so this is byte-stable without a string
     // compare. Tolerance bands do not apply to a SORT (CONTRIBUTING.md §3): the determinism gate does.
     std::sort( scan.rows.begin(), scan.rows.end(),
@@ -241,14 +242,15 @@ inline ReadabilityScan computeReadability( const IngestResult& ing )
 // illegal inside an XML comment, which is why flags are named bare (see src/graphlegend.h).
 inline constexpr const char* kReadabilityLegend =
     "<!-- ripwire readability: the Posnett/Hindle/Devanbu (MSR 2011) closed-form lens, one row per function "
-    "or method, LEAST READABLE FIRST. p=path:line n=symbol name lines=L, the definition's physical line span "
+    "or method, ordered by P ascending, which puts the LARGEST Halstead volume, token count and length first: "
+    "a size proxy, not a readability order (the readability-ordering claim is withdrawn, docs/EVALS.md section 8). p=path:line n=symbol name lines=L, the definition's physical line span "
     "toks=N, the operator+operand tokens of the whole definition (signature included) "
     "ops=N1, the operator half of toks (keywords and punctuation; the rest are identifiers and literals) "
     "vocab=eta, distinct tokens vol=Halstead volume V, N*log2(eta) ent=E, Shannon entropy of the token "
     "frequency distribution, in bits posnett=P, sigmoid(8.87 - 0.033V + 0.40L - 1.5E), the paper's published fit. "
     "ONE token-class table serves every language, so V is a cross-language APPROXIMATION, not a per-grammar "
     "count. P was fitted on snippets of 20 lines or fewer: read the ORDER, not the number, and never as a grade. "
-    "The sigmoid SATURATES at the least-readable extreme (a high-volume function's argument clamps at +/-40), "
+    "The sigmoid SATURATES at its low end (a high-volume function's argument clamps at +/-40), "
     "so several head rows can print posnett=\"0.000\" alike; those ties (and every tie) break by vol= "
     "descending, so the ORDER stays real even where P itself has run out of visible precision. "
     "functions=functions and methods measured (a declaration with no body is not measured) "

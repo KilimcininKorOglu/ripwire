@@ -22,14 +22,20 @@ own tree (a detached git worktree; nothing in the live checkout is touched):
   (c) --expand=file:fn                 the whole-body baseline: recall 1.0 by construction, priced in
                                        raw output bytes (recall and cost reported together, §5).
 
-Deterministic given the commit list. Usage:
-  python3 bench/slice/run_slicerecall.py [--bin build/ripwire] [--repo .] [--cap 40] [--json out.json]
+Deterministic given the commit list AND the ref it is mined from — see `--ref` below (fixed
+2026-09-22: the mine used to walk bare `git log` from whatever HEAD the `--repo` checkout happened to
+be at, so re-running this exact command against `--repo .` picked up a different 40-commit population
+every time `main` advanced; docs/EVALS.md's own "corpus problem, settled" note worked around this by
+hand, always mining from a throwaway checkout DETACHED at a stated pin. `--ref` makes that the
+default instead of an operator discipline). Usage:
+  python3 bench/slice/run_slicerecall.py [--bin build/ripwire] [--repo .] [--ref v0.6.2] [--cap 40] [--json out.json]
 
 `--repo` may be ANY git tree, which is how the 2026-08-31 wider-corpus extension runs it: point it at
-a throwaway copy of a D4-pinned external corpus checked out DETACHED at its pin (the mine walks the
-log from HEAD, so the pin alone fixes the commit list) while `--bin` stays this tree's binary. The
-cap applies PER REPO. Neither the qualification rules nor any metric changed for that extension; the
-external path needed only byte-tolerant subprocess decoding and per-reason skip counters, both below.
+a throwaway copy of a D4-pinned external corpus checked out DETACHED at its pin, and pass `--ref=HEAD`
+(the external corpus will not carry this tree's `v0.6.2` tag; the checkout being pinned is what fixes
+the commit list there) while `--bin` stays this tree's binary. The cap applies PER REPO. Neither the
+qualification rules nor any metric changed for that extension; the external path needed only
+byte-tolerant subprocess decoding and per-reason skip counters, both below.
 
 Known mining limits, stated rather than discovered later: git's funcname heuristic names the nearest
 PRECEDING function header, so a hunk that INSERTS a whole new function attributes to its neighbor —
@@ -62,10 +68,12 @@ def fn_name_from_sig( sig ):
     ids = [ i for i in ids if i not in ( "inline", "static", "const", "constexpr", "struct", "class", "template", "typename", "void", "int", "bool", "auto", "std" ) ]
     return ids[-1] if ids else None
 
-def mine( repo, cap, subject_filter ):
+def mine( repo, cap, subject_filter, ref ):
     # every non-merge commit, newest first — NOT --first-parent: this repository lands work through
-    # merged lanes, so the fix commits overwhelmingly live on the second-parent chains
-    log = sh( [ "git", "log", "--no-merges", "--pretty=%H\x01%s" ], cwd=repo ).stdout
+    # merged lanes, so the fix commits overwhelmingly live on the second-parent chains.
+    # `ref` bounds the walk to a fixed point (default an immutable tag, never a bare HEAD) so the
+    # 40-commit population a run reports is the same population a later run reports.
+    log = sh( [ "git", "log", "--no-merges", "--pretty=%H\x01%s", ref ], cwd=repo ).stdout
     picked = []
     for line in log.splitlines():
         sha, _, subject = line.partition( "\x01" )
@@ -105,6 +113,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument( "--bin", default="build/ripwire" )
     ap.add_argument( "--repo", default="." )
+    ap.add_argument( "--ref", default="v0.6.2", help="git ref the mine walks `git log` from — an "
+                     "immutable point, not whatever HEAD happens to be at run time. Default is this "
+                     "tree's own release tag; pass --ref=HEAD for an external --repo already checked "
+                     "out DETACHED at its own pin (see the module docstring)." )
     ap.add_argument( "--cap", type=int, default=40 )
     ap.add_argument( "--subject-filter", default=r"\bfix" )
     ap.add_argument( "--json", default=None )
@@ -112,8 +124,10 @@ def main():
 
     repo = Path( a.repo ).resolve()
     bin_ = str( Path( a.bin ).resolve() )
-    cand = mine( repo, a.cap, a.subject_filter )
-    print( f"mined {len(cand)} single-function fix-shaped candidates (pre-resolution)", file=sys.stderr )
+    ref_sha = sh( [ "git", "rev-parse", f"{a.ref}^{{commit}}" ], cwd=repo ).stdout.strip()
+    cand = mine( repo, a.cap, a.subject_filter, ref_sha )   # the resolved sha, so the walk IS the recorded ref_sha
+    print( f"mined {len(cand)} single-function fix-shaped candidates (pre-resolution) from "
+           f"ref={a.ref} ({ref_sha[:9]})", file=sys.stderr )
 
     wt = Path( tempfile.mkdtemp( prefix="slicerecall-wt-" ) ) / "tree"
     instances, commits_used = [], 0
@@ -197,7 +211,8 @@ def main():
         vals = [ r[k] for r in instances if r[k] is not None ]
         return sum( vals ) / len( vals ) if vals else None
     summary = {
-        "repo": str( repo ), "candidates_mined": len( cand ), "skips": skips,
+        "repo": str( repo ), "ref": a.ref, "ref_sha": ref_sha,
+        "candidates_mined": len( cand ), "skips": skips,
         "commits_used": commits_used, "instances": n,
         "v1_line_recall_mean": mean( "v1_line_recall" ),
         "v1_hit_all_rate": ( sum( 1 for r in instances if r["v1_hit_all"] ) / n ) if n else None,
