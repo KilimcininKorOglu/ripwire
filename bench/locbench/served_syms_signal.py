@@ -176,6 +176,13 @@ def check_fingerprint( summary, rows=None ):
 
 
 # ── §5.4.4 — threshold procedure ────────────────────────────────────────────────────────────────────
+def _is_served_syms_int( v ):
+    """True iff `v` is a real integer count — `bool` is excluded even though `isinstance(True, int)`
+    is `True` in Python, because a bool is never a served_syms value and letting one through would
+    silently do `True - 1 == 0` arithmetic on the threshold."""
+    return isinstance( v, int ) and not isinstance( v, bool )
+
+
 def _confusion_ge( labels, values, t ):
     """tp/fn/fp/tn for the registered rule `warn(row) <=> served_syms(row) >= t`, reusing
     score_abstention_calibration.py's `confusion()` rather than re-looping — no new counting logic.
@@ -187,9 +194,18 @@ def _confusion_ge( labels, values, t ):
     versa, so tp/fn and fp/tn swap places: confusion()'s tp' (label True, predicted-abstain True) is
     exactly this rule's fn (label True, warned False), and so on for the other three cells.
 
-    NOTE (review LOW-1, deferred — not part of fix round 1's scope): this is exact only when every
-    value and every candidate t is an integer, which `grade()`'s `served_syms=len(head)` always is
-    today; a non-integer input would silently miscount. Not validated here; flagged for a later round."""
+    VALIDATE (review LOW-1, folded into MEDIUM-4's commit): the `t - 1` trick above is exact only when
+    every value and every candidate `t` is a real int, which `grade()`'s `served_syms=len(head)` always
+    is today — but a non-integer input would otherwise silently miscount (a float `t` shifts the cut
+    point by less than one whole unit, which the half-open `<=`/`>=` boundary does not tolerate). Raise
+    rather than degrade: this predicate is cheap enough, and this path's whole purpose is being the one
+    place `<=`/`>=` counting happens, that a silent wrong count here is worse than a loud refusal."""
+    if not all( _is_served_syms_int( v ) for v in values ):
+        raise ValueError( "_confusion_ge: every served_syms value must be a real int (the `t - 1` "
+                          "trick is exact only for integers) -- got %r" %
+                          ( [ v for v in values if not _is_served_syms_int( v ) ][:3], ) )
+    if not _is_served_syms_int( t ):
+        raise ValueError( "_confusion_ge: threshold t must be a real int, same reason -- got %r" % ( t, ) )
     tp2, fn2, fp2, tn2 = confusion( labels, values, t - 1 )
     return fn2, tp2, tn2, fp2
 
@@ -361,12 +377,22 @@ def _public_sentence_fail( grain, g ):
 
 def _public_sentence_pass( grain, chosen, op_ci, grain_honesty ):
     fw, rc = op_ci["false_warn"], op_ci["recall"]
-    other_verdict = "also meets" if grain_honesty["other_grain_pass"] else "does not meet"
+    # MEDIUM-4 (delta review, `reports/rv-served-syms-prereg.md`): the non-gating grain's clause must
+    # read off `band` (the owner's actual predicate) and `safe` (band + SR-1) SEPARATELY -- `safe`
+    # alone conflates the two, so a file_hit row that is genuinely in-band but only above the fire-rate
+    # ceiling was reported as "does not meet the same band", which is false (a constructed 92-row PASS
+    # at func_hit t=30 with file_hit in-band at t=20, warn_rate 0.293, demonstrated it).
+    if grain_honesty["other_safe"]:
+        other_verdict = "also meets the band and the fire-rate ceiling"
+    elif grain_honesty["other_band"]:
+        other_verdict = "meets the band but only above the 25% fire-rate ceiling"
+    else:
+        other_verdict = "does not meet the band"
     return ( _SEEN_CLAUSE + ", at threshold t=%d served rows it reaches false-warn=%.3f [%s, %s] and "
             "miss-recall=%.3f [%s, %s] on %s (%d/%d and %d/%d bootstrap resamples usable) -- inside "
             "the pre-registered band and within the 25%% fire-rate ceiling (warns on %.1f%% of the "
-            "92). %s %s the same band. This is an in-sample result on one 92-row sample (per "
-            "docs/research/confidence-and-abstention.md §5.2) and licenses 'worth replicating,' "
+            "92). At its own best threshold, %s %s. This is an in-sample result on one 92-row sample "
+            "(per docs/research/confidence-and-abstention.md §5.2) and licenses 'worth replicating,' "
             "not 'shippable': replication on >=92 fresh held-out instances, at this same frozen "
             "threshold and orientation, has not been run." %
             ( chosen["threshold"], chosen["false_warn"], _fmt3( fw["ci_lo"] ), _fmt3( fw["ci_hi"] ),
@@ -432,9 +458,15 @@ def score_served_syms( summary, rows ):
         op_ci = bootstrap_operating_point_ci( rows, GATING_GRAIN, chosen["threshold"] )
         out["operating_point_ci"] = op_ci
         other_grain = "file_hit" if GATING_GRAIN == "func_hit" else "func_hit"
-        other_pass = any( r["safe"] for r in grains[other_grain]["sweep"] )
+        other_sweep = grains[other_grain]["sweep"]
+        other_band = any( r["band"] for r in other_sweep )     # the owner's actual predicate, alone
+        other_safe = any( r["safe"] for r in other_sweep )     # band AND SR-1 -- a STRICTER subset
         out["grain_honesty"] = dict( gating_grain=GATING_GRAIN, gating_grain_pass=True,
-                                     other_grain=other_grain, other_grain_pass=other_pass )
+                                     other_grain=other_grain,
+                                     other_band=other_band, other_safe=other_safe,
+                                     # kept for callers still reading the pre-MEDIUM-4 field name;
+                                     # equal to `other_safe`, never the weaker `other_band`.
+                                     other_grain_pass=other_safe )
         out["outcome"] = "pass"
         out["pass"] = True
         out["public_sentence"] = _public_sentence_pass( GATING_GRAIN, chosen, op_ci, out["grain_honesty"] )

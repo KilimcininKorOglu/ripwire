@@ -524,15 +524,24 @@ def md_served_syms_section( summary ):
           ( s["outcome"].upper(), s["band_met"], s["sr1_met"] ) ]
     if s["outcome"] == "pass":
         c, op = s["chosen_threshold"], s["operating_point_ci"]
+        gh = s["grain_honesty"]
+        # MEDIUM-4 (delta review): `band` and `safe` (band + SR-1) read separately for the non-gating
+        # grain -- `safe` alone would call a genuinely in-band-but-fire-rate-heavy row "does not meet
+        # the band", which is false.
+        if gh["other_safe"]:
+            other_txt = "also meets the band and the fire-rate ceiling"
+        elif gh["other_band"]:
+            other_txt = "meets the band but only above the 25% fire-rate ceiling"
+        else:
+            other_txt = "does not meet the band"
         L.append( "Chosen operating point (§5.4.4 tie rule; band AND SR-1): `t=%d` — "
                  "false_warn=%.4f [%s, %s], recall=%.4f [%s, %s], warn_rate=%.4f. Grain honesty "
-                 "(SR-2): %s meets the band; %s %s." %
+                 "(SR-2): %s meets the band; at its own best threshold, %s %s." %
                  ( c["threshold"], c["false_warn"],
                   md_num( op["false_warn"]["ci_lo"], "%.4f" ), md_num( op["false_warn"]["ci_hi"], "%.4f" ),
                   c["recall"],
                   md_num( op["recall"]["ci_lo"], "%.4f" ), md_num( op["recall"]["ci_hi"], "%.4f" ),
-                  c["warn_rate"], s["gating_grain"], s["grain_honesty"]["other_grain"],
-                  "also meets it" if s["grain_honesty"]["other_grain_pass"] else "does not" ) )
+                  c["warn_rate"], s["gating_grain"], gh["other_grain"], other_txt ) )
     elif s["outcome"] == "pass_fire_rate_rejected":
         b = s["best_band_only_threshold"]
         L.append( "Best band-only point (SR-1 ignored): `t=%d` — false_warn=%.4f, recall=%.4f, "

@@ -355,6 +355,14 @@ thresholds, which tie rule, and what each outcome may be said in public.
 > its own outcome and sentence (§5.4.6). Also: "was never scored" and "our best disclosed signal" are
 > removed from every sentence below (served_syms **was** scored, exploratorily — MEDIUM-1); §5.2's
 > separate AUROC band is now reported, though it does not gate here (MEDIUM-3).
+>
+> **Delta review, same day.** One residual: HIGH-3's fix computed the PASS sentence's SR-2 clause
+> (§5.4.4) from `safe` (band **and** SR-1) for the non-gating grain, so a grain that was genuinely
+> `band_met` but never `sr1_met` was reported as "does not meet the same band" — false, on a
+> reachable PASS (**MEDIUM-4**). SR-2 is now stated as a three-way, reading `band` and `safe`
+> separately for the non-gating grain (below). LOW-1 (`_confusion_ge`'s `t − 1` trick, exact only for
+> integers) is fixed in the same commit: it now raises rather than silently miscounting on a
+> non-integer input.
 
 **Scope.** This is not a new instrument under §5.1 — `served_syms` is not proposed as a replacement
 for `confidence=`/`margin_pct=`, and §5.1's "not a recalibration" argument does not apply to it (it is
@@ -411,6 +419,9 @@ re-parsing, no re-derivation. The invocation is unchanged from §3.2: one defaul
 no budget — the bundle an agent is actually handed. `served_syms` is a non-negative integer with no
 declared upper bound in the emitted contract (the adaptive cut's ceiling bounds it in practice, but
 that bound is an implementation detail of `adaptiveCut`, not part of what `--for` promises).
+`_confusion_ge`'s `t − 1` threshold shift (§5.4.4) is exact only because of that integer-ness; the
+scoring code VALIDATEs it (raises rather than silently miscounting on a non-integer input) — added in
+the delta-review fix, since the check is one line and the failure mode it closes is silent.
 
 **Positive classes — both grains, same definitions as §3.2/§3.3:** `file_hit` (a gold file is in the
 served head) and `func_hit` (a gold function is in the served head), read exactly as `grade()` already
@@ -523,9 +534,15 @@ so "warn on nothing" is always a representable point:
     with 15 file / 38 func misses out of 92 rows makes a low fire-rate and the recall floor jointly
     satisfiable only if `served_syms` separates considerably better than chance; this is not assumed,
     only stated as the arithmetic constraint the sweep must clear.)
-  - **SR-2 (grain honesty, from §5.3 rule 4).** A real PASS on `func_hit`, with `file_hit` not meeting
-    the band at the same or any threshold, is reported as exactly that — "meets on func_hit, not on
-    file_hit" — never folded into a single grain-agnostic sentence.
+  - **SR-2 (grain honesty, from §5.3 rule 4) — THREE-WAY, not band-vs-not-band (revised, MEDIUM-4
+    below).** A real PASS on `func_hit` reports what `file_hit` does **at its own best threshold**, on
+    its own `band`/`safe` predicates (§5.4.4's two flags — not `safe` alone): (a) file_hit **also
+    clears band and the fire-rate ceiling**, (b) file_hit **reaches the band but only above the 25%
+    ceiling** (band_met, not sr1_met — same shape as a `pass_fire_rate_rejected` outcome, just for the
+    non-gating grain), or (c) file_hit **does not reach the band at all**. Collapsing (a)/(b) into one
+    "meets"/"does not meet" pair — as an earlier draft of this section did — reports (b) as (c), a
+    false "does not meet the band" on a grain that genuinely does; never folded into a single
+    grain-agnostic sentence regardless.
   - **SR-3 (in-sample disclosure).** Any `t` found this way is chosen **in-sample** (it is selected by
     looking at the 92's own sweep table). A real PASS under this procedure licenses "worth
     replicating," never "shippable," until §5.2's replication runs the **same frozen `(orientation,
@@ -570,7 +587,7 @@ point). "Our best disclosed signal" is likewise dropped — it asserts an untest
 | --- | --- | --- | --- |
 | **Fingerprint mismatch** | any §5.4.1 check fails, including the row-count check | which check(s) failed and what was measured instead; asset tree path and binary sha | *"served_syms had never been scored against our pre-registered band — an exploratory AUROC (0.669 file_hit / 0.723 func_hit) had been computed once in a prior review, on this same 92, without an operating point or a recorded orientation. Scored now under a named procedure, with the orientation fixed in advance as the raw value — informed by that exploratory AUROC having already been seen, not blind (§5.4.3): the asset tree available today does not reproduce the pre-registered 92-instance population, so no number under this procedure is reported as measured on it."* Nothing about `served_syms`'s discrimination or an operating point may be asserted. |
 | **FAIL** | `band_met = False` (no `t` meets the band on `func_hit` at all) | `func_hit`/`file_hit` AUROC with CI and §5.2's AUROC-band rung; the full threshold sweep | opens with the same disclosure clause as above, then: *"…it does not reach the band (false-warn ≤ 0.20 at miss-recall ≥ 0.50) on func_hit: AUROC \<X\> [CI] (§5.2 rung: \<meets/weak/does_not_meet/does_not_meet_opposite_direction\>), and no threshold clears both floors together."* A negative is a complete result and is reported with the same numbers a PASS would carry. |
-| **PASS** | `band_met = True` **and** `sr1_met = True` | the chosen `t` (band AND SR-1), its `(false_warn, recall)` with CI and resample counts, `func_hit`/`file_hit` AUROC with CI, the full sweep table, SR-2's grain-honesty statement | opens with the same disclosure clause, then: *"…at threshold t=\<N\> served rows it reaches false-warn=\<X\> [CI] and miss-recall=\<Y\> [CI] on func_hit (\<a\>/10000 and \<b\>/10000 bootstrap resamples usable) — inside the pre-registered band and within the 25% fire-rate ceiling (warns on \<Z\>% of the 92). \<file_hit also/does not\> meet the same band. This is an in-sample result on one 92-row sample (per §5.2) and licenses 'worth replicating,' not 'shippable': replication on ≥92 fresh held-out instances, at this same frozen threshold and orientation, has not been run."* No sentence produced under a PASS may drop the replication clause. |
+| **PASS** | `band_met = True` **and** `sr1_met = True` | the chosen `t` (band AND SR-1), its `(false_warn, recall)` with CI and resample counts, `func_hit`/`file_hit` AUROC with CI, the full sweep table, SR-2's THREE-WAY grain-honesty statement | opens with the same disclosure clause, then: *"…at threshold t=\<N\> served rows it reaches false-warn=\<X\> [CI] and miss-recall=\<Y\> [CI] on func_hit (\<a\>/10000 and \<b\>/10000 bootstrap resamples usable) — inside the pre-registered band and within the 25% fire-rate ceiling (warns on \<Z\>% of the 92). At its own best threshold, \<file_hit also meets the band and the fire-rate ceiling / file_hit meets the band but only above the 25% fire-rate ceiling / file_hit does not meet the band\>. This is an in-sample result on one 92-row sample (per §5.2) and licenses 'worth replicating,' not 'shippable': replication on ≥92 fresh held-out instances, at this same frozen threshold and orientation, has not been run."* No sentence produced under a PASS may drop the replication clause, and the middle of these three phrasings (band met, SR-1 not) must never collapse into "does not meet the band" (MEDIUM-4). |
 | **PASS, fire-rate rejected** | `band_met = True` **and** `sr1_met = False` | the best band-only `t` (SR-1 ignored), its `(false_warn, recall, warn_rate)` | opens with the same disclosure clause, then: *"…it reaches the band at t=\<N\> served rows (false-warn=\<X\>, miss-recall=\<Y\> on func_hit) — but that threshold warns on \<Z\>% of the 92, above the 25% fire-rate ceiling §5.3 registered (carried into this round as SR-1). It meets the band and fails the fire-rate self-reject: not a candidate for shipping, and this sample has no in-band threshold that also clears SR-1."* This sentence may **never** say "does not reach the band" — the band was reached; SR-1, a separate condition, was not. |
 
 **Counts that cannot be totals are floors, and a zero means "none found."** Any skip bucket this round's

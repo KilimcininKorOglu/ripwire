@@ -161,6 +161,35 @@ def test_confusion_ge_hand_computed():
     assert S._confusion_ge( labels, values, 3 )  == ( 2, 0, 3, 0 )     # warn everybody -> every hit false-warned
 
 
+def test_confusion_ge_validates_integer_inputs():
+    """LOW-1 (reports/rv-served-syms-prereg.md), folded into the MEDIUM-4 commit: the `t - 1` trick is
+    exact only for real ints. A float value, a float threshold, or a bool sneaking in as a value (a
+    bool IS an int in Python, but is never a real served_syms count) must raise loudly rather than
+    silently miscount -- mirrors the reviewer's own C10 (float 7.5), which asserted the WRONG tuple
+    `_confusion_ge` used to return for that input; the fix makes it raise instead."""
+    labels = [ True, False ]
+    try:
+        S._confusion_ge( labels, [ 7.5, 7.0 ], 7.5 )
+        assert False, "expected ValueError for a float served_syms value"
+    except ValueError as e:
+        assert "served_syms" in str( e ) or "int" in str( e )
+
+    try:
+        S._confusion_ge( labels, [ 7, 7 ], 7.5 )               # int values, float threshold
+        assert False, "expected ValueError for a float threshold"
+    except ValueError:
+        pass
+
+    try:
+        S._confusion_ge( labels, [ True, 7 ], 7 )              # bool sneaking in as a value
+        assert False, "expected ValueError for a bool value"
+    except ValueError:
+        pass
+
+    # real ints must still work exactly as before (no regression from adding the check).
+    assert S._confusion_ge( labels, [ 8, 7 ], 8 ) == ( 1, 0, 0, 1 )
+
+
 def test_sweep_candidate_set_and_boundary_rows():
     labels = [ True, True, False, False, False ]
     values = [ 10, 12, 3, 4, 5 ]
@@ -386,6 +415,52 @@ def test_score_served_syms_end_to_end_pass_fire_rate_rejected():
     assert "was never scored" not in out["public_sentence"]
 
 
+def test_score_served_syms_pass_sentence_reports_other_grain_band_vs_safe_separately():
+    """MEDIUM-4 (delta review, reports/rv-served-syms-prereg.md): a real PASS on func_hit whose
+    non-gating grain (file_hit) is genuinely IN BAND but never clears the fire-rate ceiling must NOT
+    be reported as "file_hit does not meet the same band" -- that is false; file_hit meets the band,
+    it only fails SR-1, and the SR-2 clause must say exactly that (three-way, not band-vs-not-band).
+
+    Fixture: served_syms(row_i) = i for i = 1..92 (one row per distinct repo).
+      func_hit: miss for i in [55, 92] (38 misses, matching the default fingerprint), hit for i in
+      [1, 54] (54 hits) -- no hit ever has served_syms >= 55, so a threshold in [55, 92] never false-
+      warns; t=73 catches the top 20 misses (i in [73, 92]): recall = 20/38 ~= 0.526 >= 0.50,
+      false_warn = 0 <= 0.20, warn_rate = 20/92 ~= 0.217 <= 0.25 -- func_hit reaches a real, safe PASS.
+
+      file_hit: miss for i in [43, 92] (50 misses), hit for i in [1, 42] (42 hits) -- again no hit
+      ever has served_syms >= 43. Catching >= 25 of the 50 misses (recall >= 0.5) requires a threshold
+      t <= 68 (i in [68, 92] is exactly the top 25), so warn_rate is AT BEST 25/92 ~= 0.2717 > 0.25 at
+      every band-satisfying threshold (fewer misses caught never reaches recall 0.5; more misses
+      caught only raises warn_rate further; hits never subtract from the count since none are ever
+      caught in this range) -- band_met is True for file_hit, but sr1_met is False for EVERY t, by
+      construction, not by search."""
+    rows = ( [ mkrow( "func-miss/%d" % i, i, file_hit=( i <= 42 ), func_hit=False ) for i in range( 55, 93 ) ]
+            + [ mkrow( "func-hit-file-miss/%d" % i, i, file_hit=False, func_hit=True )
+               for i in range( 43, 55 ) ]
+            + [ mkrow( "both-hit/%d" % i, i, file_hit=True, func_hit=True ) for i in range( 1, 43 ) ] )
+    assert len( rows ) == 92
+    file_misses = sum( 1 for r in rows if not r["file_hit"] )
+    func_misses = sum( 1 for r in rows if not r["func_hit"] )
+    assert file_misses == 50 and func_misses == 38, ( file_misses, func_misses )
+
+    out = S.score_served_syms( synthetic_summary(), rows )
+    assert out["outcome"] == "pass", out                     # func_hit (the gating grain) really passes
+
+    file_sweep = out["grains"]["file_hit"]["sweep"]
+    assert any( r["band"] for r in file_sweep ), "file_hit must reach the band somewhere (t<=68)"
+    assert not any( r["safe"] for r in file_sweep ), "file_hit must NEVER clear band+SR-1 together"
+
+    gh = out["grain_honesty"]
+    assert gh["other_grain"] == "file_hit"
+    assert gh["other_band"] is True
+    assert gh["other_safe"] is False
+
+    sentence = out["public_sentence"]
+    assert "meets the band but only above the 25% fire-rate ceiling" in sentence, sentence
+    assert "file_hit does not meet the band" not in sentence     # MEDIUM-4's exact false claim
+    assert "does not meet the same band" not in sentence         # the retired (ambiguous) phrasing
+
+
 TESTS = [
     test_fingerprint_matches,
     test_fingerprint_rejects_wrong_split,
@@ -397,6 +472,7 @@ TESTS = [
     test_check_fingerprint_rows_len_check_is_optional_but_enforced_when_given,
     test_score_served_syms_catches_row_count_mismatch_via_fingerprint,
     test_confusion_ge_hand_computed,
+    test_confusion_ge_validates_integer_inputs,
     test_sweep_candidate_set_and_boundary_rows,
     test_choose_operating_point_applies_fire_rate_self_reject,
     test_choose_operating_point_band_met_but_sr1_rejected,
@@ -410,6 +486,7 @@ TESTS = [
     test_score_served_syms_end_to_end_pass,
     test_score_served_syms_end_to_end_fail_on_no_signal,
     test_score_served_syms_end_to_end_pass_fire_rate_rejected,
+    test_score_served_syms_pass_sentence_reports_other_grain_band_vs_safe_separately,
 ]
 
 
