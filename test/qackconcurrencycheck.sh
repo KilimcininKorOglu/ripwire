@@ -402,7 +402,7 @@ if [ -f "$BF/.ripwire_quality_acks" ]; then
     BFROW="$( grep '^ack duplication ' "$BF/.ripwire_quality_acks" 2>/dev/null )"
     case "$BFROW" in
         *" prov=recon facet=threshold-ladder "*) ok "(9) a stripped legacy clone row was reconstructed from the current tree — prov=recon plus the recomputed idiom" ;;
-        *" prov=recon "*)                        ok "(9) a stripped legacy clone row was reconstructed (prov=recon); the idiom verdict is None here, which is itself the answer" ;;
+        *" prov=recon "*)                        no "(9) the reconstruction lost the idiom arm 8 measured on this same tree (expected facet=threshold-ladder)"; printf '%s\n' "$BFROW" ;;
         *) no "(9) the legacy duplication row was NOT backfilled — no prov=recon on it"; printf '%s\n' "$BFROW" ;;
     esac
     grep -q 'ack provenance backfill' "$WORK/bf1.err" \
@@ -549,6 +549,7 @@ if [ -f "$BFN/.ripwire_quality_acks" ]; then
     # legitimately restore now=/was= WITHOUT a prov= stamp, so testing for was= here would fail on correct
     # behaviour; the reconstructed stamp is the thing that must never appear on a numeric row.
     case "$NUMROW" in
+        "")         no "(9) the legacy COMPLEXITY row is missing after the re-ack — an absent row proves nothing about the refusal" ;;
         *" prov="*) no "(9) a legacy COMPLEXITY row was given reconstructed provenance — its was= cannot be recovered from this tree and must not be invented"; printf '%s\n' "$NUMROW" ;;
         *) ok "(9) a legacy numeric row was never given a reconstructed was= — the honest refusal" ;;
     esac
