@@ -862,29 +862,53 @@ jobs:
           test "$syms"  -ge 15 || { echo "ci: the fixture crawl found $syms symbol(s), expected >= 15" >&2; exit 1; }
           case "$iters" in pr_iters=\"0\"|'') echo "ci: PageRank ran 0 iterations — the graph was empty ($iters)" >&2; exit 1 ;; esac
 
-      # #326: --doctor's cache-dir row falsely reported ok="0" blobs="0" truncated="1" on Windows with neither
-      # TMPDIR nor XDG_CACHE_HOME set — cacheDirLadder()'s third-tier "/tmp/ripwire-<uid>" literal IS the real,
-      # writable, populated cache (os::mkdir/os::lstat/os::chmod rebase it onto the real user temp directory
-      # internally), but the row's own writability probe and blob scan read that un-rebased spelling with a bare
-      # std::fopen / std::filesystem — which do not — and so measured a directory (this drive's literal
-      # "\tmp\ripwire-<uid>") the tool never actually writes to. Reproduce the exact filed condition (both env
-      # vars unset), populate the ladder's cache with one real (cached, not --no-cache) crawl, then ask --doctor
-      # about the SAME directory that crawl just wrote into. This is a build+smoke proof, not the bash gate
-      # suite (see this job's header): it asserts the one fact #322/#326's fix changed and fails loudly — ok="0"
-      # or blobs="0" here — exactly the way the reporter's own machine did, on the pre-fix code.
-      - name: "--doctor cache-dir must be TRUE (#326): no false unwritable/empty on a cache this run just populated"
+      # #326: cacheDirLadder() (src/quality.h) is the one function every cache consumer in the tree builds a
+      # path from — --doctor's cache-dir row (probe + blob/lock scan), resolveCacheBlobPath (the choke point
+      # nearly every blob path routes through), evictOldCacheFamily/sweepStaleCacheBlobsOnce (cache-hygiene
+      # eviction), slicediff.h/editpreview.h's temp parse roots, crossref.h's blob-batch listing,
+      # ingest_docpass.h's doc-bridge cache, and main.cpp's remote-clone cache all take its return value. On
+      # Windows with neither TMPDIR nor XDG_CACHE_HOME set, that return value used to be the un-rebased
+      # "/tmp/ripwire-<uid>" literal — real and writable only through os::mkdir/os::lstat/os::chmod's own
+      # silent rebase onto the real user temp directory, which every one of the consumers above that reaches
+      # for it via std::filesystem or a bare std::fopen (bypassing os::) never got. Fixed at the SOURCE:
+      # cacheDirLadder() itself now returns the already-rebased spelling, so every consumer is correct by
+      # construction. This step reproduces the exact filed condition (both env vars unset), then proves TWO
+      # independent consumers end to end: --doctor's cache-dir row (probe + scan) and resolveCacheBlobPath's
+      # cache-hit path (a second identical crawl must reuse the SAME blob, not write a new one) — on unfixed
+      # code both would read/write a directory the tool never actually uses, so this fails loudly (ok="0",
+      # blobs="0", or a blob count that grows on the warm run) exactly the way the reporter's own machine did.
+      #
+      # NOT independently exercised here: evictOldCacheFamily's own scan (no CLI-observable signal exists for
+      # it without new instrumentation — its thresholds, kMaxCacheBlobCount=4096 / 30 days / 2 GiB, are not
+      # reachable by a CI smoke step). It shares the exact same fix by construction: sweepStaleCacheBlobsOnce
+      # is called with this same cacheDirLadder() return value (ingest_cache.h:2894), which the warm-run
+      # assertion below already proves is the real, in-use cache directory — so eviction's scan reaches the
+      # same real blobs this step just proved --doctor and resolveCacheBlobPath do.
+      - name: "--doctor cache-dir and cache reuse must be TRUE (#326): no false unwritable/empty, no missed cache hit"
         run: |
           unset TMPDIR XDG_CACHE_HOME
           ./build/ripwire.exe test/fixture > populate.xml || { echo "ci: the populating crawl itself failed" >&2; exit 1; }
           ./build/ripwire.exe test/fixture --doctor > doctor.xml
           cat doctor.xml
           row="$( grep -o '<c n="cache-dir"[^>]*>' doctor.xml )"
-          echo "cache-dir row: $row"
+          echo "cache-dir row (after crawl 1): $row"
           test -n "$row" || { echo "ci: no cache-dir row in --doctor output at all" >&2; exit 1; }
           case "$row" in *'ok="1"'*) ;; *) echo "ci: #326 regressed — cache-dir row is not ok=\"1\": $row" >&2; exit 1 ;; esac
-          blobs="$( printf '%s' "$row" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' )"
-          [ -n "$blobs" ] && [ "$blobs" -ge 1 ] \
-            || { echo "ci: #326 regressed — cache-dir row reports blobs=$blobs right after a crawl that just wrote there: $row" >&2; exit 1; }
+          blobs1="$( printf '%s' "$row" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' )"
+          [ -n "$blobs1" ] && [ "$blobs1" -ge 1 ] \
+            || { echo "ci: #326 regressed — cache-dir row reports blobs=$blobs1 right after a crawl that just wrote there: $row" >&2; exit 1; }
+
+          # resolveCacheBlobPath: a second, identical (still non---no-cache) crawl must find and reuse the SAME
+          # blob rather than writing a new one — proves the choke point every cache-path builder routes through
+          # resolves to the real, in-use directory too, not just --doctor's own check above.
+          ./build/ripwire.exe test/fixture > populate2.xml || { echo "ci: the warm crawl itself failed" >&2; exit 1; }
+          cmp populate.xml populate2.xml || { echo "ci: cold and warm crawls of the same tree produced different bytes" >&2; exit 1; }
+          ./build/ripwire.exe test/fixture --doctor > doctor2.xml
+          row2="$( grep -o '<c n="cache-dir"[^>]*>' doctor2.xml )"
+          echo "cache-dir row (after crawl 2, warm): $row2"
+          blobs2="$( printf '%s' "$row2" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' )"
+          [ -n "$blobs2" ] && [ "$blobs2" -eq "$blobs1" ] \
+            || { echo "ci: #326 regressed — a warm, identical crawl changed blobs= from $blobs1 to $blobs2 (a cache miss/duplicate write, not a reuse)" >&2; exit 1; }
 
       # The ASan flavour's own configure+build. It is here because it is a BUILD failure this round fixed —
       # clang-cl refuses `-fsanitize=address` together with the debug CRT a plain configure selects — and a
