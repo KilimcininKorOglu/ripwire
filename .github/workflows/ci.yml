@@ -862,6 +862,30 @@ jobs:
           test "$syms"  -ge 15 || { echo "ci: the fixture crawl found $syms symbol(s), expected >= 15" >&2; exit 1; }
           case "$iters" in pr_iters=\"0\"|'') echo "ci: PageRank ran 0 iterations — the graph was empty ($iters)" >&2; exit 1 ;; esac
 
+      # #326: --doctor's cache-dir row falsely reported ok="0" blobs="0" truncated="1" on Windows with neither
+      # TMPDIR nor XDG_CACHE_HOME set — cacheDirLadder()'s third-tier "/tmp/ripwire-<uid>" literal IS the real,
+      # writable, populated cache (os::mkdir/os::lstat/os::chmod rebase it onto the real user temp directory
+      # internally), but the row's own writability probe and blob scan read that un-rebased spelling with a bare
+      # std::fopen / std::filesystem — which do not — and so measured a directory (this drive's literal
+      # "\tmp\ripwire-<uid>") the tool never actually writes to. Reproduce the exact filed condition (both env
+      # vars unset), populate the ladder's cache with one real (cached, not --no-cache) crawl, then ask --doctor
+      # about the SAME directory that crawl just wrote into. This is a build+smoke proof, not the bash gate
+      # suite (see this job's header): it asserts the one fact #322/#326's fix changed and fails loudly — ok="0"
+      # or blobs="0" here — exactly the way the reporter's own machine did, on the pre-fix code.
+      - name: "--doctor cache-dir must be TRUE (#326): no false unwritable/empty on a cache this run just populated"
+        run: |
+          unset TMPDIR XDG_CACHE_HOME
+          ./build/ripwire.exe test/fixture > populate.xml || { echo "ci: the populating crawl itself failed" >&2; exit 1; }
+          ./build/ripwire.exe test/fixture --doctor > doctor.xml
+          cat doctor.xml
+          row="$( grep -o '<c n="cache-dir"[^>]*>' doctor.xml )"
+          echo "cache-dir row: $row"
+          test -n "$row" || { echo "ci: no cache-dir row in --doctor output at all" >&2; exit 1; }
+          case "$row" in *'ok="1"'*) ;; *) echo "ci: #326 regressed — cache-dir row is not ok=\"1\": $row" >&2; exit 1 ;; esac
+          blobs="$( printf '%s' "$row" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' )"
+          [ -n "$blobs" ] && [ "$blobs" -ge 1 ] \
+            || { echo "ci: #326 regressed — cache-dir row reports blobs=$blobs right after a crawl that just wrote there: $row" >&2; exit 1; }
+
       # The ASan flavour's own configure+build. It is here because it is a BUILD failure this round fixed —
       # clang-cl refuses `-fsanitize=address` together with the debug CRT a plain configure selects — and a
       # fix to a build failure that no build exercises is not fixed. ripwire_probe alone, not the whole

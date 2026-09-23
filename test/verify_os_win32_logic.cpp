@@ -367,6 +367,52 @@ TEST_CASE( "rebaseMsysTmp: Git for Windows' /tmp is the user's temp directory; n
     CHECK( rebaseMsysTmp( "/tmp/x", "" ).empty() );
 }
 
+// #326: the dispatch NativePath makes at every os_win32.cpp syscall — which of rebaseMsysTmp / rebaseDevNull (if
+// either) applies to a program path — extracted to oswin::rebasedProgramPath so a caller outside os_win32.cpp
+// (os::rebased_path, for a consumer like std::filesystem or a bare std::fopen that performs no rebase of its own)
+// can ask the same question. ORACLE: reimplemented here independently (manual prefix dispatch, not a call into the
+// function under test) against the exact bug this seam exists for — --doctor's cache-dir probe measuring
+// "/tmp/ripwire-<uid>" via std::fopen/std::filesystem, which on Windows resolves against the CURRENT DRIVE rather
+// than the real, os::mkdir-created cache directory os_win32.cpp's NativePath rebases every os:: call onto.
+TEST_CASE( "rebasedProgramPath: routes exactly like NativePath's own dispatch, for a non-os:: caller" )
+{
+    const std::string nativeTmp = "C:\\Users\\x\\AppData\\Local\\Temp\\";
+    const auto        oracle    = [ & ]( std::string_view path ) -> std::string
+    {
+        if( path.empty() || path.front() != '/' ) { return {}; }
+        if( path.substr( 0, 4 ) == "/tmp" ) { return rebaseMsysTmp( path, nativeTmp ); }
+        if( path.substr( 0, 9 ) == "/dev/null" ) { return rebaseDevNull( path ); }
+        return {};
+    };
+
+    // the exact repro from the issue: cacheDirLadder()'s third-tier literal for uid 1001.
+    const std::string doctorCacheDir = "/tmp/ripwire-1001";
+    CHECK( rebasedProgramPath( doctorCacheDir, nativeTmp ) == oracle( doctorCacheDir ) );
+    CHECK( rebasedProgramPath( doctorCacheDir, nativeTmp ) == "C:/Users/x/AppData/Local/Temp/ripwire-1001" );
+
+    // the sentinel cacheDirLadder() returns when the ladder itself judged the directory unsafe/unusable — must
+    // still fail closed (a '|' byte, never a real openable Windows path), same as calling rebaseDevNull directly.
+    const std::string unusableCacheDir = "/dev/null/ripwire-cache-unavailable";
+    CHECK( rebasedProgramPath( unusableCacheDir, nativeTmp ) == oracle( unusableCacheDir ) );
+    CHECK( rebasedProgramPath( unusableCacheDir, nativeTmp ).find( '|' ) != std::string::npos );
+
+    // an already-native or unrelated absolute path: no rebase applies, dispatch answers empty (the caller's
+    // contract, matching NativePath, is "empty means use `path` itself unchanged").
+    CHECK( rebasedProgramPath( "C:/Users/x/project", nativeTmp ) == oracle( "C:/Users/x/project" ) );
+    CHECK( rebasedProgramPath( "C:/Users/x/project", nativeTmp ).empty() );
+    CHECK( rebasedProgramPath( "/home/x/project", nativeTmp ) == oracle( "/home/x/project" ) );
+    CHECK( rebasedProgramPath( "/home/x/project", nativeTmp ).empty() );
+
+    // relative and empty input: never crashes, never fabricates an absolute answer.
+    CHECK( rebasedProgramPath( "", nativeTmp ).empty() );
+    CHECK( rebasedProgramPath( "tmp/x", nativeTmp ).empty() );
+
+    // GetTempPathW itself failed (userTempDirectory() empty): degrades to "no rebase" rather than a garbage path —
+    // the caller (os::rebased_path) then falls back to the ORIGINAL spelling, same failure shape as before #326,
+    // not a crash or a fabricated location.
+    CHECK( rebasedProgramPath( doctorCacheDir, "" ).empty() );
+}
+
 TEST_CASE( "extendedLengthPath: only an absolute, clean path gets the \\\\?\\ prefix" )
 {
     CHECK( extendedLengthPath( u"C:\\Users\\x\\Temp\\" ) == u"\\\\?\\C:\\Users\\x\\Temp\\" );

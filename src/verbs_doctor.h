@@ -804,14 +804,31 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
 
     // ---- check 3: cache-dir health — resolves, writable (create+delete a probe file), report
     // existing ripwire-* blob count + total bytes (eviction sanity: flag >50 blobs, informational) ----
+    //
+    // #326: cacheDirLadder()'s own POSIX-spelled "/tmp/ripwire-<uid>" return is not necessarily a path any
+    // non-os:: call can open — on Windows it is Git for Windows' "/tmp", which os::mkdir/os::lstat/os::chmod (what
+    // the ladder itself calls to create and verify the directory) silently rebase onto the real user temp
+    // directory, but a bare std::fopen or std::filesystem call does not know to. The ladder's caller here used to
+    // be exactly that: std::fopen on the raw ladder string, and doctorCacheStats/doctorEditLockCount walking it
+    // with std::filesystem — three call sites all measuring a directory the cache never actually uses (typically
+    // nonexistent on the current drive), so a perfectly healthy, writable, populated cache reported ok="0"
+    // blobs="0". rw::os::rebased_path( dir ) is the SAME routing os::mkdir/os::open/os::stat apply internally
+    // (os_win32_logic.h's oswin::rebasedProgramPath) exposed for these three non-os:: consumers; identity on
+    // POSIX, where "/tmp" is already a real, directly usable directory. Once resolved, `dir` below is the actual
+    // path in use — the row's own `dir=`/hint= attributes name the real cache location, not a path the tool
+    // never touches.
     {
-        const std::string dir   = cacheDirLadder();
+        const std::string dir   = rw::os::rebased_path( cacheDirLadder().c_str() );
         const std::string probe = dir + "/.ripwire-doctor-probe-" + std::to_string( rw::os::getpid() );
         bool writable = false;
-        if( std::FILE* f = std::fopen( probe.c_str(), "wb" ) )
+        // create+remove a real file — the only thing "writable" can honestly mean on either platform; a mode-bit
+        // check (POSIX access()/stat permission bits) is not equivalent on Windows, where an ACL can permit or
+        // deny a create independent of any bit this process could read.
+        if( const int fd = rw::os::open( probe.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600 ); fd >= 0 )
         {
-            std::fputs( "doctor", f );
-            std::fclose( f );
+            static constexpr std::string_view kProbeBody = "doctor";
+            (void)rw::os::write( fd, kProbeBody.data(), kProbeBody.size() );
+            rw::os::close( fd );
             writable = ( rw::os::unlink( probe.c_str() ) == 0 );
         }
 
