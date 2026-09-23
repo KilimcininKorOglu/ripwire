@@ -190,8 +190,10 @@ struct Config
     bool             hotspots          = false;            // --hotspots: complexity × recent git churn (maintenance-pain map)
     bool             clones            = false;            // --clones: token-normalized duplicate function bodies
     bool             readability       = false;            // --readability: the Posnett/Hindle/Devanbu (MSR 2011) lens — per function, Halstead
-                                                            // volume + token entropy + line span → P, emitted LEAST readable first. Pages through
-                                                            // limit/offset like the other report verbs; a ranking lens, never a grade (readability.h)
+                                                            // volume + token entropy + line span → P, emitted LARGEST Halstead volume/token-count/
+                                                            // length first (a size proxy — the readability-ordering claim is WITHDRAWN,
+                                                            // docs/EVALS.md §8). Pages through limit/offset like the other report verbs;
+                                                            // a ranking lens, never a grade (readability.h)
     bool             nonlocalState     = false;            // --nonlocal-state: per function, the non-local MUTABLE state it or its transitive
                                                             // callees reach — globals/statics/file-scope data — with READS and WRITES kept apart
                                                             // and the site or callee that explains each one. Unsound by construction (indirect
@@ -1379,7 +1381,8 @@ inline constexpr char kHelpHead[] =
         "                               counted: extent_suspect_syms= on its row, unranked_extent_suspect= for a file with none left\n"
         "    --clones                   token-normalized duplicate bodies\n"
         "    --readability              order functions by Halstead volume, token entropy and length, largest first\n"
-        "                               per-function readability lens, LEAST readable first: vol= Halstead volume V (N*log2(eta)),\n"
+        "                               per-function lens, LARGEST Halstead volume/token-count/length first (a size proxy, not a\n"
+        "                               readability order — see WITHDRAWN below): vol= Halstead volume V (N*log2(eta)),\n"
         "                               ent= Shannon token entropy E, lines= L, posnett= sigmoid(8.87 - 0.033V + 0.40L - 1.5E)\n"
         "                               (Posnett/Hindle/Devanbu, MSR 2011). APPROXIMATION, disclosed: ONE token-class table serves\n"
         "                               every language (keywords + punctuation = operators, identifiers + literals = operands),\n"

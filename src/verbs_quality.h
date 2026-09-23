@@ -1818,8 +1818,8 @@ std::optional<int> runQualityViews( const MainDispatch& d )
     std::vector<char>  qvRootEsc;
     const std::string  qvRootAttr   = qvSingleRoot ? ( " root=\"" + std::string( escapeXml( cfg.roots[0], qvRootEsc ) ) + "\"" ) : std::string();
 
-    // --readability: the Posnett/Hindle/Devanbu (MSR 2011) closed-form lens, per function, LEAST readable
-    // first (readability.h owns the measurement AND its emission, the way --handoff owns its packet). It
+    // --readability: the Posnett/Hindle/Devanbu (MSR 2011) closed-form lens, per function, LARGEST volume
+    // first, a size proxy (readability.h owns the measurement AND its emission, the way --handoff owns its packet). It
     // reads only the symbol table and the files on disk, so it needs neither the graph nor git — and it is
     // a LENS: exit 0 always, no verdict, no threshold.
     if( cfg.readability )

@@ -43,7 +43,7 @@
 # Arms:
 #   (A) determinism  — two --no-cache runs are byte-identical
 #   (B) golden       — every column of both functions, against the hand-derivation above
-#   (C) order        — the report is LEAST readable first (mix before add)
+#   (C) order        — the report is lowest-P first, i.e. largest body first (mix before add)
 #   (D) mutation     — the SAME assertions run against a mutated fixture must go RED, proving (B) can see
 #                      a wrong number at all
 #   (E) paging       — limit=1 discloses shown/capped/total/has_more/next_offset per pageview.h
@@ -147,18 +147,18 @@ for line in bad:
 if not bad:
     print( "  PASS  (B) every column of add/mix matches the hand-derivation (ints exact, floats in band)" )
 
-# (C) least readable FIRST — mix (P=0.050) must precede add (P=0.968), and the printed order must be
+# (C) lowest P FIRST — mix (P=0.050) must precede add (P=0.968), and the printed order must be
 #     monotone non-decreasing in posnett for every adjacent pair.
 order = [ node.get( "n" ) for node in rows ]
 scores = [ float( node.get( "posnett" ) ) for node in rows ]
 if order != [ "mix", "add" ]:
-    print( f"  FAIL  (C) expected least-readable-first order ['mix', 'add'], got {order}" )
+    print( f"  FAIL  (C) expected lowest-P-first order ['mix', 'add'], got {order}" )
     bad.append( "order" )
 elif any( scores[i] > scores[i + 1] + 1e-12 for i in range( len( scores ) - 1 ) ):
     print( f"  FAIL  (C) posnett is not non-decreasing down the rows: {scores}" )
     bad.append( "order" )
 else:
-    print( "  PASS  (C) rows are ranked least readable first (mix before add)" )
+    print( "  PASS  (C) rows are ranked lowest P first, the largest body first (mix before add)" )
 
 # root honesty: functions= is the measured total and matches the rows on an uncapped run
 if root.get( "functions" ) != str( len( rows ) ):
@@ -201,15 +201,30 @@ else
 fi
 
 # ── §L10: the SATURATION disclosure — on a real, large corpus (this repo's own source), several of the
-# least-readable head rows genuinely print posnett="0.000" alike (the sigmoid has run out of visible
+# lowest-P head rows genuinely print posnett="0.000" alike (the sigmoid has run out of visible
 # precision at 3 decimals for a high-volume function). The legend must say so, AND the ORDER must still be
 # real: among the saturated rows, vol= (the documented tie-break) must be non-increasing — proof the ranking
 # did not collapse into an arbitrary/ID-order tie just because P itself is illegible.
 # L1 (2026-09-19): the CLI default legend is compact; (G) reads the FULL legend's prose, so this run asks for it.
 REAL_OUT="$( "$BIN" "$ROOT" --readability --limit=10 --no-cache --legend=full 2>/dev/null )"
-printf '%s' "$REAL_OUT" | grep -q 'sigmoid SATURATES at the least-readable extreme' \
-    && ok "(G) legend discloses sigmoid saturation at the least-readable extreme" \
+printf '%s' "$REAL_OUT" | grep -q 'sigmoid SATURATES at its low end' \
+    && ok "(G) legend discloses sigmoid saturation at its low end" \
     || no "(G) legend does not disclose sigmoid saturation"
+# (G2) the ORDER is described as what it is. docs/EVALS.md section 8 withdrew the claim that this order is a
+# readability order (8 of 10 token-count deciles show no later-fix association: a size proxy). Both legends
+# must say so and neither may still call the order "least readable first" — the full legend is REAL_OUT above,
+# the compact one is the default run's. Read into variables first so an empty run fails instead of passing.
+COMPACT_OUT="$( "$BIN" "$ROOT" --readability --limit=1 --no-cache 2>/dev/null )"
+if [ -z "$REAL_OUT" ] || [ -z "$COMPACT_OUT" ]; then
+    no "(G2) a --readability run printed nothing, so the legend wording could not be checked"
+elif printf '%s\n%s\n' "$REAL_OUT" "$COMPACT_OUT" | grep -qi 'least[ -]readable first'; then
+    no "(G2) a --readability legend still describes the order as least readable first (withdrawn, docs/EVALS.md section 8)"
+elif printf '%s' "$REAL_OUT" | grep -q 'a size proxy, not a readability order' \
+     && printf '%s' "$COMPACT_OUT" | grep -q 'largest Halstead volume first (a size proxy)'; then
+    ok "(G2) both legends describe the order as largest-first, a size proxy — never as least readable first"
+else
+    no "(G2) a --readability legend does not state that its order is a size proxy"
+fi
 printf '%s' "$REAL_OUT" | grep -q 'ties (and every tie) break by vol= descending' \
     && ok "(G) legend states the tie-break (vol= descending)" \
     || no "(G) legend does not state the tie-break"

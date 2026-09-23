@@ -803,7 +803,7 @@ inline constexpr const char* kEnsembleLegend =
     "bar_params=parameter count; a row shows only the ones that crossed, with the value that crossed. "
     "Two signals are RANKINGS with no defensible absolute cut, so each fires for the worst decile of its own "
     "ranking, at least one row and at most 40 (each verb's own default window): rrank=the symbol's rank in the "
-    "readability lens (0 is least readable) rcut=how many ranks that decile covers rmeasured=functions the "
+    "readability lens (0 is the lowest posnett=, i.e. the largest body; a size proxy) rcut=how many ranks that decile covers rmeasured=functions the "
     "readability lens measured; hrank=the file's rank by git churn (0 is most changed) churn=its in-window "
     "commit count hcut=how many ranks that decile covers hranked=files with any in-window commit "
     "window=the churn window. An ordinal cut is RELATIVE: some symbol is always in the worst decile of its own "
