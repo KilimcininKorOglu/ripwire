@@ -536,5 +536,29 @@ grep -q 'order="defuse"' "$ORD/o.xml" && sed 's/<slice .*//' "$ORD/o.xml" | grep
 "$BIN" --help=all 2>&1 | grep -q 'order="defuse"' \
     && ok "(order) --help documents order=\"defuse\"" || no "(order) --help does not document order=\"defuse\""
 
+# ── (disclosure) the ARISE line-ranking pre-registration FAILed over the whole function span
+# (docs/EVALS.md, "row order over the WHOLE function span"): order="defuse" stays the shipped rule (it
+# still beats random among the rows it already emits), but nothing here may read as claiming it finds the
+# most relevant line in a function it has not narrowed down first. RED on a binary built before that
+# disclosure landed (no "whole-function" scoping anywhere in the compact legend, the full legend, or
+# --help=slice): every clause below is new text, so this arm fails on the pre-disclosure binary by
+# construction and is the red-first proof for this lane.
+DCOMPACT="$( "$BIN" "$ORD" --slice=mix:x --legend=compact --no-cache 2>/dev/null )"
+DFULL="$( "$BIN" "$ORD" --slice=mix:x --legend=full --no-cache 2>/dev/null )"
+DHELP="$( "$BIN" --help=slice 2>&1 )"
+for pair in "compact:$DCOMPACT" "full:$DFULL" "help:$DHELP"; do
+    dname="${pair%%:*}"; dtext="${pair#*:}"
+    printf '%s' "$dtext" | grep -qi 'whole-function' \
+        && ok "(disclosure) --legend=$dname / --help=slice scopes the ranking claim to \"whole-function\"" \
+        || no "(disclosure) --legend=$dname / --help=slice does not scope order=\"defuse\" away from a whole-function ranking claim"
+done
+printf '%s' "$DHELP" | grep -qi 'docs/EVALS.md' \
+    && ok "(disclosure) --help=slice points the whole-function disclosure at docs/EVALS.md, not an unmerged branch" \
+    || no "(disclosure) --help=slice must cite docs/EVALS.md for the whole-function result"
+grep -q 'WHOLE function span' "$ROOT/docs/EVALS.md" \
+    && grep -q '611ed7ab' "$ROOT/docs/EVALS.md" \
+    && ok "(disclosure) docs/EVALS.md carries the whole-function-span FAIL result and its signed result sha (611ed7ab)" \
+    || no "(disclosure) docs/EVALS.md must record the whole-function FAIL result with its signed result sha"
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

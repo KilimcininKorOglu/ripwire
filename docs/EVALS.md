@@ -14017,3 +14017,37 @@ Python."* That is an @1 claim (0.285 vs 0.268), not a claim that the rule outran
 or at every depth — @10/@20 tie, and the per-pair split has more losses than wins. `--help` and
 `src/slice.h`'s `sliceDefUseRowOrder` comment are worded to this claim, not to the broader "ranks above it"
 a first draft of this feature shipped.
+
+## `--slice=SYM:VAR` row order over the WHOLE function span — MEASURED 2026-09-23: **FAIL, `order="defuse"` unchanged**
+
+**Scope — this does not retract the ADOPT above.** The ADOPT above is the narrow claim: among the rows
+`--slice=SYM:VAR` already emits, def-use coverage descending beats a random shuffle at rank 1 (478 pairs,
+MRR 0.628 vs 0.602). This section is a separate, WIDER question, pre-registered before any number existed
+(`docs/research/arise-line-ranking-prereg.md` §4, signed `5b7f01c4`, round 3, on
+`origin/lane/arise-line-ranking`): does the same rule find a gold line first over the WHOLE function span,
+not just among the rows it already narrowed down to. It does not — and per the prereg's own §4.3.1, a
+wide-pool FAIL changes only the disclosure, never the shipped order: plain source order was already
+measured WORSE than random on the narrow pool (0.525 vs 0.602), so replacing `order="defuse"` with it would
+be a regression, not a fix.
+
+**What was already at chance (the reason the attempt ran at all).** Over the whole function span, the
+SHIPPED rule (`order="defuse"`, R1: def-use coverage) scores R1@1 0.0477 against a random-shuffle control
+CTL@1 0.0423 — indistinguishable from chance at this sample size.
+
+**The one pre-registered attempt (R3: definitions before uses, then coverage) — result.** LocBench V1
+Python, 173 single-function instances (88 held-out repos), 498 variable instances: R3@1 0.0344 vs CTL@1
+0.0423, Δ = −0.0079, bootstrap 95% CI [−0.0310, 0.0189] (10,000 resamples, seed
+`ripwire-arise-line-rank-v1`) — includes zero. 1 of 4 pre-registered PASS conditions held (R3@1 > R0@1
+only; margin ≥ 0.02 NO, CI excludes 0 NO, R3@1 > R1@1 NO). Per-instance vs the shipped rule: 2 better, 7
+worse, 164 tied. The narrow-pool arm (informational; moot once the wide pool failed) also did not clear:
+def-use-coverage MRR 0.630 vs R3's 0.596 on the same 484-pair population the ADOPT table above uses.
+
+**Provenance.** Signed result commit `611ed7ab` on `origin/lane/arise-result` (unmerged; every number above
+is reproduced here, in the committed tree, so nothing that cites this section points at an unmerged
+branch). Independently re-run byte-identical to the committed output (result review, 2026-09-23).
+
+**What this supersedes.** Any reading of the ADOPT section above, or of `--slice`'s legend/help, as a claim
+that `--slice=SYM:VAR` ranks lines by relevance across a whole function is superseded by this section: the
+rule is proven only to order the rows it already emits, never to find the most relevant line in a function
+it has not narrowed down first. `src/compactlegend.h`'s `order` reading, `src/slice.h`'s v1/v2 legends, and
+`--help=slice` are worded to this scope.
