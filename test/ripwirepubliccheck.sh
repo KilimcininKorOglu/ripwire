@@ -1292,7 +1292,9 @@ okSet = {l.strip() for l in sys.argv[2].splitlines() if l.strip()}
 SCOPE_RE = re.compile(r'^(bench/|docs/|scripts/|test/lib/)')
 SELF = 'test/ripwirepubliccheck.sh'
 GIT_LOGREV = re.compile(r'git[^|&;\n]{0,40}\b(log|rev-list|for-each-ref)\b')
-PIN_SIGNAL = re.compile(r'\bHEAD\b|--ref\b|\bref\b|\bPIN\b|\b[0-9a-f]{7,40}\b|\bv[0-9]+\.[0-9]+(\.[0-9]+)?\b', re.IGNORECASE)
+# CASE-SENSITIVE on purpose: under re.IGNORECASE `\bHEAD\b` matched the `| head -n 50` a shell recipe pipes
+# into, and an unpinned `git log --format=%H | head -n 50` read as pinned. Each accepted spelling is listed.
+PIN_SIGNAL = re.compile(r'\bHEAD\b|--ref\b|\b(?:ref|REF)\b|\bPIN\b|\b[0-9a-fA-F]{7,40}\b|\bv[0-9]+\.[0-9]+(?:\.[0-9]+)?\b')
 ALL_TOKEN = re.compile(r'--all\b|--branches\b|--remotes\b')
 FENCE_OPEN = re.compile(r'^```(bash|sh|shell|zsh)\s*$')
 FENCE_CLOSE = re.compile(r'^```\s*$')
@@ -1304,7 +1306,8 @@ for p in paths:
         continue
     try:
         data = open(p, 'rb').read()
-    except OSError:
+    except OSError as e:
+        print(f'{p}: tracked in-scope file could not be read ({e.strerror}) — arm 9 did not scan it')
         continue
     if b'\0' in data:
         continue   # binary, skip
@@ -1339,8 +1342,13 @@ for p in paths:
             continue   # allowlisted — this exact line's content is unchanged from the reviewed hit
         print(f'{p}:{i}: unpinned {m.group(0)!r} — {line.strip()[:140]}')
 PY
-if [ -s "$TMP/arm9" ]; then
-    no "arm 9 — unpinned git-history walk in a tracked measurement script:"
+arm9rc=$?
+if [ "$arm9rc" -ne 0 ]; then
+    # an empty report from a scanner that crashed is not a clean sweep
+    no "arm 9 — the history-walk scanner exited $arm9rc, so the sweep did not run"
+    [ -s "$TMP/arm9" ] && sed 's/^/          /' "$TMP/arm9"
+elif [ -s "$TMP/arm9" ]; then
+    no "arm 9 — unpinned or unscannable git-history walk in a tracked measurement script:"
     sed 's/^/          /' "$TMP/arm9"
 else
     ok "arm 9 — every tracked measurement script's history walk is ref-pinned or allowlisted"

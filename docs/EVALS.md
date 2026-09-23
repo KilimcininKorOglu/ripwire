@@ -8631,7 +8631,9 @@ so the instance set is a function of the HEAD it runs at. (2026-09-22: the harne
 default `v0.6.2` — an immutable point, not a bare HEAD — and records the resolved ref+sha in its own
 output; this turns (b) below from operator discipline into the harness's own default. The `b156027`
 numbers already recorded here are unaffected — they were pinned by hand, the same mechanism `--ref`
-now automates.) Settled here, from the harness code and a
+now automates. To re-run that recorded measurement with today's harness, pass `--ref=b156027` as well
+as checking out `b156027`: the default `--ref` of `v0.6.2` would otherwise mine a later, different
+population.) Settled here, from the harness code and a
 read-only count: **(a)** the paired design is real — all arms run per instance inside ONE
 invocation with one binary, so a v3−v2 delta computed within one invocation is a valid paired
 statistic under any drift; but validity-under-drift is not enough, because the newest-first cap

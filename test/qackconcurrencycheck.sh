@@ -42,6 +42,13 @@
 #       because nothing in this tree can supply its `was=` and half a triple is worse than none. RED on the
 #       pre-backfill binary, which leaves every stripped row legacy.
 #
+#   (10) LEDGER TOKENS ARE EXTERNAL INPUT (train 17 fix round): the ledger is committed and hand-edited, so a
+#       now=/was= or p= line number a binary could not have written — negative, or past 32 bits — must stay
+#       visible text, never be narrowed into a fabricated value (now=-1 read back as 4294967295, now=4294967296
+#       as 0). And a finding whose path contains a SPACE must not have its locator written as a token it cannot
+#       be read back as: `p=my dir/a b.py:1` read back as path `my`, the rest pushed into the reason, and the
+#       next ack committed the damage. RED on the 0d6f0490 binary on both halves.
+#
 # Every arm was run RED against the pre-fix binary before the fix landed (arms 1 and 4's convergence arm; 8
 # against the pre-provenance binary, which writes no now=/was=/facet= token at all; 9 against the
 # pre-backfill binary, which heals no legacy row).
@@ -402,7 +409,7 @@ if [ -f "$BF/.ripwire_quality_acks" ]; then
     BFROW="$( grep '^ack duplication ' "$BF/.ripwire_quality_acks" 2>/dev/null )"
     case "$BFROW" in
         *" prov=recon facet=threshold-ladder "*) ok "(9) a stripped legacy clone row was reconstructed from the current tree — prov=recon plus the recomputed idiom" ;;
-        *" prov=recon "*)                        ok "(9) a stripped legacy clone row was reconstructed (prov=recon); the idiom verdict is None here, which is itself the answer" ;;
+        *" prov=recon "*)                        no "(9) the reconstruction lost the idiom arm 8 measured on this same tree (expected facet=threshold-ladder)"; printf '%s\n' "$BFROW" ;;
         *) no "(9) the legacy duplication row was NOT backfilled — no prov=recon on it"; printf '%s\n' "$BFROW" ;;
     esac
     grep -q 'ack provenance backfill' "$WORK/bf1.err" \
@@ -598,11 +605,81 @@ if [ -f "$BFN/.ripwire_quality_acks" ]; then
     # legitimately restore now=/was= WITHOUT a prov= stamp, so testing for was= here would fail on correct
     # behaviour; the reconstructed stamp is the thing that must never appear on a numeric row.
     case "$NUMROW" in
+        "")         no "(9) the legacy COMPLEXITY row is missing after the re-ack — an absent row proves nothing about the refusal" ;;
         *" prov="*) no "(9) a legacy COMPLEXITY row was given reconstructed provenance — its was= cannot be recovered from this tree and must not be invented"; printf '%s\n' "$NUMROW" ;;
         *) ok "(9) a legacy numeric row was never given a reconstructed was= — the honest refusal" ;;
     esac
 else
     no "(9) no numeric fixture ledger to strip"
+fi
+
+# ── (10) ledger tokens are external input ───────────────────────────────────────────────────────────────
+# (10a) hand-written rows a binary could not have written. Each must come back with its bad value still visible
+# and never narrowed: the now= rows keep their text verbatim (no provenance is taken), and the p= rows keep the
+# whole token as the path rather than inventing a line.
+XT="$WORK/extinput"; mkdir -p "$XT"
+printf 'def solo(a):\n    return a\n' > "$XT/x.py"
+( cd "$XT" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+cat > "$XT/.ripwire_quality_acks" <<'EOF'
+# ripwire quality acks v1 — hand-written fixture
+ack complexity  a666666666666666 9 now=4294967296 was=0 overflowing now
+ack complexity  a777777777777777 9 now=-1 was=2 negative now
+ack complexity  a888888888888888 9 now=9 was=2 p=src/a.py:4294967296 overflowing line
+ack complexity  a999999999999999 9 now=9 was=2 p=src/a.py:-1 negative line
+EOF
+( cd "$XT" && "$BIN" . --quality-delta --quality-ack="external-input probe" >/dev/null 2>"$WORK/xt.err" ); xtrc=$?
+xt_row(){ grep "^ack [a-z-]* $1 " "$XT/.ripwire_quality_acks" 2>/dev/null; }
+[ "$xtrc" = 0 ] || no "(10a) the probe ack exited $xtrc"
+case "$( xt_row a666666666666666 )" in
+    "") no "(10a) the overflowing-now= row is missing after the rewrite" ;;
+    *" now=4294967296 was=0 overflowing now") ok "(10a) now= past 32 bits stays visible text — never narrowed to 0" ;;
+    *) no "(10a) now=4294967296 was narrowed or lost"; xt_row a666666666666666 ;;
+esac
+case "$( xt_row a777777777777777 )" in
+    "") no "(10a) the negative-now= row is missing after the rewrite" ;;
+    *" now=-1 was=2 negative now") ok "(10a) a negative now= stays visible text — never wrapped to 4294967295" ;;
+    *) no "(10a) now=-1 was wrapped or lost"; xt_row a777777777777777 ;;
+esac
+case "$( xt_row a888888888888888 )" in
+    "") no "(10a) the overflowing-line row is missing after the rewrite" ;;
+    *" p=src/a.py:4294967296"*) ok "(10a) a p= line past 32 bits stays part of the path text — never narrowed to line 0" ;;
+    *) no "(10a) p=src/a.py:4294967296 was narrowed or lost"; xt_row a888888888888888 ;;
+esac
+case "$( xt_row a999999999999999 )" in
+    "") no "(10a) the negative-line row is missing after the rewrite" ;;
+    *" p=src/a.py:-1"*) ok "(10a) a negative p= line stays part of the path text — never wrapped to 4294967295" ;;
+    *) no "(10a) p=src/a.py:-1 was wrapped or lost"; xt_row a999999999999999 ;;
+esac
+
+# (10b) a LIVE finding on a path with a space: the first ack must not write a p= it cannot read back, and a
+# second ack must leave the ledger byte-identical (the damage used to land on the second write).
+SP="$WORK/spacepath"; mkdir -p "$SP/my dir"
+printf 'def grow(a):\n    return a\n' > "$SP/my dir/a b.py"
+( cd "$SP" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+python3 - "$SP/my dir/a b.py" <<'PY'
+import sys
+lines = [ "def grow(a):", "    t = 0" ]
+for i in range( 40 ):
+    lines += [ f"    if a > {i}:", f"        for j in range({i}):", f"            if j % 3 == {i % 3}:", f"                t += j * {i}" ]
+lines.append( "    return t" )
+open( sys.argv[1], "w" ).write( "\n".join( lines ) + "\n" )
+PY
+( cd "$SP" && "$BIN" . --quality-delta --quality-ack="space probe" >/dev/null 2>"$WORK/sp1.err" ); sprc1=$?
+cp "$SP/.ripwire_quality_acks" "$WORK/sp_first.acks" 2>/dev/null
+( cd "$SP" && "$BIN" . --quality-delta --quality-ack="space probe" >/dev/null 2>"$WORK/sp2.err" ); sprc2=$?
+SPROWS="$( grep -c '^ack complexity ' "$SP/.ripwire_quality_acks" 2>/dev/null || true )"
+if [ "$sprc1" != 0 ] || [ "$sprc2" != 0 ]; then
+    no "(10b) the space-path acks exited $sprc1 / $sprc2"
+elif [ "${SPROWS:-0}" = 0 ]; then
+    no "(10b) no complexity row was acked on the space-path fixture — the probe did not run"
+elif grep '^ack ' "$SP/.ripwire_quality_acks" | grep -q ' p=my '; then
+    no "(10b) a path with a space was written as a p= token and read back truncated to 'my'"; grep '^ack ' "$SP/.ripwire_quality_acks"
+elif ! cmp -s "$WORK/sp_first.acks" "$SP/.ripwire_quality_acks"; then
+    no "(10b) a second ack rewrote a space-path row — the ledger does not round-trip"; diff "$WORK/sp_first.acks" "$SP/.ripwire_quality_acks" | head -6
+elif grep '^ack complexity ' "$SP/.ripwire_quality_acks" | grep -q ' now=[0-9]* was=[0-9]* space probe$'; then
+    ok "(10b) a finding on a path with a space keeps now=/was= and its reason, omits the unspellable locator, and round-trips"
+else
+    no "(10b) the space-path row lost its now=/was= or its reason"; grep '^ack ' "$SP/.ripwire_quality_acks"
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
