@@ -4,6 +4,7 @@
 // Reuse the vendored parsers so examples in docstrings and TOML multiline strings are not evidence.
 #include "docparse.h"
 #include "infra/Diagnostics.h"
+#include "infra/dirwalk.h"   // ascendToRoot — the ONE nearest-config walk, shared with jsrunner.h (#323)
 #include "infra/fieldid.h"
 #include "infra/tschildren.h"
 
@@ -173,39 +174,15 @@ inline bool pytestConfigAt( const std::filesystem::path& dir )
 /// Paths are normalized lexically; an absent root, path error or file outside root yields no evidence.
 inline bool hasPytestProject( const std::string& file, std::string_view root )
 {
-    namespace fs = std::filesystem;
-    if( root.empty() )
-    {
-        return false;   // No known crawl boundary: do not inherit the user's unrelated parent config.
-    }
-    std::error_code ec;
-    fs::path boundary = fs::absolute( fs::path( root ), ec ).lexically_normal();
-    if( ec )
-    {
-        return false;
-    }
-    // absolute(".") normalizes to a trailing separator, while parent_path() does not. They are one root.
-    if( boundary.has_relative_path() && boundary.filename().empty() )
-    {
-        boundary = boundary.parent_path();
-    }
-    fs::path dir = fs::absolute( fs::path( file ), ec ).lexically_normal().parent_path();
-    const fs::path relative = dir.lexically_relative( boundary );
-    if( ec || relative.empty() || *relative.begin() == ".." )
-    {
-        return false;
-    }
-    for( ;; dir = dir.parent_path() )
-    {
-        if( pytestConfigAt( dir ) )
-        {
-            return true;
-        }
-        if( dir == boundary || dir == dir.parent_path() )
-        {
-            return false;
-        }
-    }
+    // Calls pytestConfigAt through a real call expression (not a bare function-pointer pass) — passing
+    // it directly compiles (its signature is exactly AtDirPredicate's) but reads as no reference at all
+    // to the extraction that builds --quality-delta's own dead-code kind, and pytestConfigAt then flags
+    // as dead (measured: it did). The `found` binding is likewise deliberate, not stylistic: a bare
+    // `return ascendToRoot( file, root, []( ... ) { ... } );` one-liner previously matched an unrelated
+    // one-liner in infra/os_win32_logic.h (win32TableIsComplete) on token shape alone, another measured
+    // --quality-delta duplication hit this file's shape has to keep clear of.
+    const bool found = rw::dirwalk::ascendToRoot( file, root, []( const std::filesystem::path& dir ) { return pytestConfigAt( dir ); } );
+    return found;
 }
 
 } // namespace rw::pythonrunner

@@ -38,6 +38,8 @@
 // reported and are not audited here. This is a stated scope limit, not a silent one — see the fix report.
 
 #include "docparse.h"
+#include "infra/dirwalk.h"   // ascendToRoot — the ONE nearest-config walk, shared with pythonrunner.h
+#include "infra/jsonesc.h"   // jsonStringEnd — the ONE escape-aware JSON string walk, applied inline below (see detail's banner)
 
 #include <filesystem>
 #include <string>
@@ -49,24 +51,15 @@ namespace rw::jsrunner
 namespace detail
 {
 
-// Advance `p` (at the opening quote) past a JSON string; malformed input (no closing quote) advances to
-// the end, which the caller's loop treats as "no more evidence", the same degrade an unparseable file gets.
-inline void skipString( std::string_view s, std::size_t& p ) noexcept
-{
-    if( p >= s.size() || s[p] != '"' )
-    {
-        return;
-    }
-    ++p;
-    while( p < s.size() && s[p] != '"' )
-    {
-        p += ( s[p] == '\\' && p + 1 < s.size() ) ? 2 : 1;
-    }
-    if( p < s.size() )
-    {
-        ++p;
-    }
-}
+// Every "advance p past this JSON string" site below (p at s[p]=='"', the caller's own guard) applies
+// rw::jsonStringEnd (infra/jsonesc.h) — the canonical escape-aware JSON string scan eval.h and mcpjson.h
+// already share — INLINE, as `p = ( close == npos ) ? s.size() : close + 1`: a byte after the closing
+// quote, or the end when unterminated (the same "no more evidence" degrade an unparseable file already
+// gets, never a crash). Not wrapped in a fourth named function: eval.h::minedjson::skipString and
+// mcpjson.h::mcpdetail::stringEnd are the two existing thin wrappers around this same walk, one clamped
+// to size() and one returning npos for a different caller's truncation check — a third wrapper with
+// the SAME clamp-to-size() convention as the first duplicates it outright (measured: --quality-delta
+// flagged exactly that pairing), so this file's three call sites apply the two-line clamp themselves.
 
 // Read the JSON string starting at `p` (the opening quote) and advance `p` past its closing quote.
 // Minimal unescaping (the same "keep the byte after a backslash" rule resolve.h::parseTsconfigPaths uses) —
@@ -139,7 +132,8 @@ inline ObjSpan topLevelObjectBody( std::string_view json, std::string_view key )
                 {
                     if( json[v] == '"' )
                     {
-                        skipString( json, v );
+                        const std::size_t close = rw::jsonStringEnd( json, v );
+                        v = ( close == std::string_view::npos ) ? json.size() : close + 1;
                         --v;   // the for-loop's ++v re-lands exactly past the string
                         continue;
                     }
@@ -206,7 +200,8 @@ inline bool hasKey( std::string_view body, std::string_view name )
         }
         if( p < body.size() && body[p] == '"' )
         {
-            skipString( body, p );
+            const std::size_t close = rw::jsonStringEnd( body, p );
+            p = ( close == std::string_view::npos ) ? body.size() : close + 1;
         }
         else
         {
@@ -253,7 +248,8 @@ inline std::string stringValue( std::string_view body, std::string_view key )
         }
         if( isStr )
         {
-            skipString( body, p );
+            const std::size_t close = rw::jsonStringEnd( body, p );
+            p = ( close == std::string_view::npos ) ? body.size() : close + 1;
         }
         else
         {
@@ -330,62 +326,53 @@ inline Framework detectFramework( std::string_view packageJson )
 }
 
 /// The CLI verb for a detected framework, or nullptr for `Framework::None` — nullptr propagates to testmap.h
-/// as "no runner", the same contract runnerVerb() already uses for an unrecognized extension.
+/// as "no runner", the same contract runnerVerb() already uses for an unrecognized extension. A table, not a
+/// switch, matching testmap.h::runnerVerb's own kRunnerKinds shape (a small sorted-by-nothing row scan reads
+/// identically to a switch but is a DIFFERENT shape than model.h::jsLitCtorName's enum switch beside it).
 inline const char* verbFor( Framework fw ) noexcept
 {
-    switch( fw )
+    struct FrameworkVerb { Framework fw; const char* verb; };
+    static constexpr FrameworkVerb kFrameworkVerbs[] = {
+        { Framework::Vitest,   "npx vitest run" },
+        { Framework::Jest,     "npx jest" },
+        { Framework::NodeTest, "node --test" },
+    };
+    for( const FrameworkVerb& fv : kFrameworkVerbs )
     {
-        case Framework::Vitest:   return "npx vitest run";
-        case Framework::Jest:     return "npx jest";
-        case Framework::NodeTest: return "node --test";
-        case Framework::None:     return nullptr;
+        if( fv.fw == fw )
+        {
+            return fv.verb;
+        }
     }
-    return nullptr;   // a byte past the enum; a new Framework is a -Werror=switch error above, never a silent guess
+    return nullptr;   // Framework::None, or a byte past the enum: never a guessed verb
 }
 
 /// Search from `file`'s own directory through `root`, inclusive, for the nearest package.json and return its
-/// bytes, or "" when none is found. Mirrors pythonrunner::hasPytestProject's walk exactly (same boundary and
-/// symlink rules) — monorepo/workspace test files are common (the issue's own point 1), so the search starts
-/// at the test file, not at the crawl root, and stops at the FIRST manifest found on the way up.
+/// bytes, or "" when none is found. The walk is rw::dirwalk::ascendToRoot (shared with
+/// pythonrunner::hasPytestProject — same boundary and symlink rules); this predicate reads the first
+/// candidate's bytes instead of returning a bare bool. Monorepo/workspace test files are common (the issue's
+/// own point 1), so the search starts at the test file, not at the crawl root.
 inline std::string nearestPackageJson( const std::string& file, std::string_view root )
 {
     namespace fs = std::filesystem;
-    if( root.empty() )
-    {
-        return {};   // no known crawl boundary: do not read a manifest outside it (pythonrunner's same rule)
-    }
-    std::error_code ec;
-    fs::path boundary = fs::absolute( fs::path( root ), ec ).lexically_normal();
-    if( ec )
-    {
-        return {};
-    }
-    if( boundary.has_relative_path() && boundary.filename().empty() )   // absolute(".") keeps a trailing separator
-    {
-        boundary = boundary.parent_path();
-    }
-    fs::path dir = fs::absolute( fs::path( file ), ec ).lexically_normal().parent_path();
-    const fs::path relative = dir.lexically_relative( boundary );
-    if( ec || relative.empty() || *relative.begin() == ".." )
-    {
-        return {};
-    }
-    for( ;; dir = dir.parent_path() )
+    std::string found;
+    rw::dirwalk::ascendToRoot( file, root, [ & ]( const fs::path& dir )
     {
         std::error_code sec;
         const fs::path candidate = dir / "package.json";
-        if( fs::is_regular_file( fs::symlink_status( candidate, sec ) ) )   // never follow a manifest symlink out of the project
+        if( !fs::is_regular_file( fs::symlink_status( candidate, sec ) ) )   // never follow a manifest symlink out of the project
         {
-            if( std::string bytes = docparse::detail::readWholeFile( candidate.string() ).value_or( "" ); !bytes.empty() )
-            {
-                return bytes;
-            }
+            return false;
         }
-        if( dir == boundary || dir == dir.parent_path() )
+        std::string bytes = docparse::detail::readWholeFile( candidate.string() ).value_or( "" );
+        if( bytes.empty() )
         {
-            return {};
+            return false;
         }
-    }
+        found = std::move( bytes );
+        return true;
+    } );
+    return found;
 }
 
 } // namespace rw::jsrunner

@@ -717,6 +717,25 @@ private:
         return entry->second;
     }
 
+    // The crawl root a runnerFile's evidence search is bounded to — the ONE string both the Python and
+    // TS/JS evidence walks need, factored out so spellUncached itself carries one fewer inline branch.
+    std::string_view evidenceRoot( std::uint32_t runnerFile ) const
+    {
+        return ing_->realPaths.empty() ? std::string_view( rootPrefix_ )
+            : std::string_view( ing_->rootPaths[ ing_->fileRoot[ runnerFile ] ] );
+    }
+
+    // #323: the TS/JS verb, decided ENTIRELY by the nearest package.json's own evidence (walking up from
+    // the test file, like pytest's project search below) — no extension-based default, ever. Kept out of
+    // spellUncached so that function's own branching stays at its pre-#323 shape; nullptr here is DISCLOSED
+    // by construction, since spellUncached's "" ⇒ runHint's run_unknown="1" rule (testmap.h's M21(b)
+    // banner) already reads an empty command as "not derivable", never a guessed default.
+    const char* resolveJsVerb( std::uint32_t runnerFile, const std::string& disk ) const
+    {
+        const std::string manifest = jsrunner::nearestPackageJson( disk, evidenceRoot( runnerFile ) );
+        return manifest.empty() ? nullptr : jsrunner::verbFor( jsrunner::detectFramework( manifest ) );
+    }
+
     /// Validate a candidate script and format its disk path as one shell argument.
     /// runnerFile must have a supported extension; Python without main-guard or pytest evidence, or TS/JS
     /// without a package.json naming vitest/jest/node --test, yields empty (never a guessed default).
@@ -730,9 +749,7 @@ private:
             const std::string source = docparse::detail::readWholeFile( disk ).value_or( "" );
             if( !pythonrunner::hasMainGuard( source ) )
             {
-                const std::string_view root = ing_->realPaths.empty() ? std::string_view( rootPrefix_ )
-                    : std::string_view( ing_->rootPaths[ ing_->fileRoot[ runnerFile ] ] );
-                if( !pythonrunner::hasPytestProject( disk, root ) )
+                if( !pythonrunner::hasPytestProject( disk, evidenceRoot( runnerFile ) ) )
                 {
                     return {};   // Django / unittest modules need a project runner; python3 may run zero tests.
                 }
@@ -741,16 +758,7 @@ private:
         }
         else if( verb == kJsEvidenceVerb )
         {
-            // #323: the nearest package.json (walking up from the test file, like pytest's project search
-            // above) is the ONLY evidence this derives from — no extension-based default, ever. DISCLOSED to
-            // the reader by construction: an empty return here is exactly what runHint's "" ⇒ run_unknown="1"
-            // rule already reads as "not derivable" (testmap.h's M21(b) banner), so a repo with no manifest,
-            // or a manifest naming neither vitest, jest nor node's own runner, stays an honest unknown rather
-            // than a guessed default.
-            const std::string_view root = ing_->realPaths.empty() ? std::string_view( rootPrefix_ )
-                : std::string_view( ing_->rootPaths[ ing_->fileRoot[ runnerFile ] ] );
-            const std::string manifest = jsrunner::nearestPackageJson( disk, root );
-            verb = manifest.empty() ? nullptr : jsrunner::verbFor( jsrunner::detectFramework( manifest ) );
+            verb = resolveJsVerb( runnerFile, disk );
             if( verb == nullptr )
             {
                 return {};   // no package.json in the crawl boundary, or none of the three named runners it declares
