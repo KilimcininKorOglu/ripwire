@@ -21,9 +21,9 @@ set -u
 BIN="${1:?usage: ci-windows-evict-smoke.sh <ripwire binary>}"
 unset TMPDIR XDG_CACHE_HOME
 
-"$BIN" test/fixture --doctor > doctor-evict.xml   # exits 1 when ANY row is not ok; the cache-dir row below is the check
-row="$( grep -o '<c n="cache-dir"[^>]*>' doctor-evict.xml || true )"
-echo "cache-dir row: $row"
+# --doctor exits 1 when ANY row is not ok; the shared helper records that code instead of obeying it and fails, loudly,
+# only when the cache-dir row itself is missing or not ok="1" — so `row` below is a present, healthy row.
+row="$( bash "$( dirname "$0" )/ci-windows-doctor-row.sh" "$BIN" doctor-evict.xml )" || exit 1
 cachedir="$( printf '%s' "$row" | sed -n 's/.* dir="\([^"]*\)".*/\1/p' )"
 if [ -z "$cachedir" ] || [ ! -d "$cachedir" ]; then
     echo "ci: --doctor's cache-dir row names no directory that exists here: dir=\"$cachedir\"" >&2; exit 1
