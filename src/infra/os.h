@@ -200,7 +200,14 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 // Windows branch); exists for a caller that must hand `path` to something outside os:: that performs no such
 // rewrite itself (std::filesystem, a popen'd shell command) and needs the same answer os::open/os::stat/os::mkdir
 // already give internally — #326.
-[[gnu::always_inline]] inline std::string rebased_path( const char* path ) { return path == nullptr ? std::string() : std::string( path ); }
+[[gnu::always_inline]] inline std::string rebased_path( const char* path )
+{
+    if( path == nullptr )
+    {
+        return {};
+    }
+    return path;   // no rewrite on this platform: `path` already is the spelling every os:: call above touches
+}
 
 // which: the path a shell would run for `command` — `command` itself when it contains a '/' and is executable,
 // otherwise the first executable PATH entry joined with it (an empty entry is the current directory, as sh
