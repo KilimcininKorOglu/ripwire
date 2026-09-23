@@ -115,6 +115,7 @@
 // byte-identical.
 
 #include "darkflags.h"    // forEachLine / trimView / identByte / readWhole — the shared lexical + file-read primitives
+#include "infra/namesplit.h" // containsWordBoundedBy — the shared word-boundary scan, shared with jsrunner.h
 #include "gitmine.h"      // gitRepoToplevel
 #include "quality.h"      // quality::gitBlameConfigPins / quality::gitOneLine — the shared git-blame plumbing
 #include "gitstamp.h"     // gitstamp::stampAt — the at="<sha>[+dirty]" anchor
@@ -358,21 +359,13 @@ inline bool isStatusLedgerHeadingText( std::string_view headingText ) noexcept
     return true;
 }
 
+// rv-test-gate-tsjs: the walk is rw::namesplit::containsWordBoundedBy (shared with jsrunner.h's own
+// word-boundary match, over a DIFFERENT predicate — see that file for why); this caller's boundary stays
+// darkflags::identByte exactly as before, so this function's own behaviour is unchanged byte for byte.
 inline bool containsWholeWord( std::string_view line, std::string_view word ) noexcept
 {
-    std::size_t pos = 0;
-    while( ( pos = line.find( word, pos ) ) != std::string_view::npos )
-    {
-        const bool leftOk  = ( pos == 0 ) || !darkflags::identByte( static_cast<unsigned char>( line[ pos - 1 ] ) );
-        const bool rightOk = ( pos + word.size() >= line.size() )
-                           || !darkflags::identByte( static_cast<unsigned char>( line[ pos + word.size() ] ) );
-        if( leftOk && rightOk )
-        {
-            return true;
-        }
-        ++pos;
-    }
-    return false;
+    return rw::namesplit::containsWordBoundedBy( line, word,
+        []( char c ) { return darkflags::identByte( static_cast<unsigned char>( c ) ); } );
 }
 
 // ── the two new git primitives (see the file header's "reused rather than reinvented" note) ───────────

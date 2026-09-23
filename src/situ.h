@@ -1138,14 +1138,8 @@ inline TestGateResult computeTestGateFor( const IngestResult& ing, const Graph& 
         // flipimpact.h's own untested-hosts loop both apply, so the exclusion cannot drift between the two.
         if( !isTestPath( rootRelPath( ing, f ) ) && !testReach[n] )
         {
-            if( isUntestableOwner( ing.symbols[n].kind ) )
-            {
-                ++r.untestedModscope;   // rv-test-gate-tsjs F3: counted, never silently dropped
-            }
-            else
-            {
-                r.untested.push_back( n );
-            }
+            // rv-test-gate-tsjs F3: counted, never silently dropped.
+            if( isUntestableOwner( ing.symbols[n].kind ) ) { ++r.untestedModscope; } else { r.untested.push_back( n ); }
         }
     }
     r.testRows = rankTestRows( ing, reach, gateDepth, &isChangedSym, gateSplit.src, gateSplit.tests );

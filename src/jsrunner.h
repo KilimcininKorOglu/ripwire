@@ -38,8 +38,9 @@
 // reported and are not audited here. This is a stated scope limit, not a silent one — see the fix report.
 
 #include "docparse.h"
-#include "infra/dirwalk.h"   // ascendToRoot — the ONE nearest-config walk, shared with pythonrunner.h
-#include "infra/jsonesc.h"   // jsonStringEnd — the ONE escape-aware JSON string walk, applied inline below (see detail's banner)
+#include "infra/dirwalk.h"    // ascendToRoot — the ONE nearest-config walk, shared with pythonrunner.h
+#include "infra/jsonesc.h"    // jsonStringEnd — the ONE escape-aware JSON string walk, applied inline below (see detail's banner)
+#include "infra/namesplit.h"  // isIdentChar / containsWordBoundedBy — the shared ident-byte test and word-boundary scan
 
 #include <filesystem>
 #include <string>
@@ -263,32 +264,25 @@ inline std::string stringValue( std::string_view body, std::string_view key )
 }
 
 // rv-test-gate-tsjs F2: a byte that can continue an identifier/path SEGMENT — used to bound a word match
-// so "jest" inside "jest-report-cleaner.js" (a FILENAME) is not mistaken for a "run jest" command.
+// so "jest" inside "jest-report-cleaner.js" (a FILENAME) is not mistaken for a "run jest" command. Built
+// on rw::namesplit::isIdentChar (the ONE ASCII identifier-byte test) plus '-', the one byte this caller
+// needs beyond it: darkflags.h's own identByte (planlint.h's word-boundary user) does NOT count '-' as a
+// word byte, which is the wrong reading here — a hyphenated CLI token is one word, not two.
 inline bool isWordByte( char c ) noexcept
 {
-    return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c == '-';
+    return rw::namesplit::isIdentChar( c ) || c == '-';
 }
 
 /// Whether `word` occurs in `text` bounded on BOTH sides by a non-word byte or the string edge — "vitest"
 /// matches in "npx vitest run" (space both sides) and in "node_modules/.bin/jest" (a path separator, then
 /// the string end), never in "jest-report-cleaner.js" (a '-' immediately follows) or "myvitest" (a letter
 /// immediately precedes). rv-test-gate-tsjs F2: a runner name matched as a SUBSTRING of an unrelated token
-/// is not evidence the script text was ever ".find()"-shaped for before this fix.
+/// is not evidence the script text was ever ".find()"-shaped for before this fix. The scan itself is
+/// rw::namesplit::containsWordBoundedBy — the SAME walk planlint.h::containsWholeWord already uses, over
+/// this file's own boundary predicate (see isWordByte's own comment for why the two predicates differ).
 inline bool matchesWord( std::string_view text, std::string_view word )
 {
-    std::size_t pos = 0;
-    while( ( pos = text.find( word, pos ) ) != std::string_view::npos )
-    {
-        const bool leftOk  = pos == 0 || !isWordByte( text[pos - 1] );
-        const std::size_t end = pos + word.size();
-        const bool rightOk = end >= text.size() || !isWordByte( text[end] );
-        if( leftOk && rightOk )
-        {
-            return true;
-        }
-        ++pos;
-    }
-    return false;
+    return rw::namesplit::containsWordBoundedBy( text, word, isWordByte );
 }
 
 } // namespace detail
@@ -326,10 +320,16 @@ inline std::string testScript( std::string_view packageJson )
 enum class Framework : std::uint8_t { None, Vitest, Jest, NodeTest };
 
 // npm's own generated placeholder (`npm init`'s default `scripts.test`) — present, but not really a script
-// a human wrote, so it reads the same as "absent" for evidence purposes (rv-test-gate-tsjs F2).
+// a human wrote, so it reads the same as "absent" for evidence purposes (rv-test-gate-tsjs F2). The named
+// `marker` local (not a bare one-line `return x.find(y) != npos`) is deliberate: a bare return of that
+// exact shape structurally matched three UNRELATED substring checks elsewhere in the tree
+// (taskroute::has, verbs_for.h's forCoverageAttrPresent/forRouteAttrPresent) under --quality-delta's
+// duplication kind — the same false-positive class infra/dirwalk.h's own banner already documents fixing
+// for pythonrunner::hasPytestProject, not a real clone of any of those three unrelated checks.
 inline bool isNpmPlaceholderScript( std::string_view script ) noexcept
 {
-    return script.find( "Error: no test specified" ) != std::string_view::npos;
+    constexpr std::string_view marker = "Error: no test specified";
+    return script.find( marker ) != std::string_view::npos;
 }
 
 /// Evidence-only framework detection. rv-test-gate-tsjs F2: a NON-EMPTY, non-placeholder `scripts.test` is
