@@ -49,6 +49,14 @@ PATS=(
   'Wid[g]et'               # a single-element char class inside a literal run
   'comp.te'                # a '.' wildcard inside a literal
   'open\('                 # an escaped metacharacter (literal paren)
+  # 2026-09-23: escapes whose TAIL the engine reads. The analyser took `\x65` for the letters x,6,5 and
+  # required THAT trigram of every file, so a pattern spelling one byte by number dropped every file that
+  # matched, at capped="0". One in a literal run, one in a class, one as \uHHHH, and one as the branch of
+  # an alternation that is a file's ONLY match (arm (E) below pins that shape by name).
+  'op\x65n\('              # \xHH inside a literal run (\x65 = e)
+  '[\x6f]pen'              # \xHH inside a char class (\x6f = o)
+  'comp\u0075te'           # \uHHHH (\u0075 = u): four digits, same tail rule
+  'zylophoneXyzzy|\x63ompute'   # the escaped branch is the only match in two fixture files
 )
 
 # ── (S) soundness + (D) determinism, per pattern ──────────────────────────────────────────────
@@ -56,6 +64,13 @@ for p in "${PATS[@]}"; do
     "$BIN" "$CORPUS" --regex="$p" --no-cache               >"$TMP/pf"  2>/dev/null
     "$BIN" "$CORPUS" --regex="$p" --no-cache               >"$TMP/pf2" 2>/dev/null   # determinism: run twice
     "$BIN" "$CORPUS" --regex="$p" --no-prefilter --no-cache >"$TMP/fs" 2>/dev/null   # full-scan oracle
+
+    # presence guard: a refused pattern writes no <grep> element to EITHER file, and empty == empty would
+    # read as agreement (CONTRIBUTING §2 shape 3). The oracle must have answered before it is compared to.
+    if ! grep -q '<grep ' "$TMP/fs"; then
+        no "$(printf '%-12s' "$p") full-scan oracle gave no <grep> answer (refused? rc/stderr not captured here) — nothing to compare"
+        continue
+    fi
 
     det="ok"; diff -q "$TMP/pf" "$TMP/pf2" >/dev/null || det="BAD"
     snd="ok"; diff -q "$TMP/pf" "$TMP/fs"  >/dev/null || snd="BAD"
@@ -67,6 +82,64 @@ for p in "${PATS[@]}"; do
         [ "$det" = ok ] || no "$(printf '%-12s' "$p") non-deterministic (run-to-run differs)"
     fi
 done
+
+# The root-relative <f p="…"> set of an answer, past the legend comment (whose prose spells that shape).
+fileSetOf(){ python3 -c '
+import re, sys
+xml = sys.stdin.read().split( "-->", 1 )[ -1 ]
+for m in re.finditer( r"<f p=\"([^\"]*)\"", xml ):
+    print( m.group( 1 ) )
+' | sort -u; }
+
+# ── (E) an alternation whose ESCAPED branch is a file's only match reaches that file (2026-09-23) ──
+# `zylophoneXyzzy|\x63ompute`: the analyser read `\x63` as the letters x, 6, 3 and ORed the trigram "x63" in,
+# so a file the first branch did not admit was skipped — beta.py and gamma.md hold `compute` and no
+# `zylophoneXyzzy`, and both vanished from an answer that still said capped="0". Three assertions: the fixture
+# HAS such files (presence guard), the prefiltered answer lists every one of them, and the prefiltered file
+# count equals full-scan's and exceeds the first branch's alone (the escaped branch admitted files, so a
+# trivial ALL is not what passed).
+esc='zylophoneXyzzy|\x63ompute'
+onlyEsc="$( grep -L 'zylophoneXyzzy' "$CORPUS"/* | xargs grep -l 'compute' | sed "s|^$CORPUS/||" | sort -u )"
+if [ -n "$onlyEsc" ]; then
+    ok "(E) presence: $( printf '%s\n' "$onlyEsc" | wc -l | tr -d ' ' ) fixture file(s) hold 'compute' and no 'zylophoneXyzzy': $( printf '%s' "$onlyEsc" | tr '\n' ' ' )"
+else
+    no "(E) presence: no fixture file holds 'compute' without 'zylophoneXyzzy' — the arm would have nothing to drop"
+fi
+"$BIN" "$CORPUS" --regex="$esc" --grep-in=any --no-cache >"$TMP/esc.pf" 2>/dev/null
+"$BIN" "$CORPUS" --regex="$esc" --grep-in=any --no-prefilter --no-cache >"$TMP/esc.fs" 2>/dev/null
+escSet="$( fileSetOf <"$TMP/esc.pf" )"
+missE=0
+while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    printf '%s\n' "$escSet" | grep -qxF "$f" || { missE=1; echo "      $f holds 'compute' but the prefiltered /$esc/ answer dropped it"; }
+done <<< "$onlyEsc"
+pfF="$( grep -o ' files="[0-9]*"' "$TMP/esc.pf" | head -1 | grep -o '[0-9]*' )"
+fsF="$( grep -o ' files="[0-9]*"' "$TMP/esc.fs" | head -1 | grep -o '[0-9]*' )"
+oneF="$( "$BIN" "$CORPUS" --regex='zylophoneXyzzy' --grep-in=any --no-cache 2>/dev/null | grep -o ' files="[0-9]*"' | head -1 | grep -o '[0-9]*' )"
+cappedE="$( grep -o ' capped="[01]"' "$TMP/esc.pf" | head -1 | grep -o '[01]' )"
+if [ "$missE" -eq 0 ] && [ -n "$pfF" ] && [ -n "$fsF" ] && [ "$pfF" -eq "$fsF" ] && [ "$fsF" -gt "${oneF:-0}" ]; then
+    ok "(E) /$esc/ prefiltered files=$pfF == full-scan files=$fsF > first-branch-only files=$oneF, every escaped-only file listed (capped=\"${cappedE:-?}\")"
+else
+    no "(E) /$esc/ prefiltered files=${pfF:-none} full-scan files=${fsF:-none} first-branch-only files=${oneF:-none} capped=\"${cappedE:-?}\" — the escaped branch's files were dropped from a complete-looking answer"
+fi
+
+# ── (O2) an escape-aware external oracle: `grep -E` cannot spell \xHH, ripgrep can ──────────────
+# ripgrep is a suite prerequisite (CONTRIBUTING §1), so its absence is a FAIL, never a silent skip.
+if command -v rg >/dev/null 2>&1; then
+    for p in 'op\x65n\(' '[\x6f]pen' 'zylophoneXyzzy|\x63ompute'; do
+        cx="$( "$BIN" "$CORPUS" --regex="$p" --grep-in=any --no-cache 2>/dev/null | fileSetOf )"
+        gp="$( rg -l -- "$p" "$CORPUS" 2>/dev/null | sed "s|^$CORPUS/||" | sort -u )"
+        if [ -z "$gp" ]; then no "(O2) rg found no file for /$p/ — the oracle has nothing to compare (fixture drift?)"; continue; fi
+        miss=0
+        while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            printf '%s\n' "$cx" | grep -qxF "$f" || { miss=1; echo "      rg matched $f but ripwire dropped it"; }
+        done <<< "$gp"
+        if [ "$miss" -eq 0 ]; then ok "(O2) oracle ⊇ rg   $(printf '%-26s' "$p") ($( printf '%s\n' "$gp" | wc -l | tr -d ' ' ) files)"; else no "(O2) oracle dropped an rg-matched file for /$p/"; fi
+    done
+else
+    no "(O2) ripgrep is not on PATH — the escape-aware oracle cannot run (CONTRIBUTING lists rg as a suite prerequisite)"
+fi
 
 # ── (O) independent grep oracle: ripwire's matched-FILE set must be a SUPERSET of grep -lE's ──
 # (BRE-safe subset of the battery; uses grep -E so the pattern syntax matches.)

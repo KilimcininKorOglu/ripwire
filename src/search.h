@@ -528,6 +528,57 @@ inline TriQuery finishQuery( RegexInfo r )
     return std::move( r.match );
 }
 
+// ── numbered escapes: `\xHH`, `\uHHHH`, `\cX`, a backreference `\N…` — the escapes whose TAIL the engine reads ──
+// (2026-09-23) The analyser took `\x66` for the letters x, 6, 6 and required THAT trigram of every file, so a pattern
+// spelling one byte by number dropped every file that matched it, at capped="0" (`\x66s::exists`: 0 files where the
+// full scan and ripgrep answer 10). A reader must step over exactly the characters the engine reads as the escape,
+// and may name the byte only when it is certain; otherwise it is one byte the reader does not vouch for (ALL).
+inline bool isNumberedRegexEscape( char e ) noexcept
+{
+    return e == 'x' || e == 'u' || e == 'c' || ( e >= '1' && e <= '9' );
+}
+
+// Up to `want` hex digits at s[pos…], consumed; their value when every digit was present and the byte is ASCII, else
+// -1. A value at or past 0x80 is left unknown on purpose: the engine compares `char`s, and that byte's signedness is
+// not this reader's call.
+inline int regexHexByteAt( const std::string& s, std::size_t& pos, std::size_t want ) noexcept
+{
+    std::size_t got   = 0;
+    unsigned    value = 0;
+    while( got < want && pos < s.size() && std::isxdigit( (unsigned char)s[ pos ] ) )
+    {
+        const char d = s[ pos++ ];
+        value = value * 16 + unsigned( std::isdigit( (unsigned char)d ) ? d - '0' : std::tolower( (unsigned char)d ) - 'a' + 10 );
+        ++got;
+    }
+    ENSURES( got <= want, "no more digits are consumed than the escape has" );
+    return ( got == want && value < 0x80 ) ? int( value ) : -1;
+}
+
+// The tail of the numbered escape whose letter `e` was just consumed, stepped over as the engine steps over it: the
+// byte `\xHH` / `\u00HH` spells when certain, else -1 (`\cX` and a backreference are never one known byte).
+inline int regexNumberedEscapeByte( const std::string& s, std::size_t& pos, char e ) noexcept
+{
+    EXPECTS( e == 'x' || e == 'u' || e == 'c' || ( e >= '1' && e <= '9' ), "the callers route only the escapes whose tail the engine reads" );
+    if( e == 'x' || e == 'u' )
+    {
+        return regexHexByteAt( s, pos, e == 'x' ? 2 : 4 );
+    }
+    if( e == 'c' )
+    {
+        if( pos < s.size() && std::isalpha( (unsigned char)s[ pos ] ) )
+        {
+            ++pos;                                       // the control letter
+        }
+        return -1;
+    }
+    while( pos < s.size() && std::isdigit( (unsigned char)s[ pos ] ) )
+    {
+        ++pos;                                           // the rest of a backreference's number
+    }
+    return -1;
+}
+
 // ── A small recursive-descent parser for the ECMAScript-subset we analyze ──────────────────────────
 //
 // Grammar (precedence low→high):  alt := concat ('|' concat)*   concat := repeat*   repeat := atom quant?
@@ -637,6 +688,7 @@ private:
 
     RegexInfo parseAtom()
     {
+        EXPECTS( pos_ < s_.size(), "parseConcat hands an atom only while pattern bytes remain" );
         const char c = peek();
         if( c == '(' )
         {
@@ -676,22 +728,7 @@ private:
         if( c == '\\' )
         {
             next();                                      // consume '\'
-            if( eof() )
-            {
-                return riAnchor();
-            }
-            const char e = next();
-            // word/space/digit classes and boundaries → unknown char or anchor (sound)
-            if( e == 'b' || e == 'B' || e == 'A' || e == 'Z' || e == 'z' )
-            {
-                return riAnchor();
-            }
-            if( e == 'w' || e == 'W' || e == 'd' || e == 'D' || e == 's' || e == 'S' )
-            {
-                return riAnyChar();
-            }
-            // an escaped metacharacter / ordinary char → that literal byte
-            return riLiteral( std::string( 1, unescape( e ) ) );
+            return parseEscape();
         }
         if( c == ')' || c == '|' )
         {
@@ -757,16 +794,11 @@ private:
         bool degrade = false;
         while( !eof() && peek() != ']' )
         {
-            char lo;
-            if( peek() == '\\' ) { next(); if( eof() ) { degrade = true; break; } char e = next(); if( std::strchr( "wWdDsS", e ) ) { degrade = true; } lo = unescape( e ); }
-            else
-            {
-                lo = next();
-            }
+            const char lo = classByte( degrade );
             if( !eof() && peek() == '-' && pos_ + 1 < s_.size() && s_[ pos_ + 1 ] != ']' )   // a range lo-hi
             {
                 next();                                  // consume '-'
-                char hi = ( peek() == '\\' ) ? ( next(), unescape( next() ) ) : next();
+                const char hi = classByte( degrade );
                 if( hi < lo || ( hi - lo ) > 6 )
                 {
                     degrade = true; // wide range ⇒ don't enumerate (ALL)
@@ -797,6 +829,57 @@ private:
             return riAnyChar();
         }
         return riCharSet( std::move( chars ) );
+    }
+
+    // Everything after a `\` (already consumed): a boundary/anchor is ε; a numbered escape is its byte or one unknown
+    // byte; a named byte (`\n` …) or an escaped metacharacter is that byte; any other letter (`\w` `\d` `\s` and their
+    // negations — the screen refuses the rest upstream) is one unknown byte (ALL). Every branch is sound.
+    RegexInfo parseEscape()
+    {
+        if( eof() )
+        {
+            return riAnchor();
+        }
+        const char e = next();
+        if( e == 'b' || e == 'B' || e == 'A' || e == 'Z' || e == 'z' )
+        {
+            return riAnchor();
+        }
+        if( isNumberedRegexEscape( e ) )
+        {
+            const int byte = regexNumberedEscapeByte( s_, pos_, e );
+            return byte >= 0 ? riLiteral( std::string( 1, char( byte ) ) ) : riAnyChar();
+        }
+        const char byte = unescape( e );
+        return ( byte != e || !std::isalpha( (unsigned char)e ) ) ? riLiteral( std::string( 1, byte ) ) : riAnyChar();
+    }
+
+    // One member of a `[...]` class: a plain byte, or the byte an escape spells. An escape that is not ONE known byte
+    // (`\w`, `\b` = backspace here, `\uHHHH` past ASCII, `\cX`, a backreference) degrades the class to ALL, its tail
+    // stepped over as the engine steps over it (`[\x66]s::exists` used to enumerate {x,6,6} and drop every file).
+    char classByte( bool& degrade )
+    {
+        EXPECTS( pos_ < s_.size(), "the class loop reads a member only while a byte is left before ']'" );
+        if( peek() != '\\' )
+        {
+            return next();
+        }
+        next();                                          // consume '\'
+        if( eof() )
+        {
+            degrade = true;
+            return '\\';
+        }
+        const char e = next();
+        if( isNumberedRegexEscape( e ) )
+        {
+            const int byte = regexNumberedEscapeByte( s_, pos_, e );
+            degrade = degrade || byte < 0;
+            return byte < 0 ? e : char( byte );
+        }
+        const char byte = unescape( e );
+        degrade = degrade || ( byte == e && std::isalpha( (unsigned char)e ) );
+        return byte;
     }
 
     // map an escaped char to its literal byte (the common ones); default = the char itself.

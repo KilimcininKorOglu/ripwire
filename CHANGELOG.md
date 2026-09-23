@@ -15,6 +15,27 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [0.6.2] — 2026-09-21
 
+### Fixed — a `--regex` spelling one byte by number dropped every file that matched it, at `capped="0"`
+
+`--regex` opens only the files a sound regex→trigram query admits (`src/search.h`'s `RegexAnalyzer`, the Cox
+prefilter; the full-scan switch the gates use is its oracle). That reader knew `\n`, `\t`, `\w`, `\b` and an escaped
+metacharacter, and took every other escape for its letter: `\x66s::exists` became the literal run `x66s::exists`,
+whose trigram `x66` no source file holds, so the ten files with `fs::exists` were never opened — and the answer
+still said `files="0" hits="0" capped="0"`. In an alternation the escaped branch went missing on its own:
+`fs::exists|\x66s::remove` answered 11 files where the full scan and ripgrep answer 14. The same reading inside a
+class (`[\x66]s::exists` enumerated `{x,6,6}`) dropped the same ten. `\uHHHH`, `\cX` and a backreference `\1` had
+the same shape; the screen in `src/regexguard.h` lists all four as portable escapes, so they were accepted and then
+misread. The analyser now steps over exactly the characters the engine reads as the escape: `\xHH` and `\u00HH`
+with every digit present and an ASCII value are that one byte, and the rest are one byte it does not vouch for
+(ALL — sound, as `.` is). Only `--regex` (CLI and the MCP `grep` verb, which share `grepCollect`) evaluates that
+query; the literal `--grep`, the unindexed scan and the line-level literal paths never did.
+
+Gate: `test/regexcheck.sh` — four escape patterns join the prefiltered-versus-full-scan battery (S), which now
+refuses to compare two empty answers; (E) pins the alternation shape (`zylophoneXyzzy|\x63ompute`: the escaped
+branch is the only match in two fixture files, and both must be listed with the file count equal to full-scan's
+and above the first branch's alone); (O2) checks the escape patterns against ripgrep, which spells `\xHH` where
+`grep -E` cannot. Red on the previous binary: (S) 4 of 17, (E), and (O2) 3 of 3.
+
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
 
 The native Windows port (#44) built with clang-cl only; `cl.exe` stopped at the GCC/Clang language extensions
