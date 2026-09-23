@@ -869,27 +869,23 @@ jobs:
       # cacheDirLadder() now returns the already-rebased path, so every consumer is correct by construction.
       # Reproduces the filed condition, then proves --doctor's report AND a warm-run cache hit
       # (resolveCacheBlobPath) end to end; eviction shares the fix by construction (same dir=, see CHANGELOG).
+      # --doctor exits 1 on ANY non-ok row (binary-path included): the helper records that code instead of
+      # aborting on it under `bash -eo pipefail`, and asserts on the cache-dir row alone.
       - name: "--doctor cache-dir and cache reuse must be TRUE (#326): no false unwritable/empty, no missed cache hit"
         run: |
           unset TMPDIR XDG_CACHE_HOME
           ./build/ripwire.exe test/fixture > populate.xml || { echo "ci: the populating crawl itself failed" >&2; exit 1; }
-          ./build/ripwire.exe test/fixture --doctor > doctor.xml
+          row="$( bash scripts/ci-windows-doctor-row.sh ./build/ripwire.exe doctor.xml )"
           cat doctor.xml
-          row="$( grep -o '<c n="cache-dir"[^>]*>' doctor.xml )"
-          echo "cache-dir row (after crawl 1): $row"
-          test -n "$row" || { echo "ci: no cache-dir row in --doctor output at all" >&2; exit 1; }
-          case "$row" in *'ok="1"'*) ;; *) echo "ci: #326 regressed — cache-dir row is not ok=\"1\": $row" >&2; exit 1 ;; esac
-          blobs1="$( printf '%s' "$row" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' )"
+          blobs1="$( printf '%s' "$row" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' || true )"
           [ -n "$blobs1" ] && [ "$blobs1" -ge 1 ] \
             || { echo "ci: #326 regressed — cache-dir row reports blobs=$blobs1 right after a crawl that just wrote there: $row" >&2; exit 1; }
 
           # a second identical crawl must reuse the SAME blob (resolveCacheBlobPath), not write a new one.
           ./build/ripwire.exe test/fixture > populate2.xml || { echo "ci: the warm crawl itself failed" >&2; exit 1; }
           cmp populate.xml populate2.xml || { echo "ci: cold and warm crawls of the same tree produced different bytes" >&2; exit 1; }
-          ./build/ripwire.exe test/fixture --doctor > doctor2.xml
-          row2="$( grep -o '<c n="cache-dir"[^>]*>' doctor2.xml )"
-          echo "cache-dir row (after crawl 2, warm): $row2"
-          blobs2="$( printf '%s' "$row2" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' )"
+          row2="$( bash scripts/ci-windows-doctor-row.sh ./build/ripwire.exe doctor2.xml )"
+          blobs2="$( printf '%s' "$row2" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' || true )"
           [ -n "$blobs2" ] && [ "$blobs2" -eq "$blobs1" ] \
             || { echo "ci: #326 regressed — a warm, identical crawl changed blobs= from $blobs1 to $blobs2 (a cache miss/duplicate write, not a reuse)" >&2; exit 1; }
 
