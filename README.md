@@ -1097,7 +1097,7 @@ stated reason, not an oversight:
 | --- | --- | --- | --- |
 | `--field-affinity` | which struct fields are read together but declared far apart; each loop's access shape (index vs pointer-chase) | its subject is a **type**, not a function — attributing a struct's finding to the functions touching it is a claim the lens never makes | `MainDispatch`: **12** findings at separation cost **92.88**; **1,374** loops classified, **5** genuine pointer-chases |
 | `cache-*` lint rules + `--with-profile` | cache-hostile access shapes (alloc-in-loop, `p=p->next`, `a[b[i]]`, node containers, …), then which are *measured* hot | rows are facts about **sites**, joined to per-scope hardware counters — not per-function evidence a family vote could count | aggressive rules: **0** hits in shipping `src/`; **327** findings adversarially triaged → **0** fix-worthy; the one open refactor settled by measurement (5.2 ms) |
-| `--readability` | least-readable-first ordering (Halstead volume, Posnett sigmoid) | the fitted score **saturates past 20 lines** — only the ordering is meaningful, and an ordering cannot vote in a count | ordering only, never a grade |
+| `--readability` | orders by Halstead volume, Posnett sigmoid (a size proxy — the readability-ordering claim is withdrawn) | the fitted score **saturates past 20 lines** — only the ordering is meaningful, and an ordering cannot vote in a count | ordering only, never a grade |
 | `--naming-consistency` | off-convention names, each with a computed `propose=` | the one lens that emits **advice** — a fix is not evidence, so it does not vote | camelCase dominant at **93.0%**; **136** names flagged with proposals |
 | `--lint --naming-locals` | the naming rules pointed at local variables inside already-flagged functions | **opt-in and unvalidated** — stays outside any join until a real-corpus audit clears it (the withdrawn-rule lesson) | +**973** findings that were structurally invisible before |
 
@@ -1155,7 +1155,7 @@ rather than blurring it:
   with a published closed form: Halstead volume (Halstead, *Elements of Software Science*, 1977) and
   the Posnett/Hindle/Devanbu sigmoid fit (MSR 2011, [doi:10.1145/1985441.1985454](https://doi.org/10.1145/1985441.1985454)),
   fitted on snippets of 20 lines or fewer — past that the fitted score saturates and only the
-  *ordering* stays meaningful, which is exactly how the verb is used: least-readable-first, never as a
+  *ordering* stays meaningful, which is exactly how the verb is used: largest-first, never as a
   grade. Halstead's volume specifically (not the later, less-trusted difficulty/effort derivatives) is
   among the metrics shown to track measured cognitive load directly (Peitek, Apel, Parnin, Brechmann &
   Siegmund, ICSE 2021, [doi:10.1109/ICSE43902.2021.00056](https://doi.org/10.1109/ICSE43902.2021.00056)) —
@@ -1169,7 +1169,11 @@ rather than blurring it:
   computes exactly what it says it computes, so this is a construct-validity finding about the
   ordering claim, not an arithmetic bug. (First recorded as 484 pairs / 30.2% from an unpinned `git
   log --all` walk that does not reproduce — full derivation, the instrument fix and the retracted
-  figure: [`docs/EVALS.md` §8](docs/EVALS.md).) The lens itself is unchanged pending a proper human
+  figure: [`docs/EVALS.md` §8](docs/EVALS.md).) **WITHDRAWN:** the ordering claim is withdrawn —
+  stratified into narrow token-count bands, the later-fix association disappears in 8 of 10 deciles
+  (CIs include 1), so the order this verb produces is better explained as a residual size proxy,
+  measured in the lens's own units, than as an independent readability signal (derivation:
+  [`docs/EVALS.md` §8](docs/EVALS.md)). The lens's computation is unchanged pending a proper human
   study, and `--help=--readability` carries the same figures where a CLI reader meets them.
 - **`--naming-consistency`** is the *lexical* family's one exception to "evidence, never advice": every
   other lens in this panel tells you WHAT is wrong, never a computed fix. Case-style consistency is
