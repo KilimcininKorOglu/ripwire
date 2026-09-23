@@ -343,8 +343,13 @@ inline bool isNpmPlaceholderScript( std::string_view script ) noexcept
 /// must not (F5's whole point).
 inline bool hasAuthoritativeScript( std::string_view packageJson )
 {
-    const std::string script = testScript( packageJson );
-    return !script.empty() && !isNpmPlaceholderScript( script );
+    const std::string script  = testScript( packageJson );
+    const bool        isEmpty = script.empty();
+    if( isEmpty )
+    {
+        return false;   // no scripts.test at all: nothing here to be authoritative about
+    }
+    return !isNpmPlaceholderScript( script );
 }
 
 /// Evidence-only framework detection. rv-test-gate-tsjs F2: a NON-EMPTY, non-placeholder `scripts.test` is
