@@ -21,8 +21,21 @@
 #       produce byte-identical ledgers, and the file the concurrent runs converge on is the same one three
 #       sequential runs produce. The lock and the tmp+rename publish must not move a single byte of the
 #       uncontended output — qackorigincheck/ackonlycheck pin the row CONTENT; this pins the bytes.
+#   (8) RE-SCORE PROVENANCE (round 2026-09-22): a magnitude-bearing ack row carries `now=`/`was=` — the exact
+#       (was,now) pair that decided its severity — and a facet-driven kind (duplication /
+#       new-clone-of-reused-helper) additionally carries `facet=`. RED on the pre-provenance binary: neither
+#       token existed, so this arm fails there by construction. The "table-driven re-score formula agrees with
+#       the live one" half of the contract is proven a different way — not by this shell script re-deriving the
+#       materiality formula, but by an ENSURES self-check wired into the write path itself (verbs_quality.h,
+#       right after `rec` is built): every `--quality-ack` on a magnitude-bearing finding calls rescoreAckRecord
+#       on the row it just wrote (in memory — NOT through renderAckRecords/readAckRecords, so it does not prove
+#       the ledger's text grammar round-trips; that half is this arm's own grep checks below plus arms (2)/(7))
+#       and ENSURES the verdict matches the one the live report just computed. That check runs on every ack this
+#       gate's own fixtures take (arms 1-7 above, and 8 below) in the plain (non-NDEBUG) build — a divergence
+#       would abort the process, which this arm's plain 0-exit check therefore also covers.
 #
-# Every arm was run RED against the pre-fix binary before the fix landed (arms 1 and 4's convergence arm).
+# Every arm was run RED against the pre-fix binary before the fix landed (arms 1 and 4's convergence arm; 8
+# against the pre-provenance binary, which writes no now=/was=/facet= token at all).
 #
 # Own temp git repo, never the real one. Needs git + python3.
 # Usage:  bash test/qackconcurrencycheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/qackconcurrencycheck.sh
@@ -80,12 +93,12 @@ LEDGER="$WORK/.ripwire_quality_acks"
 ack_one(){ ( cd "$WORK" && "$BIN" . --quality-delta --scope="$1" --quality-ack="writer-$1" --ack-only="$1Complex" >/dev/null 2>&1 ); }
 
 # every non-comment line must match the documented grammar:
-#   ack <kind> <16 hex> <ackNow> [cid=<16 hex>] [by=<scope>] <reason to end of line>
+#   ack <kind> <16 hex> <ackNow> [cid=<16 hex>] [by=<scope>] [now=<uint> was=<uint>] [facet=<token>] [p=<path>:<line>] <reason to end of line>
 cat > "$WORK/parse.py" <<'PY'
 import re, sys
 bad = []
 rows = 0
-pat = re.compile( r'^ack [A-Za-z0-9:_-]+ [0-9a-f]{16} \d+ (cid=[0-9a-f]{16} )?(by=\S+ )?\S.*$' )
+pat = re.compile( r'^ack [A-Za-z0-9:_-]+ [0-9a-f]{16} \d+ (cid=[0-9a-f]{16} )?(by=\S+ )?(now=\d+ was=\d+ )?(facet=\S+ )?(p=\S+ )?\S.*$' )
 for n, line in enumerate( open( sys.argv[1], encoding = "utf-8", errors = "replace" ), 1 ):
     line = line.rstrip( "\n" )
     if line.startswith( "#" ) or line == "":
@@ -238,6 +251,89 @@ if [ -f "$COMMITTED" ]; then
 else
     ok "(7) no committed ledger in this tree — nothing to round-trip"
 fi
+
+# ── (8) RE-SCORE PROVENANCE: a magnitude-bearing ack row carries now=/was= (+facet= for clone kinds) ──────
+# RED on the pre-provenance binary: it never wrote any of these three tokens, so both case arms below fail
+# there (no now=/was=/facet= to match) and rcProv's check is vacuously true there too (nothing to abort on).
+PROV="$WORK/prov"; mkdir -p "$PROV/a" "$PROV/b"
+cat > "$PROV/a/pick.cpp" <<'EOF'
+int pickA( int x )
+{
+    if( x < 1 )
+    {
+        return 100;
+    }
+    if( x < 2 )
+    {
+        return 200;
+    }
+    return 300;
+}
+EOF
+( cd "$PROV" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+cat > "$PROV/b/pick.cpp" <<'EOF'
+int pickB( int y )
+{
+    if( y < 1 )
+    {
+        return 100;
+    }
+    if( y < 2 )
+    {
+        return 200;
+    }
+    return 300;
+}
+EOF
+( cd "$PROV" && "$BIN" . --quality-delta --quality-ack="provenance fixture" >"$WORK/prov.out" 2>"$WORK/prov.err" ); rcProv=$?
+DUPROW="$( grep '^ack duplication ' "$PROV/.ripwire_quality_acks" 2>/dev/null )"
+case "$DUPROW" in
+    *" now="*" was="*" facet=threshold-ladder "*) ok "(8) a facet-driven ack row (duplication, recognized idiom) carries now=/was=/facet=" ;;
+    *) no "(8) the duplication ack row is missing now=/was=/facet= provenance"; printf '%s\n' "$DUPROW" ;;
+esac
+[ "$rcProv" -eq 0 ] \
+    && ok "(8) the write-path self-check did not abort — rescoreAckRecord on the row it just wrote reproduced the just-computed severity (ENSURES in verbs_quality.h)" \
+    || no "(8) --quality-ack on the provenance fixture exited $rcProv — a crash here is the in-memory re-score self-check (ENSURES) firing"
+
+# a plain numeric (non-facet) bar kind: complexity — same growth shape as qackorigincheck's (f) arm
+NUM="$WORK/numprov"; mkdir -p "$NUM"
+cat > "$NUM/c.py" <<'EOF'
+def simple(a, b):
+    if a > b:
+        return a
+    return b
+EOF
+( cd "$NUM" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+cat > "$NUM/c.py" <<'EOF'
+def simple(a, b, c, d, e, f, g, h):
+    if a > 0 and b > 0:
+        if c > 0 and d > 0:
+            if e > 0 and f > 0:
+                if g > 0 and h > 0:
+                    return a
+                else:
+                    return b
+            else:
+                return c
+        else:
+            return d
+    elif a < 0 or b < 0:
+        return e
+    else:
+        return f
+EOF
+( cd "$NUM" && "$BIN" . --quality-delta --quality-ack="numeric provenance fixture" >/dev/null 2>&1 )
+CCXROW="$( grep '^ack complexity ' "$NUM/.ripwire_quality_acks" 2>/dev/null )"
+case "$CCXROW" in
+    *" now="*" was="*) ok "(8) a numeric bar-kind ack row (complexity) carries now=/was=" ;;
+    *) no "(8) the complexity ack row is missing now=/was= provenance"; printf '%s\n' "$CCXROW" ;;
+esac
+case "$CCXROW" in
+    *" facet="*) no "(8) the complexity row carries a facet= token — this kind never sets one" ;;
+    *) ok "(8) …and correctly omits facet= (complexity has no facet — an honest omission, not a guess)" ;;
+esac
+# grammar arm (2) above already re-parses the WHOLE ledger with the updated pattern — a token this arm wrote
+# in a shape that pattern does not accept would already have failed there for every run after this one.
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

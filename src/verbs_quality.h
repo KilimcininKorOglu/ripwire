@@ -1240,10 +1240,33 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                 // "<new> | prior: <old>" (capped at one hop; a no-op when the reason is unchanged), so a
                 // shared row re-acked by unrelated sessions keeps both justifications instead of the last
                 // writer silently erasing the one before it. See quality.h's composeAckReason for the rule.
+                // RE-SCORE PROVENANCE: was/now/facet/path/line are a REFRESH, not a preserve, same posture as
+                // cid= above — a re-ack re-reads the finding, so the stored triple always describes the row AS
+                // JUST ACCEPTED, never as it was some earlier run. See AckRecord's doc comment for what each
+                // one is and why a later run can re-score from them alone.
                 rec = quality::AckRecord{ ackKind, r.key, std::max( rec.ackNow, r.now ), cid,
                                           scope.active() ? scope.spec : rec.by,
+                                          r.was, r.now, r.facet, r.path, r.line, /*hasProvenance=*/true,
                                           cfg.qualityAckReason.empty() ? rec.reason
                                                                        : quality::composeAckReason( rec.reason, std::string( cfg.qualityAckReason ) ) };
+                // SELF-CHECK, not a one-off test: every magnitude-bearing ack proves that the TABLE-DRIVEN
+                // re-score formula agrees with the LIVE one on the row it just built. NOT a full round trip —
+                // rescoreAckRecord runs here on the in-memory `rec` directly; it never goes through
+                // renderAckRecords/readAckRecords, so this does not exercise the ledger's text grammar (order-
+                // tolerant token parsing, splitAckLocator, the takeAckNamedToken family) at all — that half of
+                // the contract is what qackconcurrencycheck.sh's grammar arm (2) and byte-identity arm (7) pin
+                // instead, over the actual file. What THIS catches: rescoreNumericMajor's kMaterialityBars
+                // lookup (by kind name) silently drifting from the bar/minorDelta/growthTiered literals
+                // perSymbolKind was called with (computeDelta, above) — two spellings of the same three
+                // constants that a future edit could change in only one place. A drift there means the live
+                // formula (numericRegressionIsMajor, via perSymbolKind) and the re-score formula
+                // (rescoreNumericMajor) have silently diverged — see quality.h's MaterialityBar table, the one
+                // place both are meant to agree. ENSURES, not ASSUME: this is this function's OWN postcondition
+                // on the row it just built, not a fact something else already guarantees.
+                const std::optional<bool> rescored      = quality::rescoreAckRecord( rec );
+                const bool                rescoreAgrees = !rescored.has_value() || *rescored == !r.isMinor;   // plain bool, so the promise below is a bare accessor-free read
+                ENSURES( rescoreAgrees,
+                         "ack provenance re-score (in-memory, not a ledger round trip) must reproduce the just-computed severity" );
             }
             if( ackWritten == 0 && !cfg.qualityAckOnly.empty() )
             {
