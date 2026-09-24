@@ -766,7 +766,11 @@ inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
 // work pretending to be a belt-and-suspenders check.
 inline bool cppDefinitionRootsStd( TSNode nameNode, std::string_view src )
 {
-    return cppQualifiedChainRootsStd( nameNode, src ) || cppEnclosingChainRootsStd( nameNode, src );
+    if( cppQualifiedChainRootsStd( nameNode, src ) )
+    {
+        return true;
+    }
+    return cppEnclosingChainRootsStd( nameNode, src );   // also `namespace std { int detail::f() {} }` (partial qualifier)
 }
 
 // The qualifier the 3+-segment re-split keys a REFERENCE on, from the scope half of its captured text: the last
