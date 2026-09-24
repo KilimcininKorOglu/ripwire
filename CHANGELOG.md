@@ -26,7 +26,8 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   (gold-body-served 52/92 before and after); the default `--for` route serves no bodies there and is byte-identical.
 - **Every dropped body is named.** Bodies met after the budget was spent used to be dropped with no name at all; they
   are now listed, in rank order, in ONE `<!-- bodies omitted (budget spent): a, b -->` comment (one list rather than a
-  marker each, so a long tail's disclosure stays small: 29 dropped `--detail` bodies cost 607 B, not 1.7 KB). A body
+  marker each, so a long tail's disclosure stays small: 29 dropped `--for --detail=30` bodies on a 30-function fixture
+  under `--token-budget=800` are named in 502 B, against 1,479 B as one marker each). A body
   skipped because it did not fit while budget remained keeps its `<!-- body omitted (over budget): NAME -->`. The
   names equal `total - shown`, and the JSON `bodies_omitted` lists the same set.
 - **A truncated body says so outside its CDATA.** An oversized first body used to carry `<!-- truncated -->` inside
