@@ -1,0 +1,306 @@
+name: Windows package
+
+# The windows-x64 release asset, built ONE way for two callers: release.yml's `build-windows` job (on a tag) and
+# ci.yml's `windows-package` job (every full-matrix run, so every integration train PR). Because both call this
+# file, the zip a tester downloads from a PR run's artifacts is built by exactly the steps that build the release
+# asset — there is no second copy of the build to drift. The only input is the tag; with it empty (CI) the
+# version-vs-tag check is skipped and the cross-platform outputs are uploaded for ci.yml's xplat-diff job.
+#
+# Nobody on the producing side has a Windows machine, so this job is the Windows verification platform. What it
+# proves, in order: the static-CRT Release build and its imports (no redistributable needed), the std::print
+# emitter, two-run determinism and G4 well-formedness on the built binary (the other legs' smoke and determinism
+# steps), then — on the UNZIPPED package, from a path with a space, outside the build tree — --version/--help, a
+# map of this repository, sha256 verification the way the README tells users to do it, --doctor with the cache
+# directory under %LOCALAPPDATA%, cache creation and reuse, an MCP stdio handshake, and the fixed verb set whose
+# bytes ci.yml's xplat-diff job compares against Linux. What it cannot prove is listed in README.md's Windows
+# section (SmartScreen on an unsigned exe, antivirus, older Windows versions, ARM64 emulation, a machine without
+# Git for Windows): that is what the Windows testers are asked to cover.
+#
+# DESIGN CHOICES (each is what the 0.6.3 Windows release rests on):
+#   compiler  clang-cl, the owner's primary Windows toolchain (2026-09-19) and the front end ci.yml's windows job
+#             proves on every PR. It is the same LLVM family the other release legs build with, it reads the
+#             x86-64-v3 floor from cmake/PortableFlags.cmake like linux-x64 does (/clang:-march=x86-64-v3), and it
+#             builds in 4m47s where cl.exe takes 7m41s (train 18, run 36016382564).
+#   flavour   Release, so RIPWIRE_LTO is ON exactly as on the other legs. No PGO: pgobuild.sh is a POSIX script
+#             around llvm-profdata/xcrun, and porting its instrument/train/merge loop is not trivial; linux-x64
+#             and linux-arm64 ship without PGO too.
+#   CRT       the STATIC runtime, /MT (-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded), so ripwire.exe runs on a clean
+#             Windows install with no Visual C++ Redistributable. CMakeLists.txt pins /MD only for the ASan tree
+#             (the sanitizer runtime has no static build) and honours an explicit choice everywhere else. The step
+#             after the build reads the compile lines and the exe's import table to prove it.
+#   package   ripwire-<ver>-windows-x64.zip + .zip.sha256 ("HASH  NAME", like the .tar.gz.sha256 files), same
+#             layout as the tarballs with ripwire.exe for ripwire. zip because Windows opens it natively; written
+#             by Python's zipfile (forward-slash entry names, which Expand-Archive and Explorer both read).
+#   checkout  core.autocrlf=false BEFORE the checkout: the runner's Git for Windows defaults to true, which would
+#             ship skills/install.sh and hooks/*.sh with CRLF (bash then fails on "$'\r'") and would give the
+#             cross-platform diff different fixture bytes from Linux. The zip's files are the tarballs' bytes.
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "The tag being released (release.yml). Empty from ci.yml: no tag check, xplat outputs uploaded."
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: windows-x64 (clang-cl, Release, /MT, zip)
+    runs-on: windows-latest   # the image ci.yml's windows job tests on
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash   # Git Bash; the build step overrides to cmd for vcvars, one step uses pwsh as a user would
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    outputs:
+      asset: ${{ steps.package.outputs.asset }}
+    steps:
+      - name: LF working tree (core.autocrlf=false, before the checkout — see DESIGN CHOICES)
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # --for's churn= in the cross-platform set reads real history, as on the Linux leg
+          persist-credentials: false
+
+      # One cmd step: vcvars64.bat exports INCLUDE/LIB/PATH into its own process only (as ci.yml's windows job).
+      # dumpbin is read here, inside the VC environment, and judged in the next step.
+      - name: Build (clang-cl, Ninja, Release = LTO, static CRT /MT, portable x86-64-v3)
+        shell: cmd
+        run: |
+          @echo on
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL ( echo windows-package: no Visual Studio install with the x64 C++ tools & exit /b 1 )
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          set "RW_LLVM=%VSINSTALL%\VC\Tools\Llvm\x64\bin"
+          if exist "C:\Program Files\LLVM\bin\clang-cl.exe" set "RW_LLVM=C:\Program Files\LLVM\bin"
+          set "PATH=%RW_LLVM%;%PATH%"
+          clang-cl --version || exit /b 1
+          cmake --version || exit /b 1
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded || exit /b 1
+          cmake --build build -j --target ripwire || exit /b 1
+          dumpbin /nologo /dependents build\ripwire.exe > build\dependents.txt || exit /b 1
+
+      # Read back, not assumed: the front end, the flavour, the CRT on every compile line, and the exe's imports.
+      # A /MD (or /MDd) anywhere, or an import of the VC++ runtime or the UCRT DLLs, means the exe needs a
+      # redistributable a clean Windows does not have — the one thing the static CRT was chosen to avoid.
+      - name: The toolchain, flavour and static CRT this exe was built with (no redistributable needed)
+        run: |
+          grep -h 'set(CMAKE_CXX_COMPILER_ID \|set(CMAKE_CXX_COMPILER_VERSION \|FRONTEND_VARIANT' build/CMakeFiles/*/CMakeCXXCompiler.cmake
+          grep -h 'set(CMAKE_CXX_COMPILER_ID ' build/CMakeFiles/*/CMakeCXXCompiler.cmake | grep -q Clang \
+            || { echo "windows-package: the build did not configure clang-cl" >&2; exit 1; }
+          grep -qx 'CMAKE_BUILD_TYPE:STRING=Release' build/CMakeCache.txt \
+            || { echo "windows-package: not the Release flavour: $( grep '^CMAKE_BUILD_TYPE:' build/CMakeCache.txt )" >&2; exit 1; }
+          grep -E '^CMAKE_MSVC_RUNTIME_LIBRARY:[A-Z]+=MultiThreaded$' build/CMakeCache.txt \
+            || { echo "windows-package: CMAKE_MSVC_RUNTIME_LIBRARY is not MultiThreaded (/MT)" >&2; exit 1; }
+          if grep -nE '(^|[ "])[-/]MDd?([ "]|$)' build/build.ninja | head -5 | grep .; then
+            echo "windows-package: a compile line still selects the DLL runtime (/MD or /MDd), above" >&2; exit 1
+          fi
+          grep -qE '(^|[ "])[-/]MT([ "]|$)' build/build.ninja \
+            || { echo "windows-package: no compile line carries /MT — the runtime pin did not reach the build" >&2; exit 1; }
+          tr -d '\r' < build/dependents.txt
+          dlls="$( tr -d '\r' < build/dependents.txt | grep -iE '^[[:space:]]+[A-Za-z0-9_.-]+\.dll[[:space:]]*$' | tr -d ' \t' )"
+          [ -n "$dlls" ] || { echo "windows-package: dumpbin listed no imports at all — the check read nothing" >&2; exit 1; }
+          if printf '%s\n' "$dlls" | grep -iE '^(vcruntime|msvcp|concrt|vccorlib|ucrtbase|api-ms-win-crt-|clang_rt)'; then
+            echo "windows-package: ripwire.exe imports the runtime DLLs above, which a clean Windows install lacks" >&2; exit 1
+          fi
+          echo "imports (system DLLs only): $( printf '%s\n' "$dlls" | tr '\n' ' ' )"
+
+      # The other legs' own steps, on this leg's binary: the std::print emitter, then determinism and G4.
+      # xmllint is not on the Windows image; Python's parser refuses what xmllint --noout refuses (ci.yml's windows job).
+      - name: The emitter the shipped binary compiled in is std::print
+        run: |
+          ./build/ripwire.exe --version
+          ./build/ripwire.exe --version | grep -q 'emit=std::print'
+
+      - name: Determinism check — two runs byte-identical
+        run: |
+          ./build/ripwire.exe test/fixture --no-cache > a.xml
+          ./build/ripwire.exe test/fixture --no-cache > b.xml
+          cmp a.xml b.xml
+
+      - name: Smoke-test the freshly built binary
+        run: |
+          ./build/ripwire.exe --version
+          ./build/ripwire.exe test/fixture --no-cache > smoke.xml
+          python -c "import xml.etree.ElementTree as E,sys; E.parse(sys.argv[1]); print('well-formed', sys.argv[1])" smoke.xml
+          test "$( grep -o '<f ' smoke.xml | wc -l )" -ge 6 || { echo "windows-package: the fixture map indexed too few files" >&2; exit 1; }
+
+      - name: Package
+        id: package
+        run: |
+          version="$( ./build/ripwire.exe --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 )"
+          if [ -n "$RELEASE_TAG" ] && [ "v${version}" != "$RELEASE_TAG" ]; then
+            echo "release: binary version v${version} does not match release tag ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          asset="ripwire-${version}-windows-x64"
+          rm -rf dist && mkdir -p "dist/${asset}/skills"
+          cp build/ripwire.exe "dist/${asset}/ripwire.exe"
+          cp README.md LICENSE "dist/${asset}/"
+          # the tarballs' payload, file for file (release.yml's Package step says why each part travels)
+          cp -R skills/ripwire-* "dist/${asset}/skills/"
+          cp skills/install.sh "dist/${asset}/skills/"
+          cp -R hooks "dist/${asset}/hooks"
+          if grep -rlI $'\r' "dist/${asset}/skills" "dist/${asset}/hooks"; then
+            echo "windows-package: the files above carry CR bytes; skills/install.sh and hooks/*.sh must ship LF" >&2; exit 1
+          fi
+          ( cd dist && python -m zipfile -c "${asset}.zip" "${asset}" )
+          ( cd dist && sha256sum "${asset}.zip" > "${asset}.zip.sha256" )
+          cat "dist/${asset}.zip.sha256"
+          ls -la dist
+          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.asset }}
+          path: |
+            dist/${{ steps.package.outputs.asset }}.zip
+            dist/${{ steps.package.outputs.asset }}.zip.sha256
+          if-no-files-found: error
+
+      # ── the UNZIPPED package, as a user gets it ─────────────────────────────────────────────────────────────
+      # Expand-Archive, not a bash unzip: it is the tool the README gives users. The destination has a space in it
+      # and every run below starts from a directory that is neither the build tree nor the checkout.
+      - name: Unzip with Expand-Archive into a path with a space; verify the sha256 the README's way
+        shell: pwsh
+        env:
+          ASSET: ${{ steps.package.outputs.asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dest = Join-Path $env:RUNNER_TEMP 'rw test dir'
+          Expand-Archive -LiteralPath "dist\$env:ASSET.zip" -DestinationPath $dest -Force
+          $want = (Get-Content "dist\$env:ASSET.zip.sha256").Split(' ')[0]
+          $got  = (Get-FileHash "dist\$env:ASSET.zip" -Algorithm SHA256).Hash
+          if ($got -ne $want) { throw "sha256 mismatch: file $got, .sha256 $want" }
+          "sha256 ok: $got"
+          $exe = Join-Path $dest "$env:ASSET\ripwire.exe"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "no ripwire.exe at $exe" }
+          # From PowerShell, the environment a user has (no MSYS variables, no TMPDIR): --version and a map.
+          $cwd = Join-Path $dest 'elsewhere'
+          New-Item -ItemType Directory -Force -Path $cwd | Out-Null
+          Set-Location $cwd
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "--version exited $LASTEXITCODE" }
+          & $exe "$env:GITHUB_WORKSPACE\test\fixture" --no-cache | Out-File -Encoding utf8 fixture-pwsh.xml
+          if ($LASTEXITCODE -ne 0) { throw "the fixture map exited $LASTEXITCODE" }
+          if (-not (Select-String -Path fixture-pwsh.xml -Pattern 'pr_iters="[1-9]' -Quiet)) { throw "the fixture map from PowerShell did not rank anything" }
+          "RW_EXE=$exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "RW_DIR=$(Join-Path $dest $env:ASSET)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: "The unzipped exe, from outside the build tree: --version, --help, and a map of this repository"
+        run: |
+          exe="$( cygpath -u "$RW_EXE" )"; cwd="$( cygpath -u "$RUNNER_TEMP" )/rw test dir/elsewhere"
+          repo="$( cygpath -w "$GITHUB_WORKSPACE" )"
+          cd "$cwd"
+          "$exe" --version | tee version.txt
+          grep -qE '^ripwire [0-9]+\.[0-9]+\.[0-9]+ \(' version.txt
+          grep -q 'emit=std::print' version.txt
+          test "$( "$exe" --help | wc -c )" -gt 1000
+          start=$SECONDS
+          "$exe" "$repo" > self-map.xml
+          echo "map of $repo: $(( SECONDS - start )) s, $( wc -c < self-map.xml ) bytes"
+          python -c "import xml.etree.ElementTree as E,sys; E.parse(sys.argv[1]); print('well-formed', sys.argv[1])" self-map.xml
+          files="$( grep -o 'files=[0-9][0-9]*' self-map.xml | head -1 | tr -dc 0-9 )"
+          echo "self-map files=$files"
+          [ -n "$files" ] && [ "$files" -ge 1000 ] || { echo "windows-package: the map of this repository indexed '$files' files, expected >= 1000" >&2; exit 1; }
+          if grep -o ' p="[^"]*\\[^"]*"' self-map.xml | head -3 | grep .; then
+            printf '%s\n' "windows-package: a p= path above is spelled with a backslash — program paths are '/'-separated on every platform" >&2; exit 1
+          fi
+
+      # --doctor with the unzipped directory on PATH, under the conditions a PowerShell user has (no TMPDIR, no
+      # XDG_CACHE_HOME). Every row must pass except binary-path, which on Windows is DISCLOSED as degraded
+      # (degrade_reason="win32-which-spelling": Git Bash's `which` never prints ".exe", src/verbs_doctor.h) and may
+      # read ok="0" on a correct install; the README says so. The cache directory (#326) must be the user's temp
+      # directory's ripwire-<uid>, under %LOCALAPPDATA% — compared in long form, the runner's TEMP is 8.3 (RUNNER~1).
+      - name: "--doctor passes, and the cache directory is under %LOCALAPPDATA% (#326)"
+        run: |
+          unset TMPDIR XDG_CACHE_HOME
+          pkgdir="$( cygpath -u "$RW_DIR" )"
+          export PATH="$pkgdir:$PATH"
+          cd "$( cygpath -u "$RUNNER_TEMP" )/rw test dir/elsewhere"
+          rc=0; ripwire "$( cygpath -w "$GITHUB_WORKSPACE" )" --doctor > doctor.xml || rc=$?
+          grep -o '<c n="[a-z-]*" ok="[01]"[^>]*>' doctor.xml
+          checks="$( grep -o 'checks="[0-9]*"' doctor.xml | head -1 | tr -dc 0-9 )"
+          [ -n "$checks" ] && [ "$checks" -ge 8 ] || { echo "windows-package: --doctor ran '$checks' checks" >&2; exit 1; }
+          bad="$( grep -o '<c n="[a-z-]*" ok="0"[^>]*>' doctor.xml | grep -v '^<c n="binary-path"' || true )"
+          [ -z "$bad" ] || { echo "windows-package: --doctor rows failed (rc=$rc): $bad" >&2; exit 1; }
+          bp="$( grep -o '<c n="binary-path"[^>]*>' doctor.xml )"
+          case "$bp" in
+            *'ok="1"'*) echo "binary-path ok" ;;
+            *'degraded="1" degrade_reason="win32-which-spelling"'*) echo "binary-path: disclosed Windows degrade (expected): $bp" ;;
+            *) echo "windows-package: binary-path failed without the disclosed Windows degrade: $bp" >&2; exit 1 ;;
+          esac
+          dir="$( grep -o '<c n="cache-dir"[^>]*>' doctor.xml | sed -n 's/.* dir="\([^"]*\)".*/\1/p' )"
+          long="$( cygpath -m -l "$dir" )"; lad="$( cygpath -m -l "$LOCALAPPDATA" )"; tmp="$( cygpath -m -l "$( cygpath -w "$TEMP" )" )"
+          echo "cache-dir dir=$dir long=$long LOCALAPPDATA=$lad TEMP=$tmp"
+          case "${long,,}" in
+            "${lad,,}"/*) ;;
+            *) echo "windows-package: the cache directory $long is not under %LOCALAPPDATA% ($lad)" >&2; exit 1 ;;
+          esac
+          case "${long,,}" in
+            "${tmp,,}"/ripwire-*) ;;
+            *) echo "windows-package: the cache directory $long is not <user temp>/ripwire-<uid> ($tmp)" >&2; exit 1 ;;
+          esac
+
+      # (g) A cold crawl of a fresh copy creates a cache blob; a warm crawl reuses it: same bytes out, no new blob,
+      # and --doctor's index-cache row reads the lean artifact for that root as present and openable.
+      - name: The cache is created on the first run and reused on the second
+        run: |
+          unset TMPDIR XDG_CACHE_HOME
+          exe="$( cygpath -u "$RW_EXE" )"
+          cd "$( cygpath -u "$RUNNER_TEMP" )/rw test dir/elsewhere"
+          rm -rf cachefx && cp -R "$( cygpath -u "$GITHUB_WORKSPACE" )/test/fixture" cachefx
+          blobs() { "$exe" cachefx --doctor > "$1" || true; grep -o '<c n="cache-dir"[^>]*>' "$1" | grep -o 'blobs="[0-9]*"' | tr -dc 0-9; }
+          b0="$( blobs d0.xml )"
+          grep -o '<c n="index-cache"[^>]*>' d0.xml | grep -o ' lean="[a-z-]*"'
+          "$exe" cachefx > cold.xml
+          b1="$( blobs d1.xml )"
+          "$exe" cachefx > warm.xml
+          b2="$( blobs d2.xml )"
+          lean="$( grep -o '<c n="index-cache"[^>]*>' d2.xml | grep -o ' lean="[a-z-]*"' )"
+          echo "blobs: before=$b0 after-cold=$b1 after-warm=$b2; index-cache$lean"
+          [ -n "$b0" ] && [ -n "$b1" ] && [ "$b1" -gt "$b0" ] || { echo "windows-package: the cold run wrote no cache blob ($b0 -> $b1)" >&2; exit 1; }
+          [ "$b2" = "$b1" ] || { echo "windows-package: the warm run wrote a new blob instead of reusing one ($b1 -> $b2)" >&2; exit 1; }
+          [ "$lean" = ' lean="ok"' ] || { echo "windows-package: --doctor does not see the root's lean artifact as ok after two runs:$lean" >&2; exit 1; }
+          cmp cold.xml warm.xml || { echo "windows-package: cold and warm runs printed different bytes" >&2; exit 1; }
+
+      # The README's skills route for Windows: skills/install.sh, from the unzipped folder (a path with a space), under
+      # Git Bash, into a sandbox HOME. Git Bash's `ln -s` may copy rather than link; either way every skill must land
+      # with a readable SKILL.md. --hook is not exercised: the hooks are bash scripts and the README calls them untested.
+      - name: skills/install.sh from the unzipped folder under Git Bash (Claude Code and Codex destinations)
+        run: |
+          h="$( cygpath -u "$RUNNER_TEMP" )/rw skills home"
+          rm -rf "$h" && mkdir -p "$h"
+          cd "$( cygpath -u "$RW_DIR" )"
+          env -u CLAUDE_CONFIG_DIR -u CODEX_HOME -u AGENTS_HOME HOME="$h" bash skills/install.sh
+          env -u CLAUDE_CONFIG_DIR -u CODEX_HOME -u AGENTS_HOME HOME="$h" bash skills/install.sh --codex
+          want=0; for s in skills/ripwire-*/SKILL.md; do [ -f "$s" ] && want=$(( want + 1 )); done
+          for d in "$h/.claude/skills" "$h/.agents/skills"; do
+            n=0; for s in "$d"/ripwire-*/SKILL.md; do [ -f "$s" ] && n=$(( n + 1 )); done
+            echo "$d: $n of $want skills installed with a readable SKILL.md"
+            [ "$n" -ge 10 ] || { echo "windows-package: skills/install.sh installed $n skills into $d" >&2; exit 1; }
+          done
+
+      # (c, d, f) The fixed cross-platform verb set on the unzipped exe, TWICE: the two runs must be byte-identical
+      # (determinism), the script itself fails on a malformed MCP handshake, and the first run's outputs go to
+      # ci.yml's xplat-diff job, which compares them with the Linux leg's (scripts/ci-xplat-diff.sh names the rules).
+      - name: Cross-platform verb set and MCP stdio handshake on the unzipped exe, run twice (determinism)
+        run: |
+          exe="$( cygpath -u "$RW_EXE" )"
+          bash scripts/ci-xplat-outputs.sh "$exe" xplat-windows --windows
+          bash scripts/ci-xplat-outputs.sh "$exe" xplat-windows-2 --windows > /dev/null
+          diff -r xplat-windows xplat-windows-2 && echo "determinism: every output of the two runs is byte-identical"
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.release_tag == ''
+        with:
+          name: xplat-windows
+          path: xplat-windows
+          if-no-files-found: error
+          retention-days: 7
