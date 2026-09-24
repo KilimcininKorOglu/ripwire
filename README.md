@@ -935,8 +935,8 @@ report back. The exe is not code-signed, so SmartScreen may warn on first run. I
 ```powershell
 $v = "0.6.3"; $a = "ripwire-$v-windows-x64"; $u = "https://github.com/redhat-et/ripwire/releases/download/v$v"
 Invoke-WebRequest "$u/$a.zip" -OutFile "$a.zip"; Invoke-WebRequest "$u/$a.zip.sha256" -OutFile "$a.zip.sha256"
-(Get-FileHash "$a.zip" -Algorithm SHA256).Hash -eq (Get-Content "$a.zip.sha256").Split(" ")[0]   # must print True
-Expand-Archive "$a.zip" -DestinationPath "$env:LOCALAPPDATA\Programs"
+# extracts only when the SHA-256 matches; on a mismatch it throws and nothing is unpacked
+if ((Get-FileHash "$a.zip" -Algorithm SHA256).Hash -eq (Get-Content "$a.zip.sha256").Split(" ")[0]) { Expand-Archive "$a.zip" -DestinationPath "$env:LOCALAPPDATA\Programs" } else { throw "SHA-256 mismatch: do not run $a.zip" }
 $bin = "$env:LOCALAPPDATA\Programs\$a"
 [Environment]::SetEnvironmentVariable("Path", "$bin;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
 $env:Path = "$bin;$env:Path"   # this window too; new windows read the user Path
