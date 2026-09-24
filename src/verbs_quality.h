@@ -1308,8 +1308,18 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                 // and the run says so. This never accepts a finding and the refusal's exit code is unchanged.
                 const bool nonCanonical = !acks.empty()
                     && quality::renderAckRecords( acks ) != docparse::detail::readRegularFile( "the quality-acks ledger", acksFile ).value_or( std::string() );
-                if( nonCanonical && quality::writeAckRecords( acksFile, acks ) )
+                if( nonCanonical )
                 {
+                    // A failed heal is said, not folded into "nothing written" (CodeRabbit on #331): the same
+                    // "could not write" ackNothingToAccept prints for the same failure. writeAckRecords has already
+                    // DISCLOSEd on its answerRefused sink; the exit code is 1 either way.
+                    if( !quality::writeAckRecords( acksFile, acks ) )
+                    {
+                        rw::emitTo( stderr, "ripwire: --ack-only={} matched none of the {} finding(s) — nothing accepted; could not write {} "
+                                              "(it was not in canonical form, and re-serialising it failed)\n",
+                                      std::string_view( cfg.qualityAckOnly.data(), cfg.qualityAckOnly.size() ), regs.size(), acksFile.c_str() );
+                        return 1;
+                    }
                     rw::emitTo( stderr, "ripwire: --ack-only={} matched none of the {} finding(s) — nothing accepted, but {} was not in canonical form "
                                           "(ack provenance backfill / legacy rows) and has been re-serialised\n",
                                   std::string_view( cfg.qualityAckOnly.data(), cfg.qualityAckOnly.size() ), regs.size(), acksFile.c_str() );
