@@ -142,6 +142,18 @@ fix. `--doctor`'s cache-dir row's `dir=`/`hint=` now also name the real cache lo
 tool never touches, and its writability probe still measures the only thing "writable" can honestly mean on
 either platform — creating and removing a real file — never a mode-bit check.
 
+### Fixed — the cache-eviction sweep evicts on Windows; the cache no longer grows without bound
+
+The consumer of the defect above with the most visible cost. With neither `TMPDIR` nor `XDG_CACHE_HOME` set —
+the ordinary state of a cmd.exe or PowerShell session, which have `TMP`/`TEMP` instead — the eviction sweep
+that runs once per process from `saveCache` (`sweepStaleCacheBlobsOnce` → `evictOldCacheFamily`) walked the
+un-rebased spelling with `std::filesystem::directory_iterator`, met a directory that does not exist, and
+returned early: nothing was ever evicted — not the 30-day age pass, not the 2 GB byte budget, not the keep-N
+families — while the real cache accumulated blobs indefinitely. The fix is the one above; what this adds is
+the proof. The `windows` CI job seeds the real cache directory (learned from `--doctor`'s `dir=`) with stale
+blobs, forces a cache write, and asserts they are gone — loud on the pre-fix code — and `evictioncheck` pins
+in the source that every value `cacheDirLadder()` returns is the rebased spelling.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

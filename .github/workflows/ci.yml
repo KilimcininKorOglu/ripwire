@@ -889,6 +889,12 @@ jobs:
           [ -n "$blobs2" ] && [ "$blobs2" -eq "$blobs1" ] \
             || { echo "ci: #326 regressed — a warm, identical crawl changed blobs= from $blobs1 to $blobs2 (a cache miss/duplicate write, not a reuse)" >&2; exit 1; }
 
+      # #326's sibling: the eviction sweep walked cacheDirLadder()'s un-rebased "/tmp/ripwire-<uid>" with
+      # std::filesystem and so evicted nothing on Windows, ever. The script seeds the REAL cache directory (from
+      # --doctor's dir=) with stale blobs, forces a cache write, and asserts they are gone; loud on the pre-fix code.
+      - name: "the cache-eviction sweep must really evict on Windows (sibling of #326): scripts/ci-windows-evict-smoke.sh"
+        run: bash scripts/ci-windows-evict-smoke.sh ./build/ripwire.exe
+
       # The ASan flavour's own configure+build. It is here because it is a BUILD failure this round fixed —
       # clang-cl refuses `-fsanitize=address` together with the debug CRT a plain configure selects — and a
       # fix to a build failure that no build exercises is not fixed. ripwire_probe alone, not the whole
