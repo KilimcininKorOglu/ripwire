@@ -1611,12 +1611,15 @@ inline std::string mentionsJson( const std::string& root, const std::string& sym
     {
         out += "\"sym\":\"" + mcpdetail::jsonEscape( seedSym ) + "\","; // the @-seed's rebound definition name
     }
+    // cut-fix E: the 100-file default is this surface's alone (the CLI twin is uncapped) and it cut silently
+    // (discloseCap=false). It discloses exactly when the window cut, like `owners` below: path order is kept so
+    // offset= pages the CLI's own stream.
     const PageWindow mnPw = pageWindow( fileRows.size(), effectiveRowCap( page.limit, kUseSiteRowCap ), page.offset );
     char             mnPab[ kPageDisclosureCap ];
     out += "\"docs\":" + std::to_string( fileRows.size() )
          + ",\"sections\":" + std::to_string( docs.size() )
          + pageDisclosure( mnPab, sizeof( mnPab ), mnPw.end - mnPw.begin, fileRows.size(), mnPw.end,
-                           page.limit, page.offset, /*discloseCap=*/false, kJsonPageSyntax )
+                           page.limit, page.offset, /*discloseCap=*/mnPw.end - mnPw.begin < fileRows.size(), kJsonPageSyntax )
          + ",\"files\":[";
     bool first = true;
     for( std::size_t mnRowIndex = mnPw.begin; mnRowIndex < mnPw.end; ++mnRowIndex )
@@ -2467,11 +2470,15 @@ inline std::optional<std::string> ownersText( const std::string& root, const std
     const std::string  owRootAttr   = owSingleRoot ? ( " root=\"" + std::string( rw::escapeXml( root, owRootEsc ) ) + "\"" ) : std::string();
     // M13: the same window the CLI --owners applies, over the SAME already-selected row list, so `limit`
     // and `offset` mean here exactly what they mean there.
+    // cut-fix E: the 40-row default is THIS surface's alone (the CLI twin prints every row), and it cut with
+    // discloseCap=false, so nothing said rows were dropped. discloseCap is now "the window cut": a cut answer
+    // carries shown=/capped="1"/total=/next_offset= (offset= fetches the rest), an uncut one stays byte-identical.
+    // Path order is kept, not ranked: it is the CLI's paging stream, and offset= must name the same rows there.
     const PageWindow owPw = pageWindow( printRows.size(), effectiveRowCap( page.limit, kCallHierarchyRowCap ), page.offset );
     char             owPab[ kPageDisclosureCap ];
     rw::emitTo( mem, "<owners files=\"{}\"{}{}{}{}>", ownerships.size(), owSymAttr.c_str(),
                   pageDisclosure( owPab, sizeof( owPab ), owPw.end - owPw.begin, printRows.size(), owPw.end,
-                                  page.limit, page.offset, /*discloseCap=*/false ),
+                                  page.limit, page.offset, /*discloseCap=*/owPw.end - owPw.begin < printRows.size() ),
                   owRootAttr.c_str(), gitstamp::atAttr( root ).c_str() );
     if( uniformCount > 0 )
     {
@@ -2669,7 +2676,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // LB-H: ONE derivation, shared with the CLI arm (graph.h::impactImportTier) — mcpclidiffcheck compares
     // the two surfaces' attribute sets, and an honesty marker that lands on one of them is the §B4 class.
     ImportTier imports = impactImportTier( ing, seeds );
-    sizeImportTier( imports, page.limit );   // cut-fix C: limit sizes the tier, as on the CLI
+    sizeImportTier( imports, page.limit, symbol );   // cut-fix C: limit sizes the tier, as on the CLI
     rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
                   ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: where the CLI root carries it
                   imports.xmlAttrs.c_str(), radiusTested, radiusUntested, declinedCallsAttrXml( declinedCalls ).c_str(), imRootAttr.c_str(),

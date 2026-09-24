@@ -7,6 +7,7 @@
 #include "elixir_resolve.h"      // lexical module/name/arity resolution; reuses cached Binding records
 #include "filter.h"              // isTestPath — for the Q2 tested= post-pass
 #include "pageview.h"            // LB-H: kImportReachRowCap — the import tier's display cap lives with the rest of the truncation vocabulary
+#include "nextverb.h"            // cut-fix E: nextFlag / nextAttrXml / kNextAttrMaxBytes — the import tier's importers_next=
 #include "graphlegend.h"         // M15: graphGaugeAttrXml/Json + kGraphCountFloorAttrXml/Json — graphCountFloorAttrXml( g ) below
 #include "lintrules.h"           // §P9.4: langOfPath / dependencyCapable — the file-language classification
                                  // restrictDependencyHealth() needs (owns the extension table, kept in sync
@@ -6260,22 +6261,39 @@ struct ImportTier
                                         //   set from this importer is a function-body require/import
     std::size_t                shown  = 0;
     bool                       capped = false;
-    std::string                xmlAttrs;   // " importers= shown_importers= importers_capped=" — pure digits, nothing to escape
+    std::string                xmlAttrs;   // " importers= shown_importers= importers_capped=" [+ importers_next= on a cut]
+    std::string                next;       // cut-fix E: the call that lists the whole tier; empty when uncut
 };
 
 // cut-fix C: the tier's DISPLAY size, split from its measurement (callhierarchy.h's rule: the cap policy is the
 // surface's, the rows are not). `pageLimit` is the answer's --limit / MCP limit, 0 = the kImportReachRowCap default;
 // both surfaces call this on the tier impactImportTier measured, so they cannot disagree about shown_importers=.
-inline void sizeImportTier( ImportTier& t, int pageLimit )
+// cut-fix E: `sym` is the answer's own selector. A cut tier was a DEAD-END cut (docs/research/answer-completeness.md
+// §1.3): counted, but naming no call that serves the rest, although one exists — the tier is sized by limit, so
+// `--impact=SYM --limit=<importers>` lists all of it. That call rides as importers_next= (the root's next= is taken
+// by --safe-delete), only on a cut, and not when the invocation would pass kNextAttrMaxBytes (a hint that pastes
+// wrong is worse than none — forpage.h's rule). Both surfaces spell the CLI flag, as their root next= already does.
+inline void sizeImportTier( ImportTier& t, int pageLimit, std::string_view sym = {} )
 {
     t.shown  = std::min( t.files.size(), std::size_t( rw::effectiveRowCap( pageLimit, rw::kImportReachRowCap ) ) );
     t.capped = t.shown < t.files.size();
+    t.next.clear();
+    if( t.capped && !sym.empty() )
+    {
+        std::string inv = rw::nextFlag( "--impact=", sym ) + " --limit=" + std::to_string( t.files.size() );
+        if( inv.size() <= rw::kNextAttrMaxBytes )
+        {
+            t.next = std::move( inv );
+        }
+    }
     // Emitted UNCONDITIONALLY, zero included: an absent importers= reads as "this build cannot measure it",
     // and a shown_ without its capped= is the missing-attribute ambiguity pageview.h rule 3 forbids.
     t.xmlAttrs = " importers=\"" + std::to_string( t.files.size() ) + "\""
                + " shown_importers=\"" + std::to_string( t.shown ) + "\""
-               + " importers_capped=\"" + ( t.capped ? "1" : "0" ) + "\"";
+               + " importers_capped=\"" + ( t.capped ? "1" : "0" ) + "\""
+               + rw::nextAttrXml( t.next, "importers_next" );
     ENSURES( t.shown <= t.files.size(), "the page is a prefix of the ranked tier" );
+    ENSURES( t.next.empty() || t.capped, "a follow-up is offered only for a cut tier" );
 }
 
 inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<NodeId>& seeds )

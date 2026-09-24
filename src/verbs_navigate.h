@@ -1963,7 +1963,11 @@ std::optional<int> runExternalSurface( const MainDispatch& d )
         // P2.1: --pack-top-n caps the listing; names= is the true total, shown=/capped= the printed slice.
         const std::size_t extShown = extPw.end - extPw.begin;
         const bool        extCut   = extShown < names.size();
-        const std::string extNext  = extCut ? rw::nextAttrXml( "--external-surface --offset=" + std::to_string( extPw.end ) ) : std::string();
+        // cut-fix E: the next page of the SAME listing — the caller's --limit, and the two flags that change its rows
+        // or its window (--include-builtins, --pack-top-n) ride along (rw::pagedNext).
+        const std::string extCall  = std::string( "--external-surface" ) + ( cfg.includeBuiltins ? " --include-builtins" : "" )
+                                   + ( cfg.packTopN > 0 ? " --pack-top-n=" + std::to_string( cfg.packTopN ) : std::string() );
+        const std::string extNext  = extCut ? rw::nextAttrXml( rw::pagedNext( extCall, cfg.pageLimit, extPw.end ) ) : std::string();
         const std::string extBuiltinsAttr = builtinsExcluded > 0 ? " builtins_excluded=\"" + std::to_string( builtinsExcluded ) + "\"" : std::string();
         char              extAb[ kPageDisclosureCap ];
         rw::emitTo( stdout, "<external-surface names=\"{}\"{}{}{}>", names.size(), extBuiltinsAttr.c_str(),
@@ -2262,6 +2266,10 @@ int emitImpactJson( const ImpactView& v )
                  rw::unprovenDefsKeyJson( v.unprovenDefs ).c_str() );   // H1: absent at zero, like its XML twin
     rw::emitTo( stdout, ",\"importers\":{},\"shown_importers\":{},\"importers_capped\":{}",
                  v.imports.files.size(), v.imports.shown, v.imports.capped ? "true" : "false" );
+    if( !v.imports.next.empty() )   // cut-fix E: the XML root's importers_next=, present on a cut only
+    {
+        rw::emitTo( stdout, ",\"importers_next\":\"{}\"", jsonStr( v.imports.next ).c_str() );
+    }
     rw::emitTo( stdout, ",\"radius_tested\":{},\"radius_untested\":{}{}", v.radiusTested, v.radiusUntested,
                  rw::declinedCallsKeyJson( v.declinedCalls ) );   // A6; then the XML root's declined_calls=
     if( v.singleRoot ) { rw::emitTo( stdout, ",\"root\":\"{}\"", jsonStr( v.rootRaw ).c_str() ); }   // R-E
@@ -2360,7 +2368,7 @@ std::optional<int> runImpact( const MainDispatch& d )
         // (importers=), a separate truncation pair (shown_importers=/importers_capped=, pageview.h rule 6)
         // and a separate row tag.
         rw::ImportTier       imports        = rw::impactImportTier( ing, seeds );
-        rw::sizeImportTier( imports, cfg.pageLimit );   // cut-fix C: --limit sizes the tier too (offset= does not move it)
+        rw::sizeImportTier( imports, cfg.pageLimit, cfg.impactSym );   // cut-fix C: --limit sizes the tier too (offset= does not move it)
         const auto           importPage     = std::span<const std::uint32_t>( imports.files ).first( imports.shown );
         const auto           importLazyPage = std::span<const char>( imports.lazy ).first( imports.shown );
 

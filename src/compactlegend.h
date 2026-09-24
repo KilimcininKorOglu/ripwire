@@ -438,6 +438,13 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // one clause is present exactly when both fields are, and the header-ONLY read still keeps it off <trace unresolved=>,
     // which counts frames. compactlegendcheck (S) accepts an always-on header field spelled inside that clause.
     { "shown_importers",   "shown_importers=: <f> rows (limit= sizes them)", true, "impact" },
+    // cut-fix E (2026-09-24): three cut disclosures that ride only a CUT answer, so each is present-only. importers_next= is
+    // graph.h sizeImportTier's call for the whole tier; shown_bridges=/bridges= is --zoom's secondaryCutAttrs on <zoom>
+    // (kZoomBridgeCap); shown_symbols= is --tree's on <tree> (kTreeSymbolsPerFile). Their *_capped= siblings read in the
+    // shared sub-cap clause.
+    { "importers_next",    "importers_next=: the call listing every importer", true, "impact" },
+    { "shown_bridges",     "shown_bridges=/bridges=: <bridge> rows printed (the 12 heaviest) / all pairs", false, "zoom", MapHeaderRead::No, {}, "zoom" },
+    { "shown_symbols",     "shown_symbols=: <s> rows printed, 3 a file (symbols= above 3 = cut)", false, "tree", MapHeaderRead::No, {}, "tree" },
     // THE SWEEP'S LAST PASS (2026-09-12) listed every attribute the compact --impact, --safe-delete, --communities,
     // --community=ID and map-header documents emit and found these still without a reading. Each rides only SOME answers of
     // its root, so each is a present-only term rather than a purpose-line clause. Checked against the emitters:

@@ -2814,7 +2814,14 @@ std::optional<int> runZoom( const MainDispatch& d )
             rw::emitTo( stdout, "flowchart TB\n" );
             std::vector<char> esc;
             const auto ex = [ & ]( std::string_view s ) -> std::string { std::string r( s ); for( char& ch : r ) { if( ch == '"' ) { ch = '\''; } } return r; };
+            // cut-fix E: the diagram's three fixed caps (10 top modules, 8 child modules, 5 symbols a subgraph) cut
+            // silently. Mermaid has no attributes, so each cut is a `%%` comment in the vocabulary's words, emitted
+            // only where the cut happened: one after the header for the top modules, one inside each cut subgraph.
             const std::size_t maxTopShown = std::min<std::size_t>( 10, topOrder.size() );
+            if( maxTopShown < topOrder.size() )
+            {
+                rw::emitTo( stdout, "%% top modules shown={} total={} capped=1\n", maxTopShown, topOrder.size() );
+            }
             for( std::size_t ti = 0; ti < maxTopShown; ++ti )
             {
                 const std::uint32_t t = topOrder[ti];
@@ -2825,6 +2832,10 @@ std::optional<int> runZoom( const MainDispatch& d )
                     std::sort( kids.begin(), kids.end(),
                               [ & ]( std::uint32_t a, std::uint32_t b ) { return massSizeIdLess( a, b, mass[topL - 1], members[topL - 1] ); } );
                     const std::size_t maxKids = std::min<std::size_t>( 8, kids.size() );
+                    if( maxKids < kids.size() )
+                    {
+                        rw::emitTo( stdout, "    %% child modules shown={} total={} capped=1\n", maxKids, kids.size() );
+                    }
                     for( std::size_t ki = 0; ki < maxKids; ++ki )
                     {
                         rw::emitTo( stdout, "    nL{}_{}[\"{}<br/>{}\"]\n", topL - 1, kids[ki], ex( domDirOf( topL - 1, kids[ki] ) ).c_str(), std::size_t( members[topL - 1][ kids[ki] ].size() ) );
@@ -2835,6 +2846,10 @@ std::optional<int> runZoom( const MainDispatch& d )
                     rw::SmallVec<NodeId, 2> mem = members[topL][t];
                     std::sort( mem.begin(), mem.end(), [ & ]( NodeId a, NodeId b ) { return rank[a] != rank[b] ? rank[a] > rank[b] : a < b; } );
                     const std::size_t maxS = std::min<std::size_t>( 5, mem.size() );
+                    if( maxS < mem.size() )
+                    {
+                        rw::emitTo( stdout, "    %% symbols shown={} total={} capped=1\n", maxS, mem.size() );
+                    }
                     for( std::size_t si = 0; si < maxS; ++si )
                     {
                         rw::emitTo( stdout, "    sL{}_{}_{}[\"{}\"]\n", topL, t, si, ex( ing.symbols[ mem[si] ].name ).c_str() );
@@ -2879,7 +2894,7 @@ std::optional<int> runZoom( const MainDispatch& d )
             inHierarchy += members[topL][gid].size();
         }
         const std::uint32_t isolatedCount = N - std::uint32_t( inHierarchy );
-        rw::emitTo( stdout, "<!-- ripwire zoom: NESTED module hierarchy (multi-level Louvain); indent = one level deeper; module = dominant-dir(symbol-count); leaf lists top-ranked symbols; bridge = cross-top-module call traffic. "
+        rw::emitTo( stdout, "<!-- ripwire zoom: NESTED module hierarchy (multi-level Louvain); indent = one level deeper; module = dominant-dir(symbol-count); leaf lists top-ranked symbols; bridge = cross-top-module call traffic, the 12 heaviest (a cut adds shown_bridges=/bridges_capped=/bridges=, all pairs). "
                      "symbols= is the whole corpus; isolated= is the symbols in NO top-level module (a group of one — the same rule that makes top_modules= count only groups of 2 or more), and they reconcile exactly: "
                      "symbols= equals isolated= plus the sum of the TOP-LEVEL size= values, every one of them, including any this page did not print. "
                      "On a level-0 module size= is its true member count and shown=/capped= describe the member list printed here, which is fixed at the 5 top-ranked members and is not widened by limit=/offset= (those page the TOP-LEVEL modules); "
@@ -2887,7 +2902,7 @@ std::optional<int> runZoom( const MainDispatch& d )
                      // P4 (L7): the two default ceilings, defined where the reader meets them
                      "levels_shown= is how many of the levels= this document prints from the top (default 2; the zoom-levels flag sets it, 0 = all): a module AT the cut "
                      "carries children= (its child modules, none printed) instead of nesting. The top-level module rows are a WINDOW (shown=/capped=/total=/next_offset=, "
-                     "default 40 largest; limit=/offset= page it) and next= pastes the next page. {}{}-->",
+                     "default 40 by rank mass; limit=/offset= page it) and next= pastes the next page. {}{}-->",
                      rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         // §P15/§P16: top_modules= is a real, deterministically-ordered row list (size desc, id asc — the same
         // rule --communities' module listing uses) that used to print EVERY top module unconditionally, so a
@@ -2903,13 +2918,22 @@ std::optional<int> runZoom( const MainDispatch& d )
                                                           : std::min<std::size_t>( L, 2 );
         const std::size_t cutLevel    = topL + 1 - levelsShown;   // the deepest level printed; its rows carry children= when l > 0
         const bool        zoomCut     = zoomPw.end - zoomPw.begin < topOrder.size();
-        const std::string zoomNext    = zoomCut ? rw::nextAttrXml( "--zoom --offset=" + std::to_string( zoomPw.end ) ) : std::string();
+        // cut-fix E: the next page of the SAME hierarchy — --zoom=D changes the modules and --zoom-levels=N the depth
+        // printed, so both ride with the caller's --limit (rw::pagedNext).
+        const std::string zoomCall    = ( cfg.zoomDepth > 0 ? "--zoom=" + std::to_string( cfg.zoomDepth ) : std::string( "--zoom" ) )
+                                      + ( cfg.zoomLevelsSet ? " --zoom-levels=" + std::to_string( cfg.zoomLevels ) : std::string() );
+        const std::string zoomNext    = zoomCut ? rw::nextAttrXml( rw::pagedNext( zoomCall, cfg.pageLimit, zoomPw.end ) ) : std::string();
         char              zoomAb[ kPageDisclosureCap ];
-        rw::emitTo( stdout, "<zoom levels=\"{}\" levels_shown=\"{}\" top_modules=\"{}\" symbols=\"{}\" isolated=\"{}\"{}{}{}>", L, levelsShown, topOrder.size(), N, isolatedCount,
+        // cut-fix E: the <bridge> rows are a SECONDARY listing cut at kZoomBridgeCap (traffic desc, so the cut drops
+        // the lightest pairs), and the cut was silent: no total, no flag. secondaryCutAttrs is the pair plus the
+        // total, present only on a cut (an uncut answer is byte-identical); no call pages it, so there is no next=.
+        const std::size_t zoomBridgesShown = std::min<std::size_t>( kZoomBridgeCap, bridge.size() );
+        rw::emitTo( stdout, "<zoom levels=\"{}\" levels_shown=\"{}\" top_modules=\"{}\" symbols=\"{}\" isolated=\"{}\"{}{}{}{}>", L, levelsShown, topOrder.size(), N, isolatedCount,
                      ( pageDisclosure( zoomAb, sizeof( zoomAb ), zoomPw.end - zoomPw.begin, topOrder.size(), zoomPw.end,
                                        cfg.pageLimit, cfg.pageOffset, zoomCut )
                        + rw::renderDisclosure( prD, rw::DiscloseAs::XmlAttrs ) ).c_str(),
                      rw::graphCountFloorAttrXml( g ).c_str(),   // H5/M15: gauge + marker; isolated=/top_modules= partition the name-based CSR
+                     rw::secondaryCutAttrs( "bridges", zoomBridgesShown, bridge.size(), "bridges" ).c_str(),
                      zoomNext.c_str() );
 
         // a stack-free recursion via an explicit lambda (std::function — not hot). Emits <module> elements
@@ -2966,7 +2990,7 @@ std::optional<int> runZoom( const MainDispatch& d )
 
         std::vector<std::pair<std::uint64_t, std::uint32_t>> br( bridge.begin(), bridge.end() );
         std::sort( br.begin(), br.end(), []( const auto& a, const auto& b ) { return a.second != b.second ? a.second > b.second : a.first < b.first; } );
-        const std::size_t topB = std::min<std::size_t>( 12, br.size() );
+        const std::size_t topB = zoomBridgesShown;
         for( std::size_t i = 0; i < topB; ++i )
         {
             rw::emitTo( stdout, "<bridge a=\"{}\" b=\"{}\" edges=\"{}\"/>", std::uint32_t( br[i].first >> 32 ), std::uint32_t( br[i].first & 0xffffffffu ), br[i].second );
@@ -3484,7 +3508,7 @@ std::optional<int> runStructureText( const MainDispatch& d )
         const std::string  trRootPrefix = trSingleRoot ? rw::sarif::rootPrefixOf( cfg.roots[0] ) : std::string();
         std::vector<char>  trRootEsc;
         const std::string  trRootAttr   = trSingleRoot ? ( " root=\"" + std::string( rw::escapeXml( cfg.roots[0], trRootEsc ) ) + "\"" ) : std::string();
-        rw::emitTo( stdout, "<!-- ripwire tree: each file + its top symbols by rank, files ordered by their best "
+        rw::emitTo( stdout, "<!-- ripwire tree: each file + its 3 top symbols by rank (symbols= counts all; a cut adds shown_symbols=/symbols_capped= to the root), files ordered by their best "
                      "symbol's rank (path breaks ties) — a session-start orientation map. files= is the indexed "
                      "corpus; rows list files WITH symbols; files_unlisted= holds the symbol-less remainder "
                      // W3FIX NIT: "files equals the listed rows plus files_unlisted on every run" reads FALSE on
@@ -3509,13 +3533,23 @@ std::optional<int> runStructureText( const MainDispatch& d )
         // raises it. discloseCap fires exactly when the window cut the list, so a tree that fits stays byte-identical.
         const PageWindow  pw = pageWindow( ford.size(), effectiveRowCap( cfg.pageLimit, kTreeRowCap ), cfg.pageOffset );
         const bool        treeCut  = pw.end - pw.begin < ford.size();
-        const std::string treeNext = treeCut ? rw::nextAttrXml( "--tree --offset=" + std::to_string( pw.end ) ) : std::string();
+        const std::string treeNext = treeCut ? rw::nextAttrXml( rw::pagedNext( "--tree", cfg.pageLimit, pw.end ) ) : std::string();
         char              pab[ kPageDisclosureCap ];
-        rw::emitTo( stdout, "<tree files=\"{}\" files_unlisted=\"{}\"{}{}{}>", F, filesUnlisted,
+        // cut-fix E: each <file> lists its kTreeSymbolsPerFile best-ranked symbols, and a longer list was cut with only
+        // its symbols= total to say so. The page's own pair, present only when some printed file's list was cut: shown_
+        // symbols= is the <s> rows below, and each row's symbols= is its total, so symbols= above the per-file cap marks
+        // exactly the cut rows (no second total on the root: summing it would restate the rows' own counts).
+        std::size_t treeSymsShown = 0, treeSymsTotal = 0;
+        for( std::size_t fi = pw.begin; fi < pw.end; ++fi )
+        {
+            treeSymsShown += std::min<std::size_t>( kTreeSymbolsPerFile, byFile[ ford[fi] ].size() );
+            treeSymsTotal += byFile[ ford[fi] ].size();
+        }
+        rw::emitTo( stdout, "<tree files=\"{}\" files_unlisted=\"{}\"{}{}{}{}>", F, filesUnlisted,
                      ( pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, ford.size(), pw.end,
                                        cfg.pageLimit, cfg.pageOffset, treeCut )
                        + rw::renderDisclosure( prD, rw::DiscloseAs::XmlAttrs ) ).c_str(),
-                     trRootAttr.c_str(), treeNext.c_str() );
+                     trRootAttr.c_str(), rw::secondaryCutAttrs( "symbols", treeSymsShown, treeSymsTotal ).c_str(), treeNext.c_str() );
         std::vector<char> trEsc;
         for( std::size_t fi = pw.begin; fi < pw.end; ++fi )
         {
@@ -3526,7 +3560,7 @@ std::optional<int> runStructureText( const MainDispatch& d )
             const auto ep = rw::escapeXml( trSingleRoot ? rw::sarif::rootRelativeUri( ing.files[f], trRootPrefix )
                                                         : std::string_view( ing.files[f] ), trEsc );
             rw::emitTo( stdout, "<file p=\"{}\" symbols=\"{}\">", std::string_view( ep.data(), ep.size() ), std::size_t( syms.size() ) );
-            const std::size_t topN = std::min<std::size_t>( 3, syms.size() );
+            const std::size_t topN = std::min<std::size_t>( kTreeSymbolsPerFile, syms.size() );
             for( std::size_t i = 0; i < topN; ++i )
             {
                 const Symbol& s = ing.symbols[ syms[i] ];

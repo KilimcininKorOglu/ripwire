@@ -760,6 +760,45 @@ EOF
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
+echo "=== 8. cut-fix E — MCP owners/mentions disclose their surface-only default cut ==="
+# `owners` (40 <f> rows) and `mentions` (100 files) are capped on this surface alone — the CLI twins print every row —
+# and both cut with discloseCap=false, so a cut answer said nothing. RED on 9936ba4e (no shown=/capped= on the cut);
+# GREEN: the cut carries shown=/capped="1"/total=/next_offset=, offset= continues it, an uncut answer adds no bytes.
+CR="$TMP/cutrepo"; mkdir -p "$CR/docs"
+git -C "$CR" init -q
+for i in $( seq -w 1 45 ); do printf 'int cutfn%s( int x ) { return x + 1; }\n' "$i" >"$CR/f$i.c"; done
+for i in $( seq -w 1 105 ); do printf '# note %s\n\nSee `cutfn01` here.\n' "$i" >"$CR/docs/n$i.md"; done
+( cd "$CR" && git add -A && GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL=a@x.com GIT_COMMITTER_NAME=A GIT_COMMITTER_EMAIL=a@x.com \
+    GIT_AUTHOR_DATE=2026-06-01T12:00:00 GIT_COMMITTER_DATE=2026-06-01T12:00:00 git commit -q -m one )
+for i in $( seq -w 1 45 ); do printf '// b\n' >>"$CR/f$i.c"; done
+( cd "$CR" && git add -A && GIT_AUTHOR_NAME=B GIT_AUTHOR_EMAIL=b@x.com GIT_COMMITTER_NAME=B GIT_COMMITTER_EMAIL=b@x.com \
+    GIT_AUTHOR_DATE=2026-06-02T12:00:00 GIT_COMMITTER_DATE=2026-06-02T12:00:00 git commit -q -m two )
+cut_text(){ mcp_call '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"'"$1"'","arguments":'"$2"'}}' | tail -1 \
+    | python3 -c 'import sys, json; r = json.load(sys.stdin); print(r["result"]["content"][0]["text"] if "result" in r else "__ERROR__")'; }
+OW="$( cut_text owners '{"path":"'"$CR"'"}' )"
+OWROOT="$( printf '%s' "$OW" | grep -o '<owners [^>]*>' | head -1 )"
+case "$OWROOT" in
+    *' shown="40" capped="1" total="45" has_more="1" next_offset="40"'*) ok "owners: the 40-row cut discloses shown=40 capped=1 total=45 next_offset=40" ;;
+    *) no "owners: the 40-row cut is silent: $OWROOT" ;;
+esac
+OW2="$( cut_text owners '{"path":"'"$CR"'","offset":40}' )"
+[ "$( printf '%s' "$OW2" | grep -o '<f p="' | wc -l | tr -d ' ' )" = 5 ] && ok "owners: offset=40 serves the other 5 rows" || no "owners: offset=40 served $( printf '%s' "$OW2" | grep -o '<f p="' | wc -l | tr -d ' ' ) rows (want 5)"
+OW3="$( cut_text owners '{"path":"'"$CR"'","symbol":"cutfn01"}' )"
+printf '%s' "$OW3" | grep -o '<owners [^>]*>' | head -1 | grep -q ' shown=' && no "owners: an uncut answer gained shown=" || ok "owners: an uncut answer is unchanged (no shown=)"
+MN="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn01"}' )"
+printf '%s' "$MN" | python3 -c '
+import sys, json
+d = json.loads( sys.stdin.read() )
+ok = d.get( "shown" ) == 100 and d.get( "capped" ) is True and d.get( "total" ) == 105 and d.get( "next_offset" ) == 100 and len( d[ "files" ] ) == 100
+sys.exit( 0 if ok else 1 )' && ok "mentions: the 100-file cut discloses shown=100 capped=true total=105 next_offset=100" \
+    || no "mentions: the 100-file cut is silent: $( printf '%s' "$MN" | head -c 200 )"
+MN2="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn01","offset":100}' )"
+printf '%s' "$MN2" | python3 -c 'import sys, json; sys.exit( 0 if len( json.loads( sys.stdin.read() )[ "files" ] ) == 5 else 1 )' \
+    && ok "mentions: offset=100 serves the other 5 files" || no "mentions: offset=100 did not serve the other 5 files"
+MN3="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn02"}' )"
+printf '%s' "$MN3" | grep -q '"shown"' && no "mentions: an uncut answer gained \"shown\"" || ok "mentions: an uncut answer is unchanged (no shown)"
+
 echo
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"
