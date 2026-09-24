@@ -697,18 +697,31 @@ inline std::string qualifierOfDefinition( TSNode nameNode, std::string_view src 
 // qualified_identifier ancestor (a no-op for a call — its outermost node's own parent is a call_expression,
 // never another qualified_identifier, so the loop tests once and stops) until nothing higher is still part of
 // the chain, and reads the root from THAT node's text instead.
-inline bool cppQualifiedChainRootsStd( TSNode nameNode, std::string_view src )
+// The OUTERMOST qualified_identifier of the chain nameNode belongs to (the climb described above), or a null node
+// when nameNode's parent is not a qualified_identifier at all. Shared by the root test below and
+// cppQualifiedChainWrittenGlobal, so the two can never disagree about which node spells the chain.
+inline TSNode cppOutermostQualified( TSNode nameNode )
 {
     TSNode outer = ts_node_parent( nameNode );
-    if( ts_node_is_null( outer ) || !kindIs( ts_node_type( outer ), "qualified_identifier" ) || hasPhantomScopeSeparator( outer ) )
+    if( ts_node_is_null( outer ) || !kindIs( ts_node_type( outer ), "qualified_identifier" ) )
     {
-        return false;
+        return TSNode{};
     }
     for( TSNode up = ts_node_parent( outer ); !ts_node_is_null( up ) && kindIs( ts_node_type( up ), "qualified_identifier" ); up = ts_node_parent( up ) )
     {
         outer = up;
     }
-    std::string_view text = nodeTextOf( outer, src );
+    return outer;
+}
+
+inline bool cppQualifiedChainRootsStd( TSNode nameNode, std::string_view src )
+{
+    const TSNode inner = ts_node_parent( nameNode );
+    if( ts_node_is_null( inner ) || !kindIs( ts_node_type( inner ), "qualified_identifier" ) || hasPhantomScopeSeparator( inner ) )
+    {
+        return false;
+    }
+    std::string_view text = nodeTextOf( cppOutermostQualified( nameNode ), src );
     if( text.starts_with( "::" ) )
     {
         text.remove_prefix( 2 );   // `::std::move` — the leading global-scope operator names no segment
@@ -731,7 +744,10 @@ inline bool cppQualifiedChainRootsStd( TSNode nameNode, std::string_view src )
 // what decides the answer, which is why `namespace mylib { namespace std { … } }` is correctly NOT
 // std-rooted: the outermost level there is "mylib", and the language itself permits reopening the real
 // `::std` only at file scope ([namespace.std]), never nested inside another namespace.
-inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
+// The first written segment of the OUTERMOST named namespace enclosing `node`, or nullopt when no named namespace
+// encloses it (anonymous ones are transparent). cppEnclosingChainRootsStd asks whether it is "std";
+// cppDefinitionRootsStd asks only whether there is one.
+inline std::optional<std::string_view> cppOutermostNamedNamespaceRoot( TSNode node, std::string_view src )
 {
     std::string_view outermostNsRoot;
     bool              sawNamespace = false;
@@ -751,7 +767,12 @@ inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
         outermostNsRoot = sep == std::string_view::npos ? text : text.substr( 0, sep );
         sawNamespace    = true;
     }
-    return sawNamespace && outermostNsRoot == "std";
+    return sawNamespace ? std::optional<std::string_view>( outermostNsRoot ) : std::nullopt;
+}
+
+inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
+{
+    return cppOutermostNamedNamespaceRoot( node, src ) == std::optional<std::string_view>( "std" );
 }
 
 // A WRITTEN `std::` qualifier is resolved against where the def sits (CodeRabbit on #331). A qualified definition
@@ -762,30 +783,10 @@ inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
 // when no NAMED namespace encloses the def (an anonymous one stays transparent, as in the walk above) or the chain is
 // written from the global scope (`::std::…`); every other case falls to the enclosing walk, whose outermost-root rule
 // already answers `vendor` there.
-inline bool cppHasNamedEnclosingNamespace( TSNode node )
-{
-    for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
-    {
-        if( kindIs( ts_node_type( p ), "namespace_definition" ) && !ts_node_is_null( fieldChild( p, NodeField::Name ) ) )
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 inline bool cppQualifiedChainWrittenGlobal( TSNode nameNode, std::string_view src )
 {
-    TSNode outer = ts_node_parent( nameNode );
-    if( ts_node_is_null( outer ) || !kindIs( ts_node_type( outer ), "qualified_identifier" ) )
-    {
-        return false;
-    }
-    for( TSNode up = ts_node_parent( outer ); !ts_node_is_null( up ) && kindIs( ts_node_type( up ), "qualified_identifier" ); up = ts_node_parent( up ) )
-    {
-        outer = up;
-    }
-    return nodeTextOf( outer, src ).starts_with( "::" );
+    const TSNode outer = cppOutermostQualified( nameNode );
+    return !ts_node_is_null( outer ) && nodeTextOf( outer, src ).starts_with( "::" );
 }
 
 // The definition-side dispatcher: an out-of-line qualified def (`std::SomeType::f() {…}`, rare but legal —
@@ -801,7 +802,7 @@ inline bool cppQualifiedChainWrittenGlobal( TSNode nameNode, std::string_view sr
 inline bool cppDefinitionRootsStd( TSNode nameNode, std::string_view src )
 {
     if( cppQualifiedChainRootsStd( nameNode, src )
-        && ( !cppHasNamedEnclosingNamespace( nameNode ) || cppQualifiedChainWrittenGlobal( nameNode, src ) ) )
+        && ( !cppOutermostNamedNamespaceRoot( nameNode, src ).has_value() || cppQualifiedChainWrittenGlobal( nameNode, src ) ) )
     {
         return true;
     }
