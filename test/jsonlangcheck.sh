@@ -219,7 +219,9 @@ echo "=== #157: a refused JSON file is rowed in --skipped cold AND warm, and --m
 # nothing to match. '['*600 + ']'*600 is 600 levels deep, well past kMaxJsonNestDepth=512.
 KGJ="$TMP/kgjson"; mkdir -p "$KGJ"
 python3 -c "open('$KGJ/deep_data.json','w').write('['*600 + ']'*600)"
-printf '{"kgsiblingkey": 1}\n' > "$KGJ/sibling.json"
+# The sibling holds an ARRAY so the --match='(array)' arm below has a positive control: a walk that skipped
+# EVERY file would also return zero hits in deep_data.json plus nest_refused="1" (CodeRabbit on #331).
+printf '{"kgsiblingkey": [1]}\n' > "$KGJ/sibling.json"
 $BIN "$KGJ" --cache="$TMP/kgjson.cache" >"$TMP/kgj_cold.xml" 2>"$TMP/kgj_cold.err"; KGJ_COLD_RC=$?
 $BIN "$KGJ" --cache="$TMP/kgjson.cache" >"$TMP/kgj_warm.xml" 2>"$TMP/kgj_warm.err"; KGJ_WARM_RC=$?
 KGJ_LIVE=0
@@ -262,8 +264,10 @@ elif grep -q '<m p="deep_data\.json:' "$TMP/kgj_match.xml"; then
     no "#157 REGRESSED: --match returns hits INSIDE deep_data.json in the same run whose ingest refused it — the bypass is back"
 elif ! grep -q 'nest_refused="1"' "$TMP/kgj_match.xml"; then
     no "#157 REGRESSED: --match's answer does not disclose nest_refused=\"1\" over a tree holding one refused file: $( grep -o '<match [^>]*>' "$TMP/kgj_match.xml" )"
+elif ! grep -q '<m p="sibling\.json:' "$TMP/kgj_match.xml"; then
+    no "(kg-json) --match: no hit in sibling.json, the positive control — a walk that skipped every file would pass the arms above: $( grep -o '<match [^>]*>' "$TMP/kgj_match.xml" )"
 else
-    ok "#157: --match returns zero hits inside the refused deep_data.json and discloses nest_refused=\"1\""
+    ok "#157: --match returns zero hits inside the refused deep_data.json, still hits sibling.json, and discloses nest_refused=\"1\""
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────

@@ -427,8 +427,8 @@ fi
 
 # ── §12 (#150) — the WRITTEN SHAPES the fix's own design has to get right, beyond §11's three gaps ─────────────
 # §11 pins the three broken RESOLUTIONS; §12 pins the SPELLINGS a std-rooted call/def can take. Two are
-# RED-FIRST (base main 60b65f02: `globalMs` binds a decoy, count=1; `callInline` is AMBIGUOUS, count=2 —
-# reconfirmed against $BASE_BIN when set, see the header note); two are CONTROLS proving the widening did not
+# RED-FIRST (measured once against base main 60b65f02: `globalMs` binds a decoy, count=1; `callInline` is
+# AMBIGUOUS, count=2 — this gate does not re-run a base binary); two are CONTROLS proving the widening did not
 # over-trigger. `sortedCopy` DUPLICATES the name on purpose (a decoy AND the real std def) so `callInline`
 # actually discriminates between them — §11's `hasAnswer`/`contains` has no such decoy, so it could not.
 SHAPES="$TMP/shapes"

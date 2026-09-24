@@ -489,7 +489,9 @@ fi
 # a standalone harness linking the vendored kotlin grammar (parser.c + scanner.c) straight to a tree-sitter core
 # build, calling tree_sitter_kotlin() and ts_parser_parse_string() with nothing else in front. Same $CC detection
 # as arm K's harness below (this arm runs first, so it cannot reuse arm K's $kcc). rc=134 (SIGABRT) is the bug;
-# rc=0 is the patch holding. Under the asan flavour it is also the sanitizer tripwire for the refused push.
+# rc=0 is the patch holding. The harness is built with plain -O1 and no sanitizer flags, in every flavour: it
+# proves the refusal by exit status only, so since #157 took $BIN off this scanner path the asan flavour no
+# longer runs this scanner under a sanitizer (CodeRabbit on #331).
 KTDEEP="$TMP/ktdeep"; mkdir -p "$KTDEEP"
 {
     printf 'package deep\n\nfun deepFn(): Int = 1\n\nval deep = '

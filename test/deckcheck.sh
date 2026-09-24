@@ -314,9 +314,12 @@ unreleased = [h for h in local if '[Unreleased]' in h]
 if len(unreleased) > 1:
     print("  FAIL  CHANGELOG carries %d [Unreleased] headings — at most one is allowed" % len(unreleased))
     ok = False
-if unreleased and mainReleases and mainReleases[0] in local:
-    if local.index(unreleased[0]) > local.index(mainReleases[0]):
-        print("  FAIL  CHANGELOG's [Unreleased] heading sits BELOW a release heading — it must sit above every release")
+# Against EVERY local release heading, not only origin/main's first: a release heading this branch adds
+# above the pinned ones is a release too, and [Unreleased] below it would file notes under the wrong one.
+localReleases = [h for h in local if '[Unreleased]' not in h]
+if unreleased and localReleases:
+    if local.index(unreleased[0]) > local.index(localReleases[0]):
+        print("  FAIL  CHANGELOG's [Unreleased] heading sits BELOW a release heading (%s) — it must sit above every release" % localReleases[0])
         ok = False
 
 if ok:

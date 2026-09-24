@@ -136,7 +136,9 @@ grep -q 'nearlimit\.md' "$TMP/map.err" \
 # generated corpus, never the committed fixture (the committed dir must stay note-free, see above).
 KGM="$TMP/kgmd"; mkdir -p "$KGM"
 cp "$DEEPFIX/deepquote.md" "$KGM/deepquote.md"
-printf '# Kg Sibling Heading\n\nzqkgsibling prose\n' > "$KGM/sibling.md"
+# The sibling carries one shallow block quote: the --match='(block_quote)' arm below needs a positive control,
+# or a walk that skipped EVERY file would pass it too (CodeRabbit on #331).
+printf '# Kg Sibling Heading\n\nzqkgsibling prose\n\n> zqkgsibling quote\n' > "$KGM/sibling.md"
 $BIN "$KGM" --cache="$TMP/kgmd.cache" >"$TMP/kgm_cold.xml" 2>"$TMP/kgm_cold.err"; KGM_COLD_RC=$?
 $BIN "$KGM" --cache="$TMP/kgmd.cache" >"$TMP/kgm_warm.xml" 2>"$TMP/kgm_warm.err"; KGM_WARM_RC=$?
 KGM_LIVE=0
@@ -179,8 +181,10 @@ elif grep -q '<m p="deepquote\.md:' "$TMP/kgm_match.xml"; then
     no "#157 REGRESSED: --match returns hits INSIDE deepquote.md in the same run whose ingest refused it — the bypass is back"
 elif ! grep -q 'nest_refused="1"' "$TMP/kgm_match.xml"; then
     no "#157 REGRESSED: --match's answer does not disclose nest_refused=\"1\" over a tree holding one refused file: $( grep -o '<match [^>]*>' "$TMP/kgm_match.xml" )"
+elif ! grep -q '<m p="sibling\.md:' "$TMP/kgm_match.xml"; then
+    no "(kg-md) --match: no hit in sibling.md, the positive control — a walk that skipped every file would pass the arms above: $( grep -o '<match [^>]*>' "$TMP/kgm_match.xml" )"
 else
-    ok "#157 FIXED: --match returns zero hits inside the refused deepquote.md and discloses nest_refused=\"1\""
+    ok "#157 FIXED: --match returns zero hits inside the refused deepquote.md, still hits sibling.md, and discloses nest_refused=\"1\""
 fi
 
 sec(){ # sec NAME — the map carries a t="sec" symbol with exactly this name

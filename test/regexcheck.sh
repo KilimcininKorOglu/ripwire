@@ -338,6 +338,7 @@ def fileset(pat, no_prefilter):
 
 fails = []
 ran = 0
+answered = 0   # patterns BOTH runs answered OK on and agreed about: the only ones that compare anything
 for p in pats:
     st_pf, fs_pf = fileset(p, False)
     st_fs, fs_fs = fileset(p, True)
@@ -349,8 +350,16 @@ for p in pats:
         continue
     if st_pf != st_fs or fs_pf != fs_fs:
         fails.append((p, '%s:%s vs %s:%s' % (st_pf, fs_pf, st_fs, fs_fs)))
+    else:
+        answered += 1
 
-print('seeded fuzz: %d/%d patterns compared (seed=%d)' % (ran, len(pats), SEED))
+print('seeded fuzz: %d/%d patterns ran, %d answered on both sides (seed=%d)' % (ran, len(pats), answered, SEED))
+# Same rule as the presence guard in (S): refused == refused is not agreement. A flag change that made every
+# run refuse (a renamed --grep-in=, a rejected --limit=) used to exit 0 here with "0 divergences" having
+# compared nothing (CodeRabbit on #331). At least half the generated patterns must produce an answer.
+if answered < len(pats) // 2:
+    print('only %d of %d patterns produced an answer on both sides — the arm compared too little to vouch' % (answered, len(pats)))
+    sys.exit(1)
 if fails:
     for p, why in fails[:15]:
         print('  DIVERGE %r: %s' % (p, why))

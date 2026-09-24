@@ -329,7 +329,7 @@ Q="$( runjs testgatefsonlyfix src/lib.ts )"; QEC="$( rcjs testgatefsonlyfix src/
 #      spelled as a vitest target — vitest's own include-glob would never collect it either.
 R1="$( runjs testgatehelperfix test/util.ts )"; R1EC="$( rcjs testgatehelperfix test/util.ts )"
 { [ "$R1EC" = 4 ] && printf '%s' "$R1" | grep -qF '<t p="test/util.ts" changed="1" run_unknown="1"/>' \
-      && printf '%s' "$R1" | grep -qF '<t p="test/setup.ts"' && ! printf '%s' "$R1" | grep -qF 'p="test/setup.ts"[^/]*run="npx' \
+      && printf '%s' "$R1" | grep -qF '<t p="test/setup.ts"' && ! printf '%s' "$R1" | grep -qE '<t p="test/setup\.ts"[^>]*run="npx' \
       && printf '%s' "$R1" | grep -qF 'run="npx vitest run test/util.test.ts"'; } \
     && ok "(r1) F4: helper/setup TS files stay run_unknown; the real util.test.ts still derives" \
     || no "(r1) F4 helper/setup wrongly spelled runnable (exit=$R1EC): $R1"
