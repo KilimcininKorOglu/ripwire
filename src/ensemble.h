@@ -13,7 +13,7 @@
 // Corroboration is only worth something when the lenses
 // fail DIFFERENTLY, so the partition is by KIND OF EVIDENCE, not by metric:
 //   structural  — the shape of the code: cognitive complexity, physical size, nesting depth, parameter count
-//                 (the four bars quality.h already uses) plus the --readability lens' Posnett rank.
+//                 (the four bars quality.h already uses) plus the --biggest-first lens' Posnett rank.
 //   lexical     — the identifier TEXT: the naming-* rules (src/naminglens.h).
 //   confusion   — the syntactic CONSTRUCT: the atom-* rules (src/atoms.h, Gopstein et al. ESEC/FSE 2017).
 //   historical  — git: how often the FILE changes (the --hotspots churn axis, same 12-month window). Its unit
@@ -43,7 +43,7 @@
 // TWO KINDS OF THRESHOLD, AND THE DIFFERENCE IS DISCLOSED. Four of the structural signals are ABSOLUTE bars
 // reused verbatim from src/quality.h (kCcxBar 15, kLocBar 60, kNestBar 4, kParamBar 5) — no new magic numbers.
 // The other two signals (Posnett readability, churn) are RANKINGS whose own authors publish no defensible
-// absolute cut: --readability's header says in so many words to read the ORDER, not the number. The only honest
+// absolute cut: --biggest-first's header says in so many words to read the ORDER, not the number. The only honest
 // predicate on an ordinal signal is an ordinal cut, so each fires for the WORST DECILE of its own ranking,
 // bounded above by that verb's own default display window (40 rows) and below by one row. That means some
 // symbol is ALWAYS in the worst decile of its own corpus — which is what "ordinal" means, and the legend says
@@ -108,7 +108,7 @@ namespace ensemble
 inline constexpr std::size_t kEnsembleSymbolRowCap = 40;
 inline constexpr std::size_t kEnsembleFileRowCap   = 20;
 
-// The ordinal-signal window: --readability and --hotspots both default to showing 40 rows, so a symbol or file
+// The ordinal-signal window: --biggest-first and --hotspots both default to showing 40 rows, so a symbol or file
 // inside that window is exactly "what the existing verb would have put on your screen".
 inline constexpr std::size_t kOrdinalWindowCap = 40;
 
@@ -282,7 +282,7 @@ struct FamilyHit
     std::string  tag;
 };
 
-// The join's eligibility predicate, and it is deliberately the SAME one --readability uses: a function or
+// The join's eligibility predicate, and it is deliberately the SAME one --biggest-first uses: a function or
 // method with a body. A declaration has no shape to measure and no construct to confuse, so counting its
 // silent families as "did not fire" would be the very lie the unavailable/silent distinction exists to stop.
 inline bool eligibleForJoin( const Symbol& s ) noexcept

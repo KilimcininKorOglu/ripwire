@@ -13,6 +13,57 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Added — `--biggest-first` supersedes `--readability`
+
+**`--biggest-first` supersedes `--readability`**, which remains fully functional as a hidden alias and
+prints a one-line stderr deprecation the first time it is used. The rename follows the ordering claim's
+withdrawal: the flag never measured readability directly, only Halstead volume/token entropy/length, so
+after the claim went, the name was the one thing left overclaiming (derivation: `docs/EVALS.md` §8).
+Renaming the flag changes nothing else — the emitted `<readability functions=… >` root, the
+`schema="ripwire.readability/v1"` compact-legend tag and every attribute on a row (`vol=` `ent=`
+`posnett=` …) are unchanged, since renaming those would break every script that already parses this
+verb's XML. stdout is byte-identical between the two spellings; only stderr carries the notice.
+
+### Fixed — the construct-validity caveat on `--biggest-first` (`--readability`) cited a proxy number that did not reproduce
+
+The `UNVALIDATED` note in `--help=--biggest-first` and the README said the lens agrees with a refactor
+commit's implied readability direction on 30.2% of 484 function pairs. That population came from
+`bench/readability_refactor_pairs.py` walking `git log --all`, which reads every branch in this clone's
+shared `.git`, so the count changed whenever an unrelated branch was pushed — a rerun of the identical
+script gave 413 pairs (38.3%) and, separately, 409 pairs (38.4%), neither matching the published number.
+Pinning the script to the immutable `v0.6.2` tag (#313) first reproduced **154 of 412 pairs (37.4%)**,
+still worse than chance (PR #321, closed as superseded before it merged). A closer look at the same
+pinned population found the actual mechanism: the sign of a
+function's token-count change explains the lens's own direction in **96.0% of pairs (388/404 whose count
+changed)** — the caveat now cites that figure and names the tag (train 16, PR #322, merged 2026-09-22;
+ships in the next release). A follow-on study then tested the ordering claim itself — whether a
+least-readable function is more likely to be fixed later — against ripwire's own history, and could not
+sustain it once stratified into ten narrow token-count deciles (8 of 10 show a CI that includes 1): the
+raw/tercile association is a residual size
+effect, not an independent readability signal. **The ordering claim is withdrawn outright**; the lens
+still orders functions by Halstead volume/token entropy/length, largest first, but is no longer claimed
+to order by readability. Full derivation: `docs/EVALS.md` §8.
+
+### Changed — `--quality-delta`'s tenth kind is named `new-clone-of-reused-helper` in `--help`
+
+`--help`'s `--quality-delta` entry called its tenth kind `reuse-decline`. The binary emits
+`kind="new-clone-of-reused-helper"`, and the verb's own legend and `docs/EVALS.md` already used that
+name — one kind under two names. The help text now uses the emitted string; `docs/EVALS.md`'s
+abbreviation note lists `reuse-decline` as an older name. A demoted `new-clone-of-reused-helper` row also
+gained an `idiom=` attribute, and gate arms now cover the reuse-decline demotions directly (train 16,
+PR #322, merged 2026-09-22; ships in the next release).
+
+### Added — `--slice=SYM:VAR` rows are in def-use order
+
+`--slice=SYM:VAR` rows are now in def-use order, and the root states it with `order="defuse"`. Also adds
+an `docs/EVALS.md` pre-registration and result for the ordering, fixes a well-formedness bug (a bare `--`
+inside a full-tier XML comment), and adds a new slicecheck arm (train 16, PR #322, merged 2026-09-22;
+ships in the next release).
+
+---
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

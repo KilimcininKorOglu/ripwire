@@ -270,7 +270,7 @@ sections your question needs.
    **Worst case:** a file that's BOTH a top hotspot (step 1) AND `bf="1"` — gnarly code only one person
    understands.
 
-   **Per-function readability** — `ripwire <dir> --readability --legend=compact`
+   **Per-function readability** — `ripwire <dir> --biggest-first --legend=compact`
    `<readability functions="N" shown="40" capped="1"><fn p="…:512" n="buildGraph" lines="1244" toks="6753"
    ops="4359" vocab="382" vol="57923.4" ent="6.26" posnett="0.000"/>` — the Posnett/Hindle/Devanbu (MSR 2011)
    closed-form model, rows ordered by Halstead volume, token entropy and length, largest first: `vol=`

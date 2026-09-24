@@ -164,13 +164,13 @@ assertWinner "affected-beats-situ"        affected         --affected=src/chain.
 # TOTAL silence, exactly like the query family did before M1. They are inserted here at their real dispatch
 # positions, which extends the adjacent-pair coverage over them: --ensemble/--context-ratio (runMaintenance-
 # Views' first two arms, ahead of --hotspots), the six runQualityViews lenses ahead of --dead-code
-# (--readability, --comment-coherence, --nonlocal-state, --quality-panel, --naming-calibration,
+# (--biggest-first, --comment-coherence, --nonlocal-state, --quality-panel, --naming-calibration,
 # --naming-consistency), --handoff (runChangeViews' first arm) and --field-affinity (between --layout and
 # --doc-drift). --index-out is verb-shaped too but WRITES cache blobs, so it stays out of this side-effect-
 # free list and gets its own arm below.
 PREC_VERBS=(
   "--exemplar=chain" "--recall=chain" "--deps" "--ensemble" "--context-ratio" "--clones"
-  "--readability" "--comment-coherence" "--nonlocal-state" "--quality-panel"
+  "--biggest-first" "--comment-coherence" "--nonlocal-state" "--quality-panel"
   "--naming-calibration" "--naming-consistency" "--dead-code" "--edit-check=d2"
   "--callers=d2" "--callees=d1" "--uses=d2" "--external-surface" "--path=d1,d3" "--connect=d1,d2,d3"
   "--impact=d3" "--mentions=d2" "--handoff" "--flags" "--whereis=d2" "--field-affinity" "--doc-drift" "--notes"
@@ -281,7 +281,7 @@ fi
 # ── F1 — the ELEVEN verb-shaped flags the table never knew about ──────────────────────────────────────
 #
 # The adversarial verifier's F1: --quality-panel, --expand, --pack-signatures, --map-diff, --field-affinity,
-# --naming-consistency and --index-out (plus, once swept properly, --readability, --comment-coherence,
+# --naming-consistency and --index-out (plus, once swept properly, --biggest-first, --comment-coherence,
 # --nonlocal-state, --naming-calibration, --ensemble, --context-ratio and --handoff) were neither table rows
 # nor pure modifiers. Every one of them collided with a real report verb at stderr-EMPTY, exit 0 — the F1
 # reproducer being `--quality-panel --lint` (panel bytes, no signal) and `--expand=SYM --lint` (lint bytes,
@@ -291,8 +291,8 @@ fi
 # against the two verbs that bracket them). The five that shape runDefaultMap are a separate class, below.
 assertCross "--hotspots"           "--quality-panel"
 assertCross "--quality-panel"      "--lint"
-assertCross "--hotspots"           "--readability"
-assertCross "--readability"        "--lint"
+assertCross "--hotspots"           "--biggest-first"
+assertCross "--biggest-first"      "--lint"
 assertCross "--hotspots"           "--naming-consistency"
 assertCross "--naming-consistency" "--lint"
 assertCross "--hotspots"           "--field-affinity"

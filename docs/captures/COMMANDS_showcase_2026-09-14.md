@@ -4973,7 +4973,7 @@ ripwire: --run-timeout=SECONDS modifies --run-trace — pass it too (e.g. ripwir
 … [188 more display lines; full output is 18154 bytes on 1 raw line(s)]
 `````
 
-## `./build/ripwire . --readability --limit=8`
+## `./build/ripwire . --biggest-first --limit=8`
 
 *Per-function size ranking, largest Halstead volume/token entropy/lines first — a size proxy, not a readability order (withdrawn, docs/EVALS.md §8) — a RANKING lens, not a grade.*
 

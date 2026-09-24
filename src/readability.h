@@ -3,7 +3,7 @@
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
-// readability.h — `--readability`: the Posnett/Hindle/Devanbu (MSR 2011) readability lens, per function.
+// readability.h — `--biggest-first` (was `--readability`): the Posnett/Hindle/Devanbu (MSR 2011) readability lens, per function.
 //
 // Three numbers per function or method, one token pass, all closed-form — no model, no corpus, no network:
 //   V  Halstead volume            V = N * log2(eta),  N = operator+operand tokens, eta = DISTINCT such tokens

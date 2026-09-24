@@ -128,9 +128,9 @@ def extract_flag_tokens_from_legend(legend_text):
         "--canonical",   # prose attribute, not a flag
         # W3-S item 4 (2026-08-19): surfaced by widening run_verb_suite past its original 15 verbs —
         # both are pattern 4 false positives that existed in the code all along and were simply never
-        # exercised before (neither --readability nor --context-ratio was in the old suite).
-        "--closed-form",       # --readability's legend: "the Posnett/Hindle/Devanbu (MSR 2011)
-                                # closed-form lens" -- a closed-form MATH SOLUTION, not a flag
+        # exercised before (neither --biggest-first nor --context-ratio was in the old suite).
+        "--closed-form",       # --biggest-first's (was --readability's) legend: "the Posnett/Hindle/Devanbu
+                                # (MSR 2011) closed-form lens" -- a closed-form MATH SOLUTION, not a flag
         "--local-reasoning",   # --context-ratio's legend: "the LOCAL-REASONING lens" -- the
                                 # code-quality PROPERTY the verb measures, not a flag
     }
@@ -281,7 +281,7 @@ def run_verb_suite(binary_path, corpus_path):
         ["--dmm"],                           # --dmm (design/metric mismatch)
         ["--comment-coherence"],             # --comment-coherence
         ["--naming-consistency"],            # --naming-consistency
-        ["--readability"],                   # --readability
+        ["--biggest-first"],                 # --biggest-first (was --readability)
         ["--context-ratio"],                 # --context-ratio
         ["--ensemble"],                      # --ensemble
         ["--outline=main.cpp"],              # --outline (whole-file summary)

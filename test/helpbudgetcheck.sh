@@ -177,6 +177,7 @@ cat >"$TMP/unadvertised" <<'EOF'
 --most-important-last   DEPRECATED spelling, accepted only for back-compat (deprecatedOrderFlag -> --order=important-last)
 --stable                DEPRECATED spelling, accepted only for back-compat (deprecatedOrderFlag -> --order=stable)
 --no-auto-order         DEPRECATED spelling, accepted only for back-compat (deprecatedOrderFlag -> --order=important-first)
+--readability            DEPRECATED spelling, accepted only for back-compat (deprecatedReadabilityFlag -> --biggest-first)
 --route                 a back-compat NO-OP: routing is the default now, and --no-route is the spelling tier 1 carries
 --connect-radius        a sub-knob, advertised inside --connect's own tier-2 prose rather than as a row
 --include-builtins      a sub-knob, advertised inside --external-surface's own tier-2 prose rather than as a row
