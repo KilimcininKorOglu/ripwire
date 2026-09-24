@@ -39,10 +39,10 @@ case "${1:-}" in
     -* )     echo "usage: $0 [BUILD_DIR|--list]" >&2; exit 2 ;;
 esac
 
-major(){ [ -n "${1:-}" ] && command -v "$1" >/dev/null 2>&1 && "$1" --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p' | head -1; }
+. "$ROOT/scripts/llvmmajor.sh"   # llvm_major, shared with test/formatgatecheck.sh
 
 if [ -n "${CLANG_TIDY:-}" ]; then
-    CT="$CLANG_TIDY"; have="$( major "$CT" )"
+    CT="$CLANG_TIDY"; have="$( llvm_major "$CT" )"
     if [ "$have" != "$WANT_MAJOR" ]; then
         echo "error: CLANG_TIDY='$CT' is major '${have:-none}', and the gating subset is pinned to $WANT_MAJOR."; exit 2
     fi
@@ -50,7 +50,7 @@ else
     CT=""; seen=""
     for c in "$( command -v clang-tidy-$WANT_MAJOR 2>/dev/null )" "$( command -v clang-tidy 2>/dev/null )" "$BREW_TIDY"; do
         [ -n "$c" ] || continue
-        m="$( major "$c" )"; seen="$seen ${c}=${m:-unreadable}"
+        m="$( llvm_major "$c" )"; seen="$seen ${c}=${m:-unreadable}"
         [ "$m" = "$WANT_MAJOR" ] && { CT="$c"; break; }
     done
     if [ -z "$CT" ]; then

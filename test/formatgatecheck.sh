@@ -65,15 +65,15 @@ pick_cf()
     fi
 }
 
-cf_major(){ [ -n "${1:-}" ] && command -v "$1" >/dev/null 2>&1 && "$1" --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p' | head -1; }
+. "$ROOT/scripts/llvmmajor.sh"   # llvm_major, shared with scripts/tidycheck.sh
 
 CAND_ENV="${CLANG_FORMAT:-}"
 CAND_PATH="$( command -v clang-format 2>/dev/null || true )"
 CAND_BREW=""
 [ -x /opt/homebrew/opt/llvm/bin/clang-format ] && CAND_BREW=/opt/homebrew/opt/llvm/bin/clang-format
-MAJ_ENV="$( cf_major "$CAND_ENV" )"
-MAJ_PATH="$( cf_major "$CAND_PATH" )"
-MAJ_BREW="$( cf_major "$CAND_BREW" )"
+MAJ_ENV="$( llvm_major "$CAND_ENV" )"
+MAJ_PATH="$( llvm_major "$CAND_PATH" )"
+MAJ_BREW="$( llvm_major "$CAND_BREW" )"
 PICKED="$( pick_cf "$CAND_ENV" "$MAJ_ENV" "$CAND_PATH" "$MAJ_PATH" "$CAND_BREW" "$MAJ_BREW" "$WANT_MAJOR" )"
 CF="${PICKED%%|*}"
 have="${PICKED#*|}"
