@@ -1274,13 +1274,17 @@ inline void walkUntestedRows( const IngestResult& ing, const TestGateResult& r, 
 // shares with --seams and --flip. docs/EVALS.md §5 has the measured before/after byte table.
 // rv-test-gate-tsjs F3: untested_modscope=N is ALWAYS present (like changed=/impacted=/tests=/untested=
 // beside it) — a reader comparing runs needs to tell "0 excluded" from "this build predates the count", and
-// an absent-when-zero convention cannot. The CLAUSE defining it is still G4-gated on N>0, since it costs
-// real bytes and a document with nothing excluded has nothing to explain.
+// an absent-when-zero convention cannot. The FULL clause is still G4-gated on N>0, since it costs real bytes and
+// a document with nothing excluded has nothing to explain; at N=0 a one-line definition rides instead, because the
+// attribute is on the root either way and a full legend must define every attribute it prints (CodeRabbit on #331:
+// the first-screen gap this used to leave was recorded in test/legendcoverage_baseline.txt, a downward-only file).
 inline constexpr const char* kUntestedModscopeLegend =
     "untested_modscope=N counts <file-scope> owners excluded from untested= (#324: uncallable, so untestable) "
     "— still in impacted=, a real caller. tests= counts FILES not symbols, so impacted != "
     "tests+untested+untested_modscope in general; read this as the excluded count alone, not a sum term. ";
-inline const char* untestedModscopeLegend( bool on ) noexcept { return on ? kUntestedModscopeLegend : ""; }
+inline constexpr const char* kUntestedModscopeZeroLegend =
+    "untested_modscope=0: no <file-scope> owner (#324: uncallable) was left out of untested=. ";
+inline const char* untestedModscopeLegend( bool on ) noexcept { return on ? kUntestedModscopeLegend : kUntestedModscopeZeroLegend; }
 
 inline constexpr const char* kTestGateLegend =
     "ripwire test-gate (TDAD-parity, arXiv 2603.17973, -70% agent-caused regressions): tests to run for this "
@@ -1396,7 +1400,7 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     rw::emitTo( out, "<!-- {}{}{}{}{}{}-->{}", kTestGateLegend,
                   tgHasRows ? kTestGateRowLegend : "", std::string_view( kTestRowEvidenceLegend.data(), tgHasRows ? int( kTestRowEvidenceLegend.size() ) : 0 ),
                   runHintClauseIfRows( testRows, runsAreRootRelative( ing, root ) ),   // the ONE gate: this clause is about <t> rows, so an untested-only report pays nothing
-                  untestedModscopeLegend( r.untestedModscope > 0 ),   // F3: gated on N>0, like every other zero-cost clause here
+                  untestedModscopeLegend( r.untestedModscope > 0 ),   // F3: the full clause at N>0, a one-line definition at 0
                   rw::graphUnindexedLegend( g.unindexedFiles > 0 ),   // #66: exactly when the root carries the attribute
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where

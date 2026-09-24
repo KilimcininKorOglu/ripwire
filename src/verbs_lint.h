@@ -1995,6 +1995,15 @@ std::optional<int> runLint( const MainDispatch& d )
         {
             lintRootExtra += " naming_locals=\"1\"";
         }
+        // #157 (CodeRabbit on #331): the rule walk is astQueryGrouped, which skips every file ingest's nesting guard
+        // refused — the same skip --match and --pattern disclose as nest_refused=, and the one the --skipped legend
+        // says all three share. Without it here a refused .kt file vanished from every rule's count with no trace.
+        // Absent when 0, like inert_rules=, so every lint answer over a corpus with no refusal is byte-identical.
+        const bool lintNestRefused = ing.crawlSkips.nestRefusedFiles > 0;
+        if( lintNestRefused )
+        {
+            lintRootExtra += std::format( " nest_refused=\"{}\"", ing.crawlSkips.nestRefusedFiles );
+        }
 
         // §P8 collision, documented not renamed — see the --grep legend above for the full reasoning.
         lintPrintOut( "<!-- ripwire lint: [AST]-only checks (descriptive facts, not gates). rule=the check; sev=user-rule severity; "
@@ -2024,6 +2033,11 @@ std::optional<int> runLint( const MainDispatch& d )
                     "malformed or misspelled pattern) — its count=\"0\" never ran at all, a different claim from applicable=\"0\" above "
                     "(a well-formed query whose declared language just is not in this corpus) and from an ordinary count=\"0\" (a "
                     "well-formed query that ran and found nothing); absent ⇒ the query compiled. -->" );
+        if( lintNestRefused )
+        {
+            lintPrintOut( "<!-- lint nest_refused= on the root counts corpus files a pre-parse nesting guard refused before any rule's walk "
+                        "could reach them, so no count= includes them; see the skipped verb's why=\"nest-refused\" rows for which. -->" );
+        }
         if( !cfg.withProfile.empty() )
         {
             lintPrintOut( "<!-- with-profile: heat_* on a finding = MEASURED inclusive totals of the joined #PROF_TSV scope — the nearest "

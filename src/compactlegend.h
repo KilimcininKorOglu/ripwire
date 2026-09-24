@@ -222,6 +222,9 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
     "<!-- rank_by=",                   // --rank-by's k= semantics block
     "<!-- max_tokens=",                // --max-tokens' fit_bytes block
     "<!-- with-profile: ",             // --with-profile's heat_* block
+    "<!-- lint nest_refused=",         // --lint's present-only #157 clause (verbs_lint.h); kCompactAttributeReadings'
+                                       // lint-keyed nest_refused row restates it. NOT the bare "<!-- nest_refused=":
+                                       // --skipped's own clause of that opener is kept in the default dialect.
     "<!-- slice-",                     // slice's seed/flow/since FULL-dialect tiers (slice-seed:/slice-flow:/slice-since:)
     "<!-- root rows: ",                // the multi-root roots table's reading (serialize.h kMultiRootTableLegend, the one
                                        // emitter of this opener); the completeness table's element-qualified label= row
@@ -663,6 +666,9 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // (default) legend needs its own reading too — the full-legend clause (situ.h::kUntestedModscopeLegend)
     // is row-gated on N>0 and pays nothing on the compact default otherwise.
     { "untested_modscope", "untested_modscope=N: <file-scope> owners excluded from untested= (#324, uncallable); still in impacted=", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    // --flip's twin (CodeRabbit on #331), present-only there: a <file-scope> HOST no test reaches, counted rather than
+    // silently left out of untested= (flipimpact.h computeRadius); the hosts row still lists it with tested="0".
+    { "untested_modscope", "untested_modscope=N: untested hosts that are a <file-scope> owner (#324, uncallable), left out of untested=; still in hosts=", false, "flip", MapHeaderRead::No, {}, "flip" },
     // uses: src/verbs_navigate.h (the <uses> root emit)
     { "defs", "defs=N: definitions the selector matched; qualify file:name to narrow the call sites", false, "uses", MapHeaderRead::No, {}, "uses" },
     { "external", "external=1: of= has no definition in the indexed tree under any spelling (stdlib/third-party)", false, "uses", MapHeaderRead::No, {}, "uses" },
@@ -1023,6 +1029,12 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // match: src/verbs_lint.h
     { "auto_captured", "auto_captured=1: the query bound no @capture, so @m was appended to its single top-level pattern", false, "match", MapHeaderRead::No, {}, "match" },
     { "of_files", "of_files=: indexed files in all (eligible_files= of them are in the query's languages)", false, "match", MapHeaderRead::No, {}, "match" },
+    // #157 (CodeRabbit on #331): the present-only nest_refused= on the <match>, <pattern> and <lint> roots. The
+    // header-only row in kCompactCompletenessTerms reads the MAP header alone, and the verbs' own full-legend
+    // clauses are prose the compact dialect strips, so without these a default answer carried the count unread.
+    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; never walked, not in eligible_files= (the skipped verb names them)", false, "match", MapHeaderRead::No, {}, "match" },
+    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; never walked, in neither eligible_files= nor skipped_files=", false, "pattern", MapHeaderRead::No, {}, "pattern" },
+    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; no rule walked them (the skipped verb names them)", false, "lint", MapHeaderRead::No, {}, "lint" },
     // verify: src/verbs_navigate.h (the verify root)
     { "claim", "claim=/shape=: the claim as given and its shape; from_defs=/to_defs=: defs each name resolved to", false, "verify", MapHeaderRead::No, {}, "verify" },   // also defines shape= from_defs= to_defs=
     { "hops", "hops=N: call edges on the witness path (a confirmed reach claim only)", false, "verify", MapHeaderRead::No, {}, "verify" },

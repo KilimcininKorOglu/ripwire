@@ -202,6 +202,8 @@ struct FlipResult
                                                      // fence. Real code, no host: counted rather than silently lost.
     std::size_t               dependents = 0;        // transitive callers of the hosts
     std::size_t               filesScanned = 0;
+    std::size_t               untestedModscope = 0;  // untested hosts that are a <file-scope> owner (#324), left out of
+                                                     // `untested` and COUNTED here — situ.h's untestedModscope twin
 };
 
 // ── lexical helpers (whole-identifier matching is the whole ballgame — `checkWalls` is not `kWalls`) ─────
@@ -939,9 +941,11 @@ inline void computeRadius( const IngestResult& ing, const Graph& g, FlipResult& 
         // #324: the SAME exclusion --test-gate's untested list applies (model.h::isUntestableOwner) — a flag
         // literal's innermost host can be a file's <file-scope> module scope (a top-level `if( FLAG )`, no
         // enclosing function), and that synthetic owner can no more be "tested" here than it can there.
-        if( h < res.testReach.size() && !res.testReach[h] && !isUntestableOwner( ing.symbols[h].kind ) )
+        // Counted, never silently dropped (CodeRabbit on #331): the host list still shows the <file-scope> row with
+        // tested="0", so without the count hosts= and untested= disagreed with nothing on the root to say why.
+        if( h < res.testReach.size() && !res.testReach[h] )
         {
-            res.untested.push_back( h );
+            if( isUntestableOwner( ing.symbols[h].kind ) ) { ++res.untestedModscope; } else { res.untested.push_back( h ); }
         }
     }
 
@@ -1243,14 +1247,18 @@ inline void writeFlipHeader( std::FILE* out, const FlipResult& res, const XmlEsc
                        "C family source only and treats a file declaring its OWN constant of that name as shadowing the gate's, "
                        "but a third header's same named constant (included, not redeclared) would still count. A lit site inside "
                        "no indexed def counts into filescope instead of a host. "
-                       "{}"
+                       "{}{}"
                        // §B12.5 — the cross-verb UNIT collision, in the same words on each verb that spells it.
                        "UNIT: untested= here counts HOSTS (indexed defs this gate lights that no test reaches). The test gate "
                        "verb spells untested= over impacted SYMBOLS and the seams verb over cross-directory call EDGES, so the "
                        "three numbers count three different things and must never be compared or summed across verbs. {}-->",
                        // M21(b): the run=/run_unknown= rule, from testmap.h's ONE constant — rows-gated, through
                        // the ONE gate every other legend asks (runHintClauseIfRows).
-                       rw::runHintClauseIfRows( testFilesRendered, rootRelativeRuns ).c_str(), kFlipRowLegend );
+                       rw::runHintClauseIfRows( testFilesRendered, rootRelativeRuns ).c_str(),
+                       // present-only, like the attribute it defines (writeFlipHeader's root, below)
+                       res.untestedModscope > 0 ? "untested_modscope=N counts untested hosts that are a <file-scope> module scope "
+                                                  "(#324: uncallable, so untestable), left out of untested= but still in hosts=. " : "",
+                       kFlipRowLegend );
     // Review of #219: every p= this verb prints is already spelled relative to the crawl root (relForHash),
     // and <flip> declared no root at all — so a consumer holding the document could resolve none of them,
     // and the run= commands beside them had nothing to be relative to either. The attribute and the one
@@ -1260,12 +1268,14 @@ inline void writeFlipHeader( std::FILE* out, const FlipResult& res, const XmlEsc
 
     rw::emitTo( out, "<flip gate=\"{}\" kind=\"{}\" default=\"{}\" dark=\"{}\" runtime=\"{}\" p=\"{}\" l=\"{}\""
                        " family=\"{}\" regions=\"{}\" loc=\"{}\" branches=\"{}\" bindings=\"{}\""
-                       " hosts=\"{}\" filescope=\"{}\" downstream=\"{}\" dependents=\"{}\" tests=\"{}\" untested=\"{}\" files=\"{}\"{}{}>",
+                       " hosts=\"{}\" filescope=\"{}\" downstream=\"{}\" dependents=\"{}\" tests=\"{}\" untested=\"{}\"{} files=\"{}\"{}{}>",
                   ex( res.name ).c_str(), darkflags::gateKindTag( res.kind ), ex( res.def ).c_str(),
                   res.isDark ? 1 : 0, res.isRuntime ? 1 : 0, ex( res.defSite.path ).c_str(), res.defSite.line,
                   res.family.size(), res.totalRegions, res.totalLines, res.branches.size(), res.bindings.size(),
                   res.hosts.size(), res.fileScopeLights, res.downstream.size(), res.dependents,
-                  res.tests.size(), res.untested.size(), res.filesScanned,
+                  res.tests.size(), res.untested.size(),
+                  res.untestedModscope > 0 ? " untested_modscope=\"" + std::to_string( res.untestedModscope ) + "\"" : std::string(),
+                  res.filesScanned,
                   rw::nextAttrXml( nextInvocation ).c_str(), std::string( rootAttr ).c_str() );
 
     // the contradiction row: this gate is ALREADY lit by the winning declaration, and dark only in the other
