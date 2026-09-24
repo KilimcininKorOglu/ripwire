@@ -260,7 +260,10 @@ cwd="$( printf '%s' "$input" | jq -r '.cwd // .workdir // empty' 2>/dev/null )"
 # walks the whole tree under cwd: a session started in $HOME measured over 30 s for one prompt, on every
 # prompt. The cost is routing in a small non-git project too; a missed recommendation is the direction
 # this hook already takes on every doubt.
-git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+# The answer must be `true`, not only exit 0: a bare repository, or a cwd inside a `.git` directory, prints
+# `false` with status 0, and routing there would walk git's own metadata.
+insideWorkTree="$( git -C "$cwd" rev-parse --is-inside-work-tree 2>/dev/null )" || exit 0
+[ "$insideWorkTree" = true ] || exit 0
 session="$( printf '%s' "$input" | jq -r '.session_id // .conversation_id // empty' 2>/dev/null )"
 
 promptBytes="$( printf '%s' "$prompt" | wc -c | tr -d ' ' )"

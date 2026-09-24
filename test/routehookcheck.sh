@@ -743,6 +743,31 @@ route_run "$H11" "$O11BIN:$PATH" "$( promptjson o11b "$REPO" "$RECPROMPT" )" >/d
 [ -s "$O11LOG" ] \
     && ok "O11 route: a prompt in a git work tree still calls ripwire (O11's positive control)" \
     || no "O11 route: a prompt in a git work tree never reached the stub, so O11 proved nothing"
+# A bare repository, and a cwd inside a work tree's own .git directory, are inside git but not inside a work tree:
+# `git rev-parse --is-inside-work-tree` prints `false` there WITH exit status 0, so a guard that reads only the status
+# routes and walks git's metadata. Both route hooks (claude and codex) must stay silent there. RED on the status-only
+# guard: both cwds reached the stub, for both hooks.
+O11BARE="$TMP/o11bare.git"; git init -q --bare "$O11BARE"
+for o11hook in "$HOOK" "$ROOT/hooks/ripwire-codex-route.sh"; do
+    for o11cwd in "$O11BARE" "$REPO/.git"; do
+        : >"$O11LOG"
+        printf '%s' "$( promptjson o11c "$o11cwd" "$RECPROMPT" )" \
+            | env HOME="$TMP/fakehome" RIPWIRE_HOME="$H11" PATH="$O11BIN:$PATH" bash "$o11hook" >/dev/null 2>&1
+        if [ -s "$O11LOG" ]; then
+            no "O11 route: $( basename "$o11hook" ) called ripwire in $( basename "$o11cwd" ), which is not a work tree: [$( tr '\n' ' ' <"$O11LOG" )]"
+        else
+            ok "O11 route: $( basename "$o11hook" ) never calls ripwire in $( basename "$o11cwd" ) (rev-parse prints false there)"
+        fi
+    done
+done
+: >"$O11LOG"
+printf '%s' "$( promptjson o11d "$REPO" "$RECPROMPT" )" \
+    | env HOME="$TMP/fakehome" RIPWIRE_HOME="$H11" PATH="$O11BIN:$PATH" bash "$ROOT/hooks/ripwire-codex-route.sh" >/dev/null 2>&1
+if [ -s "$O11LOG" ]; then
+    ok "O11 route: the codex hook still calls ripwire in a git work tree (the codex arms' positive control)"
+else
+    no "O11 route: the codex hook never reached the stub in a git work tree, so its O11 arms proved nothing"
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi
