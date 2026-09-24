@@ -93,7 +93,7 @@ def scan():
     for p in files:
         rel = p.relative_to(ROOT).as_posix()
         txt = p.read_text(errors='replace')
-        for a in re.findall(r'([a-z_]+)_capped', txt):
+        for a in re.findall(r'\b([A-Za-z_][A-Za-z0-9_]*)_capped', txt):   # mixed case too: calledBy_capped, not y_capped
             disc[rel].add(a)
         for m in DECL.finditer(txt):
             if not KEY.search(m.group(1)):

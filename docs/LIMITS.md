@@ -219,7 +219,7 @@ Discloses: **none**
 
 ### `src/docdrift.h`
 
-Discloses: `failed_capped`, `importers_capped`, `weak_capped`
+Discloses: `failed_capped`, `weak_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -586,7 +586,7 @@ Discloses: **none**
 
 ### `src/mcpverbs.h`
 
-Discloses: `blast_radius_capped`, `coboost_commits_capped`, `forgotten_capped`, `hits_capped`, `siblings_capped`, `terms_capped`, `unindexed_candidates_capped`
+Discloses: `blast_radius_capped`, `calledBy_capped`, `coboost_commits_capped`, `forgotten_capped`, `hits_capped`, `siblings_capped`, `terms_capped`, `unindexed_candidates_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
