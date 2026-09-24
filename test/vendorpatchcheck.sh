@@ -845,13 +845,23 @@ else
 fi
 
 # ── M: 1UL << shift-width family audit (static, no $BIN involved) ─────────────────────────────────
-python3 - "$DEPS_DIR" <<'PYEOF' > "$TMP/shiftwidth.out" 2>"$TMP/shiftwidth.err"
+# The audit is written once and run twice: first on a synthetic tree whose verdicts are known (M0, the arm's own
+# red-first control), then on third_party/deps/. A clean result means every *.c/*.h was READ and every `1UL <<`
+# operand was either proven < 32 or reported: the whole operand is parsed across lines, a numeric operand gets the
+# same >= 32 test as an enumerator, an operand that continues past its first token (`31 + 1`, `(n)`, `a[i]`) is
+# UNRESOLVED rather than read as its first token, and after an enumerator whose initializer is not a literal the
+# implicit members that follow stay unresolved until a literal initializer resets the count.
+cat > "$TMP/shiftwidth.py" <<'PYEOF'
 import re, sys, pathlib
 
 deps_dir = pathlib.Path(sys.argv[1])
 files = sorted(deps_dir.rglob("*.c")) + sorted(deps_dir.rglob("*.h"))
+if not files:
+    sys.exit(f"no *.c or *.h under {deps_dir}: the audit would read nothing")
 
-shift_re = re.compile(r'\b1UL\b\s*<<\s*([A-Za-z_]\w*|\d+)')
+shift_re = re.compile(r'\b1UL\b\s*<<')
+ident_re = re.compile(r'[A-Za-z_]\w*')
+num_re = re.compile(r'(0[xX][0-9A-Fa-f]+|[0-9]+)[uUlL]*(?![\w.])')
 enum_block_re = re.compile(r'\benum\b[^{;]*\{([^}]*)\}', re.S)
 
 def strip_comments(text):
@@ -883,51 +893,98 @@ def strip_comments(text):
             out.append(c); i += 1
     return ''.join(out)
 
+def c_int(tok):
+    # a C integer literal (hex, octal, decimal; any u/l suffix): its value, or None when it is not one
+    m = re.fullmatch(r'(0[xX][0-9A-Fa-f]+|0[0-7]*|[1-9][0-9]*)[uUlL]*', tok.strip())
+    if not m:
+        return None
+    d = m.group(1)
+    return int(d, 16) if d[:2] in ('0x', '0X') else int(d, 8) if d.startswith('0') else int(d)
+
+def operand(text, i):
+    # The shift operand starting at text[i]: (token, None) when it is ONE identifier or number that ends the
+    # operand, else (None, why). `<<` binds looser than + - * / % and tighter than everything after it, so the
+    # token ends the operand exactly when the next code character is none of those (nor a call, index, member
+    # access or a further shift).
+    n = len(text)
+    while i < n and text[i].isspace():
+        i += 1
+    m = num_re.match(text, i) or ident_re.match(text, i)
+    if not m:
+        return None, "the operand is not a single identifier or number (%r)" % text[i:i + 12].split('\n')[0]
+    j = m.end()
+    while j < n and text[j].isspace():
+        j += 1
+    nxt = text[j:j + 2]
+    if j < n and (text[j] in '+-*/%([.' or nxt in ('<<', '>>') or text[j].isalnum() or text[j] == '_'):
+        return None, "the operand continues past %s (%r)" % (m.group(0), text[i:j + 8].replace('\n', ' '))
+    return m.group(0), None
+
 for f in files:
+    rel = f.relative_to(deps_dir.parent).as_posix()
     try:
-        text = strip_comments(f.read_text(errors="replace"))
-    except OSError:
-        continue
+        text = strip_comments(f.read_bytes().decode("utf-8", errors="replace"))
+    except OSError as e:
+        sys.exit(f"cannot read {rel}: {e}: a file the audit could not read is not a clean file")
     # Ordinal map for every identifier declared in any enum { … } block in this file. A later
     # block overwrites an earlier one on a name collision, same as C's last-definition-wins scope.
     ordmap = {}
     for m in enum_block_re.finditer(text):
-        ordv = 0
+        ordv = 0   # None once an initializer could not be read: the implicit members after it are unknown too
         for part in m.group(1).split(','):
             part = part.strip()
             if not part:
                 continue
             if '=' in part:
                 name, val = (p.strip() for p in part.split('=', 1))
-                try:
-                    ordv = int(val, 0)
-                except ValueError:
-                    if re.match(r'^[A-Za-z_]\w*$', name):
-                        ordmap[name] = None  # non-constant initializer: cannot resolve statically
-                    continue
+                ordv = c_int(val)
             else:
                 name = part
             if not re.match(r'^[A-Za-z_]\w*$', name):
                 continue
             ordmap[name] = ordv
-            ordv += 1
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        for sm in shift_re.finditer(line):
-            tok = sm.group(1)
-            rel = f.relative_to(deps_dir.parent).as_posix()
-            if tok.isdigit():
-                print(f"OK\t{rel}\t{lineno}\t{tok}\t{tok}")
-                continue
-            val = ordmap.get(tok, None)
-            if val is None:
-                print(f"UNRESOLVED\t{rel}\t{lineno}\t{tok}")
-            elif val >= 32:
-                print(f"BAD\t{rel}\t{lineno}\t{tok}\t{val}")
-            else:
-                print(f"OK\t{rel}\t{lineno}\t{tok}\t{val}")
+            ordv = None if ordv is None else ordv + 1
+    for sm in shift_re.finditer(text):
+        lineno = text.count('\n', 0, sm.start()) + 1
+        tok, why = operand(text, sm.end())
+        if tok is None:
+            print(f"UNRESOLVED\t{rel}\t{lineno}\t-\t{why}")
+            continue
+        val = c_int(tok) if tok[0].isdigit() else ordmap.get(tok)
+        if val is None:
+            print(f"UNRESOLVED\t{rel}\t{lineno}\t{tok}\tcould not resolve {tok}'s ordinal statically (unknown, or after a non-literal enumerator initializer)")
+        elif val >= 32:
+            print(f"BAD\t{rel}\t{lineno}\t{tok}\t{val}")
+        else:
+            print(f"OK\t{rel}\t{lineno}\t{tok}\t{val}")
 PYEOF
-if [ -s "$TMP/shiftwidth.err" ]; then
-    no "M: the shift-width audit script errored: $( head -3 "$TMP/shiftwidth.err" | tr '\n' ' ' )"
+# M0 — the audit's own control. Each shape below is one the previous per-line, first-token audit passed (1UL << 32,
+# an operand continued by `+ 1` or onto the next line, a parenthesised operand, an implicit enumerator after a
+# non-literal initializer); each must now be BAD or UNRESOLVED, while the plainly safe shifts stay OK.
+M0="$TMP/shiftwidth-m0/deps"; mkdir -p "$M0/x"
+cat > "$M0/x/s.c" <<'CEOF'
+enum Tok { A = 0, B = 1 << 5, C, D = 3, E };
+unsigned long f( int n ) {
+    return 1UL << 32 | 1UL << 31 + 1 | 1UL <<
+        40 | 1UL << ( 2 ) | 1UL << C | 1UL << E | 1UL << 0x1f | 1UL << 5, 0;
+}
+CEOF
+m0got="$( python3 "$TMP/shiftwidth.py" "$M0" 2>&1 | cut -f1,3,4 | tr '\t\n' ': ' )"
+m0want='BAD:3:32 UNRESOLVED:3:- BAD:3:40 UNRESOLVED:4:- UNRESOLVED:4:C OK:4:E OK:4:0x1f OK:4:5 '
+if [ "$m0got" = "$m0want" ]; then
+    ok "M0: the shift-width audit rejects the 5 shapes a first-token, per-line audit passed (numeric 32, \`31 + 1\`, 40 on the next line, \`( 2 )\`, an enumerator after a non-literal initializer) and passes 3 safe shifts"
+else
+    no "M0: the shift-width audit's own control: got [$m0got], want [$m0want]"
+fi
+m0empty="$TMP/shiftwidth-m0/empty"; mkdir -p "$m0empty"
+if python3 "$TMP/shiftwidth.py" "$m0empty" >/dev/null 2>&1; then
+    no "M0: the audit passed a tree with no *.c/*.h (it read nothing)"
+else
+    ok "M0: the audit refuses a tree with no *.c/*.h rather than report zero sites"
+fi
+python3 "$TMP/shiftwidth.py" "$DEPS_DIR" > "$TMP/shiftwidth.out" 2>"$TMP/shiftwidth.err"; mrc=$?
+if [ "$mrc" != 0 ] || [ -s "$TMP/shiftwidth.err" ]; then
+    no "M: the shift-width audit did not complete (rc=$mrc): $( head -3 "$TMP/shiftwidth.err" | tr '\n' ' ' )"
 else
     mBad=0; mUnresolved=0
     while IFS=$'\t' read -r kind rel lineno tok val; do
@@ -938,12 +995,12 @@ else
                 ;;
             UNRESOLVED)
                 mUnresolved=$(( mUnresolved + 1 ))
-                no "M: $rel:$lineno — \`1UL << $tok\` — could not resolve $tok's ordinal statically (non-constant enumerator initializer); cannot prove this shift is in range"
+                no "M: $rel:$lineno — \`1UL << …\`: $val; cannot prove this shift is in range"
                 ;;
         esac
     done < "$TMP/shiftwidth.out"
     if [ "$mBad" = 0 ] && [ "$mUnresolved" = 0 ]; then
-        ok "M: no \`1UL << \` shift with a resolvable width >= 32 (or an unresolvable operand) under third_party/deps/ ($( wc -l < "$TMP/shiftwidth.out" | tr -d ' ' ) bare-1UL shift site(s) checked)"
+        ok "M: no \`1UL << \` shift with a width >= 32 (or an operand the audit cannot establish) under third_party/deps/ ($( wc -l < "$TMP/shiftwidth.out" | tr -d ' ' ) bare-1UL shift site(s) checked)"
     fi
 fi
 

@@ -343,9 +343,9 @@ if d.get( "capped" ) is not True or d.get( "sigs_shown" ) != len( seq ) or not d
 print( "OK r=1..%d of sigs_total=%d" % ( len( seq ), d[ "sigs_total" ] ) )' "${1:-0}"; }
 # A floor on the served rows: at 2000 B this query serves 8 today (measured at a2faa525), so a regression that dropped
 # every row while still saying capped="1" total>0 must fail (an empty head is 1..0, so the order test alone passes it).
-# 64 B serves 1 today, and the floor holds there too: packSignatures (src/serialize.h) tests `used >= budgetBytes`
-# before each row with `used` starting at 0, so the first row is admitted at any budget by construction. The floor is
-# 1, not 8, so a legitimate byte change to the rows does not trip it.
+# 64 B serves 1 today, and the floor holds there too: gateSigRowsRankFirst (src/serialize.h, which packSignatures calls)
+# tests `used >= budgetBytes` before each row with `used` starting at 0, so the first row is admitted at any budget by
+# construction. The floor is 1, not 8, so a legitimate byte change to the rows does not trip it.
 for pb in 64 2000; do
     minrows=1
     if v="$( "$BIN" src --for="rank graph teleport" --pack-budget-bytes=$pb --no-cache 2>/dev/null | gate_xml $minrows )"; then

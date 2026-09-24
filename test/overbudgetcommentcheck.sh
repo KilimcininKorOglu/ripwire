@@ -275,10 +275,27 @@ lines = [ "## Alpha" ] + [ "line %02d of the alpha section text" % i for i in ra
 open( os.path.join( sys.argv[1], "doc.md" ), "w" ).write( "\n".join( lines ) + "\n" )
 PY
 N5SZ="$( wc -c <"$N5/doc.md" | tr -d ' ' )"
-N5B="$( "$BIN" "$N5" --expand=Alpha --top-k=0 --pack-budget-bytes=$(( N5SZ - 1 )) --no-cache 2>/dev/null | grep -o '<b t="sec"[^>]*>' )"
+"$BIN" "$N5" --expand=Alpha --top-k=0 --pack-budget-bytes=$(( N5SZ - 1 )) --no-cache >"$TMP/n5.xml" 2>/dev/null
+N5B="$( grep -o '<b t="sec"[^>]*>' "$TMP/n5.xml" )"
+# "served whole" is checked on the BODY, not only on the tag: the section's CDATA must be the file's text less its
+# closing newline, so an answer that drops the last lines without saying so fails even with a clean tag.
+N5W="$( python3 - "$TMP/n5.xml" "$N5/doc.md" <<'PY'
+import re, sys
+doc = open( sys.argv[1], "rb" ).read()
+m = re.search( rb'<b t="sec"[^>]*><!\[CDATA\[(.*?)\]\]></b>', doc, re.S )
+want = open( sys.argv[2], "rb" ).read()
+if m is None:
+    print( "FAIL no <b t=\"sec\"> body" ); sys.exit( 0 )
+got = m.group( 1 ).replace( b']]]]><![CDATA[>', b']]>' )
+print( "OK" if got == want[ :-1 ] else "FAIL body is %d B, want the whole %d B less its newline; ends %r" % ( len( got ), len( want ) - 1, got[ -40: ] ) )
+PY
+)"
 case "$N5B" in
     *over_ceiling*|*truncated*|'') no "(B7) a $N5SZ-byte section at budget $(( N5SZ - 1 )) reads over_ceiling/truncated: $N5B" ;;
-    *) ok "(B7) a $N5SZ-byte section ending in its newline at budget $(( N5SZ - 1 )) is served whole, no over_ceiling=" ;;
+    *) case "$N5W" in
+           OK) ok "(B7) a $N5SZ-byte section ending in its newline at budget $(( N5SZ - 1 )) is served whole (body = the file less its newline), no over_ceiling=" ;;
+           *)  no "(B7) the $N5SZ-byte section's tag is clean but its body is not the whole section: $N5W" ;;
+       esac ;;
 esac
 
 echo
