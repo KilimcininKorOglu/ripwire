@@ -333,7 +333,7 @@ def call( pattern ):
     reqs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
              { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "grep", "arguments": { "path": ".", "pattern": pattern } } } ]
     out = subprocess.run( [ binPath, "--mcp" ], input = "".join( json.dumps( r ) + "\n" for r in reqs ).encode(),
-                          stdout = subprocess.PIPE, stderr = subprocess.DEVNULL ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
+                          stdout = subprocess.PIPE, stderr = subprocess.DEVNULL, timeout = 300 ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
     text = json.loads( out )[ "result" ][ "content" ][ 0 ][ "text" ]
     seen = {}
     def hook( pairs ):
@@ -394,7 +394,7 @@ import json, subprocess, sys
 reqs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
          { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "grep", "arguments": { "path": sys.argv[ 2 ], "pattern": "x", "limit": 3 } } } ]
 out = subprocess.run( [ sys.argv[ 1 ], "--mcp" ], input = "".join( json.dumps( r ) + "\n" for r in reqs ).encode(),
-                      stdout = subprocess.PIPE, stderr = subprocess.DEVNULL ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
+                      stdout = subprocess.PIPE, stderr = subprocess.DEVNULL, timeout = 300 ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
 d = json.loads( json.loads( out )[ "result" ][ "content" ][ 0 ][ "text" ] )
 if d.get( "hits_capped" ) is not True:
     print( "FAIL (J) MCP presence guard — hits_capped=%r on the 5M-hit fixture" % d.get( "hits_capped" ) )
@@ -431,7 +431,7 @@ import json, subprocess, sys
 reqs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
          { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "grep", "arguments": { "path": ".", "pattern": "e" } } } ]
 out = subprocess.run( [ sys.argv[ 1 ], "--mcp" ], input = "".join( json.dumps( r ) + "\n" for r in reqs ).encode(),
-                      stdout = subprocess.PIPE, stderr = subprocess.DEVNULL ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
+                      stdout = subprocess.PIPE, stderr = subprocess.DEVNULL, timeout = 300 ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
 d = json.loads( json.loads( out )[ "result" ][ "content" ][ 0 ][ "text" ] )
 tf, tp = d.get( "tier_files" ), d.get( "tier_parsed" )
 print( ( "PASS (K) MCP tier_files=%r > tier_parsed=%r beside tier_budget (CLI twin)" % ( tf, tp ) ) if isinstance( tf, int ) and isinstance( tp, int ) and tf > tp else

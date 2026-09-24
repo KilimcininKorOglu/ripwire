@@ -246,7 +246,7 @@ if not cut:
     print( "FAIL no truncated body — the arm measures nothing" ); sys.exit( 0 )
 for at, text in cut:
     out = subprocess.run( [ sys.argv[2], sys.argv[3], "--no-cache", "--top-k=0", "--legend=full", "--expand=%s:%s:%s" % ( at["p"], at["l"], at["n"] ) ],
-                          capture_output=True ).stdout
+                          capture_output=True, timeout=300 ).stdout
     # anchored on the <b> element: the full legend itself quotes the literal "<![CDATA[" (the ]]> split rule)
     whole = re.search( rb'<b [^>]*><!\[CDATA\[(.*?)\]\]>(?:<calls|<note|</b>)', out, re.S ).group( 1 ).replace( b']]]]><![CDATA[>', b']]>' ).decode()
     lo, hi = map( int, at["lines"].split( "/" )[0].split( "-" ) )

@@ -182,7 +182,7 @@ EX="$( "$BIN" "$FX4" --expand=hub_dispatch --top-k=0 --legend=full 2>/dev/null )
 EXPECT_SPEC="$( python3 - "$BIN" "$FX4" <<'PY'
 import re, subprocess, sys, collections
 b, fx = sys.argv[1], sys.argv[2]
-run = lambda *a: subprocess.run( [ b, fx ] + list( a ), capture_output=True, text=True ).stdout
+run = lambda *a: subprocess.run( [ b, fx ] + list( a ), capture_output=True, text=True, timeout=300 ).stdout
 defs = collections.Counter()
 for at in re.findall( r'<s ([^>]*)>', run( "--top-k=1000000", "--legend=full" ) ):
     a = dict( re.findall( r'(\w+)="([^"]*)"', at ) )

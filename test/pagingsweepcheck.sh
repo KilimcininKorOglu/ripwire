@@ -838,7 +838,7 @@ python3 - "$BIN" "$CLFIX" <<'PYM'
 import re, subprocess, sys
 BIN, FIX = sys.argv[1], sys.argv[2]
 def run( *extra ):
-    doc = subprocess.run( [ BIN, FIX, "--clones", "--no-cache" ] + list( extra ), capture_output=True, text=True, errors="replace" ).stdout
+    doc = subprocess.run( [ BIN, FIX, "--clones", "--no-cache" ] + list( extra ), capture_output=True, text=True, errors="replace", timeout=300 ).stdout
     root = re.search( r'<clones [^>]*>', doc )
     attrs = dict( re.findall( r'(\w+)="([^"]*)"', root.group( 0 ) ) ) if root else {}
     rows = [ m.group( 1 ) + "|" + ",".join( re.findall( r'<f n="([^"]*)"', m.group( 2 ) ) )
