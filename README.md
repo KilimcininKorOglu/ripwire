@@ -1377,6 +1377,8 @@ counts toward `impacted=` when it is a real caller in the blast radius, just nev
 Those excluded owners are counted, not dropped without a trace: `untested_modscope="N"` (always
 present, alongside `untested=`) says how many, so a change whose only reader is an untestable
 entrypoint discloses why `untested=` reads zero instead of looking like there was nothing to find.
+The capture above predates that attribute (and a few other root attributes added since), so its root
+lacks it; today's root carries `untested_modscope="N"` immediately after `untested=`.
 
 A TS/JS `run_unknown="1"` can mean the manifest genuinely names nothing recognized, or it can mean a
 real runner this tool does not yet derive: node's own test runner invoked through `tsx` (a common way
