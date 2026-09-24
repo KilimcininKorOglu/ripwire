@@ -241,5 +241,54 @@ LAYOUT_CAVEAT="$( "$BIN" "$WHYFIX" --layout=Derived --no-cache 2>/dev/null | gre
 printf '%s' "$WHY_OUT" | xmllint --noout - 2>/dev/null \
     && ok "18) why= output is well-formed XML" || no "18) why= output is malformed XML"
 
+# ── 19) a <pair> names the fields it counted — the display sort remaps a=/b=, it never re-points them ─
+# 2026-09-24 (cut-fix correctness): applyDisplayOrder sorted <f> rows (placed first, then offset, then name) and
+# cut them to 32, but AffPair::a/b are INDICES into that vector and were never remapped. So (a) any struct whose
+# display order differs from declaration order printed the WRONG names on its pairs — an unmodeled struct (every
+# field placed="0") sorts by name, so `zz,yy` read `xx,yy` — and (b) a pair on a field past the 32-row cut read a
+# destroyed vector element (a libc++-hardened build of the old code traps there, SIGTRAP in writeFieldAffinity).
+# Isolated fixtures, like arm 18: the shared corpus's pins stay untouched. Each fixture's <fn f=> rows are the
+# independent witness: they list the touched names per function straight from the access scan.
+PAIRFIX="$TMP/pairfix"; mkdir -p "$PAIRFIX/sorted" "$PAIRFIX/cut" "$PAIRFIX/tail"
+cat >"$PAIRFIX/sorted/a.cpp" <<'EOF2'
+struct Base { int b0; };
+struct Mixed : Base { int zz; int yy; int xx; };
+int readZY( Mixed& m ) { return m.zz + m.yy; }
+int readZY2( Mixed& m ) { return m.zz - m.yy; }
+int readX( Mixed& m ) { return m.xx; }
+EOF2
+# (b) 40 fields declared f39..f00 on an unmodeled struct: the name sort moves f02/f01 (declared 37/38) to rows
+# 2/1, so the old code read slots 37/38 of a vector already cut to 32.
+{ printf 'struct Base { int b0; };\nstruct Wide : Base {\n'
+  for i in $( seq 39 -1 0 ); do printf '    int f%02d;\n' "$i"; done
+  printf '};\n'
+  for i in $( seq 0 39 ); do printf 'int t%02d( Wide& w ) { return w.f%02d; }\n' "$i" "$i"; done
+  for k in 1 2 3; do printf 'int hot%d( Wide& w ) { return w.f02 + w.f01; }\n' "$k"; done; } >"$PAIRFIX/cut/a.cpp"
+# (c) 40 placed fields in declaration order: the hot pair f37/f38 sits in the cut <f> TAIL. The pair list is the
+# ranked head, so the pair stays and names both fields; exactly 32 <f> rows print, touched="40" says 8 more exist.
+{ printf 'struct Tail {\n'; for i in $( seq 0 39 ); do printf '    int f%02d;\n' "$i"; done; printf '};\n'
+  for i in $( seq 0 39 ); do printf 'int t%02d( Tail& w ) { return w.f%02d; }\n' "$i" "$i"; done
+  for k in 1 2 3; do printf 'int hot%d( Tail& w ) { return w.f37 + w.f38; }\n' "$k"; done; } >"$PAIRFIX/tail/a.cpp"
+pair_of(){ printf '%s' "$1" | grep -oE '<pair a="[^"]*"[^>]*>' | head -1; }   # a quoted a=: never the legend's '<pair a= b=' shape
+S_OUT="$( "$BIN" "$PAIRFIX/sorted" --field-affinity --no-cache 2>/dev/null )"
+S_PAIR="$( pair_of "$S_OUT" )"
+printf '%s' "$S_OUT" | grep -q 'n="readZY"[^>]*f="zz,yy"' \
+    || no "19a) fixture broken: readZY's <fn> row does not list zz,yy"
+printf '%s' "$S_PAIR" | grep -q 'a="zz" b="yy" fns="2"' \
+    && ok "19a) the display sort (unmodeled: by name) does not re-point the pair — a=\"zz\" b=\"yy\", the two fields readZY/readZY2 touch" \
+    || no "19a) the pair names fields its functions never co-accessed (a=/b= not remapped through the display sort): $S_PAIR"
+C_OUT="$( "$BIN" "$PAIRFIX/cut" --field-affinity --no-cache 2>/dev/null )"; c_rc=$?
+C_PAIR="$( pair_of "$C_OUT" )"
+[ "$c_rc" = 0 ] && printf '%s' "$C_PAIR" | grep -q 'a="f02" b="f01" fns="3"' \
+    && ok "19b) a pair whose fields were declared past row 32 names them (a=\"f02\" b=\"f01\"), no read past the cut" \
+    || no "19b) rc=$c_rc — the pair read the wrong or a destroyed <f> slot: $C_PAIR"
+T_OUT="$( "$BIN" "$PAIRFIX/tail" --field-affinity --no-cache 2>/dev/null )"; t_rc=$?
+T_PAIR="$( pair_of "$T_OUT" )"
+T_FROWS="$( printf '%s' "$T_OUT" | grep -oE '<f n="f[0-9]+"' | wc -l | tr -d ' ' )"
+[ "$t_rc" = 0 ] && printf '%s' "$T_PAIR" | grep -q 'a="f37" b="f38" fns="3"' \
+    && [ "$T_FROWS" = 32 ] && printf '%s' "$T_OUT" | grep -q '<s [^>]*touched="40"' \
+    && ok "19c) the ranked pair on two cut-tail fields is KEPT and named (a=\"f37\" b=\"f38\"); 32 <f> rows of touched=\"40\"" \
+    || no "19c) rc=$t_rc f_rows=$T_FROWS — the head pair on the cut <f> tail was lost or misnamed: $T_PAIR"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES"
 exit "$fail"

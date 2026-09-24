@@ -87,7 +87,9 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 # the lane's 51 and is already in sink form; the lane's mcpedit lock site took main's new wording in its sink form.
 # train7-fix1 (2026-09-19): docdrift.h's collectRepoPaths root-walk site converted to the RepoPaths sink (RootWalkFailed),
 # the doc-drift twin of the darkflags conversion above. 50 -> 49.
-DISCLOSE_SINKLESS_PIN=49
+# lane/cutfix-correctness (2026-09-24): clones.h's Type-3 pair-cap site converted to the Type3Stats sink (PairCapHit) —
+# the one-argument trace compiled out under NDEBUG, so the shipped binary never said the cap fired. 49 -> 48.
+DISCLOSE_SINKLESS_PIN=48
 WORK="$( mktemp -d "${TMPDIR:-/tmp}/selfcheck.XXXXXX" )"
 trap 'rm -rf "$WORK"' EXIT
 T=$'\t'

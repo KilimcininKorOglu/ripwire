@@ -1566,8 +1566,19 @@ std::optional<int> runVerify( const MainDispatch& d )
     };
 
     char              pab[ kPageDisclosureCap ];
-    const auto        pageTailOf = [ & ]( std::size_t shownRows, std::size_t total, std::size_t windowEnd ) -> const char*
-    { return pageDisclosure( pab, sizeof( pab ), shownRows, total, windowEnd, 0, 0, true ); };
+    // 2026-09-24 ruling (cut-fix correctness): the CAP HALF only — shown= capped= — never the paging quintet.
+    // pageDisclosure's M2 rule put total=/has_more=/next_offset= on every capped answer, but --verify is not a
+    // paging verb (honorsPaging() refuses --limit/--offset beside it), so next_offset= advertised a call the CLI
+    // then refused. The evidence rows are a sample behind the verdict, and every row total already rides on the
+    // root under its own name (count= hits= defs= occurrences= — rule 2's "the report's own count attribute"), so
+    // shown= against that total is the whole disclosure. The uncapped answer is byte-identical: it was always
+    // exactly this cap half.
+    const auto        pageTailOf = [ & ]( std::size_t shownRows, std::size_t total, std::size_t /*windowEnd*/ ) -> const char*
+    {
+        ASSUME( shownRows <= total );
+        rw::formatTo( pab, sizeof( pab ), " shown=\"{}\" capped=\"{}\"", shownRows, shownRows < total ? 1 : 0 );
+        return pab;
+    };
 
     // ── calls( A , B ) — does A transitively call B (directed, name-based call graph) ────────────────
     if( claim.shape == verify::ClaimShape::Calls )
