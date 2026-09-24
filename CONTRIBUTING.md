@@ -35,6 +35,30 @@ cmake -S . -B asan -DRIPWIRE_ASAN=ON && cmake --build asan -j
 LSAN_OPTIONS=suppressions=lsan_suppressions.txt ./asan/ripwire <dir> >/dev/null
 ```
 
+**macOS 26 with the Command Line Tools' AppleClang 17: ASan hangs before `main`.** Every
+`-fsanitize=address` binary, even an empty `main`, hangs in ASan's start-up (shadow-memory set-up
+walking the dyld shared cache), so each ASan gate just times out. CI's Xcode 26.6 AppleClang 21 is
+not affected, and CMake warns when it sees the affected pair. Configure the sanitizer tree with
+Homebrew LLVM 22 instead, linking its own libc++ so the headers and the dylib are one release
+(Homebrew clang otherwise links the system libc++ against its libc++ 22 headers):
+
+```bash
+brew install llvm@22     # keg-only; nothing goes on PATH and /usr/bin/clang stays AppleClang
+L=$(brew --prefix llvm@22)
+cmake -S . -B asan -DRIPWIRE_ASAN=ON \
+  -DCMAKE_C_COMPILER="$L/bin/clang" -DCMAKE_CXX_COMPILER="$L/bin/clang++" \
+  -DCMAKE_EXE_LINKER_FLAGS="-L$L/lib/c++ -L$L/lib/unwind -lunwind -Wl,-rpath,$L/lib/c++ -Wl,-rpath,$L/lib/unwind"
+cmake --build asan -j
+otool -L asan/ripwire    # expect llvm@22's libc++, libunwind and libclang_rt.asan_osx_dynamic.dylib
+```
+
+Name `llvm@22`, not `llvm`: the unversioned keg moves to a new major on `brew upgrade`, and an older
+one may still be installed. Gates that compile their own sanitizer harness take the compiler from
+`CXX` (strkerncheck's CMake leg also reads `CC` and `LDFLAGS`), so export
+`CC="$L/bin/clang" CXX="$L/bin/clang++" LDFLAGS="<the linker flags above>"` before running them.
+With libc++ 22, oswin32logiccheck arm (B) stops on an `-fsanitize=integer` report inside libc++'s own
+`<string>` (`__grow_by` stores `-1` into `size_type` on purpose). That is the toolchain, not ripwire.
+
 ### Stale objects — the build that reports success and is wrong
 
 Make decides what to recompile by comparing timestamps, and header tracking in this tree is correct
