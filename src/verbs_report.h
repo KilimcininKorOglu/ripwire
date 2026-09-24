@@ -2894,7 +2894,7 @@ std::optional<int> runZoom( const MainDispatch& d )
             inHierarchy += members[topL][gid].size();
         }
         const std::uint32_t isolatedCount = N - std::uint32_t( inHierarchy );
-        rw::emitTo( stdout, "<!-- ripwire zoom: NESTED module hierarchy (multi-level Louvain); indent = one level deeper; module = dominant-dir(symbol-count); leaf lists top-ranked symbols; bridge = cross-top-module call traffic, the 12 heaviest (a cut adds shown_bridges=/bridges_capped=/bridges=, all pairs). "
+        rw::emitTo( stdout, "<!-- ripwire zoom: NESTED module hierarchy (multi-level Louvain); indent = one level deeper; module = dominant-dir(symbol-count); leaf lists top-ranked symbols; bridge = cross-top-module call traffic{}. "
                      "symbols= is the whole corpus; isolated= is the symbols in NO top-level module (a group of one — the same rule that makes top_modules= count only groups of 2 or more), and they reconcile exactly: "
                      "symbols= equals isolated= plus the sum of the TOP-LEVEL size= values, every one of them, including any this page did not print. "
                      "On a level-0 module size= is its true member count and shown=/capped= describe the member list printed here, which is fixed at the 5 top-ranked members and is not widened by limit=/offset= (those page the TOP-LEVEL modules); "
@@ -2903,6 +2903,7 @@ std::optional<int> runZoom( const MainDispatch& d )
                      "levels_shown= is how many of the levels= this document prints from the top (default 2; the zoom-levels flag sets it, 0 = all): a module AT the cut "
                      "carries children= (its child modules, none printed) instead of nesting. The top-level module rows are a WINDOW (shown=/capped=/total=/next_offset=, "
                      "default 40 by rank mass; limit=/offset= page it) and next= pastes the next page. {}{}-->",
+                     bridge.size() > kZoomBridgeCap ? ", the 12 heaviest (shown_bridges=/bridges_capped=/bridges= of all pairs)" : "",
                      rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         // §P15/§P16: top_modules= is a real, deterministically-ordered row list (size desc, id asc — the same
         // rule --communities' module listing uses) that used to print EVERY top module unconditionally, so a
@@ -3508,7 +3509,21 @@ std::optional<int> runStructureText( const MainDispatch& d )
         const std::string  trRootPrefix = trSingleRoot ? rw::sarif::rootPrefixOf( cfg.roots[0] ) : std::string();
         std::vector<char>  trRootEsc;
         const std::string  trRootAttr   = trSingleRoot ? ( " root=\"" + std::string( rw::escapeXml( cfg.roots[0], trRootEsc ) ) + "\"" ) : std::string();
-        rw::emitTo( stdout, "<!-- ripwire tree: each file + its 3 top symbols by rank (symbols= counts all; a cut adds shown_symbols=/symbols_capped= to the root), files ordered by their best "
+        // cut-fix E: the window and the per-file symbol cut are measured BEFORE the legend, so the legend defines
+        // shown_symbols=/symbols_capped= exactly when the root below carries them (an uncut page pays no bytes for it).
+        const PageWindow  pw = pageWindow( ford.size(), effectiveRowCap( cfg.pageLimit, kTreeRowCap ), cfg.pageOffset );
+        // cut-fix E: each <file> lists its kTreeSymbolsPerFile best-ranked symbols, and a longer list was cut with only
+        // its symbols= total to say so. The page's own pair, present only when some printed file's list was cut: shown_
+        // symbols= is the <s> rows below, and each row's symbols= is its total, so symbols= above the per-file cap marks
+        // exactly the cut rows (no second total on the root: summing it would restate the rows' own counts).
+        std::size_t treeSymsShown = 0, treeSymsTotal = 0;
+        for( std::size_t fi = pw.begin; fi < pw.end; ++fi )
+        {
+            treeSymsShown += std::min<std::size_t>( kTreeSymbolsPerFile, byFile[ ford[fi] ].size() );
+            treeSymsTotal += byFile[ ford[fi] ].size();
+        }
+        const std::string treeSymsCut = rw::secondaryCutAttrs( "symbols", treeSymsShown, treeSymsTotal );
+        rw::emitTo( stdout, "<!-- ripwire tree: each file + its 3 top symbols by rank{}, files ordered by their best "
                      "symbol's rank (path breaks ties) — a session-start orientation map. files= is the indexed "
                      "corpus; rows list files WITH symbols; files_unlisted= holds the symbol-less remainder "
                      // W3FIX NIT: "files equals the listed rows plus files_unlisted on every run" reads FALSE on
@@ -3521,7 +3536,8 @@ std::optional<int> runStructureText( const MainDispatch& d )
                      // P4 (L7): the default window, defined where the reader meets it
                      "The rows are a WINDOW even without explicit paging: the default prints the 80 files with the best-ranked symbols "
                      "(shown=/capped=/total=/has_more=/next_offset= disclose the cut) and next= pastes the next page; limit= raises it. "
-                     "{}-->{}", rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(),
+                     "{}-->{}", treeSymsCut.empty() ? "" : " (symbols= counts all; shown_symbols=/symbols_capped= on the root mark a cut)",
+                     rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(),
                      rw::rootRelPathsLegend( trSingleRoot ) );
         // T2 + §P8 G1: --limit/--offset paginate over the (sorted) non-empty file set. files= stays the TRUE
         // total of INDEXED files (all of them, matching pre-T2) — deliberately NOT the paging total, because
@@ -3531,25 +3547,14 @@ std::optional<int> runStructureText( const MainDispatch& d )
         // so the un-paginated tag is byte-identical. See src/pageview.h, THE TRUNCATION VOCABULARY.
         // P4 (L7): kTreeRowCap is the DEFAULT window now (187,209 B / 3,773 rows on this repo before); --limit=N
         // raises it. discloseCap fires exactly when the window cut the list, so a tree that fits stays byte-identical.
-        const PageWindow  pw = pageWindow( ford.size(), effectiveRowCap( cfg.pageLimit, kTreeRowCap ), cfg.pageOffset );
         const bool        treeCut  = pw.end - pw.begin < ford.size();
         const std::string treeNext = treeCut ? rw::nextAttrXml( rw::pagedNext( "--tree", cfg.pageLimit, pw.end ) ) : std::string();
         char              pab[ kPageDisclosureCap ];
-        // cut-fix E: each <file> lists its kTreeSymbolsPerFile best-ranked symbols, and a longer list was cut with only
-        // its symbols= total to say so. The page's own pair, present only when some printed file's list was cut: shown_
-        // symbols= is the <s> rows below, and each row's symbols= is its total, so symbols= above the per-file cap marks
-        // exactly the cut rows (no second total on the root: summing it would restate the rows' own counts).
-        std::size_t treeSymsShown = 0, treeSymsTotal = 0;
-        for( std::size_t fi = pw.begin; fi < pw.end; ++fi )
-        {
-            treeSymsShown += std::min<std::size_t>( kTreeSymbolsPerFile, byFile[ ford[fi] ].size() );
-            treeSymsTotal += byFile[ ford[fi] ].size();
-        }
         rw::emitTo( stdout, "<tree files=\"{}\" files_unlisted=\"{}\"{}{}{}{}>", F, filesUnlisted,
                      ( pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, ford.size(), pw.end,
                                        cfg.pageLimit, cfg.pageOffset, treeCut )
                        + rw::renderDisclosure( prD, rw::DiscloseAs::XmlAttrs ) ).c_str(),
-                     trRootAttr.c_str(), rw::secondaryCutAttrs( "symbols", treeSymsShown, treeSymsTotal ).c_str(), treeNext.c_str() );
+                     trRootAttr.c_str(), treeSymsCut.c_str(), treeNext.c_str() );
         std::vector<char> trEsc;
         for( std::size_t fi = pw.begin; fi < pw.end; ++fi )
         {
