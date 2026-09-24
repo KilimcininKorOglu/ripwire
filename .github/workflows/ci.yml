@@ -218,6 +218,13 @@ jobs:
           cmake -S . -B build-tidy -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           cmake --build build-tidy --target ripwire_version_stamp
 
+      # GATING, and deliberately narrow: only the silent-wrong-answer checks that sit at ZERO rows on these five TUs
+      # (the list lives in scripts/tidycheck.sh, the counts in .clang-tidy's header). --warnings-as-errors='*'
+      # makes any new row red. CLANG_TIDY is named, so a wrong or missing major is an error here, never a SKIP.
+      # Local equivalent: CLANG_TIDY=/opt/homebrew/opt/llvm@22/bin/clang-tidy bash scripts/tidycheck.sh
+      - name: clang-tidy — gate (scripts/tidycheck.sh, the zero-row subset)
+        run: CLANG_TIDY=clang-tidy-"$CLANG_VERSION" bash scripts/tidycheck.sh build-tidy
+
       - name: clang-tidy — ADVISORY, never gates
         continue-on-error: true
         run: |

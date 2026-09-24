@@ -610,6 +610,7 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
                 {
                     pendingParsedBytes += bytes.size();
                     pendingParsed.emplace_back( static_cast<std::uint32_t>( fileId ), le, std::move( bytes ), tree.release(), std::move( ppDead ) );
+                    bytes.clear();   // moved-from is "valid but unspecified": make it empty. Every path refills it (readFile) before a read
                     continue;
                 }
 

@@ -219,12 +219,29 @@ releases and an unpinned checker reports drift on a tree that was formatted corr
 `RIPWIRE_FORMAT_ANY_VERSION=1` to run anyway, and `CLANG_FORMAT=/path/to/clang-format` to point at a
 binary that is not on `PATH` (Homebrew's LLVM is not, on macOS, by default).
 
-**clang-tidy is advisory only, and must stay that way.** `.clang-tidy` carries an empty
-`WarningsAsErrors`, CI runs it with `continue-on-error`, and the config is curated down to
-`bugprone-*` / `clang-analyzer-*` / `performance-*` / `misc-dangling-*`. Its default catalogue argues
-for a different C++ than the data-oriented one §3 and G2 mandate — POD and SoA, C arrays, 32-bit
-handles, `ASSUME` instead of exceptions — so read its output as a to-triage list, never as a queue of
-defects.
+**clang-tidy's broad report is advisory, and must stay that way; one narrow subset gates.**
+`.clang-tidy` carries an empty `WarningsAsErrors`, CI runs it with `continue-on-error`, and the config
+is curated down to `bugprone-*` / `clang-analyzer-*` / `performance-*` / `misc-dangling-*` /
+`misc-redundant-expression`. Its default catalogue argues for a different C++ than the data-oriented one
+§3 and G2 mandate — POD and SoA, C arrays, 32-bit handles, `ASSUME` instead of exceptions — so read its
+output as a to-triage list, never as a queue of defects.
+
+The exception is `scripts/tidycheck.sh`, a separate CI step with `--warnings-as-errors='*'`. It runs
+only checks whose every finding is a silently wrong answer and that sat at **zero rows** on the five CI
+TUs when admitted (0.6.3, clang-tidy 22): `bugprone-use-after-move`, `bugprone-dangling-handle`,
+`bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop`,
+`modernize-use-override` and `clang-analyzer-core.*`. It is a ratchet, not a style gate: a new row is a
+bug to fix, never a `NOLINT`, and a gated check that proves noisy leaves the list with its count, the way
+it came in (`.clang-tidy`'s header has the counts, and the two candidates that stayed out). Run it
+before a PR that touches C++: `scripts/tidycheck.sh` finds clang-tidy 22 on `PATH` or, on macOS, at
+Homebrew's keg-only `/opt/homebrew/opt/llvm@22/bin/clang-tidy` — pin that path, not
+`/opt/homebrew/opt/llvm`, which may be another major — and prints a `SKIP` line (not a pass) when it
+finds neither.
+
+The compiler holds the same line for the UB class: CMakeLists.txt's compile-time fence block makes
+`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, and on Clang
+`-Wdangling` and constant `array-bounds`, errors on our own targets, per compiler, with the cl.exe
+`/we####` equivalents — each measured at zero hits on AppleClang 17, clang 22 and GCC 13/14/16 first.
 
 ---
 
