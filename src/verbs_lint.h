@@ -2036,7 +2036,9 @@ std::optional<int> runLint( const MainDispatch& d )
         if( lintNestRefused )
         {
             lintPrintOut( "<!-- lint nest_refused= on the root counts corpus files a pre-parse nesting guard refused before any rule's walk "
-                        "could reach them, so no count= includes them; see the skipped verb's why=\"nest-refused\" rows for which. -->" );
+                        "could reach them, so no count= includes them; the count is corpus-wide, not narrowed to a language any rule here "
+                        "declares, so some of it was never going to be read by lint regardless; see the skipped verb's why=\"nest-refused\" "
+                        "rows for which. -->" );
         }
         if( !cfg.withProfile.empty() )
         {

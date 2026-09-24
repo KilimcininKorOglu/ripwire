@@ -1041,7 +1041,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // clauses are prose the compact dialect strips, so without these a default answer carried the count unread.
     { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; never walked, not in eligible_files= (the skipped verb names them)", false, "match", MapHeaderRead::No, {}, "match" },
     { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; never walked, in neither eligible_files= nor skipped_files=", false, "pattern", MapHeaderRead::No, {}, "pattern" },
-    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; no rule walked them (the skipped verb names them)", false, "lint", MapHeaderRead::No, {}, "lint" },
+    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused, corpus-wide (not narrowed to a language any rule here declares); no rule walked them (the skipped verb names them)", false, "lint", MapHeaderRead::No, {}, "lint" },
     // verify: src/verbs_navigate.h (the verify root)
     { "claim", "claim=/shape=: the claim as given and its shape; from_defs=/to_defs=: defs each name resolved to", false, "verify", MapHeaderRead::No, {}, "verify" },   // also defines shape= from_defs= to_defs=
     { "hops", "hops=N: call edges on the witness path (a confirmed reach claim only)", false, "verify", MapHeaderRead::No, {}, "verify" },
