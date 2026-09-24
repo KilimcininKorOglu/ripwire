@@ -545,10 +545,11 @@ inline int regexHexByteAt( const std::string& s, std::size_t& pos, std::size_t w
 {
     std::size_t got   = 0;
     unsigned    value = 0;
-    while( got < want && pos < s.size() && std::isxdigit( (unsigned char)s[ pos ] ) )
+    while( got < want && pos < s.size() && std::isxdigit( static_cast<unsigned char>( s[ pos ] ) ) )
     {
         const char d = s[ pos++ ];
-        value = value * 16 + unsigned( std::isdigit( (unsigned char)d ) ? d - '0' : std::tolower( (unsigned char)d ) - 'a' + 10 );
+        const unsigned char u = static_cast<unsigned char>( d );
+        value = value * 16 + unsigned( std::isdigit( u ) ? d - '0' : std::tolower( u ) - 'a' + 10 );
         ++got;
     }
     ENSURES( got <= want, "no more digits are consumed than the escape has" );
