@@ -19,8 +19,8 @@ set -u
 LIN="${1:?usage: ci-xplat-diff.sh <linux dir> <windows dir>}"
 WIN="${2:?usage: ci-xplat-diff.sh <linux dir> <windows dir>}"
 fail=0
-bad() { printf '  FAIL  %s\n' "$*"; fail=1; rulefail=1; }
-good() { printf '  PASS  %s\n' "$*"; }
+# verdict PASS|FAIL MESSAGE — a FAIL marks both the run and the rule being checked
+verdict() { printf '  %s  %s\n' "$1" "$2"; if [ "$1" = FAIL ]; then fail=1; rulefail=1; fi; }
 show() { # first differing bytes, readable
     diff <( tr '>' '\n' <"$1" ) <( tr '>' '\n' <"$2" ) | head -12 | sed 's/^/        /'
 }
@@ -30,26 +30,26 @@ for f in "$LIN"/*.xml "$LIN"/*.rc "$LIN"/*.json "$LIN"/*.txt; do
     [ -e "$f" ] || continue
     b="${f##*/}"; n=$(( n + 1 ))
     if [ ! -e "$WIN/$b" ]; then
-        bad "R1 $b: written on Linux, missing on Windows"
+        verdict FAIL "R1 $b: written on Linux, missing on Windows"
     elif cmp -s "$f" "$WIN/$b"; then
         :
     else
-        bad "R1 $b differs (Linux $( wc -c <"$f" | tr -d ' ' ) B, Windows $( wc -c <"$WIN/$b" | tr -d ' ' ) B):"; show "$f" "$WIN/$b"
+        verdict FAIL "R1 $b differs (Linux $( wc -c <"$f" | tr -d ' ' ) B, Windows $( wc -c <"$WIN/$b" | tr -d ' ' ) B):"; show "$f" "$WIN/$b"
     fi
 done
 # 5 verbs x 3 copies + their 15 rc files + 3 MCP files. A short list means an output step silently wrote nothing.
 if [ "$n" -lt 33 ]; then
-    bad "R1 only $n Linux outputs found in $LIN (expected >= 33): nothing meaningful was compared"
+    verdict FAIL "R1 only $n Linux outputs found in $LIN (expected >= 33): nothing meaningful was compared"
 else
-    [ "$rulefail" -eq 0 ] && good "R1 all $n Linux outputs are byte-identical on Windows"
+    [ "$rulefail" -eq 0 ] && verdict PASS "R1 all $n Linux outputs are byte-identical on Windows"
 fi
 
 if [ ! -e "$WIN/bslash-map.xml" ]; then
-    bad "R2 Windows side has no bslash-map.xml (run ci-xplat-outputs.sh with --windows)"
+    verdict FAIL "R2 Windows side has no bslash-map.xml (run ci-xplat-outputs.sh with --windows)"
 elif cmp -s "$LIN/repo-map.xml" "$WIN/bslash-map.xml" && [ "$( cat "$WIN/bslash-map.rc" 2>/dev/null )" = 0 ]; then
-    good "R2 a root typed test\\fixture on Windows maps byte-identically to test/fixture on Linux"
+    verdict PASS "R2 a root typed test\\fixture on Windows maps byte-identically to test/fixture on Linux"
 else
-    bad "R2 bslash-map.xml (rc=$( cat "$WIN/bslash-map.rc" 2>/dev/null )) differs from Linux repo-map.xml:"; show "$LIN/repo-map.xml" "$WIN/bslash-map.xml"
+    verdict FAIL "R2 bslash-map.xml (rc=$( cat "$WIN/bslash-map.rc" 2>/dev/null )) differs from Linux repo-map.xml:"; show "$LIN/repo-map.xml" "$WIN/bslash-map.xml"
 fi
 
 rulefail=0
@@ -58,11 +58,11 @@ for side in "$LIN" "$WIN"; do
         if cmp -s "$side/tree-$v.xml" "$side/crlf-$v.xml"; then
             :
         else
-            bad "R3 ${side##*/}: crlf-$v.xml differs from tree-$v.xml — CRLF line endings changed a structural answer:"; show "$side/tree-$v.xml" "$side/crlf-$v.xml"
+            verdict FAIL "R3 ${side##*/}: crlf-$v.xml differs from tree-$v.xml — CRLF line endings changed a structural answer:"; show "$side/tree-$v.xml" "$side/crlf-$v.xml"
         fi
     done
 done
-[ "$rulefail" -eq 0 ] && good "R3 CRLF copies give the same map/--for/--callers/--impact as LF on both sides (crlf-expand under R1 only)"
+[ "$rulefail" -eq 0 ] && verdict PASS "R3 CRLF copies give the same map/--for/--callers/--impact as LF on both sides (crlf-expand under R1 only)"
 
 if [ "$fail" -ne 0 ]; then
     echo "SOME CHECKS FAILED"; exit 1
