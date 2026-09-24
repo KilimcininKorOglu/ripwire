@@ -1978,6 +1978,9 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 {
                     d.scope = enclosingScopeOf( nameNode, src );
                 }
+                // #150: is this def genuinely INSIDE namespace std, at ANY nesting depth — not just a def
+                // whose immediate scope happens to spell a segment std also uses? See Symbol::scopeRootsStd.
+                d.scopeRootsStd = cppDefinitionRootsStd( nameNode, src ) ? std::uint8_t( 1 ) : std::uint8_t( 0 );
             }
             else if( le.lang == Lang::Python )
             { // P2-D Rule 1: enclosing class of a Python method → `self.m()` narrows to Class::m
@@ -2116,6 +2119,10 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 if( le.lang == Lang::Cpp )
                 {
                     r.qualifier = qualifierOf( nameNode, src ); // `A::b()` → "A" (E#4 canonical resolve)
+                    // #150: the FULL written chain's root, BEFORE the H4 re-split below overwrites r.qualifier
+                    // with the immediate segment only (`std::ranges::move` loses "std", keeps "ranges") — see
+                    // Reference::qualifierRootsStd and graph.h::keepStdQualifiedCandidates.
+                    r.qualifierRootsStd = cppQualifiedChainRootsStd( nameNode, src );
                     cppResplitRefName( r, nameTxt );            // H4 RE-SPLIT at 3+ segments, operator tails, `template` disambiguator
                 }
                 else if( le.lang == Lang::Rust )

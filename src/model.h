@@ -515,6 +515,20 @@ struct Symbol
     // linkage found", so a grammar that never sets it keeps today's gather. Shares testScope's byte as a bit-field:
     // Symbol has no pad byte left (the static_assert below holds unchanged).
     std::uint8_t  internalLinkage : 1 = 0;
+    // STD-ROOTED SCOPE (#150, C++ only): 1 ⇒ walking this def's FULL enclosing-owner chain out to the
+    // translation unit, the OUTERMOST namespace found is literally `std` — i.e. this def genuinely lives
+    // inside namespace std, at any nesting depth (`std::ranges::contains`, `std::__1::ranges::contains`),
+    // not merely a def whose IMMEDIATE scope happens to spell "ranges" or "__1" the way a user's own
+    // `mylib::ranges::` could too. Computed at extraction by ingest_names.h::cppDefinitionRootsStd, which
+    // walks the SAME ancestor chain enclosingScopeOf already walks (so the two can never disagree about
+    // which def is "inside std") for an in-class/in-namespace def, or reads the written qualifier chain
+    // (cppQualifiedChainRootsStd, shared with the call side) for an out-of-line `std::Type::method(){}`.
+    // Read only by graph.h::keepStdQualifiedCandidates, alongside Reference::qualifierRootsStd — see that
+    // guard's banner for the full rule, including why a std-rooted DECLARATION with no body still refuses
+    // (K3). 0 (the safe default) on every def this bit never reaches: any non-Cpp language, or a def with
+    // no enclosing namespace at all. Shares internalLinkage's byte as a 3rd bit of the SAME bit-field —
+    // Symbol has no pad byte left (the static_assert below holds unchanged; this is not a new byte).
+    std::uint8_t  scopeRootsStd : 1 = 0;
     // EXTENT HONESTY (src/extentsuspect.h, gate test/extentcheck.sh): the containment rules this def's extent,
     // scope or recovered kind FAILED, as extent::kSuspect* bits (name/head/scope/error); 0 ⇒ every rule held.
     // Computed at LOAD from facts the cache already carries (the extents, the name byte, the `recovered`
@@ -659,6 +673,16 @@ struct Reference
     bool          viaArrow   = false;     // a C++/ObjC member call written `->` (`p->m()`, not `p.m()`). On a compose ref: calleeName is the
                                           //   POINTEE of a member written `std::unique_ptr<T>` / `std::shared_ptr<T>`, which `->` reaches and
                                           //   `.` never does (`p.reset()` is the smart pointer's own member) — Rule 2b requires the call's bit
+    bool          qualifierRootsStd = false;  // #150: true ⇒ the FULL WRITTEN qualifier chain at this call site is rooted in
+                                          //   namespace std — `std::X`, `::std::X`, `std::ranges::X`, `std::__1::ranges::X` — not just
+                                          //   `qualifier` (the IMMEDIATE segment only: "ranges" for `std::ranges::move`, indistinguishable
+                                          //   from a user's own `mylib::ranges::move`). Computed at extraction, C++ only, by
+                                          //   ingest_names.h::cppQualifiedChainRootsStd, which reads the ENTIRE span tree-sitter gives the
+                                          //   call's outermost qualified_identifier and keys only its first written segment — never guessed
+                                          //   from `qualifier` after the H4 re-split has already thrown the outer segments away. Read only by
+                                          //   graph.h::keepStdQualifiedCandidates, alongside Symbol::scopeRootsStd. false (the safe default) on
+                                          //   every bare/unqualified call and on every non-Cpp language (ObjC gets no `qualifier` at all today —
+                                          //   see keepStdQualifiedCandidates' stated floor — so this stays false there too, by construction).
     std::string   calleeName;             // referenced name (final identifier segment)
     std::string   qualifier;              // explicit scope at the call site (`A` in `A::b()`); "" if bare/method — for canonical resolve
     std::string   recvVar;                // receiver variable identifier when recv==NamedVar/FieldOfVar (`x` in `x->m()`); "" otherwise — for Rule 2

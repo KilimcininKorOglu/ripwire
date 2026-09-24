@@ -34,6 +34,27 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-24, lane/std-nested-binding-150 (#150 delta review): RE-DERIVED with UPDATE_GOLDEN=1 — hash
+#   COLLAPSES BACK to 82d60238f7…08e7e9b (identical to the 2026-09-23 entry below). kParserVer 121 -> 120: the
+#   prior entry's 121 bump is undone, not superseded — 121 never reached main or a release (this whole
+#   sequence happened inside one lane before merge) and this codebase's caches are per-worktree, so no reader
+#   anywhere could hold a cache written under that brief-lived intermediate value. The F1/F2 correctness fix
+#   itself is NOT reverted, only its separate version bump; kParserVer 120 now covers both the original #150
+#   extraction facts and the F1/F2 fix to how one of them is computed, folded into one history entry in
+#   ingest_cache.h. kCacheVersion stays 25. Mirrored in quality.h's kIngestParserVerMirror in the same commit.
+# 2026-09-23 (later same day), lane/std-nested-binding-150 (#150 adversarial review, F1/F2): RE-DERIVED with
+#   UPDATE_GOLDEN=1 (hash acd95b16fc…1ac9a7d — SUPERSEDED the same day by the 2026-09-24 entry above). ONE
+#   manifest input moved again: kParserVer 120 -> 121 — the VALUE RawDef::scopeRootsStd computes changed (a
+#   3+-segment out-of-line std definition's chain root was read from the wrong node; a std-rooted variable's
+#   "has a body" test was fixed to skip non-function kinds), not the record shape, so kCacheVersion stayed 25
+#   and kQSnapCacheScheme was untouched. Mirrored in quality.h's kIngestParserVerMirror in the same commit.
+# 2026-09-23, lane/std-nested-binding-150 (#150) on origin/main 60b65f02: RE-DERIVED with UPDATE_GOLDEN=1
+#   (new hash 82d60238f7…08e7e9b). ONE manifest input moves: ingest_cache.h's kParserVer 119 -> 120 and
+#   kCacheVersion 24 -> 25 (RawRef gains `qualifierRootsStd`, RawDef gains `scopeRootsStd` — the two facts
+#   graph.h::keepStdQualifiedCandidates needs to tell a NESTED std:: call (`std::ranges::move`) from a
+#   same-shaped user namespace), mirrored in quality.h's kIngestParserVerMirror/kIngestCacheVersionMirror in
+#   the same commit (static_assert). This is an EXTRACTION-IDENTITY change only — no Snapshot dead-set/
+#   clone-group/blob-shape semantics moved, so kQSnapCacheScheme is untouched.
 # 2026-09-20, TRAIN 13 (integration/train-13 on main ae6e3e7a: lane/t13-contrib-finish a7281dea,
 #   lane/t13-honesty-fixes 0cf97744): RE-DERIVED ON THE FINAL MERGED TREE with UPDATE_GOLDEN=1.
 #   TWO manifest inputs move, both from the honesty lane:

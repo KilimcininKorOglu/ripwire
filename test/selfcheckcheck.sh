@@ -144,6 +144,9 @@ ALLOW = {
     "std::max":               "comparison of two values",
     "std::string_view":       "a non-owning view over storage the caller already holds",
     "rfind":                  "read-only search of a string the caller owns",
+    "std::all_of":            "read-only walk of the given range (#150 keepStdQualifiedCandidates postcondition)",
+    "isDefinitionNotDeclaration": "read-only span comparison (model.h); no state — the predicate std::all_of walks above",
+    "isFunctionLikeKind":        "read-only enum comparison (graph.h, a local lambda); no state — the F2 body-test scope guard",
 }
 # (T) ASSUMED-THEN-TESTED allowlist: "site -> reason", one line each. A site lands here only when the equality
 # really is a true invariant (the re-test below is dead defensive code that should eventually be deleted, not
