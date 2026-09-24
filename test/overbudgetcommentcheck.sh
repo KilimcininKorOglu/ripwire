@@ -222,7 +222,10 @@ while True:
         break
     sel = at["next"][ len( "--expand=" ): ]
 ok = "\n".join( parts ) == whole
-print( "%s calls=%d over_ceiling=%d reassembled=%s" % ( "OK" if ok and calls > 1 or ( ok and over ) else "FAIL", calls, over, ok ) )
+# Every B5 fixture holds one line larger than its budget, so a passing chain needs all three: it reassembles, it
+# took more than one call, AND some call served that line whole under over_ceiling="1". Without the last term a
+# binary that stopped disclosing the over-ceiling line (or cut it) but still chained would print OK.
+print( "%s calls=%d over_ceiling=%d reassembled=%s" % ( "OK" if ok and calls > 1 and over > 0 else "FAIL", calls, over, ok ) )
 PY
 for spec in "first_long 1000" "last_long 500" "big_table "; do
     set -- $spec
