@@ -5118,31 +5118,47 @@ inline std::vector<NodeId> calleeWalkOrder( NodeId id, const std::vector<std::ui
     return walk;
 }
 
-// THE --expand CALLEE ORDER (lane/cutfix-bodies, 2026-09-23): FEWEST SAME-NAMED DEFINITIONS FIRST, node id breaking
-// ties. --expand has no query to rank a cut <calls> listing by, and it used to keep the sixteen lowest node ids. The
-// obvious replacement, the map's own PageRank, was MEASURED and is WORSE than node-id order: over the first 60 cut
-// listings (map rows out>16) of this repo and three public LocBench held-out corpora, the share of the kept sixteen
-// defined in the body's OWN file fell 11.4% -> 6.4% (ripwire), 4.6 -> 4.3 (aiohttp), 57.6 -> 55.6 (meson), 79.0 ->
-// 78.5 (pydantic) — PageRank promotes `empty`/`find`/`push_back`, the names a name-based resolver binds most
-// loosely, because every loosely bound call feeds them rank (simulated over --callees' full listing and the map's
-// per-name counts; on this repo's real --expand output 11.5% -> 16.2%, 945 rows). A callee whose
-// name has ONE definition in the index is a binding the resolver could not have got wrong; one of twelve same-named
-// defs is the likeliest to be a mis-bind. Ordering by that count raised the same-file share on all four corpora:
-// 17.0% / 5.0 / 59.3 / 79.0. The score is 1/count, so equal counts compare equal and calleeWalkOrder's node-id
-// tie-break decides — a total order, byte-stable.
+// THE --expand CALLEE ORDER (lane/cutfix-bodies, 2026-09-23): FEWEST SAME-NAMED CALLABLE DEFINITIONS FIRST, node id
+// breaking ties. --expand has no query to rank a cut <calls> listing by, and it used to keep the sixteen lowest node
+// ids. A callee whose name has ONE callable definition in the index is a binding the name-based resolver could not
+// have got wrong; one of twelve same-named defs is the likeliest mis-bind. Only CALLABLE kinds are counted — function,
+// method, class/struct (a constructor call) and macro — because a variable, field or markdown heading sharing the
+// name is no rival binding (review S1). Measured, that restriction moved none of the four corpora below: the
+// namesakes that matter are callable ones.
+//
+// MEASURED, real binaries (first 60 cut listings = map fn/method rows with out>16; sqlglot has 35), node-id -> this
+// order. same_file = share of the kept sixteen defined in the body's own file; reachable = own file or a file it
+// directly imports (a binding-precision proxy, NOT the key): ripwire 11.5 -> 16.2 / 34.8 -> 38.8, scrapy 3.9 -> 9.4 /
+// 26.6 -> 29.5, sqlglot 23.6 -> 31.4 / 50.7 -> 59.8, mypy 8.9 -> 9.5 / 75.1 -> 69.8 — reachable FALLS on mypy (cause not
+// established; not the non-callable namesakes, see above), so the gain is not universal. The map's PageRank, simulated over
+// --callees' full listing, is corpus-dependent: same_file 6.4 / 9.3 / 24.5 / 6.1 on the same four — below node-id
+// order on ripwire and mypy, above it on scrapy and sqlglot, below this order on all four but scrapy's reachable
+// (31.0 vs 29.5). The score is 1/count, so equal counts compare equal and calleeWalkOrder's node-id tie-break decides —
+// a total order, byte-stable.
+inline bool isCallableKind( SymKind k ) noexcept
+{
+    return k == SymKind::Function || k == SymKind::Method || k == SymKind::Class || k == SymKind::Struct || k == SymKind::Macro;
+}
+
 inline std::vector<float> calleeNameSpecificity( const IngestResult& ing )
 {
-    HashMap<std::string_view, std::uint32_t> defsOfName;
-    defsOfName.reserve( ing.symbols.size() );
+    HashMap<std::string_view, std::uint32_t> callableDefsOfName;
+    callableDefsOfName.reserve( ing.symbols.size() );
     for( const Symbol& s : ing.symbols )
     {
-        ++defsOfName[ std::string_view( s.name ) ];
+        if( isCallableKind( s.kind ) )
+        {
+            ++callableDefsOfName[ std::string_view( s.name ) ];
+        }
     }
     std::vector<float> score( ing.symbols.size(), 0.0f );
     for( std::size_t i = 0; i < ing.symbols.size(); ++i )
     {
-        const std::uint32_t n = defsOfName.find( std::string_view( ing.symbols[i].name ) )->second;
-        ASSUME( n >= 1, "every symbol's own name was counted above" );
+        const Symbol&       s  = ing.symbols[i];
+        const auto          it = callableDefsOfName.find( std::string_view( s.name ) );
+        // a non-callable callee (a mis-bind to a variable, say) counts itself on top of its callable namesakes
+        const std::uint32_t n  = ( it == callableDefsOfName.end() ? 0u : it->second ) + ( isCallableKind( s.kind ) ? 0u : 1u );
+        ASSUME( n >= 1, "a callable symbol was counted above; a non-callable one counts itself" );
         score[i] = 1.0f / float( n );
     }
     return score;
