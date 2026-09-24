@@ -369,7 +369,11 @@ done
 nexpect(){   # $1 sym  $2 want  $3 PASS prose  $4 FAIL prose
     local out; out="$( nrun "--callees=$1" )"
     local got; got="$( cnt "$out" )"
-    [ "${got:-REFUSED}" = "$2" ] && ok "$3" || no "$4 — got '${got:-REFUSED}': $( el "$out" )"
+    if [ "${got:-REFUSED}" = "$2" ]; then
+        ok "$3"
+    else
+        no "$4 — got '${got:-REFUSED}': $( el "$out" )"
+    fi
 }
 nexpect shiftRange 0 \
     "#150 FIXED K1: --callees=shiftRange count=0 — std::ranges::move no longer binds the lone in-repo Pool::move (was count=1)" \
@@ -487,7 +491,11 @@ srun(){ run "$SHAPES" "$@" --no-cache; }
 sexpect(){   # $1 sym  $2 want  $3 PASS prose  $4 FAIL prose
     local out; out="$( srun "--callees=$1" )"
     local got; got="$( cnt "$out" )"
-    [ "${got:-REFUSED}" = "$2" ] && ok "$3" || no "$4 — got '${got:-REFUSED}': $( el "$out" )"
+    if [ "${got:-REFUSED}" = "$2" ]; then
+        ok "$3"
+    else
+        no "$4 — got '${got:-REFUSED}': $( el "$out" )"
+    fi
 }
 sexpect globalMs 0 \
     "#150 §12: --callees=globalMs count=0 — ::std::chrono::duration_cast (leading ::) refuses the non-std decoy (was count=1 -> the decoy)" \
@@ -567,7 +575,11 @@ dcold="$( run "$DEADFIX" --dead-code --cache="$TMP/dead.bin" )"; dwarm="$( run "
     && ok "§13 warm == cold on the dead-code fixture (a new per-def field must survive the cache round-trip)" \
     || no "§13 warm != cold on the dead-code fixture"
 if command -v xmllint >/dev/null 2>&1; then
-    printf '%s' "$dcold" | xmllint --noout - 2>/dev/null && ok "§13 xml well-formed (dead-code fixture map)" || no "§13 dead-code fixture map is malformed XML"
+    if printf '%s' "$dcold" | xmllint --noout - 2>/dev/null; then
+        ok "§13 xml well-formed (dead-code fixture map)"
+    else
+        no "§13 dead-code fixture map is malformed XML"
+    fi
 else
     no "§13 cannot verify G4: xmllint is NOT INSTALLED — this check did not run (install libxml2)"
 fi
@@ -630,7 +642,11 @@ frun(){ run "$F1FIX" "$@" --no-cache; }
 fexpect(){   # $1 sym  $2 want  $3 PASS prose  $4 FAIL prose
     local out; out="$( frun "--callees=$1" )"
     local got; got="$( cnt "$out" )"
-    [ "${got:-REFUSED}" = "$2" ] && ok "$3" || no "$4 — got '${got:-REFUSED}': $( el "$out" )"
+    if [ "${got:-REFUSED}" = "$2" ]; then
+        ok "$3"
+    else
+        no "$4 — got '${got:-REFUSED}': $( el "$out" )"
+    fi
 }
 fexpect callMix 1 \
     "#150 §14 F1: --callees=callMix count=1 -> std::hash<Foo>::mix, a 3-segment out-of-line def with a template-id middle link (was count=0 on 70dfdf09: the innermost-link bug read the root as 'hash<Foo>')" \

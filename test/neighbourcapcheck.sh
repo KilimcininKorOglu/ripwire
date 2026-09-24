@@ -350,7 +350,11 @@ R_COL="$( rr --callers=rankHubFn --format=columnar )"
     && ok "(11e) --json and --format=columnar keep the same 5 heavy callers (one order, every dialect)" \
     || no "(11e) a dialect cut the head: json=$( printf '%s' "$R_JS" | grep -oE '"n":"heavy_[0-9]"' | wc -l | tr -d ' ' )"
 r1="$( rr --callers=rankHubFn )"
-[ "$r1" = "$R_DEF" ] && ok "(11f) the ranked answer is byte-identical across runs" || no "(11f) the ranked answer is nondeterministic"
+if [ "$r1" = "$R_DEF" ]; then
+    ok "(11f) the ranked answer is byte-identical across runs"
+else
+    no "(11f) the ranked answer is nondeterministic"
+fi
 
 echo "=== (12) --uses: the same rule at its own cap ==="
 U_R="$( rr --uses=rankHubFn )"
@@ -365,8 +369,9 @@ printf '%s' "$U_R" | grep -oE '<u role="[^"]*" p="[^"]*"' | head -1 | grep -q 'z
 
 echo "=== (13) MCP: the same order, and find_symbol's calledBy cut is disclosed ==="
 MCP_OUT="$( python3 - "$BIN" "$RB" <<'PY'
-import json, subprocess, sys
+import json, subprocess, sys, threading
 p = subprocess.Popen( [ sys.argv[1], sys.argv[2], "--mcp" ], stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.DEVNULL )
+watchdog = threading.Timer( 300, p.kill ); watchdog.daemon = True; watchdog.start()   # a hung server ends readline() below, not the gate
 def tool( n, name, args ):
     p.stdin.write( ( json.dumps( { "jsonrpc": "2.0", "id": n, "method": "tools/call", "params": { "name": name, "arguments": args } } ) + "\n" ).encode() )
     p.stdin.flush()
