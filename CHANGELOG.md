@@ -15,6 +15,18 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — vendored Swift scanner: an undefined shift width on Windows (LLP64)
+
+The vendored `tree-sitter-swift` scanner suppressed a fake `try!`/`!` token with
+`1UL << FAKE_TRY_BANG`, where `FAKE_TRY_BANG` is enum ordinal 32. `unsigned long` (`UL`) is only 32
+bits on LLP64 (Windows), so that shift was undefined behaviour there — well-defined, and equal to
+`1ULL << 32`, on every LP64 host this repo builds and tests on (Linux, macOS), which is why it was
+invisible locally and in CI. Effect: `try!` and some `!` inside `#if` blocks could parse differently
+on a Windows build. Fixed with `third_party/patches/swift/002-scanner-op-suppressor-shift-width.patch`
+(`1UL` → `1ULL`, same value everywhere it already ran correctly, no `kParserVer` change).
+`test/vendorpatchcheck.sh` gains arm M, a static audit for this shift-width defect class across every
+vendored scanner, not just Swift's.
+
 ### Added — `--biggest-first` supersedes `--readability`
 
 **`--biggest-first` supersedes `--readability`**, which remains fully functional as a hidden alias and

@@ -91,6 +91,17 @@
 #      exit code decides. On macOS it runs the plain binary under `leaks --atExit`, which reported
 #      "1 leak for 16 total leaked bytes" on the unpatched build and 0 on the patched one, with a
 #      field-free control query that must report 0 on both. Anywhere else it SKIPs by name.
+#   M  `1UL <<` shift-width family audit (static, $BIN-independent) — first tenant: swift/002.
+#      `1UL` is `unsigned long`, 32 bits on LLP64 (Windows); shifting it by an enumerator whose
+#      ordinal is >= 32 (swift's OP_SYMBOL_SUPPRESSOR table, FAKE_TRY_BANG = 32) is undefined
+#      behaviour there, even though it is well-defined on every LP64 host this repo is built and
+#      tested on — so the bug is invisible locally and on Linux/macOS CI alike. This scans every
+#      vendored `.c`/`.h` file for a bare `1UL << IDENT` (or `1UL << N`), resolves IDENT's ordinal
+#      from the nearest enclosing `enum { … }` in the same file (explicit `= N` members reset the
+#      count), and fails on any shift >= 32; a shift whose operand cannot be resolved statically
+#      fails loudly too (H's "unclassified fails loudly" convention), rather than passing while
+#      unproven. A re-vendor that reintroduces this shape in any grammar — not just swift — turns
+#      this arm red the moment it lands, before it ever reaches a Windows build.
 #
 # Usage:
 #   test/vendorpatchcheck.sh
@@ -831,6 +842,109 @@ elif command -v leaks >/dev/null 2>&1 && [ "$( uname -s )" = "Darwin" ] && ! LC_
     fi
 else
     skip "L: tree_sitter/001 — no leak detector for this binary here (LeakSanitizer needs a Linux sanitizer build; leaks(1) needs macOS and a plain build)"
+fi
+
+# ── M: 1UL << shift-width family audit (static, no $BIN involved) ─────────────────────────────────
+python3 - "$DEPS_DIR" <<'PYEOF' > "$TMP/shiftwidth.out" 2>"$TMP/shiftwidth.err"
+import re, sys, pathlib
+
+deps_dir = pathlib.Path(sys.argv[1])
+files = sorted(deps_dir.rglob("*.c")) + sorted(deps_dir.rglob("*.h"))
+
+shift_re = re.compile(r'\b1UL\b\s*<<\s*([A-Za-z_]\w*|\d+)')
+enum_block_re = re.compile(r'\benum\b[^{;]*\{([^}]*)\}', re.S)
+
+def strip_comments(text):
+    # Blanks out // and /* */ comments while preserving every newline, so line numbers in the
+    # stripped text still match the original file, and no identifier or digit inside a comment
+    # (including this audit's own explanatory comments in a patched vendored file) can be mistaken
+    # for a real shift expression. Not string-literal aware — acceptable here: these are C scanner
+    # sources, and a `//`/`/*` inside a string literal on a `1UL <<` line is not a shape this
+    # vendored code uses.
+    out = []
+    i, n = 0, len(text)
+    line_comment = block_comment = False
+    while i < n:
+        c = text[i]
+        if line_comment:
+            out.append('\n' if c == '\n' else ' ')
+            line_comment = c != '\n'
+            i += 1
+        elif block_comment:
+            if text[i:i + 2] == '*/':
+                out.append('  '); i += 2; block_comment = False
+            else:
+                out.append('\n' if c == '\n' else ' '); i += 1
+        elif text[i:i + 2] == '//':
+            out.append('  '); i += 2; line_comment = True
+        elif text[i:i + 2] == '/*':
+            out.append('  '); i += 2; block_comment = True
+        else:
+            out.append(c); i += 1
+    return ''.join(out)
+
+for f in files:
+    try:
+        text = strip_comments(f.read_text(errors="replace"))
+    except OSError:
+        continue
+    # Ordinal map for every identifier declared in any enum { … } block in this file. A later
+    # block overwrites an earlier one on a name collision, same as C's last-definition-wins scope.
+    ordmap = {}
+    for m in enum_block_re.finditer(text):
+        ordv = 0
+        for part in m.group(1).split(','):
+            part = part.strip()
+            if not part:
+                continue
+            if '=' in part:
+                name, val = (p.strip() for p in part.split('=', 1))
+                try:
+                    ordv = int(val, 0)
+                except ValueError:
+                    if re.match(r'^[A-Za-z_]\w*$', name):
+                        ordmap[name] = None  # non-constant initializer: cannot resolve statically
+                    continue
+            else:
+                name = part
+            if not re.match(r'^[A-Za-z_]\w*$', name):
+                continue
+            ordmap[name] = ordv
+            ordv += 1
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        for sm in shift_re.finditer(line):
+            tok = sm.group(1)
+            rel = f.relative_to(deps_dir.parent).as_posix()
+            if tok.isdigit():
+                print(f"OK\t{rel}\t{lineno}\t{tok}\t{tok}")
+                continue
+            val = ordmap.get(tok, None)
+            if val is None:
+                print(f"UNRESOLVED\t{rel}\t{lineno}\t{tok}")
+            elif val >= 32:
+                print(f"BAD\t{rel}\t{lineno}\t{tok}\t{val}")
+            else:
+                print(f"OK\t{rel}\t{lineno}\t{tok}\t{val}")
+PYEOF
+if [ -s "$TMP/shiftwidth.err" ]; then
+    no "M: the shift-width audit script errored: $( head -3 "$TMP/shiftwidth.err" | tr '\n' ' ' )"
+else
+    mBad=0; mUnresolved=0
+    while IFS=$'\t' read -r kind rel lineno tok val; do
+        case "$kind" in
+            BAD)
+                mBad=$(( mBad + 1 ))
+                no "M: $rel:$lineno — \`1UL << $tok\` shifts by $val (>= 32): undefined behaviour on LLP64 (unsigned long is 32 bits there); use 1ULL"
+                ;;
+            UNRESOLVED)
+                mUnresolved=$(( mUnresolved + 1 ))
+                no "M: $rel:$lineno — \`1UL << $tok\` — could not resolve $tok's ordinal statically (non-constant enumerator initializer); cannot prove this shift is in range"
+                ;;
+        esac
+    done < "$TMP/shiftwidth.out"
+    if [ "$mBad" = 0 ] && [ "$mUnresolved" = 0 ]; then
+        ok "M: no \`1UL << \` shift with a resolvable width >= 32 (or an unresolvable operand) under third_party/deps/ ($( wc -l < "$TMP/shiftwidth.out" | tr -d ' ' ) bare-1UL shift site(s) checked)"
+    fi
 fi
 
 # ── verdict ─────────────────────────────────────────────────────────────────────────────────────

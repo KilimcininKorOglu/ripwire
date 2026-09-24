@@ -84,6 +84,9 @@ Notes:
   force-moved server-side, a SHA cannot.
 - `deps/swift` is pinned to a bare commit rather than a tag because upstream's default branch does
   not carry a generated `parser.c`; that commit's generated output is what is vendored here.
+  `deps/swift/src/scanner.c` carries two local patches, recorded under
+  `third_party/patches/swift/` and policed by `test/vendorpatchcheck.sh` — see that directory's
+  README for the convention and the full list of vendored-code patches across every dependency.
 - `deps/kotlin` is pinned to a bare commit rather than the last tag (`v0.3.8`, Aug 2024) because
   that tag predates a scanner segfault fix (upstream #136) present on `main`; the pinned commit is
   `main`'s tip as of this vendoring, chosen for the fix, not for being a release.
