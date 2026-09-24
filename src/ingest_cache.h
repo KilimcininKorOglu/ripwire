@@ -322,6 +322,14 @@ constexpr std::uint32_t kParserVer    = 120;          // bump on any grammar/.sc
                                                       //   a body" test now applies to function-like kinds only, so
                                                       //   a std-rooted VARIABLE (a niebloid) is no longer refused
                                                       //   for having no body. See test/stdqualcheck.sh §14.
+                                                      //   SECOND same-train fix, folded in on the same terms
+                                                      //   (2026-09-24, CodeRabbit on #331; 120 still unmerged):
+                                                      //   cppDefinitionRootsStd no longer marks a qualified
+                                                      //   `std::…` def written inside a NAMED namespace
+                                                      //   (`namespace vendor { void std::ranges::f(){} }` defines
+                                                      //   vendor::std::ranges::f) as std-rooted. A 120 cache from
+                                                      //   before it can only over-mark that one perverse shape.
+                                                      //   See test/stdqualcheck.sh §15.
                                                       // #310/#325/#320 (open PRs that also bump kParserVer): take
                                                       //   the next free value above whatever lands after this on
                                                       //   integration; do not reuse 120.

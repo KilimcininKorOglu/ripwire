@@ -677,4 +677,42 @@ else
     no "§14 cannot verify G4: xmllint is NOT INSTALLED — this check did not run (install libxml2)"
 fi
 
+# ── §15 (CodeRabbit on #331, 2026-09-24) — a WRITTEN `std::` def qualifier inside a NAMED namespace ─────────────
+# A qualified definition names an entity of a namespace that ENCLOSES it ([namespace.memdef]), so `int
+# std::ranges::vshift(int)` written inside `namespace vendor { … }` defines vendor::std::ranges::vshift. The
+# real ::std can only be re-opened out of line at file scope. cppDefinitionRootsStd used to mark that def
+# std-rooted from its written chain alone, and keepStdQualifiedCandidates then kept it as the target of a call
+# to the real ::std::ranges::vshift, which has no in-repo definition: RED on 9936ba4e, count=1 for both calls
+# below (a false edge). §14's file-scope out-of-line std defs above are the control: they must still resolve.
+# Known limit, the SAFE direction #150 already chose: a call written `std::ranges::vshift` INSIDE namespace
+# vendor (which C++ would bind to vendor::std) is not bound either, since the call side cannot tell vendor::std
+# from ::std without cross-file lookup; an unbound call is disclosed, a false edge is not.
+VSTD="$TMP/vstd"
+mkdir -p "$VSTD"
+cat >"$VSTD/vendor.h" <<'EOF'
+#pragma once
+namespace vendor
+{
+namespace std { namespace ranges { int vshift( int x ); } }
+}
+EOF
+cat >"$VSTD/vendor.cpp" <<'EOF'
+#include "vendor.h"
+namespace vendor
+{
+int std::ranges::vshift( int x ) { return x << 1; }   // defines vendor::std::ranges::vshift, NOT ::std's
+}
+int callGlobal( int x ) { return ::std::ranges::vshift( x ); }   // names the REAL ::std: no in-repo def
+int callWritten( int x ) { return std::ranges::vshift( x ); }    // at file scope, std is ::std as well
+EOF
+for vsym in callGlobal callWritten; do
+    vout="$( run "$VSTD" "--callees=$vsym" --no-cache )"
+    vgot="$( cnt "$vout" )"
+    if [ "${vgot:-REFUSED}" = 0 ]; then
+        ok "#331 §15: --callees=$vsym count=0 — a ::std call does not bind vendor::std::ranges::vshift, a same-spelled def inside namespace vendor (was count=1 on 9936ba4e)"
+    else
+        no "#331 §15 REGRESSED: --callees=$vsym must not bind the def written inside namespace vendor — got '${vgot:-REFUSED}': $( el "$vout" )"
+    fi
+done
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

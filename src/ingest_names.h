@@ -754,6 +754,40 @@ inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
     return sawNamespace && outermostNsRoot == "std";
 }
 
+// A WRITTEN `std::` qualifier is resolved against where the def sits (CodeRabbit on #331). A qualified definition
+// names an entity of a namespace that ENCLOSES it ([namespace.memdef]), so `void std::ranges::f() {}` written inside
+// `namespace vendor { … }` defines `vendor::std::ranges::f` — the real `::std` can only be re-opened out of line at
+// file scope. Such a def used to be marked std-rooted anyway, and keepStdQualifiedCandidates could then keep it as the
+// target of a call to the real `std::ranges::f`: a false edge to a same-spelled def. So the qualified test holds only
+// when no NAMED namespace encloses the def (an anonymous one stays transparent, as in the walk above) or the chain is
+// written from the global scope (`::std::…`); every other case falls to the enclosing walk, whose outermost-root rule
+// already answers `vendor` there.
+inline bool cppHasNamedEnclosingNamespace( TSNode node )
+{
+    for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        if( kindIs( ts_node_type( p ), "namespace_definition" ) && !ts_node_is_null( fieldChild( p, NodeField::Name ) ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool cppQualifiedChainWrittenGlobal( TSNode nameNode, std::string_view src )
+{
+    TSNode outer = ts_node_parent( nameNode );
+    if( ts_node_is_null( outer ) || !kindIs( ts_node_type( outer ), "qualified_identifier" ) )
+    {
+        return false;
+    }
+    for( TSNode up = ts_node_parent( outer ); !ts_node_is_null( up ) && kindIs( ts_node_type( up ), "qualified_identifier" ); up = ts_node_parent( up ) )
+    {
+        outer = up;
+    }
+    return nodeTextOf( outer, src ).starts_with( "::" );
+}
+
 // The definition-side dispatcher: an out-of-line qualified def (`std::SomeType::f() {…}`, rare but legal —
 // re-opening a std entity out of line) is std-rooted exactly as a CALL with the same written chain would be,
 // so it tries cppQualifiedChainRootsStd first. OR, not either/or (found by the same review pass as the climb
@@ -766,7 +800,8 @@ inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
 // work pretending to be a belt-and-suspenders check.
 inline bool cppDefinitionRootsStd( TSNode nameNode, std::string_view src )
 {
-    if( cppQualifiedChainRootsStd( nameNode, src ) )
+    if( cppQualifiedChainRootsStd( nameNode, src )
+        && ( !cppHasNamedEnclosingNamespace( nameNode ) || cppQualifiedChainWrittenGlobal( nameNode, src ) ) )
     {
         return true;
     }
