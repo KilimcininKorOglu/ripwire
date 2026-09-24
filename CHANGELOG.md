@@ -15,6 +15,40 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — silent cuts in the report verbs and the MCP twins now say what they dropped
+
+Each of these cut an answer without saying so. An answer that was not cut is byte-identical.
+- MCP `owners` (40 rows) and `mentions` (100 files) are capped on that surface only, since their CLI
+  twins print every row. A cut answer now carries `shown=`, `capped="1"`, `total=`, `has_more=` and
+  `next_offset=`, and `offset=` continues it. Rows stay in path order: that is the CLI's paging order,
+  so an offset names the same rows on both surfaces.
+- `--zoom` `<bridge>` rows (the 12 heaviest): `shown_bridges=`, `bridges_capped="1"` and `bridges=` (all
+  pairs). `--zoom --mermaid`: each of its three caps (10 top modules, 8 child modules and 5 symbols per
+  subgraph) writes a `%% … shown=N total=M capped=1` comment where it cuts.
+- `--tree`: a file lists its 3 best-ranked symbols. A page where some list was cut carries
+  `shown_symbols=` and `symbols_capped="1"`, and each row's `symbols=` is its total.
+- `next=` on `--tree`, `--zoom` and `--external-surface` now keeps the caller's `--limit`, plus the flags
+  that shape the listing (`--zoom=D`, `--zoom-levels=N`, `--include-builtins`, `--pack-top-n=N`). A
+  `--limit=5` page used to point at a default-sized second page.
+- `--impact`: a cut import tier names the call that lists all of it, `importers_next="--impact=SYM
+  --limit=N"` (a `"importers_next"` key in `--json`). Before, the cut was counted but gave no way to get
+  the rest.
+- `--situ`: the co-change section probes the first 20 changed files, so on a larger diff it adds
+  `partners_capped="1" probed= changed_files=`, because its partner count is then a floor. The decl/def
+  partner list (4 rows) is raised by `--limit`, and its note ends in `next: --situ=… --limit=N`.
+- `--run-trace`: a success tail that kept fewer lines than the capture holds carries `capped="1"`.
+- `--nonlocal-state`: the 2048-cell ceiling (`cells_capped=`/`decls_capped=`) is a collection cut, so the
+  root now also says `capped="1"` and `counts_floor="1"` instead of reading as a complete page.
+- `--plan-lanes --brief`: a lane whose ranking held more than its 12 claims carries `"ranked":N` and
+  `"ranked_capped":true`.
+- `--from-trace` `<test_hop>`: the dropped-row count is `dropped=`. It was `capped=`, which is a 0|1 flag
+  everywhere else.
+- The `--recall`/`memory_recall` capped note names both spellings of each setting
+  (`--top-k/top_k`, `--max-tokens/budget_tokens`), so an MCP caller is not told to pass a CLI flag.
+- A body exactly one byte over the byte budget, where that byte is its final newline, is served whole
+  inside the budget. Before, it carried an `over_ceiling="1"` whose reading ("its first line alone exceeds
+  the budget") was false.
+
 ### Added — `--biggest-first` supersedes `--readability`
 
 **`--biggest-first` supersedes `--readability`**, which remains fully functional as a hidden alias and
