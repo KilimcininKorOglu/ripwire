@@ -254,6 +254,45 @@ else
     no "cap arm inert: --impact=IngestResult on this repo reported importers='$CAP_N', so the >40 case was never exercised"
 fi
 
+# ── #9b RANK BEFORE THE CAP + --limit REACH (cut-fix C, 2026-09-23) ─────────────────────────────────────
+# The tier used to sort by path and cut at 40, and --limit could not reach it, so on a >40 tier the files that
+# survived were the alphabetically-first ones and the rest were one guess away. Now the most-imported importers
+# lead (each file's own importer count), and --limit sizes the tier like the symbol rows. The sandbox makes path
+# order and relevance disagree: 45 leaf importers pkg/a_NN.py (nobody imports them) sort before 3 pkg/z_N.py,
+# each imported by 4 other files. RED on 60b65f02 (the three arms below); GREEN on cut-fix C.
+RS="$( mktemp -d )"
+mkdir -p "$RS/pkg"
+python3 - "$RS" <<'PY'
+import os, sys
+d = os.path.join( sys.argv[1], "pkg" )
+open( os.path.join( d, "__init__.py" ), "w" ).write( "" )
+open( os.path.join( d, "hub.py" ), "w" ).write( "def importHubFn( x ):\n    return x\n" )
+for i in range( 45 ):
+    open( os.path.join( d, "a_%02d.py" % i ), "w" ).write( "from pkg.hub import importHubFn\n\ndef use_a_%02d( ):\n    return importHubFn( %d )\n" % ( i, i ) )
+for i in range( 3 ):
+    open( os.path.join( d, "z_%d.py" % i ), "w" ).write( "from pkg.hub import importHubFn\n\ndef use_z_%d( ):\n    return importHubFn( %d )\n" % ( i, i ) )
+for j in range( 4 ):
+    open( os.path.join( d, "d_%d.py" % j ), "w" ).write( "".join( "from pkg.z_%d import use_z_%d\n" % ( i, i ) for i in range( 3 ) ) )
+PY
+ri(){ perl -e 'alarm 30; exec @ARGV' "$BIN" "$RS" --impact=importHubFn --no-cache "$@" 2>/dev/null; }
+R_DEF="$( ri )"
+R_ALL="$( ri --limit=100 )"
+zRows(){ body "$1" | grep -oE '<f via="import" p="pkg/z_[0-9]\.py"' | wc -l | tr -d ' '; }
+{ [ "$( attr importers "$R_DEF" )" = 48 ] && [ "$( attr shown_importers "$R_DEF" )" = 40 ] && [ "$( attr importers_capped "$R_DEF" )" = 1 ]; } \
+    && ok "rank: presence guard — importers=48 over the 40 cap, shown_importers=40 importers_capped=1" \
+    || no "rank: fixture broken — importers=$( attr importers "$R_DEF" ) shown_importers=$( attr shown_importers "$R_DEF" )"
+[ "$( zRows "$R_DEF" )" = 3 ] \
+    && ok "rank: the default 40-file page keeps all 3 most-imported importers (they sort LAST by path)" \
+    || no "rank: the default page kept $( zRows "$R_DEF" ) of the 3 most-imported importers — the cap cut the head"
+body "$R_DEF" | grep -oE '<f via="import" p="[^"]*"' | head -3 | grep -c 'pkg/z_' | grep -qx 3 \
+    && ok "rank: the most-imported importers lead the tier" \
+    || no "rank: the tier does not lead with the most-imported files: $( body "$R_DEF" | grep -oE '<f via="import" p="[^"]*"' | head -1 )"
+{ [ "$( attr shown_importers "$R_ALL" )" = 48 ] && [ "$( attr importers_capped "$R_ALL" )" = 0 ] \
+  && [ "$( body "$R_ALL" | grep -oE '<f via="import"' | wc -l | tr -d ' ' )" = 48 ]; } \
+    && ok "reach: --limit=100 serves the whole 48-file tier (shown_importers=48 importers_capped=0) — the cut is one known call away" \
+    || no "reach: --limit=100 left the tier at shown_importers=$( attr shown_importers "$R_ALL" ) — --limit cannot reach it"
+rm -rf "$RS"
+
 # ── #10 determinism + well-formedness ─────────────────────────────────────────────────────────────────
 A="$( i Widget )"; B="$( i Widget )"
 if [ "$A" = "$B" ]; then ok "determinism: --impact=Widget byte-identical run-to-run"; else no "non-deterministic --impact output"; fi

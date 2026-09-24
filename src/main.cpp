@@ -26,7 +26,7 @@
 #include "situ.h"
 #include "handoff.h"               // --handoff: the continuation packet (verified + heuristic sections)
 #include "dmm.h"                   // --dmm: the Delta Maintainability Model scalar — the trendable complement to --quality-delta
-#include "readability.h"           // --readability: the Posnett (MSR 2011) per-function readability lens
+#include "readability.h"           // --biggest-first (was --readability): the Posnett (MSR 2011) per-function readability lens
 #include "commentcoherence.h"      // --comment-coherence: Steidl c_coeff + Scalabrino CIC, per documented function/method
 #include "contextratio.h"          // --context-ratio: the LOCAL-REASONING lens (outside-the-file share of a unit's context)
 #include "nonlocalstate.h"         // --nonlocal-state: per function, the non-local MUTABLE state it reaches (reads vs writes)
@@ -2283,12 +2283,18 @@ int runDefaultMap( const MainDispatch& d )
             { packSource( f, ing, rank, cfg.packTopN, cfg.packBudgetBytes, redactPtr ); },
             rw::kBytesPerTokenBody );
     }
+    // &calleeOrder (lane/cutfix-bodies): each body's <calls> listing is cut at 16 rows, and with no query in scope it
+    // kept the sixteen LOWEST node ids — an arbitrary cut, however honestly disclosed. It is now ordered FEWEST
+    // SAME-NAMED DEFINITIONS FIRST (serialize.h calleeNameSpecificity: why that and not the map's PageRank, with the
+    // measurement). Built only when a body is expanded; the same vector rides the two emissions below, so the
+    // charged render and the emitted one cannot differ.
+    const std::vector<float> calleeOrder = expandNodes.empty() ? std::vector<float>{} : rw::calleeNameSpecificity( ing );
     if( !expandNodes.empty() )
     {
         bodiesSection = rw::chargeSection( [ & ]( std::FILE* f )
             { packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                           expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
-                          /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg ); },   // V1: octocode F2 sibs=/inc=
+                          /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); },   // V1: octocode F2 sibs=/inc=
             rw::kBytesPerTokenBody );
     }
     if( !outlineNodes.empty() )
@@ -2628,7 +2634,7 @@ int runDefaultMap( const MainDispatch& d )
         {
             emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                                                            expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
-                                                           /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg ); } );
+                                                           /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); } );
             bodiesEmittedEarly = true;
         }
         // T3: fill-aware auto important-last — ONLY on this, the default map emission. --no-auto-order opts
@@ -2702,7 +2708,7 @@ int runDefaultMap( const MainDispatch& d )
     {
         emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                                                        expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
-                                                       /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg ); } );   // L3: --expand bodies surface notes; V1: sibs=/inc=
+                                                       /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); } );   // L3: --expand bodies surface notes; V1: sibs=/inc=
     }
     if( !outlineNodes.empty() )
     { // resolved (and refused on a miss) above, before the first stdout byte
@@ -2789,7 +2795,7 @@ int runDefaultMap( const MainDispatch& d )
 //
 //   --index-out                                            pre-ingest, ahead of EVERY verb incl. the family
 //   --ensemble, --context-ratio                            runMaintenanceViews arms 1-2, ahead of --hotspots
-//   --readability, --comment-coherence, --nonlocal-state,   runQualityViews arms 1-6, ahead of --dead-code
+//   --biggest-first, --comment-coherence, --nonlocal-state, runQualityViews arms 1-6, ahead of --dead-code
 //   --quality-panel, --naming-calibration, --naming-consistency
 //   --handoff                                              runChangeViews arm 1, ahead of --situ
 //   --field-affinity                                       between --layout and --doc-drift
@@ -2846,7 +2852,7 @@ VerbPrecedence scanReportVerbPrecedence( const rw::Config& c )
         { "--owners",            c.owners                 }, { "--quality-baseline", c.qualityBaseline    },
         { "--quality-delta",     c.qualityDelta           }, { "--dmm",           c.dmm                   },
         // §F1: runQualityViews' six lenses, in its own arm order, all ahead of --dead-code
-        { "--readability",       c.readability            }, { "--comment-coherence", c.commentCoherence  },
+        { "--biggest-first",     c.readability            }, { "--comment-coherence", c.commentCoherence  },
         { "--nonlocal-state",    c.nonlocalState          }, { "--quality-panel", c.qualityPanel          },
         { "--naming-calibration", c.namingCalibration     }, { "--naming-consistency", c.namingConsistency },
         { "--dead-code",         c.deadCode               },   // the row order IS the dispatch order (test/dispatchordercheck.sh pins every pair) — never re-pair for layout

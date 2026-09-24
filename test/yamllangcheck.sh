@@ -304,17 +304,20 @@ grep -q 'normalnest0' "$TMP/norm.xml" \
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo
-echo "=== KNOWN GAP (help wanted: prompts/help-wanted/nesting-refusals-visible.md): the refused deep.yml is invisible to --skipped and to warm runs, and --match parses it anyway ==="
+echo "=== #157 FLIPPED (was KNOWN GAP, prompts/help-wanted/nesting-refusals-visible.md): the refused deep.yml is rowed cold AND warm, and --match refuses it consistently ==="
 # ═══════════════════════════════════════════════════════════════════════════
-# The depth guard above refuses deep.yml before the parse, and says so ONLY as one stderr line on a COLD run.
-# Measured on main:
-#   - --skipped never rows the file; its only trace is an anonymous unmeasured="1";
-#   - a warm run stat-hits the cache record saveCache wrote for it, so nothing is printed at all;
-#   - --match's structural-query walk (astQueryGrouped) parses the refused file with no prescan, which leaves the
-#     vendored scanner patch as that path's only layer.
-# Each KNOWN GAP arm asserts TODAY's behaviour, so it PASSES now. Flipping them is the acceptance test for the
-# prompt: a refused file is rowed in --skipped on cold AND warm runs, and --match applies the same refusal. A FAIL
-# on a KNOWN GAP arm means the gap moved: rewrite the arm to assert the fixed behaviour, never delete it.
+# This block used to pin main's GAP (no row ever, warm run silent, --match parsed the refused file anyway) as
+# four KNOWN-GAP arms that passed on the bug. #157 closed it: refuseNesting (ingest_prewarm.h) itemizes every
+# nesting refusal — json/yaml/markdown/kotlin alike — into --skipped, forgetNestRefusalsForCache forgets the
+# refused file's cache record so a warm run re-refuses and re-rows it, and the structural-query walk
+# (astQueryGrouped, ingest_astquery.h) now checks the SAME per-file refusal (IngestResult::nestRefusedFile)
+# before parsing, so --match/--pattern/--lint can never return a hit from a file ingest refused.
+# NOTE on stderr: the warm run's "[ripwire] …: yaml nesting …" note REAPPEARS every warm run under this fix —
+# that is not a regression, it is forgetNestRefusalsForCache's documented cost (one re-scan per warm run of a
+# tree holding a refused file) and it is EXACTLY what Kotlin's own pre-existing guard already does (verified
+# against the unmodified base binary: Deep.kt's note reprints on every warm run there too). CONTRIBUTING's own
+# rule is to never assert DISCLOSE's stderr text as a disclosure — the --skipped ROW is the disclosure, and
+# that is what every arm below checks.
 KGY="$TMP/kgyaml"; mkdir -p "$KGY"
 cp "$DEEP/deep.yml" "$KGY/deep.yml"
 printf 'kgsiblingkey: 1\n' > "$KGY/sibling.yml"
@@ -329,22 +332,26 @@ else
     no "(kg-yaml) presence: expected rc=0 twice, a cold refusal note for deep.yml and a warm map identical to the cold one (cold rc=$KGY_COLD_RC, warm rc=$KGY_WARM_RC) — the arms below would be vacuous: $( head -2 "$TMP/kgy_cold.err" )"
 fi
 if [ "$KGY_LIVE" -eq 1 ]; then
-    grep -q 'deep.yml' "$TMP/kgy_warm.err" \
-        && no "KNOWN GAP MOVED (prompts/help-wanted/nesting-refusals-visible.md): the warm run now names deep.yml on stderr — rewrite this arm to assert the warm refusal is visible" \
-        || ok "KNOWN GAP (help wanted: prompts/help-wanted/nesting-refusals-visible.md): a WARM run says nothing about the refused deep.yml — flipping this is the acceptance test"
     for mode in cold warm; do
         if [ "$mode" = cold ]; then
             $BIN "$KGY" --no-cache --skipped >"$TMP/kgy_sk_$mode.xml" 2>/dev/null; SK_RC=$?
         else
             $BIN "$KGY" --cache="$TMP/kgyaml.cache" --skipped >"$TMP/kgy_sk_$mode.xml" 2>/dev/null; SK_RC=$?
         fi
+        DEEP_BYTES="$( wc -c < "$KGY/deep.yml" | tr -d ' ' )"
         if [ "$SK_RC" -ne 0 ] || ! grep -q '<skipped indexed="2"' "$TMP/kgy_sk_$mode.xml"; then
-            no "(kg-yaml) $mode --skipped: exit $SK_RC or no <skipped indexed=\"2\"> report — the arm cannot observe the gap"
-        elif grep -qE '<f p="[^"]*deep\.yml"' "$TMP/kgy_sk_$mode.xml"; then
-            no "KNOWN GAP MOVED (prompts/help-wanted/nesting-refusals-visible.md): $mode --skipped now rows deep.yml — rewrite this arm to assert the row, its why=, and its legend clause"
+            no "(kg-yaml) $mode --skipped: exit $SK_RC or no <skipped indexed=\"2\"> report — the arm cannot observe the fix"
+        elif ! grep -qE "<f p=\"[^\"]*deep\\.yml\" why=\"nest-refused\" bytes=\"$DEEP_BYTES\" ext=\"\\.yml\"/>" "$TMP/kgy_sk_$mode.xml"; then
+            no "#157 REGRESSED: $mode --skipped has no exact nest-refused row for deep.yml (why=/bytes=$DEEP_BYTES/ext=.yml): $( grep -o '<f p="[^"]*deep[^/]*/>' "$TMP/kgy_sk_$mode.xml" )"
+        elif ! grep -q 'nest_refused="1"' "$TMP/kgy_sk_$mode.xml"; then
+            no "#157 REGRESSED: $mode --skipped header is missing nest_refused=\"1\": $( grep -o '<skipped [^>]*>' "$TMP/kgy_sk_$mode.xml" )"
+        elif ! grep -qF 'nest_refused= counts indexed files a pre-parse nesting guard' "$TMP/kgy_sk_$mode.xml"; then
+            no "#157 REGRESSED: $mode --skipped legend carries no nest_refused= clause"
         else
-            ok "KNOWN GAP (help wanted: prompts/help-wanted/nesting-refusals-visible.md): $mode --skipped has no row for the refused deep.yml (only an anonymous unmeasured= counts it) — flipping this is the acceptance test"
+            ok "#157 FIXED: $mode --skipped rows deep.yml (why=\"nest-refused\" bytes=\"$DEEP_BYTES\" ext=\".yml\"), header nest_refused=\"1\", legend present — the file is no longer invisible"
         fi
+        grep -qE '<f p="[^"]*sibling\.yml" why="nest-refused"' "$TMP/kgy_sk_$mode.xml" \
+            && no "#157 REGRESSED: $mode --skipped rows sibling.yml as nest-refused too — the guard is refusing the whole tree, not the one hostile file"
     done
 fi
 # --match: evaluated on a clean exit only. A crashed run prints nothing, and "no hits in an empty document" would pass
@@ -353,11 +360,15 @@ $BIN "$KGY" --no-cache --match='(block_mapping_pair)' >"$TMP/kgy_match.xml" 2>"$
 if [ "$KGY_M_RC" -ne 0 ]; then
     no "(kg-yaml) --match over the refused deep.yml exited $KGY_M_RC — a parse the guard exists to prevent went wrong (the vendored scanner patch is --match's only layer): $( head -2 "$TMP/kgy_match.err" )"
 elif ! grep -q 'deep.yml: yaml nesting' "$TMP/kgy_match.err"; then
-    no "(kg-yaml) --match: the same run's ingest did not refuse deep.yml — the arm cannot show the two paths disagree"
+    no "(kg-yaml) --match: the same run's ingest did not refuse deep.yml — the arm cannot show the two paths agree"
 elif grep -q '<m p="deep\.yml:' "$TMP/kgy_match.xml"; then
-    ok "KNOWN GAP (help wanted: prompts/help-wanted/nesting-refusals-visible.md): --match returns hits INSIDE deep.yml in the same run whose ingest refused it — flipping this is the acceptance test"
+    no "#157 REGRESSED: --match returns hits INSIDE deep.yml in the same run whose ingest refused it — the bypass is back"
+elif ! grep -q 'nest_refused="1"' "$TMP/kgy_match.xml"; then
+    no "#157 REGRESSED: --match's answer does not disclose nest_refused=\"1\" over a tree holding one refused file: $( grep -o '<match [^>]*>' "$TMP/kgy_match.xml" )"
+elif ! grep -q '<m p="sibling\.yml:' "$TMP/kgy_match.xml"; then
+    no "#157 REGRESSED: --match found no hit in the sibling file either — the arm cannot tell refusal from a broken walk"
 else
-    no "KNOWN GAP MOVED (prompts/help-wanted/nesting-refusals-visible.md): --match no longer returns hits inside the refused deep.yml — rewrite this arm to assert the refusal and its disclosure"
+    ok "#157 FIXED: --match returns zero hits inside the refused deep.yml, discloses nest_refused=\"1\", and still scans sibling.yml"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

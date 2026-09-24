@@ -13,6 +13,463 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Added — `--biggest-first` supersedes `--readability`
+
+**`--biggest-first` supersedes `--readability`**, which remains fully functional as a hidden alias and
+prints a one-line stderr deprecation the first time it is used. The rename follows the ordering claim's
+withdrawal: the flag never measured readability directly, only Halstead volume/token entropy/length, so
+after the claim went, the name was the one thing left overclaiming (derivation: `docs/EVALS.md` §8).
+Renaming the flag changes nothing else — the emitted `<readability functions=… >` root, the
+`schema="ripwire.readability/v1"` compact-legend tag and every attribute on a row (`vol=` `ent=`
+`posnett=` …) are unchanged, since renaming those would break every script that already parses this
+verb's XML. stdout is byte-identical between the two spellings; only stderr carries the notice.
+
+### Fixed — the construct-validity caveat on `--biggest-first` (`--readability`) cited a proxy number that did not reproduce
+
+The `UNVALIDATED` note in `--help=--biggest-first` and the README said the lens agrees with a refactor
+commit's implied readability direction on 30.2% of 484 function pairs. That population came from
+`bench/readability_refactor_pairs.py` walking `git log --all`, which reads every branch in this clone's
+shared `.git`, so the count changed whenever an unrelated branch was pushed — a rerun of the identical
+script gave 413 pairs (38.3%) and, separately, 409 pairs (38.4%), neither matching the published number.
+Pinning the script to the immutable `v0.6.2` tag (#313) first reproduced **154 of 412 pairs (37.4%)**,
+still worse than chance (PR #321, closed as superseded before it merged). A closer look at the same
+pinned population found the actual mechanism: the sign of a
+function's token-count change explains the lens's own direction in **96.0% of pairs (388/404 whose count
+changed)** — the caveat now cites that figure and names the tag (train 16, PR #322, merged 2026-09-22;
+ships in the next release). A follow-on study then tested the ordering claim itself — whether a
+least-readable function is more likely to be fixed later — against ripwire's own history, and could not
+sustain it once stratified into ten narrow token-count deciles (8 of 10 show a CI that includes 1): the
+raw/tercile association is a residual size
+effect, not an independent readability signal. **The ordering claim is withdrawn outright**; the lens
+still orders functions by Halstead volume/token entropy/length, largest first, but is no longer claimed
+to order by readability. Full derivation: `docs/EVALS.md` §8.
+
+### Changed — `--quality-delta`'s tenth kind is named `new-clone-of-reused-helper` in `--help`
+
+`--help`'s `--quality-delta` entry called its tenth kind `reuse-decline`. The binary emits
+`kind="new-clone-of-reused-helper"`, and the verb's own legend and `docs/EVALS.md` already used that
+name — one kind under two names. The help text now uses the emitted string; `docs/EVALS.md`'s
+abbreviation note lists `reuse-decline` as an older name. A demoted `new-clone-of-reused-helper` row also
+gained an `idiom=` attribute, and gate arms now cover the reuse-decline demotions directly (train 16,
+PR #322, merged 2026-09-22; ships in the next release).
+
+### Added — `--slice=SYM:VAR` rows are in def-use order
+
+`--slice=SYM:VAR` rows are now in def-use order, and the root states it with `order="defuse"`. Also adds
+an `docs/EVALS.md` pre-registration and result for the ordering, fixes a well-formedness bug (a bare `--`
+inside a full-tier XML comment), and adds a new slicecheck arm (train 16, PR #322, merged 2026-09-22;
+ships in the next release).
+
+### Changed — `--slice=SYM:VAR`'s legend and `--help` say what `order="defuse"` does not claim
+
+A pre-registered attempt to rank `--slice=SYM:VAR` rows by relevance over the WHOLE function span did not
+beat a random-shuffle control (R3@1 0.0344 vs 0.0423, bootstrap 95% CI [−0.0310, 0.0189]). `order="defuse"`
+stays the default: among the rows `--slice` already narrows to it still beats random (MRR 0.628 vs 0.602 on
+478 pairs). The compact and full legends and `--help=slice` now say the order ranks those rows only and is
+not a whole-function relevance ranking. No row, attribute or default changed. Derivation: `docs/EVALS.md`.
+
+### Fixed — a file refused for pathological nesting no longer disappears silently
+
+JSON, YAML and Markdown-family files that fail the pre-parse nesting guard (memory-safety load-bearing for
+YAML and Markdown; a performance guard for JSON) used to print one stderr line on a cold run only, carry no
+row in `--skipped`, and go completely silent on a warm run — the cache had no record that the file was ever
+refused. Worse, the `--match`/`--pattern`/`--lint` structural-query walk parsed the refused file anyway, in
+the same run whose ingest had just refused it, so the guard protected the map but not those three verbs.
+
+- Every nesting refusal — json/yaml/markdown, and Kotlin's pre-existing one — is now itemized in `--skipped`
+  (`why="nest-refused"`), on cold **and** warm runs: the refused file's cache record is forgotten before the
+  save, so a warm run re-refuses and re-rows it instead of silently reusing an empty hit.
+- The default map's header gains `nest_refused=N` (absent when zero; `--json` twin `"nest_refused"`), so a
+  reader of the map itself — not only `--skipped` — can tell a file was excluded and why.
+- `--match` and `--pattern` no longer parse a file ingest refused: they apply the same refusal, exclude the
+  file from `eligible_files=`, and disclose `nest_refused=N` on their own answer (absent when zero). `--lint`
+  applies the same refusal and its root carries the same `nest_refused=N`, so a refused `.kt` file no longer
+  leaves every rule's `count=` short with no trace. The default (compact) legend defines `nest_refused=` on
+  all three roots.
+- An index cache written before this change is invalidated on load (`kCacheVersion` 24 → 25) so a refused
+  file already hidden in an old cache is re-scanned and rowed once, rather than staying hidden until the
+  file's content next changes.
+
+---
+
+### Fixed — a nested `std::` call (`std::ranges::move`, `std::chrono::duration_cast`) no longer binds an unrelated in-repo definition
+
+#134 stopped a FLAT `std::X(...)` call from binding a lone in-repo `X`, but its guard read only the call's
+IMMEDIATE qualifier segment: `std::ranges::move` arrives as qualifier `"ranges"`, indistinguishable from a
+user's own `mylib::ranges::move`, so the guard never applied and the call fell through to whatever in-repo
+`move` existed — at full confidence, with no `amb=`. Worse for a library that mirrors std's own layout
+(Boost.Chrono's `boost::chrono::duration_cast`, or any vendored `vendorlib::chrono::duration_cast`):
+`std::chrono::duration_cast` canonically hit that vendored definition, and a canonical hit was exempt from
+the guard by design. Both shapes are every C++20/23 codebase's normal spelling of algorithms
+(`std::ranges::`), time (`std::chrono::`) and paths (`std::filesystem::`), so `--callers`, `--impact` and
+every ranking computed over them inherited the false edges.
+
+The guard now reads the FULL written qualifier chain, not just the immediate segment, on both sides:
+`Reference::qualifierRootsStd` (a call's whole chain is rooted at `std`, `::std`, or a standard library's
+inline ABI namespace, at any nesting depth) and `Symbol::scopeRootsStd` (a definition's whole enclosing
+chain roots at `std`, including the C++17 `namespace std::ranges { … }` spelling). A candidate now survives
+only when its OWN chain is std-rooted too — so a std-rooted call can no longer canonically hit a vendored
+library that merely shares std's namespace layout — and a std-rooted call against a DECLARATION-ONLY std
+entity with no in-repo body (no real implementation anywhere in the corpus) is refused rather than bound to
+the forward declaration standing in for it. A namespace-alias or using-directive call (`namespace sr =
+std::ranges; sr::move(...)`, or an unqualified call after `using namespace std::chrono;`) is a stated,
+disclosed floor — its written qualifier never names `std` at all, so it is unaffected, unchanged from
+today's ladder. An out-of-line std-rooted definition (`std::detail::f(){}`, `std::hash<Foo>::mix(...){}`) and
+a partially-qualified one written inside `namespace std { … }` (`namespace std { int detail::f(){} }`) are
+recognised too, and a std-rooted VARIABLE (a niebloid: `namespace std::ranges { inline constexpr sort_fn
+niebloid{}; }`) is never refused for having no function body. A qualified def written inside another named
+namespace (`namespace vendor { int std::ranges::f(int){…} }`, which defines `vendor::std::ranges::f`) is not
+std-rooted, so a call to the real `::std::ranges::f` no longer binds it. `kParserVer` moves 119 → 120 (two new
+per-record extraction facts, folded together with a same-day correctness fix to how one of them is
+computed) and `kCacheVersion` moves 24 → 25, so any cache written by an earlier binary is refused and
+reparsed.
+
+The same "a qualified call binds by its immediate segment alone" shape was checked in Rust, C#, Python,
+Java/Kotlin and Go: Rust's `std::`/`core::` guard has the identical gap — confirmed on both binaries
+(`std::collections::HashMap::new()` and `core::mem::swap`/`std::mem::swap` all still bind an unrelated
+in-repo `HashMap::new`/`mem::swap`) and **currently a known, UNTRACKED gap**, not filed as its own issue as
+of this writing; C#, Python and Java capture no qualifier chain at all for these calls today, so the shared
+mechanism does not reach them without new capture work; Go's package-qualified calls are always exactly one
+segment, so the defect shape cannot arise there.
+
+### Fixed — the whole Windows cache path, not just `--doctor`'s report of it
+
+On Windows with neither `TMPDIR` nor `XDG_CACHE_HOME` set, `--doctor` reported the cache directory `ok="0"`
+with `blobs="0" bytes="0" truncated="1"` for a cache that was in fact writable and populated (#326).
+`cacheDirLadder()`'s fallback tier returns a POSIX-spelled `/tmp/ripwire-<uid>`; `os::mkdir`/`os::lstat`/
+`os::chmod` — what the ladder itself calls to create and verify the directory — silently rebase that onto the
+real user temp directory on Windows, but anything reaching for the SAME directory string through
+`std::filesystem` or a bare `std::fopen`, bypassing `os::`, does not get that rebase and reads/writes a
+directory the tool never actually uses (typically nonexistent on the current drive). `--doctor`'s cache-dir
+probe and blob/edit-lock scans were the reported symptom, but not the only consumer: `resolveCacheBlobPath`
+(the one choke point nearly every cache-blob path in the tree routes through), the cache-eviction sweep
+(`evictOldCacheFamily`/`sweepStaleCacheBlobsOnce`), `--slice`'s and the MCP edit-preview's temp parse roots,
+the cross-branch blob-batch listing, the markitdown doc-bridge cache, and the remote-clone reuse cache all
+shared the exact same defect shape. Fixed at the source: `cacheDirLadder()` itself now returns the
+already-rebased spelling (via the new `rw::os::rebased_path()`, the same routing `os::open`/`os::stat`/
+`os::mkdir` already apply internally; identity on POSIX, where `/tmp` is already a real, directly usable
+directory), so every one of the consumers above is correct by construction — none of them needed their own
+fix. `--doctor`'s cache-dir row's `dir=`/`hint=` now also name the real cache location instead of a path the
+tool never touches, and its writability probe still measures the only thing "writable" can honestly mean on
+either platform — creating and removing a real file — never a mode-bit check.
+
+### Fixed — the cache-eviction sweep evicts on Windows; the cache no longer grows without bound
+
+The consumer of the defect above with the most visible cost. With neither `TMPDIR` nor `XDG_CACHE_HOME` set —
+the ordinary state of a cmd.exe or PowerShell session, which have `TMP`/`TEMP` instead — the eviction sweep
+that runs once per process from `saveCache` (`sweepStaleCacheBlobsOnce` → `evictOldCacheFamily`) walked the
+un-rebased spelling with `std::filesystem::directory_iterator`, met a directory that does not exist, and
+returned early: nothing was ever evicted — not the 30-day age pass, not the 2 GB byte budget, not the keep-N
+families — while the real cache accumulated blobs indefinitely. The fix is the one above; what this adds is
+the proof. The `windows` CI job seeds the real cache directory (learned from `--doctor`'s `dir=`) with stale
+blobs, forces a cache write, and asserts they are gone — loud on the pre-fix code — and `evictioncheck` pins
+in the source that every value `cacheDirLadder()` returns is the rebased spelling.
+
+### Fixed — `--quality-ack`: a refused `--ack-only` no longer discards the ledger's own healing
+
+`--ack-only=SUBSTR` that matches none of the current findings correctly refuses (exit 1, nothing accepted) —
+but it used to also throw away any legacy-row provenance healing (`backfillCloneAckProvenance`) this same run
+had already computed in memory for unrelated rows, because the refusal returned before the ledger was ever
+rewritten. A refused `--ack-only` now still writes that healing (only when it actually changes the ledger's
+canonical bytes — a canonical ledger is still left untouched), the same "heal even with nothing to accept"
+rule `--quality-ack` already applies when a run's report has zero findings at all. The refusal itself, and its
+exit code, are unchanged.
+
+### Fixed — `--test-gate` derives a TS/JS runner from package.json evidence, and never lists a file's own module scope as untested
+
+Two `--test-gate` defects, both reported against real TS/JS repos:
+
+`--test-gate` had no runner derivation for TypeScript/JavaScript test files — only `.sh`/`.py` were
+recognized — so every TS/JS `<t>` row carried `run_unknown="1"` and the gate could never clear on a
+TS/JS change with a test partner (one report measured 154 of 154 runs over three days hitting this on
+a vitest project). The runner is now derived the same evidence-first way Python's already is: the
+nearest `package.json` above the test file (walking up, so a monorepo/workspace test file's own
+manifest is used, not the repo root's) is read for a `scripts.test` entry or a `vitest`/`jest`
+dependency naming one of the three runners this recognizes — `vitest`, `jest`, or node's own built-in
+test runner. A manifest naming none of the three, or no manifest at all, stays the honest
+`run_unknown="1"` it already was — never a guessed default. New: `src/jsrunner.h`.
+
+`--test-gate` could also list a file's synthetic module-scope owner (`<file-scope>`, minted for a
+top-level call or an anonymous-callback body, #60) as an "untested" symbol — a row an agent could
+never discharge, since nothing in any language can call `<file-scope>` and no test can be written for
+it. `model.h::isUntestableOwner` now excludes it from every such obligation listing in one place:
+`--test-gate`'s untested rows and `--flags --flip`'s untested hosts, the two places a synthetic owner
+could reach a reader as an actionable item. It still counts toward the coarser `impacted=`/`hosts=`
+gauges, where it is a real caller in the blast radius — only the per-row obligation list changes.
+The excluded count is disclosed, not silent: `--test-gate` now carries `untested_modscope="N"` (XML
+and JSON) alongside `untested=`, so a change whose only reader is an untestable entrypoint reports why
+its `untested=` reads zero instead of reading like there was nothing to find. `--flags --flip` counts the
+same exclusion as `untested_modscope="N"` on its root (present only when N > 0), where the host row itself
+still lists the `<file-scope>` owner with `tested="0"`. The full `--test-gate` legend defines
+`untested_modscope=` at zero too.
+
+### Fixed — five defects in the TS/JS runner derivation above, found by independent review before merge
+
+- **A named shell/Python driver was losing to "unknown".** TS/JS test files now have their OWN evidence
+  path (`package.json`), and that path used to be preferred outright over a `test/*.sh` (or `.py`)
+  driver whose own text names the file — a real, previously-working signal. A TS/JS file with no
+  usable `package.json` evidence now falls through to that same driver search (shared by
+  `--test-gate`, `--affected`, and the MCP `affected` tool, which all read one `TestRunnerIndex`).
+- **A `scripts.test` that names no recognized runner was overridden by an unrelated dependency.** A
+  `mocha` project that happens to also list `vitest` in `devDependencies` (for its config types, say)
+  derived `npx vitest run …` — a command that would find no matching tests. `scripts.test`, once
+  present and not npm's own placeholder, is now authoritative: it decides the runner (or decides none),
+  and a same-named dependency never overrides it. Dependency evidence is consulted only when there is
+  no real `scripts.test` to read. Runner names are also matched as shell WORDS now, not substrings, so
+  a script naming an unrelated file that merely contains "jest" in its path no longer derives jest.
+- **Every `.ts`/`.js` file under a test directory was spelled as a vitest/jest target, including
+  non-tests.** A helper or setup file living beside real tests (or a `.d.ts` declaration file) matched
+  the extension check and got a `run=` command that would fail in CI ("no test files found") — vitest
+  and jest only collect files matching their own `.test.`/`.spec.` naming, or a `__tests__/` directory
+  segment. Only a file matching that shape is now spelled as a runnable target; a `.d.ts` file is never
+  one, regardless of evidence.
+- **The nearest `package.json` could end the search before it decided anything.** A bare module-type
+  marker (`{"type":"commonjs"}`, common in mixed-module repos) sits between a test file and its real
+  runner evidence in some layouts; the walk now keeps climbing past a manifest that names neither
+  `scripts.test` nor a recognized dependency, instead of stopping there and reporting unknown. A manifest
+  WITH a real `scripts.test` still ends the search immediately, whatever it names (even an unrecognized
+  runner): its own answer is final for that subtree and a workspace root's `vitest`/`jest` never
+  overrides a package that already answered "mocha" for itself — the same authority `scripts.test`
+  already has within one manifest, now honoured one level up a monorepo too.
+- **A `__tests__/`-only jest test file (no `.test.`/`.spec.` in its own name) was invisible to
+  `--test-gate` entirely** — not merely runner-unknown: its module scope read as an untestable owner, so
+  a change covered only through such a file exited 0 with nothing to run. `__tests__/` is now a
+  recognized test-path directory segment (`filter.h::isTestPath`, the ONE test-path convention every verb
+  shares — widened there, not duplicated), the same fix `looksLikeJsTestFile` already carried for it
+  unreachably. Checked empty of side effects on every other language: no `__tests__` directory exists
+  anywhere in this repo's own tree, so no existing fixture or pinned gate could have been counted as test
+  code by this convention before. jest's OTHER default pattern (a bare `test.js`/`spec.js` filename, no
+  leading dot or underscore) remains a narrower, separate, undocumented-no-longer gap — see below.
+- **`npm run <script>` / `yarn <script>` / `pnpm <script>` indirection inside `scripts.test` is honest-
+  unknown, not derived.** `scripts.test: "npm run test:unit"` with `scripts["test:unit"]: "vitest run"`
+  used to derive vitest via the (now-removed) dependency fallback; it is real, common indirection this
+  version does not follow. Stated as a floor below, not fixed — following it needs the same authoritative-
+  script rule one script-name hop deeper, which is a larger, separately-scoped change.
+
+### Fixed — two more TS/JS runner-derivation defects, found in PR review
+
+- **The test-name check read the absolute path.** The `__tests__/` segment test ran over the file's path on
+  disk, so it also matched directories ABOVE the crawl root: in a checkout under `…/__tests__/repo/`, a
+  helper such as `test/setup.ts` was spelled `run="npx vitest run test/setup.ts"`, and in any other checkout
+  `run_unknown="1"`. It now reads the root-relative path, so the answer no longer depends on where the repo
+  sits.
+- **A TS/JS test file could become another row's runner.** The driver search that lets a TS/JS file fall
+  back to a shell or Python driver naming it also searched the TS/JS test files themselves, so a jest test
+  that merely `require`s `./util.js` gave the `util.js` row `run="npx jest test/util.test.js"`, and a miss
+  read every TS/JS test file to find out. The search now covers `.sh`/`.py` drivers only, as documented.
+
+### Documented — TS/JS test runners this cannot yet derive (`run_unknown="1"` stays honest, not a bug)
+
+A handful of real, common TS/JS test-runner spellings are not covered by the three named in #323 and
+correctly read `run_unknown="1"`: node's own test runner invoked through `tsx` (a common way to run it
+against `.ts` files), `bun`'s test runner, and node's test runner against a `.ts` file on a node
+version too old to strip TypeScript types natively. None of these is guessed at; see #323's own
+discussion for a user-declared runner template, which would be the way to name one of these explicitly
+once implemented. `pnpm`/`yarn`-prefixed `scripts.test` entries derive correctly today, spelled as
+`npx …`, since `npx` finds a locally installed binary first. A bare `test.js`/`spec.js` filename (no
+leading dot or underscore — jest's OTHER default `testMatch` shape, distinct from the now-recognized
+`__tests__/` directory convention above) is not yet a recognized test path either. `scripts.test`
+delegating through `npm run <script>` / `yarn <script>` / `pnpm <script>` to another entry in the same
+manifest (`"test": "npm run test:unit"`, `"test:unit": "vitest run"` — a common shape for a project
+with several test scripts) is read as this project's own authoritative-but-unrecognized answer and
+stays `run_unknown="1"` rather than being followed one level deeper into the target script's own
+value — a stated floor, not a guess. (A delegating script whose OWN name happens to literally contain
+`vitest`/`jest` as a word, e.g. `"npm run test:vitest"`, still derives correctly today — that is the
+existing word-match rule firing on the visible text, not indirection-following.)
+
+### Fixed — a `--regex` spelling one byte by number dropped every file that matched it, at `capped="0"`
+
+`--regex` opens only the files a sound regex→trigram query admits (`src/search.h`'s `RegexAnalyzer`, the Cox
+prefilter; the full-scan switch the gates use is its oracle). That reader knew `\n`, `\t`, `\w`, `\b` and an escaped
+metacharacter, and took every other escape for its letter: `\x66s::exists` became the literal run `x66s::exists`,
+whose trigram `x66` no source file holds, so the ten files with `fs::exists` were never opened — and the answer
+still said `files="0" hits="0" capped="0"`. In an alternation the escaped branch went missing on its own:
+`fs::exists|\x66s::remove` answered 11 files where the full scan and ripgrep answer 14. The same reading inside a
+class (`[\x66]s::exists` enumerated `{x,6,6}`) dropped the same ten. `\uHHHH`, `\cX` and a backreference `\1` had
+the same shape; the screen in `src/regexguard.h` lists all four as portable escapes, so they were accepted and then
+misread. The analyser now steps over exactly the characters the engine reads as the escape: `\xHH` and `\u00HH`
+with every digit present and an ASCII value are that one byte, and the rest are one byte it does not vouch for
+(ALL — sound, as `.` is). Only the CLI `--regex` evaluates that query; the MCP `grep` verb is a literal-only
+scan (`src/mcpverbs.h`'s `grepHitsJson` calls `grepCollect(..., /*regex=*/false, ...)`) and never reached this
+code, and neither did the literal `--grep`, the unindexed scan or the line-level literal paths.
+
+Two more soundness gaps in the same analyser, found in review before this landed: a class range ending at
+`\x7f`/`\u007f` (both portable, accepted escapes) looped forever — `for( char ch = lo; ch <= hi; ++ch )` never
+terminates once `hi == CHAR_MAX`, and RSS grew without bound within seconds; the loop now counts with `int`.
+And a non-capturing group `(?:...)` was read as a zero-width assertion (ε), the same as a lookaround, so its
+content never entered the trigram query: a pattern such as `std::(?:string)&` required the seam trigram `::&`
+of every file, and every real `std::string&` occurrence dropped at `capped="0"`. `(?:...)` is now parsed as an
+ordinary group that consumes its content, and a lookaround whose skip loop passes an unescaped `[` (a class may
+itself hold `(` or `)`, which desyncs that loop's depth count) now falls back to ALL rather than trust it.
+
+Gate: `test/regexcheck.sh` — four escape patterns join the prefiltered-versus-full-scan battery (S), which now
+refuses to compare two empty answers; (E) pins the alternation shape (`zylophoneXyzzy|\x63ompute`: the escaped
+branch is the only match in two fixture files, and both must be listed with the file count equal to full-scan's
+and above the first branch's alone); (O2) checks the escape patterns against ripgrep, which spells `\xHH` where
+`grep -E` cannot; (F1) runs `[\x7e-\x7f]` under a short alarm and fails on a hang; (F2) runs `std::(?:string)&`
+against this repo's own `src/` and requires prefiltered == full-scan. Red on the previous binary: (S) 4 of 17,
+(E), and (O2) 3 of 3; (F1) hangs (rc=142); (F2) diverges from full-scan. A seeded differential fuzz (fixed
+seed, 260 patterns mutated from this dialect: `\xHH`/`\u00HH`, `[c]`/`[cC]`, `(c)`/`(?:c)`, `(?=c)`/`(?!c)`,
+`? + * {1} {1,2} {0,1} {1,}`, `\w \d \s`, `.`, backrefs, alternation, `^.*`) now compares `--regex` against
+`--no-prefilter` on every run, so a future soundness regression in this analyser is a gate failure, not
+another review finding.
+
+### Fixed — body packing, `--outline` and `--pack-signatures` rank before they cut, and every cut is named
+
+- **Bodies were cut in file order.** `packBodies` (the `<bodies>` of `--expand`, `--for` auto-bodies and `--detail`,
+  `--pack-task`, `--from-trace`) grouped its requests by file before the byte budget ran, so a low-ranked body sharing
+  the top body's file was admitted ahead of the second-ranked body in the next file. The budget now walks the caller's
+  own order and only the survivors are grouped by file (the emitted shape is unchanged). On a three-body fixture,
+  `--expand=alpha_head,gamma_mid,beta_tail --pack-budget-bytes=500` shipped `beta_tail` and dropped `gamma_mid`; it
+  now ships `gamma_mid`. On the 92 held-out LocBench issues, `--for --detail=6` selects a different body set on 1/92
+  (gold-body-served 52/92 before and after); the default `--for` route serves no bodies there and is byte-identical.
+- **Every dropped body is named.** Bodies met after the budget was spent used to be dropped with no name at all; they
+  are now listed, in rank order, in ONE `<!-- bodies omitted (budget spent): a, b -->` comment (one list rather than a
+  marker each, so a long tail's disclosure stays small: 29 dropped `--for --detail=30` bodies on a 30-function fixture
+  under `--token-budget=800` are named in 502 B, against 1,479 B as one marker each). A body
+  skipped because it did not fit while budget remained keeps its `<!-- body omitted (over budget): NAME -->`. Every
+  requested body is shown, named as omitted, counted as `bodyless=`, or (an unreadable span) only counted in
+  `total=`; the JSON `bodies_omitted` lists the same names.
+- **A truncated body says so outside its CDATA.** An oversized first body used to carry `<!-- truncated -->` inside
+  its CDATA while `<bodies>` said `capped="0"`. It is now `<bodies … capped="1">` and
+  `<b … lines="1-17/377" truncated="1" next="--expand=P:L:N:18-377">`; following `next=` at the same budget
+  reassembles the body byte for byte. The cut always falls at a line end and `lines=` counts whole lines only: when
+  not even the first line fits (a 70 KB line at the default 64 KB budget, or a nearly spent `--detail` budget that
+  used to serve one byte), that line is served whole with `over_ceiling="1"`, so every `next=` starts past what was
+  served and a chain of them always ends. The JSON twin carries the same `lines`/`truncated`/`next`/`over_ceiling`.
+- **`--expand`'s cut `<calls>` listing** (16 rows) kept the lowest node ids. It now keeps the callees whose names have
+  the fewest callable definitions in the index first. Over the first 60 cut listings of this repo and three held-out
+  corpora, the share of kept callees defined in the body's own file rose on all four (here 11.5% to 16.2%; scrapy
+  3.9% to 9.4%; sqlglot 23.6% to 31.4%; mypy 8.9% to 9.5%), but the share defined in the body's file or a file it
+  imports fell on mypy (75.1% to 69.8%). The map's PageRank, the other candidate, is corpus-dependent: better than
+  node-id order on scrapy and sqlglot, worse on this repo and mypy, and below the shipped order on all four.
+- **`--outline` and the map's `--pack-signatures`** walked their byte budget file-major and closed a cut with a bare
+  element. Both now walk rank-first, emit the survivors in the same grouped shape, and disclose a cut with
+  `shown= total= capped="1"` (`<!-- outlines omitted (budget spent): a, b -->` names the dropped skeletons). An uncut
+  answer is byte-identical, except that `--pack-signatures` rows sharing one start byte in a file now tie-break by id.
+  `--pack-signatures`' `total=` is the rows handed to the byte budget (its `--pack-top-n` window), as on `--for`'s
+  `<sigs>`, so a default call that the budget did not cut stays a bare `<sigs>`.
+- The full `--expand` legend said `sibs=` is "capped at 8"; the cap has been 100 since 2026-09-10.
+
+### Fixed — `--grep`'s collection ceiling ranks before it cuts, and every grep cut has a compact reading
+
+- **The 4,000,000-hit collection ceiling cut the head.** `grepCollect` spent the ceiling in ascending file order and
+  only then sorted SOURCE before test/bench before docs, so a pattern dense in files that sort early kept those and
+  dropped the rest. On a fixture of two hit-dense `docs/*.md` files and one `src/` file (5M hits),
+  `--grep=x` answered `files="2" hits="4000000" hits_capped="1"` with no source row at all. The hit files are now
+  ranked first (the shared tier-then-path key, `src/filter.h`) and the ceiling spends in that order, so it drops only
+  the tail of the least relevant tier: the same answer now leads with `src/main.c` and `files="3"`. The cut is
+  disclosed as before (`hits_capped="1" counts_floor="1" capped="1"`). On this repository no literal reaches the
+  ceiling (`--grep=e`: 2.6M hits), so every answer here is row-for-row unchanged. CLI and the MCP `grep` verb share
+  the collection.
+- **The span-tier classification budget says how much it left.** `tier_budget=` named which ceiling (128 files or
+  8 MB) stopped the code/comment/string classification, but not how many hit files it had to cover; `files=` cannot
+  stand in, because it counts files after suppression. `tier_files=` now rides beside `tier_budget=` (MCP:
+  `tier_files`), e.g. `--grep=std::string` on this tree: `tier_parsed="128" tier_budget="files" tier_files="256"`
+  where `files="251"`. About 16 bytes, on budgeted answers only.
+- **Three grep attributes had no reading in the default (compact) legend.** `tier_budget=` (which `tier_parsed=`'s
+  own reading pointed at), `tier=` on a comment- or string-only answer, and `line_bytes=`, the one sign that a row's
+  matched text was cut at 512 bytes. Each now has a present-only reading: +56 to +190 bytes on the answers that carry
+  them, nothing on the rest.
+
+Gate: `test/collectioncapcheck.sh` (J) (the ceiling fixture, CLI and MCP) and (K) (`tier_files=` CLI and MCP, and
+the three compact readings). Red on the previous binary: (J) 3 of 5, (K) 5 of 7.
+
+### Changed — `--callers`, `--uses` and the `--impact` import tier rank before they cap; `--callees` keeps path order
+
+Each of these lists sorted its rows by tier, then path, then line, and then cut at a default cap (40 symbol
+rows, 100 use sites, 40 importer files). The cut therefore dropped whatever sorted last by path, not the
+weakest rows: on this repository `--callers=kindIs` kept the 40 alphabetically-first of its 135 callers.
+
+- **One order, ranked — callers, uses and the import tier.** Within a tier (source, then test/bench, then
+  docs — unchanged), rows now come most-depended-on first: a caller by its own caller count, a use site by the
+  caller count of the symbol it sits in (file-scope sites last), an importer file by how many files import it.
+  Path and line break ties, so a list whose weights tie is byte-identical to before, and an answer with one
+  row, or rows of equal weight, is unchanged. **The emitted row order changes** on any multi-row answer whose
+  weights differ: the most-depended-on rows lead. That is the same total order the cap and `--offset`/`--limit`
+  read, so a page is a slice of it and `page[0:k] + page[k:2k] == page[0:2k]` still holds. Selecting by rank
+  and then re-sorting each page by path was considered and rejected because it would break that identity.
+  The MCP twins (`find_referencing_symbols`, `find_symbol`'s `calledBy`, `uses`, `impact`) share the order.
+- **`--callees` and `find_symbol`'s `calls` keep their order — rows and default output byte-identical to
+  before;** only the full legend's shared ordering sentence changed. A first cut of
+  this change ranked callees by the same key (each callee's own caller count), reasoning that one rule should
+  cover both directions of the same call hierarchy. Measured, it was worse: on this repository's own co-change
+  instrument, `--callees`' default-cap recall fell 0.592 → 0.466 (n=18), because a callee's own caller count
+  says how widely-called that callee is ELSEWHERE, not how central it is to the body that calls it — the cap
+  kept `empty, empty, empty, size, c_str` and dropped the two most specific callees of a 42-callee symbol.
+  Callees keep the tier/path order they always had.
+- **`find_symbol`'s `calledBy` array states its cut.** It is windowed by the same `limit`/`offset` as `calls`,
+  but `count` and the paging keys describe `calls` only, so a 105-caller symbol served 40 `calledBy` rows with
+  no sign that any were missing. A cut array now carries `calledBy_total`, `shown_calledBy`,
+  `calledBy_capped` and `calledBy_next` (the `--callers` call that continues it). An uncut array is unchanged.
+- **`--limit` reaches the `--impact` import tier.** `shown_importers` was fixed at 40 whatever `--limit` said,
+  so a cut tier had no call that fetched the rest. `--limit=N` now sizes the tier like the symbol rows (one
+  limit, one size in one answer). `offset=` still windows the symbol rows only.
+
+Measured on this repository's own history at 60b65f02, with a new instrument (no existing recall measure
+covered these lists). The "row that mattered" is a caller or use site last rewritten, per
+`git blame -w`, by the same commit that last rewrote a line of the symbol's definition. Commits touching more
+than 40 files are excluded. For importers it is a file changed by such a commit. Default cap, before → after,
+on the SMALL populations this repository has over the cap — **17 / 19 / 9 symbols** for callers / uses /
+importers: `--callers` hit rate 0.41 → 0.71, recall 0.32 → 0.51; `--uses` hit rate 0.53 → 0.74, recall
+0.43 → 0.52; import tier hit rate 0.78 → 1.00, recall 0.40 → 0.70. With `--limit=10` (76 / 80 / 30 symbols),
+`--callers` recall is 0.62 → 0.67 and `--uses` 0.51 → 0.54. The import tier's recall is 0.47 → 0.46, a slight
+drop at that depth. `--callees` rows and default output are byte-identical to before on representative
+symbols, both on the CLI and in the MCP `calls` array. Bytes on the ranked lists are otherwise unchanged apart from the legend: the
+rows are the same set whenever nothing is cut.
+
+**Honesty, from an independent review.** The review re-ran this instrument with
+paired bootstrap 95% CIs and two baselines — path order (above) and a within-tier random shuffle — plus a
+prospective gold (this repo, later commits) and a second corpus (LocBench). At the default cap the n above is
+small (17 / 19 / 9), and every callers/uses figure there is directional: the ranked-minus-path delta crosses
+zero for both lists at the default cap, and the gain over random order reaches significance at
+`--limit=10` (callers +0.082 [+0.008, +0.155], uses +0.116 [+0.048, +0.187]) and, for uses alone, barely at
+the default cap (+0.159 [+0.004, +0.325]). The **import-tier gain holds up
+outside this instrument's own assumption**: a forward-in-time gold (the lists ranked on an earlier snapshot, scored on the commits made after it) gives
+`--limit=10` recall 0.307 → 0.659 (n=11, 95% CI [+0.149, +0.574]) and `--limit=20` 0.185 → 0.792 (n=6,
+[+0.379, +0.845]); LocBench gives `--limit=20` 0.143 → 1.000 (n=7, [+0.571, +1.0]) and `--limit=10`
+0.500 → 0.857 (n=14, [0, +0.714]). The **uses gain is modest and replicates at k=10**: LocBench
+`--limit=10` recall 0.490 → 0.673 (n=27, [+0.013, +0.356]). The **callers gain is the weakest of the three**:
+on LocBench it is indistinguishable from, or below, random order (`--limit=20` recall is BELOW random order,
+n=9). Nowhere does any of the three ranked lists score significantly below its pre-change baseline.
+
+### Fixed — `--for`'s `<sigs>` byte budget cuts the rank tail, and every signature cut is named
+
+- **The byte gate ran before the rank sort.** With `--pack-budget-bytes` (and on `--pack-task`/`--from-trace`,
+  which share the path) the `<sigs>` byte gate spent its budget in file order, so a tight budget could ship
+  r=7 and r=20, drop r=1, and still print a bare `<sigs>`. It now runs on the rank-sorted rows and cuts only the
+  tail: on this repository `--for="rank graph teleport" --pack-budget-bytes=2000` ships r=1..8 under
+  `<sigs shown="8" total="40" capped="1">`, where it used to ship ten scattered rows with nothing disclosed.
+  `total=` counts the rows handed to the budget. The `--json` root gains `sigs_shown`/`sigs_total` when the
+  array was cut.
+- **Dropped doc comments are counted.** A shown row past r=24 (or cut by the trim ladder) prints no doc
+  comment; `<sigs docs_dropped="N">` (JSON `docs_dropped`) now counts those rows, present only when N > 0.
+- **A capped block that only shrank rows says so**: its legend clause reads rows shrunk, none dropped, when
+  `shown=` equals `total=`.
+- A default `--for` cannot reach the byte gate (a 40-row head is at most about 19 KB of 64 KB). On the 92
+  held-out LocBench issues no grain moved, and bundles grew 4.5 bytes on average.
+
+### Fixed — `--field-affinity` pair names, `--clones` paging, `--verify`'s page tail and the Type-3 cap disclosure
+
+- **`--field-affinity` named the wrong fields in a `<pair>`.** A pair's `a=`/`b=` indexed the struct's fields
+  in declaration order, but the fields were re-sorted for display first, so a struct whose display order
+  differs printed the wrong names; a pair on a field past the 32-row display cap read a destroyed element
+  (a libc++-hardened build traps there). Pairs are now remapped through the display order, and the cap
+  bounds only the printed `<f>` rows. No pair is dropped.
+- **`--clones` pages served some groups twice and others never.** The bare run served the first 40 Type-1/2
+  groups plus the first 40 Type-3 groups, but `--offset` indexed one flat Type-1/2-then-Type-3 stream: on a
+  448-group fixture the bare run plus its `next_offset=` walk returned 448 rows, 443 distinct. The row stream
+  is now ordered so the bare run is its prefix, and every group is served exactly once. The bare output is
+  unchanged.
+- **`--verify` advertised a page it refused.** A capped evidence sample carried `total= has_more=
+  next_offset=`, and `--offset` was then refused. It now carries `shown=`/`capped=` only; the answer's own
+  count attribute (`count=`, `hits=`, `defs=`, `occurrences=`) already gives the total.
+- **`--clones` printed `counts_floor="1"` on every run.** The Type-3 pair cap was never disclosed in a release
+  build, and the floor marker was hard-coded. `counts_floor="1" type3_capped="1"` now appear only on a run
+  where the cap fired.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

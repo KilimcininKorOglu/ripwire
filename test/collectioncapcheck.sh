@@ -52,6 +52,11 @@
 #       legend must still state the count is exact.
 #   (D) also sweeps the JSON spellings ("hits_capped":/"findings_capped":/"tier_budget":) and the two new XML
 #       markers, so an MCP twin can no longer emit a cap marker without the floor.
+#   (J) the grep COLLECTION budget (kGrepCollectionBudget) ranks before it cuts (cut-fix lane D, 2026-09-23): a fixture of
+#       two hit-dense docs files sorting before one source file, 5M hits against the 4M ceiling — the head row must be the
+#       source file (CLI + MCP) and the cut must stay disclosed. Pre-fix the ceiling ran in fileId order and dropped it.
+#   (K) the span-tier budget states its total: tier_files= beside tier_budget= (CLI + MCP), absent without it; and the
+#       default compact legend reads tier_budget=, tier= and line_bytes= wherever they ride (they had no reading).
 #   (I) run-vs-feature (2026-09-10): every arm above decides its verdict by reading an attribute out of a
 #       file, so a command that DIES leaves the attribute missing for a reason that has nothing to do with
 #       the feature. On 2026-09-09 arm (F) went red on one macOS CI shard with "tier_budget= did not fire
@@ -328,7 +333,7 @@ def call( pattern ):
     reqs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
              { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "grep", "arguments": { "path": ".", "pattern": pattern } } } ]
     out = subprocess.run( [ binPath, "--mcp" ], input = "".join( json.dumps( r ) + "\n" for r in reqs ).encode(),
-                          stdout = subprocess.PIPE, stderr = subprocess.DEVNULL ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
+                          stdout = subprocess.PIPE, stderr = subprocess.DEVNULL, timeout = 300 ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
     text = json.loads( out )[ "result" ][ "content" ][ 0 ][ "text" ]
     seen = {}
     def hook( pairs ):
@@ -353,6 +358,104 @@ PY
 while IFS= read -r line; do
     case "$line" in PASS\ *) ok "${line#PASS }" ;; FAIL\ *) no "${line#FAIL }" ;; *) no "(F) MCP probe crashed: $line" ;; esac
 done <"$TMP/mcp_tier.out"
+
+echo
+echo "=== (J) the grep collection budget RANKS before it cuts: source hits survive, the doc tail is dropped (CLI + MCP) ==="
+# Two hit-dense docs files that sort BEFORE src/ (2.5M hits each, 5M > kGrepCollectionBudget=4M) and one small source file.
+# Pre-fix the budget ran in ascending fileId order before the tier sort: files="2", every hit docs, src/main.c ABSENT —
+# the head of the answer's own stated order (SOURCE before docs) lost to its tail. RED on 60b65f02, GREEN after cut-fix D.
+FIXB="$TMP/budget"; mkdir -p "$FIXB/docs" "$FIXB/src"
+python3 - "$FIXB" <<'PY'
+import sys
+line = "x" * 999 + "\n"
+for n in ( 1, 2 ):
+    open( "%s/docs/big%d.md" % ( sys.argv[ 1 ], n ), "w" ).write( line * 2500 )
+open( "%s/src/main.c" % sys.argv[ 1 ], "w" ).write( "int x_value = 1;\nint main( void ) { return x_value; }\n" )
+PY
+runBin "$TMP/grep_budget.xml" "$FIXB" --grep=x --limit=3 --no-cache
+GB="$( rootOf "$TMP/grep_budget.xml" )"
+if [ "$( attr "$GB" hits_capped )" != "1" ]; then
+    no "(J) presence guard — the 5M-hit fixture did not reach the collection budget (hits_capped=\"$( attr "$GB" hits_capped )\"); the arm asserts nothing ($GB)$( whyEmpty "$TMP/grep_budget.xml" )"
+else
+    ok "(J) presence guard — hits_capped=\"1\" hits=\"$( attr "$GB" hits )\" on the 5M-hit fixture"
+    firstF="$( perl -0pe 's#<!--.*?-->##gs' "$TMP/grep_budget.xml" | grep -oE '<f p="[^"]*"' | head -1 )"
+    [ "$firstF" = '<f p="src/main.c"' ] \
+        && ok "(J) the head row is the SOURCE file although both docs files sort before it and alone exceed the budget" \
+        || no "(J) the budget cut the head: first row is [$firstF], not src/main.c — the collection spent its ceiling in fileId order before ranking"
+    [ "$( attr "$GB" files )" = "3" ] \
+        && ok "(J) files=\"3\": the cut dropped only the tail of the last-ranked docs file" \
+        || no "(J) files=\"$( attr "$GB" files )\", expected 3 (src/main.c whole, docs/big1.md whole, docs/big2.md cut): $GB"
+    [ "$( attr "$GB" counts_floor )" = "1" ] && [ "$( attr "$GB" capped )" = "1" ] \
+        && ok "(J) the cut is still disclosed: counts_floor=\"1\" capped=\"1\"" \
+        || no "(J) the budget fired without counts_floor=\"1\" capped=\"1\": $GB"
+fi
+python3 - "$BIN" "$FIXB" >"$TMP/mcp_budget.out" 2>&1 <<'PY'
+import json, subprocess, sys
+reqs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
+         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "grep", "arguments": { "path": sys.argv[ 2 ], "pattern": "x", "limit": 3 } } } ]
+out = subprocess.run( [ sys.argv[ 1 ], "--mcp" ], input = "".join( json.dumps( r ) + "\n" for r in reqs ).encode(),
+                      stdout = subprocess.PIPE, stderr = subprocess.DEVNULL, timeout = 300 ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
+d = json.loads( json.loads( out )[ "result" ][ "content" ][ 0 ][ "text" ] )
+if d.get( "hits_capped" ) is not True:
+    print( "FAIL (J) MCP presence guard — hits_capped=%r on the 5M-hit fixture" % d.get( "hits_capped" ) )
+else:
+    head = d[ "hits" ][ 0 ][ "file" ] if d.get( "hits" ) else None
+    print( ( "PASS (J) MCP head row is src/main.c under the budget (files=%r)" % d.get( "files" ) ) if head == "src/main.c" and d.get( "files" ) == 3 else
+           ( "FAIL (J) MCP head row %r files=%r — the budget cut the head" % ( head, d.get( "files" ) ) ) )
+PY
+while IFS= read -r line; do
+    case "$line" in PASS\ *) ok "${line#PASS }" ;; FAIL\ *) no "${line#FAIL }" ;; *) no "(J) MCP probe crashed: $line" ;; esac
+done <"$TMP/mcp_budget.out"
+
+echo
+echo "=== (K) tier_budget= says how much it left: tier_files= beside tier_parsed=, and the compact dialect reads every grep cut ==="
+# Reuses (F)'s run. tier_budget= named WHICH ceiling stopped the span classification but not how many hit files it had to
+# cover; files= cannot stand in (it counts after suppression). RED on 60b65f02 (no tier_files=, and neither tier_budget=
+# nor line_bytes= nor tier= had a reading in the default compact legend).
+if [ -n "$( attr "$GT" tier_budget )" ]; then
+    TF="$( attr "$GT" tier_files )"; TP="$( attr "$GT" tier_parsed )"
+    [ -n "$TF" ] && [ "$TF" -gt "$TP" ] 2>/dev/null \
+        && ok "(K) tier_files=\"$TF\" > tier_parsed=\"$TP\" beside tier_budget=: the cut states its total" \
+        || no "(K) tier_budget= fired with tier_files=\"$TF\" tier_parsed=\"$TP\" — the classification cut does not say how much it left: $GT"
+    perl -0ne 'print $1 if /\A((?:\s*<!--.*?-->)+)/s' "$TMP/grep_tier.xml" | grep -q 'tier_budget=:' \
+        && ok "(K) the default (compact) legend defines tier_budget=" \
+        || no "(K) tier_budget= rides the root and the default legend never reads it"
+else
+    no "(K) presence guard — (F)'s run carried no tier_budget=, so (K) asserts nothing"
+fi
+[ -z "$( attr "$GS" tier_files )" ] \
+    && ok "(K) control: no tier_budget= ⇒ no tier_files=" \
+    || no "(K) control: tier_files= rides an answer whose classification was not cut: $GS"
+grep -q 'PASS (F) MCP presence guard' "$TMP/mcp_tier.out" && python3 - "$BIN" >"$TMP/mcp_tierfiles.out" 2>&1 <<'PY'
+import json, subprocess, sys
+reqs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
+         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "grep", "arguments": { "path": ".", "pattern": "e" } } } ]
+out = subprocess.run( [ sys.argv[ 1 ], "--mcp" ], input = "".join( json.dumps( r ) + "\n" for r in reqs ).encode(),
+                      stdout = subprocess.PIPE, stderr = subprocess.DEVNULL, timeout = 300 ).stdout.decode( "utf-8", "replace" ).strip().split( "\n" )[ -1 ]
+d = json.loads( json.loads( out )[ "result" ][ "content" ][ 0 ][ "text" ] )
+tf, tp = d.get( "tier_files" ), d.get( "tier_parsed" )
+print( ( "PASS (K) MCP tier_files=%r > tier_parsed=%r beside tier_budget (CLI twin)" % ( tf, tp ) ) if isinstance( tf, int ) and isinstance( tp, int ) and tf > tp else
+       ( "FAIL (K) MCP tier_budget=%r with tier_files=%r tier_parsed=%r" % ( d.get( "tier_budget" ), tf, tp ) ) )
+PY
+while IFS= read -r line; do
+    case "$line" in PASS\ *) ok "${line#PASS }" ;; FAIL\ *) no "${line#FAIL }" ;; *) no "(K) MCP probe crashed: $line" ;; esac
+done <"$TMP/mcp_tierfiles.out"
+# line_bytes= and tier= in the default legend: one 700-byte comment line holding the only hit — the row's text is cut at the
+# matched-line cap and the answer serves the comment tier.
+FIXL="$TMP/longline"; mkdir -p "$FIXL/src"
+python3 -c "print( 'int f() { return 1; } // ' + 'x' * 700 + ' NEEDLE' )" >"$FIXL/src/a.c"
+runBin "$TMP/grep_long.xml" "$FIXL" --grep=NEEDLE --no-cache
+GL="$( rootOf "$TMP/grep_long.xml" )"
+LEGL="$( perl -0ne 'print $1 if /\A((?:\s*<!--.*?-->)+)/s' "$TMP/grep_long.xml" )"
+if grep -q 'line_bytes="' "$TMP/grep_long.xml" && [ "$( attr "$GL" tier )" = "comment" ]; then
+    ok "(K) presence guard — the long-line fixture carries line_bytes= and tier=\"comment\""
+    case "$LEGL" in *'line_bytes='*) ok "(K) the default legend defines line_bytes= (the row's text was cut)" ;;
+                    *)               no "(K) line_bytes= rides a row and the default legend never reads it: the cut reads as a bare number" ;; esac
+    case "$LEGL" in *'tier=:'*)      ok "(K) the default legend defines tier=" ;;
+                    *)               no "(K) tier=\"comment\" rides the root and the default legend never reads it" ;; esac
+else
+    no "(K) presence guard — the long-line fixture lost line_bytes= or tier=\"comment\"; (K) asserts nothing ($GL)$( whyEmpty "$TMP/grep_long.xml" )"
+fi
 
 echo
 echo "=== (G) defs_capped= — a name with more definitions than defs_per_name_cap= floors --context-ratio ==="

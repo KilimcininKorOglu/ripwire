@@ -240,5 +240,27 @@ for f in c1 c2 n1 n2 n3 u1 u2 u3 d1 d2 d3 r1 r2 r3; do
 done
 [ $both -eq 0 ] && ok 'honesty: complete= and counts_floor= never co-occur on a verify root'
 
+# ── the evidence cap discloses without advertising a page --verify refuses ──────────────────────────────
+# 2026-09-24 (cut-fix correctness) ruling: --verify is not a paging verb — honorsPaging() refuses --limit/--offset
+# beside it — so a capped answer (kEvidenceCap = 20 rows) must not carry the paging quintet's next_offset=, which
+# told a reader to send exactly the call the CLI then refused. It now carries the cap half, shown= capped=, beside
+# the row total the root already names (hits= here). Fixture: one file with 25 lines spelling the needle.
+CAPFIX="$TMP/vcap"; mkdir -p "$CAPFIX"
+{ for i in $( seq 1 25 ); do printf 'int zz_cap_needle_%02d() { return 1; }\n' "$i"; done; } >"$CAPFIX/many.cpp"
+"$BIN" "$CAPFIX" --no-cache --verify='contains(many.cpp, "zz_cap_needle_")' >"$TMP/cap1.xml" 2>/dev/null; rc=$?
+CAPROOT="$( grep -oE '<verify [^>]*>' "$TMP/cap1.xml" | head -1 )"
+HITROWS="$( grep -oE '<hit p=' "$TMP/cap1.xml" | wc -l | tr -d ' ' )"
+printf '%s' "$CAPROOT" | grep -q 'hits="25"' && [ "$HITROWS" = 20 ] \
+    || no "cap: fixture broken — expected hits=\"25\" and 20 <hit> rows (rc=$rc): $CAPROOT"
+printf '%s' "$CAPROOT" | grep -q 'shown="20" capped="1"' \
+    && ok 'cap: a capped --verify answer discloses shown="20" capped="1" beside hits="25"' \
+    || no "cap: the evidence cut is not disclosed as shown=/capped=: $CAPROOT"
+printf '%s' "$CAPROOT" | grep -qE ' (next_offset|has_more|offset|limit)=' \
+    && no "cap: the root advertises a page (next_offset=/has_more=/offset=/limit=) that --verify refuses: $CAPROOT" \
+    || ok 'cap: no next_offset=/has_more= on a verb that pages nothing'
+"$BIN" "$CAPFIX" --no-cache --verify='contains(many.cpp, "zz_cap_needle_")' --offset=20 >/dev/null 2>&1 \
+    && no 'cap: --verify accepted --offset — the ruling (no quintet) assumed it is refused; revisit it' \
+    || ok 'cap: --verify still refuses --offset, so the absence of next_offset= is the truthful shape'
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

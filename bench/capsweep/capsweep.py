@@ -967,7 +967,7 @@ def cmd_emit(a):
         sys.exit('capsweep: parsed 0 caps out of src/ — the declaration shape changed')
     disc  = collections.defaultdict(set)
     for p in sorted(REPO.joinpath('src').rglob('*.h')):
-        for x in re.findall(r'([a-z_]+)_capped', p.read_text(errors='replace')):
+        for x in re.findall(r'\b([A-Za-z_][A-Za-z0-9_]*)_capped', p.read_text(errors='replace')):
             disc[str(p.relative_to(REPO))].add(x)
     # A measured cap that no longer holds the value it was measured at makes every byte in its table a
     # claim about a constant that is gone. Refuse; do not quietly re-render around it.

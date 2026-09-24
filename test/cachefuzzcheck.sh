@@ -929,9 +929,9 @@ for i in range(n):
     s(); skip(4 * 8 + 5 * 4)                                              # path, hash/size/mtime/ctime, FileHealth
     for _ in range(u32()):                                                # defs (LEAN family: no subtoken rows)
         site32("def.ppAlt", 9 * 4); site32("def.params", 13 * 4)
-        skip(14 * 4 + 5); site("def.kind"); site("def.lang"); s(); s(); skip(8)
+        skip(14 * 4 + 6); site("def.kind"); site("def.lang"); s(); s(); skip(8)   # #150: +1 u8 (scopeRootsStd) before kind
     for _ in range(u32()):                                                # refs
-        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(10)   # line, argCount, argCountKnown, viaArrow
+        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(11)   # line, argCount, argCountKnown, viaArrow, #150's qualifierRootsStd
     for _ in range(u32()):                                                # includes
         skip(3 + 4 + 1); s()
     for _ in range(u32()):                                                # binds

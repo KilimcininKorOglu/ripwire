@@ -1693,7 +1693,10 @@ else
         grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_PC=$(( RZ_PC + 1 ))
         grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_PC=$(( RZ_PC + 1 ))
         grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_PC=$(( RZ_PC + 1 ))
-        RZ_PO=0; grep -aqF 'over_ceiling="1"' "$RZ/o.xml" && RZ_PO=1
+        # the ROOT's verdict only (read off the <ctx …> open tag): since lane/cutfix-bodies a <b over_ceiling="1"> marks
+        # a --detail body whose first line alone exceeds the BODY allowance, which is not the root's est_tokens claim,
+        # and a CDATA body can spell the literal too.
+        RZ_PO=0; grep -aoE '^<ctx [^>]*>' "$RZ/o.xml" | grep -qF 'over_ceiling="1"' && RZ_PO=1
         if [ "$RZ_PN" = "0" ] && [ "$RZ_PC" = "3" ] && [ -n "$RZ_PE" ] && [ "$RZ_PE" -le "$RZ_PROBE" ] && [ "$RZ_PO" = "0" ]; then
             ok "#18 rung zero at --token-budget=$RZ_PROBE (5 tokens above the $RZ_E this document prices at): all three droppable clauses ride, est_tokens=$RZ_PE <= $RZ_PROBE, no over_ceiling=, $RZ_PB B"
         else

@@ -121,10 +121,17 @@ EOF
 #           checked out — and a relative command whose anchor is not stated is a command the reader cannot
 #           paste. The rule is said where it is consumed, beside the rows it is about.
 # Measured on this fixture: 2957 -> 3013 B; 3070 leaves ~57 B — the same posture as every pin above.
-if [ "$legend" -le 3070 ]; then
-    ok "(a) --test-gate legend is $legend B (<= 3070 B budget; total=$total payload=$payload)"
+# RE-PINNED 3070 -> 3400 (rv-test-gate-tsjs fix round, F3). ONE new FACT, row-gated on untested_modscope=N > 0
+# (this fixture's own blast radius over src/model.h has real <file-scope> callers reaching it, so the clause
+# fires here, not just on a synthetic fixture):
+#   "untested_modscope=N counts <file-scope> owners excluded from untested= ... read this as the excluded
+#   count alone, not a sum term." — the disclosure #324 owed once it started excluding a real obligation
+#   from untested= without saying so (a silent pass a review caught: exit 0 with nothing explaining why).
+# Measured on this fixture: 3013 -> 3305 B; 3400 leaves ~95 B — the same posture as every pin above.
+if [ "$legend" -le 3400 ]; then
+    ok "(a) --test-gate legend is $legend B (<= 3400 B budget; total=$total payload=$payload)"
 else
-    no "(a) --test-gate legend is $legend B (> 3070 B budget) — the essay re-inflated"
+    no "(a) --test-gate legend is $legend B (> 3400 B budget) — the essay re-inflated"
 fi
 
 # (b) the honesty vocabulary + the §B12.5 cross-verb UNIT-collision anchors (test/testgatecheck.sh arm (g)
@@ -134,7 +141,8 @@ for phrase in \
     'UNIT: untested= here counts impacted SYMBOLS' 'call EDGES' 'defs a gate lights' \
     'shown_tests=' 'shown_untested=' 'script_gates_unmodelled=' 'script_gates_registered=' \
     'script_gates_mapped=' 'script_gates_unresolved_dynamic=' 'evidence=script_literal' \
-    'evidence=manifest_declared' 'counts_floor=1' 'REPEAT VERBATIM' 'exit 4'
+    'evidence=manifest_declared' 'counts_floor=1' 'REPEAT VERBATIM' 'exit 4' \
+    'untested_modscope=N counts <file-scope> owners excluded from untested='
 do
     case "$L" in
         *"$phrase"*) ok "(b) legend keeps: $phrase" ;;

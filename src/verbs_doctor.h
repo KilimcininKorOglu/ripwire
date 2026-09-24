@@ -804,14 +804,27 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
 
     // ---- check 3: cache-dir health — resolves, writable (create+delete a probe file), report
     // existing ripwire-* blob count + total bytes (eviction sanity: flag >50 blobs, informational) ----
+    //
+    // #326: on Windows, a bare std::fopen or std::filesystem call on cacheDirLadder()'s return value used to
+    // measure a directory the cache never actually uses (typically nonexistent on the current drive) — Git for
+    // Windows' "/tmp" is real only through os::mkdir/os::lstat/os::chmod's own silent rebase onto the real user
+    // temp directory, which a non-os:: call does not get. Fixed at the SOURCE (cacheDirLadder() itself now
+    // returns the already-rebased spelling via rw::os::rebased_path — see its own comment), so `dir` below is
+    // already the real, in-use path with no local rebase needed here: this row's `dir=`/hint= attributes and
+    // doctorCacheStats/doctorEditLockCount's scans all read the one path the cache actually uses, identically
+    // to every other cacheDirLadder() consumer in the tree.
     {
         const std::string dir   = cacheDirLadder();
         const std::string probe = dir + "/.ripwire-doctor-probe-" + std::to_string( rw::os::getpid() );
         bool writable = false;
-        if( std::FILE* f = std::fopen( probe.c_str(), "wb" ) )
+        // create+remove a real file — the only thing "writable" can honestly mean on either platform; a mode-bit
+        // check (POSIX access()/stat permission bits) is not equivalent on Windows, where an ACL can permit or
+        // deny a create independent of any bit this process could read.
+        if( const int fd = rw::os::open( probe.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600 ); fd >= 0 )
         {
-            std::fputs( "doctor", f );
-            std::fclose( f );
+            static constexpr std::string_view kProbeBody = "doctor";
+            (void)rw::os::write( fd, kProbeBody.data(), kProbeBody.size() );
+            rw::os::close( fd );
             writable = ( rw::os::unlink( probe.c_str() ) == 0 );
         }
 

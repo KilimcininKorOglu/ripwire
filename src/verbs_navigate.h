@@ -505,11 +505,11 @@ inline std::vector<char> usesChosenCallers( const rw::IngestResult& ing, const r
 }
 
 // ONE use-site row: (file, line, role, enclosing canonical id). File scope ⇒ `in` empty.
-struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std::string in; };
+struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std::string in; rw::NodeId from; };   // from: the enclosing symbol (kNoNode at file scope) — rankUseSites' weight
 
 // The use-site scan: references whose NAME matches the selector and that carry a real use-site role. Markdown
 // doc-mentions / wikilinks and HAS-A compose edges are NOT name use-sites (excluded). Returns the rows in the
-// deterministic emission order (file path, line, role, enclosing-id) plus `callSitesOfName` — the call-role
+// deterministic base order (tier, file path, line, role, enclosing-id; the --uses emitters then rank it, graph.h rankUseSites) plus `callSitesOfName` — the call-role
 // total BEFORE the §A6b narrowing, which is what the disclosure attribute reports.
 //
 // M12: `rootForId` is fielduses.h's OWN `rootForId` convention (`singleRoot ? root : {}`) — the caller's
@@ -557,7 +557,7 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
         {
             in = canonicalIdForEmit( ing, ing.symbols[ r.fromSymbol ], rootForId );   // M12: root-relative, no leading "./"
         }
-        sites.push_back( { r.fileId, r.line, r.role, std::move( in ) } );
+        sites.push_back( { r.fileId, r.line, r.role, std::move( in ), r.fromSymbol } );
     }
 
     // LB-G (r10 §5): TIER before path, filter.h's shared key — `--uses=bulk_create` was 207 django rows
@@ -615,7 +615,7 @@ std::optional<int> runUses( const MainDispatch& d )
     // all their use-sites. external="1" when SYM has NO in-corpus definition at all. §P10.2/§A6b: SYM also
     // accepts "file:name" and "::" spellings (resolveUsesSelector) — both narrow defs= AND the call-role sites
     // (usesChosenCallers); the other roles stay name-matched, and defs_of_name=/call_sites_of_name= disclose both gaps.
-    // Deterministic: use-sites sorted by (file path, line, role, enclosing-id); every value XML-escaped.
+    // Deterministic: use-sites sorted by tier, then enclosing symbol's callers (desc), then (file path, line, role, enclosing-id); every value XML-escaped.
     if( !cfg.usesSym.empty() )
     {
         const std::string_view sym = cfg.usesSym;
@@ -648,8 +648,9 @@ std::optional<int> runUses( const MainDispatch& d )
         const std::vector<char> isChosenCaller = ( sel.fileQualified || sel.scopeNarrowed ) ? usesChosenCallers( ing, g, defs ) : std::vector<char>{};
 
         // the sorted use-sites, plus the un-narrowed call-role total the disclosure reports.
-        const auto [ sites, callSitesOfName ] = collectUseSites( ing, sel, isChosenCaller,
-                                                                 usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{} );
+        auto [ sites, callSitesOfName ] = collectUseSites( ing, sel, isChosenCaller,
+                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{} );
+        rw::rankUseSites( ing, g, sites );   // cut-fix C: most-depended-on sites first, so the cap drops the lightest
 
         // §A6b(ii): a file: qualifier naming a file with NO definition of the name is a WRONG SELECTOR — its
         // three siblings all refuse it, and so does this one now.
@@ -1566,8 +1567,19 @@ std::optional<int> runVerify( const MainDispatch& d )
     };
 
     char              pab[ kPageDisclosureCap ];
-    const auto        pageTailOf = [ & ]( std::size_t shownRows, std::size_t total, std::size_t windowEnd ) -> const char*
-    { return pageDisclosure( pab, sizeof( pab ), shownRows, total, windowEnd, 0, 0, true ); };
+    // 2026-09-24 ruling (cut-fix correctness): the CAP HALF only — shown= capped= — never the paging quintet.
+    // pageDisclosure's M2 rule put total=/has_more=/next_offset= on every capped answer, but --verify is not a
+    // paging verb (honorsPaging() refuses --limit/--offset beside it), so next_offset= advertised a call the CLI
+    // then refused. The evidence rows are a sample behind the verdict, and every row total already rides on the
+    // root under its own name (count= hits= defs= occurrences= — rule 2's "the report's own count attribute"), so
+    // shown= against that total is the whole disclosure. The uncapped answer is byte-identical: it was always
+    // exactly this cap half.
+    const auto        pageTailOf = [ & ]( std::size_t shownRows, std::size_t total, std::size_t /*windowEnd*/ ) -> const char*
+    {
+        ASSUME( shownRows <= total );
+        rw::formatTo( pab, sizeof( pab ), " shown=\"{}\" capped=\"{}\"", shownRows, shownRows < total ? 1 : 0 );
+        return pab;
+    };
 
     // ── calls( A , B ) — does A transitively call B (directed, name-based call graph) ────────────────
     if( claim.shape == verify::ClaimShape::Calls )
@@ -2347,7 +2359,8 @@ std::optional<int> runImpact( const MainDispatch& d )
         // surfaces cannot drift. The two reaches stay separate all the way to the bytes: a separate count
         // (importers=), a separate truncation pair (shown_importers=/importers_capped=, pageview.h rule 6)
         // and a separate row tag.
-        const rw::ImportTier imports        = rw::impactImportTier( ing, seeds );
+        rw::ImportTier       imports        = rw::impactImportTier( ing, seeds );
+        rw::sizeImportTier( imports, cfg.pageLimit );   // cut-fix C: --limit sizes the tier too (offset= does not move it)
         const auto           importPage     = std::span<const std::uint32_t>( imports.files ).first( imports.shown );
         const auto           importLazyPage = std::span<const char>( imports.lazy ).first( imports.shown );
 

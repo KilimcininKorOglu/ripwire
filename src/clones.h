@@ -576,6 +576,22 @@ struct Type3Stats
     std::uint64_t jaccardMerges  = 0;   // exact fingerprint merges run
     std::uint64_t lcsRuns        = 0;   // pairs that cleared every gate and reached the LCS DP
     std::uint64_t emittedPairs   = 0;   // final Type-3 pairs returned
+    bool          pairCapHit     = false;   // kType3MaxPairs fired: the pair list (and every count built on it) is a FLOOR
+
+    // The DISCLOSE sink for the pass's one degrade. Until 2026-09-24 the cap used the one-argument DISCLOSE, whose
+    // trace compiles out under NDEBUG, so a shipped binary that hit the cap said nothing, while --clones printed
+    // counts_floor="1" on every run whether or not the cap fired. The sink records it; the emitters read pairCapHit.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        PairCapHit,
+    };
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::PairCapHit: pairCapHit = true; break;
+        }
+    }
 };
 
 // FNV-1a over a token — used to reduce a k-gram to a single 64-bit fingerprint (order-sensitive within the gram).
@@ -823,7 +839,7 @@ inline std::vector<CloneGroup> findClonesType3( const IngestResult& ing, int min
                     continue;
                 }
                 pairSeen.emplace( pk, 1 );
-                if( comparedPairs >= kType3MaxPairs ) { DISCLOSE( "clones: Type-3 pair cap hit — first N compared (both-gate-surviving) near-misses kept, rest skipped" ); goto done; }
+                if( comparedPairs >= kType3MaxPairs ) { DISCLOSE( st, Type3Stats::DisclosureWhy::PairCapHit, "clones: Type-3 pair cap hit — first N compared (both-gate-surviving) near-misses kept, rest skipped" ); goto done; }
                 ++st.distinctPairs;
 
 #ifndef CTX_TYPE3_SKETCH_OFF
@@ -927,7 +943,8 @@ done:
 //
 // FLOOR, not total. The Type-3 pair list is capped upstream (kType3MaxPairs) and the per-file candidate
 // walk is prefiltered, so a dropped pair is a component that did not get merged and a percentage that is
-// too LOW. Every derived count here is a floor; the emitter labels it counts_floor="1".
+// too LOW. When the cap fired (Type3Stats::pairCapHit) every derived count here is a floor, and the emitter
+// labels it counts_floor="1" type3_capped="1" — on that run only (2026-09-24; it used to print on every run).
 //
 // Deterministic: components are numbered by their smallest member id ascending, and members are collected
 // by an ascending id sweep — no hash-map iteration reaches the result.

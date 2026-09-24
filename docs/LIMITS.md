@@ -16,7 +16,7 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 222 | 89 | 121 | **101** |
+| 222 | 89 | 123 | **99** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
 are not counted as caps, and 222 + 7 is the 229 constants this generator parses out of `src/`.
@@ -153,7 +153,7 @@ Discloses: **none**
 
 ### `src/clones.h`
 
-Discloses: **none**
+Discloses: `type3_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -219,7 +219,7 @@ Discloses: **none**
 
 ### `src/docdrift.h`
 
-Discloses: `failed_capped`, `importers_capped`, `weak_capped`
+Discloses: `failed_capped`, `weak_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -586,7 +586,7 @@ Discloses: **none**
 
 ### `src/mcpverbs.h`
 
-Discloses: `blast_radius_capped`, `coboost_commits_capped`, `forgotten_capped`, `hits_capped`, `siblings_capped`, `terms_capped`, `unindexed_candidates_capped`
+Discloses: `blast_radius_capped`, `calledBy_capped`, `coboost_commits_capped`, `forgotten_capped`, `hits_capped`, `siblings_capped`, `terms_capped`, `unindexed_candidates_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |

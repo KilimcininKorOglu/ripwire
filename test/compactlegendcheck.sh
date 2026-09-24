@@ -266,6 +266,16 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # only against a binary whose DEFAULT is the full legend (a pre-L1 build) — recording with this binary's
 # --legend=full would make the pin self-referential and let a full-dialect regression pin itself:
 #   for each row below:  ( cd <the fixture repo> && <pre-L1 bin> . <args> ) > <pin>   (pinNorm masks at= on compare)
+# RE-ANCHORED BY HAND 2026-09-23 (cut-fix C, lane/cutfix-navlists), two sentences and nothing else, because a pre-L1 binary
+# cannot print a legend written after it: callers.xml's ordering sentence ("by path within a tier" -> "within a tier the
+# most-called first, then by path", +28 B) and impact.xml's import-tier clause ("limit=/offset= window the symbol rows only"
+# -> "most-imported first; limit= sizes it, offset= windows the symbol rows only", +32 B). Both
+# restate the rows' new order and the tier's new --limit reach; the rows of both pins are unchanged on this fixture.
+# RE-ANCHORED BY HAND 2026-09-24 (CodeRabbit on #331), one sentence: test-gate.xml's legend gains the N=0 definition of
+# untested_modscope= ("untested_modscope=0: no <file-scope> owner excluded from untested= (#324). ", +75 B) before its
+# closing "-->". The root already printed untested_modscope="0"; the full legend now defines it. Checked: the pin equals
+# the previous head's --legend=full output byte for byte (at= masked), and the new output differs from it by exactly
+# that insertion.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
@@ -459,6 +469,15 @@ probeFor()
 # The compact reading of the order changed from 'least readable first' to 'largest Halstead volume first (a size
 # proxy)' (compactlegend.h, +24 B): docs/EVALS.md section 8 withdrew the readability-ordering claim, and the legend
 # a reader meets first must not repeat it. readabilitycheck (G2) pins the wording. No other schema moved.
+# RE-PINNED 2026-09-23 (rv-test-gate-tsjs fix round, F3): ripwire.test-gate/v1 1160 -> 1250 (measured 1239,
+# --test-gate=geometry.cpp). untested_modscope=N is now ALWAYS present (like impacted=/tests=/untested=
+# beside it), so its compactlegend.h completeness reading rides every --test-gate compact answer, not just
+# one gated on a real exclusion — the #324 disclosure this lane's own review found silent (exit 0 with
+# nothing explaining why on a module-scope-only change).
+# RE-PINNED 2026-09-23 (cut-fix C, lane/cutfix-navlists): ripwire.impact/v1 780 -> 810 (measured 797, the --impact=distance
+# probe). The shown_importers= reading gained "(limit= sizes them)" (+20 B): --limit now sizes the import tier, and a cut tier
+# with no reading of the one call that fetches the rest is the silent-cut shape METHODOLOGY §9 principle 3 rules out. The
+# old 770 had drifted to 777 before this lane (measured on the base binary, 60b65f02). No other schema moved.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -483,7 +502,7 @@ ripwire.zoom/v1                  410   394
 ripwire.tree/v1                  250   238
 ripwire.seams/v1                  720   703
 ripwire.handoff/v1                600   589
-ripwire.test-gate/v1             1160  1144
+ripwire.test-gate/v1             1250  1239
 ripwire.field-affinity/v1        3160  3143
 ripwire.skipped/v1               1510  1498
 ripwire.lint/v1                   340   324
@@ -501,7 +520,7 @@ ripwire.doc-drift/v1              960   949
 ripwire.notes/v1                  310   292
 ripwire.path/v1                   550   535
 ripwire.connect/v1                760   741
-ripwire.impact/v1                780   770
+ripwire.impact/v1                810   797
 ripwire.mentions/v1               260   243
 ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
@@ -881,7 +900,11 @@ echo
 # every attribute its answer emits (legendcoveragecheck (G)): --quality-delta's rename/ack counters, --test-gate's four
 # script-gate counts, --affected's seeds/reached, the schema= opener on every verb. Still under a quarter of the full bill
 # (33,407 B on this fixture), and the same rule: the next multiple of 100 B over the measured total.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,400 B (33,763 B in full on the fixture) ==="
+# RE-ANCHORED 2026-09-23 (rv-test-gate-tsjs fix round, F3): 7,400 → 7,500 B, measured 7,475. Same reading as the
+# ripwire.test-gate/v1 schema pin above: untested_modscope=N's compactlegend.h completeness clause is always
+# present, so the loop's --test-gate=geometry.cpp probe carries it too. Attributed on this fixture: --test-gate
+# alone moved +95 B (measured against the pre-change binary), the other nine verbs unmoved.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,500 B (33,763 B in full on the fixture) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -890,8 +913,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 7400 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,400 B; full: $fullBytes B)"
+[ "$loopBytes" -le 7500 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,500 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="
@@ -934,7 +957,9 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 # RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
 # (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
 # Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
-for pair in "impact:780:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
+# RE-PINNED 2026-09-23 (cut-fix C): impact 780 -> 810 (measured 797; 777 on the base binary) — the same +20 B
+# shown_importers= reading the (U) table's ripwire.impact/v1 row states: --limit now sizes the import tier.
+for pair in "impact:810:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "uses:510:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "path_between:540:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
             "lego:260:{\"path\":\".\",\"type\":\"Point\",\"legend\":\"compact\"}" \

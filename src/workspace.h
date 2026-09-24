@@ -277,6 +277,10 @@ inline void mergeCrawlDisclosures( IngestResult& m, IngestResult& part, const Wo
     for( std::size_t i = 0; i < part.files.size(); ++i )
     {
         m.fileHealth.push_back( i < part.fileHealth.size() ? part.fileHealth[ i ] : FileHealth{} );
+        // #157: nestRefusedFile is EXACT and per-fileId like fileHealth, so it concatenates the same way —
+        // a part that never ran the parse pool contributes 0 ("not refused"), which is the honest reading
+        // for a root nothing measured, same as fileHealth's own default-row fallback above.
+        m.nestRefusedFile.push_back( i < part.nestRefusedFile.size() ? part.nestRefusedFile[ i ] : std::uint8_t( 0 ) );
     }
 }
 

@@ -15,3 +15,15 @@
 # unusually well, and shrinking those headers to win a byte count would destroy the most useful thing in
 # the files.
 test/*.sh linguist-detectable=false
+
+# scripts/*.sh are checked out and run directly by `bash scripts/<name>.sh` in the windows CI job
+# (.github/workflows/ci.yml's #326 and eviction-smoke steps). Every earlier bash step in that job is an
+# inline `run:` body, which the Actions runner writes to disk itself with LF endings — this is the first
+# step to run a checked-out repo script instead. Windows runner images install Git for Windows with no
+# CRLF option (runner-images Install-Git.ps1 passes no CRLFOption), which leaves the installer default,
+# core.autocrlf=true, so a script with no eol rule is checked out CRLF and Git Bash's `bash script` fails
+# loudly (rc=2 or rc=255: `\r` glued onto the last argument on each line, "invalid option", "not a valid
+# identifier") on otherwise-correct code. test/*.sh does not need this: nothing
+# in the windows job's steps runs a checked-out test/*.sh script directly, only inline `run:` bodies and
+# the two scripts/*.sh helpers above.
+scripts/*.sh text eol=lf

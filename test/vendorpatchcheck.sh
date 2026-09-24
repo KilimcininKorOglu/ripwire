@@ -61,10 +61,14 @@
 #      corpus/fuzz sweep found it. Three halves: a STATIC shape audit (no abort() left on the string-stack
 #      path — stack_push / stack_pop / scan_string_start — and both string-start shapes return the push's
 #      verdict); the default map over 700 nested string-opens, generated fresh like arm G, must exit 0
-#      well-formed; and a --match run over a 600-deep file, the RUNTIME half — ingest's
-#      kotlinStringsNestTooDeep prescan refuses such a file before any parse, so the default map no longer
-#      reaches the scanner, while --match's structural-query pass still hands it that input directly
-#      (kotlincheck §12 is the runtime arm for the prescan). kotlin/002: the plain-build exit-0
+#      well-formed; and a RUNTIME half over a 600-deep file. Before #157, ingest's kotlinStringsNestTooDeep
+#      prescan refused such a file before any parse for the default map, but --match's structural-query
+#      pass had no nesting guard and handed the scanner the file directly — the RUNTIME half used to be a
+#      --match run for exactly that reason. #157 closed that gap (every ripwire verb now applies the same
+#      refusal, via IngestResult::nestRefusedFile), so no CLI verb can reach this scanner path anymore; the
+#      runtime half is now a standalone harness that links the vendored kotlin grammar straight to a
+#      tree-sitter core build and calls it directly, bypassing ripwire entirely (kotlincheck §12 is the
+#      runtime arm for the prescan itself, on the CLI side). kotlin/002: the plain-build exit-0
 #      mis-tokenization from an escaped `$` right before a triple-quoted string's closing delimiter
 #      (test/vendorpatchfix/tripledollar.kt, committed like arm F's fixture) — checked via
 #      degraded_parse=0 and that the symbol declared right after the tricky string still extracts.
@@ -467,7 +471,7 @@ fi
 "$BIN" "$TMP/deepinterp" --no-cache > "$TMP/deepinterp.xml" 2> "$TMP/deepinterp.err"; deepRc=$?
 if [ "$deepRc" -eq 0 ]; then
     if xmllint --noout "$TMP/deepinterp.xml" 2>/dev/null; then
-        ok "J: the default map over 700 nested string-opens exits 0 and is well-formed (ingest's prescan refuses the file first; the --match run below is what reaches the scanner)"
+        ok "J: the default map over 700 nested string-opens exits 0 and is well-formed (ingest's prescan refuses the file first; the raw-scanner harness below is what reaches the scanner)"
     else
         no "J: deep-interpolation parse ran but produced malformed output"
     fi
@@ -476,11 +480,18 @@ else
     head -3 "$TMP/deepinterp.err" | sed 's/^/        /'
 fi
 
-# The RUNTIME half. The default map never reaches this scanner path — ingest's prescan refuses the file first — but
-# --match's structural-query pass parses every file of a grammar the query compiles against, with no nesting guard,
-# so it hands the scanner the 600-deep file directly. Hits INSIDE Deep.kt are the proof that the parse really ran
-# there, which is what makes exit 0 the patch's doing rather than the prescan's (the first Kotlin binary died on
-# exactly this command at rc=134). Under the asan flavour it is also the sanitizer tripwire for the refused push.
+# The RUNTIME half. #157 closed the loophole this arm used to exercise: --match's structural-query pass used to
+# parse every file of a grammar the query compiled against with NO nesting guard, handing the scanner a 600-deep
+# file directly — that was the bug #157 fixed (ripwire's own CLI now refuses this file at every entry point, ingest
+# AND --match/--pattern alike, via IngestResult::nestRefusedFile — see ingest_astquery.h). So $BIN can no longer
+# reach this scanner path at all, by any verb, and this arm's own job — proving kotlin/001 (the scanner refuses the
+# push instead of aborting) independently of ripwire's prescan — needs a caller that has no prescan to bypass:
+# a standalone harness linking the vendored kotlin grammar (parser.c + scanner.c) straight to a tree-sitter core
+# build, calling tree_sitter_kotlin() and ts_parser_parse_string() with nothing else in front. Same $CC detection
+# as arm K's harness below (this arm runs first, so it cannot reuse arm K's $kcc). rc=134 (SIGABRT) is the bug;
+# rc=0 is the patch holding. The harness is built with plain -O1 and no sanitizer flags, in every flavour: it
+# proves the refusal by exit status only, so since #157 took $BIN off this scanner path the asan flavour no
+# longer runs this scanner under a sanitizer (CodeRabbit on #331).
 KTDEEP="$TMP/ktdeep"; mkdir -p "$KTDEEP"
 {
     printf 'package deep\n\nfun deepFn(): Int = 1\n\nval deep = '
@@ -490,16 +501,73 @@ KTDEEP="$TMP/ktdeep"; mkdir -p "$KTDEEP"
     printf '\n'
 } > "$KTDEEP/Deep.kt"
 ktOpeners="$( grep -o '"a\${' "$KTDEEP/Deep.kt" | wc -l | tr -d ' ' )"
-if [ "$ktOpeners" = 599 ]; then
-    "$BIN" "$KTDEEP" --no-cache '--match=(string_literal) @s' > "$TMP/ktdeep.xml" 2> "$TMP/ktdeep.err"; ktRc=$?
-    ktHits="$( grep -o '<m p="Deep.kt:[0-9]*"' "$TMP/ktdeep.xml" | wc -l | tr -d ' ' )"
-    if [ "$ktRc" -eq 0 ] && [ "$ktHits" -gt 0 ]; then
-        ok "J: --match parses the 600-deep Deep.kt directly and exits 0 ($ktHits string_literal hits inside it) — the scanner refused the push instead of aborting"
-    else
-        no "J: --match over a 600-deep string template exited $ktRc with $ktHits hits inside Deep.kt (134 = the scanner's abort(); 0 hits = the parse never ran, so exit 0 would prove nothing): $( head -2 "$TMP/ktdeep.err" )"
-    fi
-else
+if [ "$ktOpeners" != 599 ]; then
     no "J: presence — the generated Deep.kt has $ktOpeners string openers, not 599 (600 open strings) — the runtime arm would assert on the wrong input"
+else
+    JDIR="$TMP/ktharness"; mkdir -p "$JDIR"
+    KTSRC="$DEPS_DIR/kotlin/src"
+    JCORE="$DEPS_DIR/tree_sitter/lib"
+    jcc=""
+    for jcand in "${CC:-}" clang cc gcc; do
+        if [ -n "$jcand" ] && command -v "$jcand" >/dev/null 2>&1; then
+            jcc="$jcand"
+            break
+        fi
+    done
+    cat > "$JDIR/probe.c" <<'CEOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include "tree_sitter/api.h"
+
+const TSLanguage *tree_sitter_kotlin(void);
+
+int main(int argc, char **argv) {
+    static char buf[1 << 20];
+    FILE *f = argc == 2 ? fopen(argv[1], "rb") : NULL;
+    if (!f) {
+        return 2;
+    }
+    size_t n = fread(buf, 1, sizeof buf, f);
+    fclose(f);
+    if (n == sizeof buf) {
+        return 4;
+    }
+    TSParser *parser = ts_parser_new();
+    if (!ts_parser_set_language(parser, tree_sitter_kotlin())) {
+        return 3;
+    }
+    TSTree *tree = ts_parser_parse_string(parser, NULL, buf, (uint32_t)n);
+    char *sexp = ts_node_string(ts_tree_root_node(tree));
+    printf("%s\n", sexp);
+    free(sexp);
+    ts_tree_delete(tree);
+    ts_parser_delete(parser);
+    return 0;
+}
+CEOF
+    if [ -z "$jcc" ]; then
+        skip "J: no C compiler found (checked \$CC, clang, cc, gcc) — the raw-scanner runtime harness cannot be built"
+    else
+        jbuilt=1
+        "$jcc" -O1 -c "$JCORE/src/lib.c"   -I "$JCORE/include" -I "$JCORE/src" -o "$JDIR/core.o"    2> "$JDIR/build.log" || jbuilt=0
+        "$jcc" -O1 -c "$KTSRC/parser.c"    -I "$JCORE/include" -I "$KTSRC"     -o "$JDIR/parser.o"  2>>"$JDIR/build.log" || jbuilt=0
+        "$jcc" -O1 -c "$KTSRC/scanner.c"   -I "$JCORE/include" -I "$KTSRC"     -o "$JDIR/scanner.o" 2>>"$JDIR/build.log" || jbuilt=0
+        "$jcc" -O1 -c "$JDIR/probe.c"      -I "$JCORE/include"                -o "$JDIR/probe.o"    2>>"$JDIR/build.log" || jbuilt=0
+        if [ "$jbuilt" = 1 ]; then
+            "$jcc" "$JDIR/probe.o" "$JDIR/core.o" "$JDIR/parser.o" "$JDIR/scanner.o" -o "$JDIR/probe" 2>>"$JDIR/build.log" || jbuilt=0
+        fi
+        if [ "$jbuilt" != 1 ]; then
+            no "J: $jcc could not build the raw kotlin-scanner harness — $( grep -m1 -iE 'error|undefined' "$JDIR/build.log" )"
+        else
+            ok "J: presence — the vendored kotlin grammar (parser.c + scanner.c) built standalone against one tree-sitter core with $jcc, no ripwire CLI involved"
+            ( "$JDIR/probe" "$KTDEEP/Deep.kt" > "$JDIR/probe.out" 2>"$JDIR/probe.err" ); jrc=$?
+            if [ "$jrc" -eq 0 ] && [ -s "$JDIR/probe.out" ]; then
+                ok "J: the raw scanner parses the 600-deep Deep.kt directly and exits 0 — the scanner refused the push instead of aborting"
+            else
+                no "J: the raw scanner over a 600-deep string template exited $jrc (134 = the scanner's abort(); kotlin/001-stack-push-no-abort.patch would be reverted or ineffective): $( head -2 "$JDIR/probe.err" )"
+            fi
+        fi
+    fi
 fi
 
 # kotlin/002: an escaped `$` immediately before a triple-quoted string's closing delimiter used to

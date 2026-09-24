@@ -1452,11 +1452,12 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
                             in.tested, in.amp, /*rankAdaptivePayload=*/true, in.noteIndex };
     JsonSigNoteCounts noteCounts;
     const auto packSigs = [ & ]( std::FILE* dst, std::size_t budget, bool* outCapped, std::size_t* outDroppedPositive,
-                                 std::vector<rw::NodeId>* outShownIds )
+                                 std::vector<rw::NodeId>* outShownIds, rw::SigsCutReport* outCut )
     { packSignaturesJson( dst, in.ing, in.rank, in.topN, lens, in.redact, in.packBudgetBytes, budget, outCapped, &noteCounts,
                           in.rootArg, /*hasRelevanceFloor=*/true,        // LB-A: same admission rule as the XML twin (R-R: root-relative p/id)
                           outDroppedPositive,                            // A2: exact count, see droppedPositiveCount (serialize.h)
-                          outShownIds ); };                              // lane 2: the emitted rows' ids — the tail excludes these files
+                          outShownIds,                                   // lane 2: the emitted rows' ids — the tail excludes these files
+                          outCut ); };                                   // cut-fix lane A: the XML tag's shown/total/docs_dropped
 
     // §B1.4: built once, used on both the degrade path below and the normal return — these three are plain
     // size_t values already computed by the caller (no rendering, no redaction seam), so unlike est_tokens
@@ -1481,7 +1482,8 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
     // the reservation feeding sigsBudget above deliberately does NOT include these bytes.
     std::string tailStanza = "," + renderFileTailJson( *in.fileTail, kForFileTailShownCap );
 
-    bool        sigsCapped         = false;
+    bool        sigsCapped         = false;   // the LADDER's verdict: decides the budget_bytes= stanza
+    rw::SigsCutReport sigsCut;               // cut-fix lane A: what the array cut (gate or ladder) — "capped" and the sigs_* keys
     std::size_t sigsDroppedPositive = 0;   // A2: set only by the memstream-buffered render below (nullptr on the ENOMEM degrade path)
     std::vector<rw::NodeId> jsonShownIds;   // lane 2: the sigs rows actually emitted (the XML twin's shownSigIds)
     std::string sigsJson;
@@ -1492,7 +1494,7 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
         const std::optional<rw::RedactCounts> redactBeforeSigs = in.redact != nullptr ? std::optional<rw::RedactCounts>( *in.redact ) : std::nullopt;
         if( std::FILE* const jm = rw::openChargeStream( sigsStream ) )
         {
-            packSigs( jm, sigsBudget, &sigsCapped, &sigsDroppedPositive, &jsonShownIds );
+            packSigs( jm, sigsBudget, &sigsCapped, &sigsDroppedPositive, &jsonShownIds, &sigsCut );
             const rw::MemoryStreamBytes block = sigsStream.finish();   // a write lost inside the block is not a whole block
             isSigsBuffered = block.isWhole;
             if( isSigsBuffered )
@@ -1519,7 +1521,7 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
             std::fwrite( surfaceCountsStanza.data(), 1, surfaceCountsStanza.size(), out );
             std::fwrite( tailStanza.data(), 1, tailStanza.size(), out );                   // the tail survives too (plain strings, nothing to fail)
             std::fputs( ",\"sigs\":", out );
-            packSigs( out, 0, nullptr, nullptr, nullptr );
+            packSigs( out, 0, nullptr, nullptr, nullptr, nullptr );
             std::fputs( "}", out );
             return 0;
         }
@@ -1538,6 +1540,19 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
     const std::string droppedPositiveStanza = sigsDroppedPositive > 0
         ? ",\"dropped_positive\":" + std::to_string( sigsDroppedPositive )
         : std::string();
+    // cut-fix lane A — the XML <sigs shown= total= capped="1" docs_dropped=> in this dialect: the array cannot carry keys, so
+    // they ride the root beside "capped" (the lego_total/compose_total precedent for a section's counts). Present only when
+    // the XML twin carries the attribute; their bytes were reserved inside the array's own budget (packSignaturesJson).
+    std::string sigsCutStanza;
+    if( sigsCut.isCapped )
+    {
+        sigsCutStanza += ",\"sigs_shown\":" + std::to_string( sigsCut.shown ) + ",\"sigs_total\":" + std::to_string( sigsCut.total );
+    }
+    if( sigsCut.docsDropped > 0 )
+    {
+        sigsCutStanza += ",\"docs_dropped\":" + std::to_string( sigsCut.docsDropped );
+    }
+    const bool sigsCappedKey = sigsCut.isCapped;   // "capped": the XML tag's capped="1" (the ladder's verdict OR a gate cut)
 
     // §C1 + §C2 — the CHARGE, measured from the bytes this function is about to write rather than from the
     // reservation's upper bound. Two members were wrong:
@@ -1553,7 +1568,7 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
     // every value below 10^10 (a 10-digit est_tokens would need a ~36 GB bundle). The over_ceiling decision
     // rides the same fixed point in the safe direction: the key is emitted only when the document is already
     // over, and adding its 20 bytes can only keep it over, never bring it back under.
-    const std::size_t cappedClauseBytes = sigsCapped ? 14u : 15u;      // ,"capped":true / ,"capped":false
+    const std::size_t cappedClauseBytes = sigsCappedKey ? 14u : 15u;   // ,"capped":true / ,"capped":false
     const std::size_t envelopeTextBytes = cappedClauseBytes + 14u + 8u + 1u + kJsonBundleSigsKey.size();   // + ,"est_tokens": + ,"sigs": + } + ,"bundle":"sigs"
     const std::size_t ceilingAllowance  = in.tokenBudget > 0 ? ceilingAllowanceBytes( in.tokenBudget ) : 0;
 
@@ -1575,10 +1590,12 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
                                         header.size() + sigsJson.size() + notesStanza.size()
                                             + surfaceCountsStanza.size() + envelopeTextBytes
                                             + budgetStanza.size()
+                                            + sigsCutStanza.size()          // cut-fix lane A: the sigs_* keys ride the root too
                                             + sigsCeilingStanza.size() );   // the residual the tail is funded from must see this disclosure's bytes
     const std::size_t bundleBytesBase   = header.size() + sigsJson.size() + notesStanza.size()
                                         + surfaceCountsStanza.size() + tailStanza.size() + envelopeTextBytes
                                         + droppedPositiveStanza.size()   // A2: 0 bytes on the (overwhelming) no-drop path
+                                        + sigsCutStanza.size()           // cut-fix lane A: 0 bytes when nothing was cut
                                         + budgetStanza.size()            // R1: 0 bytes without an explicit --token-budget
                                         + sigsCeilingStanza.size();      // 0 bytes when the ladder did not fire
 
@@ -1623,10 +1640,11 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
     std::fwrite( tailStanza.data(), 1, tailStanza.size(), out );
     std::fwrite( notesStanza.data(), 1, notesStanza.size(), out );
     std::fwrite( droppedPositiveStanza.data(), 1, droppedPositiveStanza.size(), out );   // A2
+    std::fwrite( sigsCutStanza.data(), 1, sigsCutStanza.size(), out );                   // cut-fix lane A: shown/total/docs_dropped
     std::fwrite( budgetStanza.data(), 1, budgetStanza.size(), out );                     // R1: beside the label it is compared against
     std::fwrite( sigsCeilingStanza.data(), 1, sigsCeilingStanza.size(), out );           // the ceiling the ladder applied, when it fired
     std::fwrite( overCeiling.data(), 1, overCeiling.size(), out );
-    rw::emitTo( out, ",\"capped\":{},\"est_tokens\":{},\"sigs\":", sigsCapped ? "true" : "false", estTokens );
+    rw::emitTo( out, ",\"capped\":{},\"est_tokens\":{},\"sigs\":", sigsCappedKey ? "true" : "false", estTokens );
     std::fwrite( sigsJson.data(), 1, sigsJson.size(), out );
     std::fputs( "}", out );
     return 0;
@@ -2955,6 +2973,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         // (the same reason est_tokens is "omitted", not "wrong", on that path — see its DISCLOSE).
         std::size_t forDroppedPositive = 0;
         bool        forSigsCapped      = false;   // did the H1 ladder trim <sigs>? — decides the budget_bytes= legend clause below
+        rw::SigsCutReport forSigsCut;             // cut-fix lane A: the <sigs> tag's shown/total/docs_dropped — its clauses below
         sigsPreRendered = preRender( [ & ]( std::FILE* sm )
             {
                 packSignatures( sm, ing, lensRank, forTopN, cfg.packBudgetBytes, true, fanInPtr, impurePtr, redactPtr,
@@ -2967,7 +2986,8 @@ std::optional<int> runForLens( const MainDispatch& d )
                                 &forDroppedPositive,                         // A2: exact count, see droppedPositiveCount
                                 &shownSigIds,                                // lane 2: the rows actually emitted — the tail excludes THESE files
                                 &forSigsCapped,                              // did the ladder fire? — the budget_bytes= clause rides only then
-                                forTopRowNext );                             // L-W: the widening page on a thin answer, else the body
+                                forTopRowNext,                               // L-W: the widening page on a thin answer, else the body
+                                &forSigsCut );                               // cut-fix lane A: which cut readings the tag owes
             },
             sigsStr );
         if( !sigsPreRendered )
@@ -2978,6 +2998,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             // failed open never sets it, and the direct-emission path below renders the block whole
             forDroppedPositive = 0;
             forSigsCapped      = false;
+            forSigsCut         = rw::SigsCutReport {};
             shownSigIds.clear();
         }
 
@@ -3042,9 +3063,10 @@ std::optional<int> runForLens( const MainDispatch& d )
         const std::string sigsCeilingAttr   = forDefaultCeiling
             ? " budget_bytes=\"" + std::to_string( rw::kForPayloadBudgetBytes ) + "\""
             : std::string();
-        const std::string sigsCeilingNote   = forDefaultCeiling
-            ? std::string( rw::kForBudgetBytesNote )
-            : std::string();
+        // cut-fix lane A: the <sigs> tag's two cut readings (docs_dropped=, shrunk-not-dropped) ride the same splice, present
+        // only when the tag carries the case (serialize.h sigsCutLegendNotes), so the reserve below already covers them.
+        const std::string sigsCeilingNote   = ( forDefaultCeiling ? std::string( rw::kForBudgetBytesNote ) : std::string() )
+            + rw::sigsCutLegendNotes( forSigsCut.isCapped, forSigsCut.shown, forSigsCut.total, forSigsCut.docsDropped );
         // ── the INDEXING-cap disclosure (mention.h CapDisclosure), at the same splice point and for the
         // same reason: a --for header is charged against the payload ceiling, so a disclosure folded into
         // the notes above is paid for in ranked rows. Measured on sixteen real invocations, that cost three

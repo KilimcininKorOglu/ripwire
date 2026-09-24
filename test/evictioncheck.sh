@@ -534,5 +534,38 @@ nkeysl="$( printf '%s\n' "$keysl" | grep -c . )"
 
 fi
 
+# ── (m) #326's sibling: the sweep scans the directory the cache REALLY uses, on every platform ─────────────
+# Every arm above runs on POSIX, where cacheDirLadder()'s answer is already a directory std::filesystem can open,
+# so no arm here can observe the Windows defect: the ladder's third tier "/tmp/ripwire-<uid>" (the tier a plain
+# cmd.exe/PowerShell user lands on — neither TMPDIR nor XDG_CACHE_HOME is set there) is Git for Windows' /tmp,
+# which os::mkdir/os::lstat/os::chmod rebase onto the real user temp directory internally, but which
+# evictOldCacheFamily's std::filesystem::directory_iterator (and resolveCacheBlobPath's shard mkdir, and the
+# per-run temp roots) resolved against the CURRENT DRIVE — a directory that does not exist, so the sweep's
+# error_code path returned early and evicted nothing, silently, forever. The fix (#326's structural follow-up)
+# resolves the spelling at the source: every value cacheDirLadder() RETURNS — the ladder's answer and the
+# fail-closed sentinel alike — passes through os::rebased_path (identity on POSIX; idempotent, so the os:: calls
+# its consumers then make on the resolved answer see no second rewrite — test/verify_os_win32_logic.cpp pins
+# that). This arm pins that in the source, since the behaviour itself is only observable on the windows CI job
+# (ci.yml: "the cache-eviction sweep must really evict on Windows"): within cacheDirLadder()'s body, EVERY
+# `return` must hand back `os::rebased_path( … )`, never a bare spelling.
+# RED on the pre-fix source (two bare returns, no rebase in the body at all), GREEN on the fixed one.
+QH="$ROOT/src/quality.h"
+ladderbody="$( awk '/^inline std::string cacheDirLadder\(\)/{f=1} f{print} f&&/^}/{exit}' "$QH" )"
+if [ -z "$ladderbody" ]; then
+    no "(m) could not extract cacheDirLadder()'s body from src/quality.h — the arm is not observing what it claims"
+else
+    returns="$( printf '%s\n' "$ladderbody" | grep -c -E '^[[:space:]]*return[[:space:]]'                   || true )"
+    rebased="$( printf '%s\n' "$ladderbody" | grep -c -E '^[[:space:]]*return os::rebased_path\('          || true )"
+    if [ "$returns" -eq 0 ]; then
+        no "(m) cacheDirLadder() has no return statement this arm can see — its anchor moved; re-derive it"
+    elif [ "$rebased" -eq 0 ]; then
+        no "(m) cacheDirLadder() never resolves its spelling through os::rebased_path — on Windows the eviction sweep scans a directory the cache does not use and evicts nothing"
+    elif [ "$rebased" -eq "$returns" ]; then
+        ok "(m) every return in cacheDirLadder() ($rebased of $returns) hands back os::rebased_path's spelling — the directory every consumer reads is the one the cache uses"
+    else
+        no "(m) $(( returns - rebased )) of cacheDirLadder()'s $returns returns hand back an un-rebased spelling — a consumer on that path scans a directory the cache does not use"
+    fi
+fi
+
 
 [ "$fail" -eq 0 ] && echo "evictioncheck: ALL PASS" || { echo "evictioncheck: SOME CHECKS FAILED"; exit 1; }

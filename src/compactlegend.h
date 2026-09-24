@@ -222,6 +222,9 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
     "<!-- rank_by=",                   // --rank-by's k= semantics block
     "<!-- max_tokens=",                // --max-tokens' fit_bytes block
     "<!-- with-profile: ",             // --with-profile's heat_* block
+    "<!-- lint nest_refused=",         // --lint's present-only #157 clause (verbs_lint.h); kCompactAttributeReadings'
+                                       // lint-keyed nest_refused row restates it. NOT the bare "<!-- nest_refused=":
+                                       // --skipped's own clause of that opener is kept in the default dialect.
     "<!-- slice-",                     // slice's seed/flow/since FULL-dialect tiers (slice-seed:/slice-flow:/slice-since:)
     "<!-- root rows: ",                // the multi-root roots table's reading (serialize.h kMultiRootTableLegend, the one
                                        // emitter of this opener); the completeness table's element-qualified label= row
@@ -231,6 +234,8 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
     "<!-- format=columnar: ",          // the columnar re-serialization block
     "<!-- a body's sibs=",             // --expand's sibs= block
     "<!-- extent_suspect=",            // the extent-honesty row reading (serialize.h kExtentSuspectRowLegend)
+    "<!-- b truncated=",               // a cut --expand/pack-task body's reading (serialize.h kTruncatedBodyLegend)
+    "<!-- b over_ceiling=",            // …and a past-the-budget one's (serialize.h kOverCeilingBodyLegend)
 };
 
 // Comments that share a prose opener and must stay: --for's trailer (est_tokens=/dropped_positive=/weak= are
@@ -395,6 +400,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "locality_pinned",   "locality_pinned=K: K calls pinned by locality alone (a guess)", false, {}, MapHeaderRead::Only },
     { "extent_suspect_syms", "extent_suspect_syms=K: K defs failed containment, corpus-wide", false, {}, MapHeaderRead::Only },
     { "macro_blanked_files", "macro_blanked_files=K: K files indexed from a macro-blanked re-parse", false, {}, MapHeaderRead::Only },
+    // #157: the map header's own nest-refused gauge (kNestRefusedMapLegend, serialize.h) — same absent-at-zero,
+    // header-only shape as its siblings just above.
+    { "nest_refused",       "nest_refused=K: K indexed files a pre-parse nesting guard refused (json/yaml/markdown/kotlin)", false, {}, MapHeaderRead::Only },
     { "ignored_files",     "ignored_files=K: K files git's ignore rules dropped", false, {}, MapHeaderRead::Only },
     { "ignored_dirs",      "ignored_dirs=K: K subtrees git's ignore rules pruned, contents unknown", false, {}, MapHeaderRead::Only },
     { "max_tokens",        "max_tokens=/fit_bytes=: tokens asked/the byte cap applied", false, {}, MapHeaderRead::Only },
@@ -432,7 +440,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // into the always-on header clause below (the `files` row): buildStats writes it into EVERY map header beside files=, so
     // one clause is present exactly when both fields are, and the header-ONLY read still keeps it off <trace unresolved=>,
     // which counts frames. compactlegendcheck (S) accepts an always-on header field spelled inside that clause.
-    { "shown_importers",   "shown_importers=: <f> rows", true, "impact" },
+    { "shown_importers",   "shown_importers=: <f> rows (limit= sizes them)", true, "impact" },
     // THE SWEEP'S LAST PASS (2026-09-12) listed every attribute the compact --impact, --safe-delete, --communities,
     // --community=ID and map-header documents emit and found these still without a reading. Each rides only SOME answers of
     // its root, so each is a present-only term rather than a purpose-line clause. Checked against the emitters:
@@ -528,6 +536,13 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "caveat",            "methods=0 caveat=not-extracted-for-lang: no <m> contract read for this language", true, "iface" },
     { "next",              "next=: the one pasteable follow-up", true },
     { "scrubbed",          "scrubbed=1: this CDATA is not the bytes (]]> split or C0 replaced)", true },
+    // lane/cutfix-bodies (2026-09-23): a body cut at the byte budget used to say so only INSIDE its CDATA; the cut is now
+    // three attributes on the <b> (serialize.h kTruncatedBodyLegend is the full reading). ELEMENT-qualified: pr-context's
+    // root truncated= and the doctor/naming-calibration truncated= rows below are other elements' attributes.
+    // next= is NOT restated here: the generic next= term above rides every document that carries one (review N1).
+    { "truncated",         "<b truncated=1 lines=lo-hi/T>: cut at the byte budget; lines= shown of its T", true, "b" },
+    // review M1: a body whose FIRST line alone exceeds the budget is served whole, never as a fragment
+    { "over_ceiling",      "<b over_ceiling=1>: its first line alone exceeds the budget, served whole", true, "b" },
     { "preview",           "preview=1: an UNWRITTEN payload; <overwrite l= end= bytes=> = the span an apply replaces, CDATA as on disk (shown=/capped=1/elided_lines= when cut)" },
     { "redacted",          "redacted=1: a credential shape rewritten to [REDACTED:kind]; the no-redact flag serves the bytes", true },
     // extent honesty (serialize.h kExtentSuspectRowLegend): a ROW-level term on the map, <d> and <b> rows alike.
@@ -580,7 +595,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "groups", "groups=/type3=: Type-2 and Type-3 group totals over all groups; total= is their sum", false, "clones", MapHeaderRead::No, {}, "clones" },   // also defines type3=
     { "exempt_groups", "exempt_groups=N: groups whose members all sit on fixture/shell-runner paths quality-delta duplication ignores", false, "clones", MapHeaderRead::No, {}, "clones" },
     { "idiom_groups", "idiom_groups=/demoted_groups=: groups of one recognized idiom / those quality-delta demotes to minor; floors", false, "clones", MapHeaderRead::No, {}, "clones" },   // also defines demoted_groups=
-    { "clone_groups", "clone_groups=N: clusters after merging pairs (rows sharing gid=); a floor, Type-3 pairs are capped upstream", false, "clones", MapHeaderRead::No, {}, "clones" },
+    { "clone_groups", "clone_groups=N: clusters after merging pairs (rows sharing gid=); a floor under type3_capped=1", false, "clones", MapHeaderRead::No, {}, "clones" },
+    { "type3_capped", "type3_capped=1: the Type-3 pair cap fired; later pairs went uncompared, so clone_groups=/dup_loc=/dup_pct= are floors", false, "clones", MapHeaderRead::No, {}, "clones" },
     { "total_loc", "total_loc=N: lines of every function body the detector considered; dup_pct= is dup_loc= over it", false, "clones", MapHeaderRead::No, {}, "clones" },
     // connect: src/mcpverbs.h packConnect (radius from src/graph.h connectSubgraph, clamped 1..12)
     { "nodes", "nodes=N: symbols printed, terminals plus joins (a floor)", false, "connect", MapHeaderRead::No, {}, "connect" },
@@ -646,6 +662,13 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "script_gates_unresolved_dynamic", "script_gates_unresolved_dynamic=N: registered gates with no mappable deps; they may cover the change unlisted", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "evidence", "t evidence=script_literal|manifest_declared: why a shell gate joins tests=, its text names the changed path or its RIPWIRE_TEST_DEPS does", true, "t", MapHeaderRead::No, {}, "test-gate" },
     { "ccx_bar", "ccx_bar=N: the cognitive-complexity bar a u row's ccx= is read against", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    // rv-test-gate-tsjs F3: untested_modscope=N is ALWAYS present (like the terms above), so the COMPACT
+    // (default) legend needs its own reading too — the full-legend clause (situ.h::kUntestedModscopeLegend)
+    // is row-gated on N>0 and pays nothing on the compact default otherwise.
+    { "untested_modscope", "untested_modscope=N: <file-scope> owners excluded from untested= (#324, uncallable); still in impacted=", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    // --flip's twin (CodeRabbit on #331), present-only there: a <file-scope> HOST no test reaches, counted rather than
+    // silently left out of untested= (flipimpact.h computeRadius); the hosts row still lists it with tested="0".
+    { "untested_modscope", "untested_modscope=N: untested hosts that are a <file-scope> owner (#324, uncallable), left out of untested=; still in hosts=", false, "flip", MapHeaderRead::No, {}, "flip" },
     // uses: src/verbs_navigate.h (the <uses> root emit)
     { "defs", "defs=N: definitions the selector matched; qualify file:name to narrow the call sites", false, "uses", MapHeaderRead::No, {}, "uses" },
     { "external", "external=1: of= has no definition in the indexed tree under any spelling (stdlib/third-party)", false, "uses", MapHeaderRead::No, {}, "uses" },
@@ -719,6 +742,13 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "suppressed_string", "suppressed_string=N: string-tier hits held back, not in hits=; the grep-in=any flag serves them", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "tier_parsed", "tier_parsed=N: hit files parsed to classify hits as code/comment/string (budgeted; see tier_budget=)", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "tier_unclassified", "tier_unclassified=N: hits in files never classified; nonzero = tier label unproven for them", false, "grep", MapHeaderRead::No, {}, "grep" },
+    // cut-fix lane D: three attributes the grep root and rows emit that the compact dialect never read. tier_parsed='s own
+    // reading pointed at tier_budget= ("see tier_budget=") and no row defined it; tier= labelled a comment-only answer
+    // undefined; and line_bytes= — the one disclosure that a row's matched text was CUT (search.h kGrepMatchedLineMaxBytes)
+    // — reached a compact reader as a bare number. Present-only, like every term here.
+    { "tier", "tier=: the span tier served when no hit is code: comment, string or comment+string", false, "grep", MapHeaderRead::No, {}, "grep" },
+    { "tier_budget", "tier_budget=: files|bytes cap hit after tier_parsed= of tier_files= hit files; tier counts floors, every row served", false, "grep", MapHeaderRead::No, {}, "grep" },
+    { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "unindexed_files_scanned", "unindexed_files_scanned=N: off-index text files also scanned; outside complete=", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_hits", "unindexed_hits=N: hits in off-index files, NOT in hits=/total=; listed in the trailing unindexed element", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "callers", "callers=N: 1-hop distinct callers of this name, all same-named defs (a FLOOR)", true, "enc", MapHeaderRead::No, {}, "grep" },
@@ -999,6 +1029,12 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // match: src/verbs_lint.h
     { "auto_captured", "auto_captured=1: the query bound no @capture, so @m was appended to its single top-level pattern", false, "match", MapHeaderRead::No, {}, "match" },
     { "of_files", "of_files=: indexed files in all (eligible_files= of them are in the query's languages)", false, "match", MapHeaderRead::No, {}, "match" },
+    // #157 (CodeRabbit on #331): the present-only nest_refused= on the <match>, <pattern> and <lint> roots. The
+    // header-only row in kCompactCompletenessTerms reads the MAP header alone, and the verbs' own full-legend
+    // clauses are prose the compact dialect strips, so without these a default answer carried the count unread.
+    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; never walked, not in eligible_files= (the skipped verb names them)", false, "match", MapHeaderRead::No, {}, "match" },
+    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; never walked, in neither eligible_files= nor skipped_files=", false, "pattern", MapHeaderRead::No, {}, "pattern" },
+    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; no rule walked them (the skipped verb names them)", false, "lint", MapHeaderRead::No, {}, "lint" },
     // verify: src/verbs_navigate.h (the verify root)
     { "claim", "claim=/shape=: the claim as given and its shape; from_defs=/to_defs=: defs each name resolved to", false, "verify", MapHeaderRead::No, {}, "verify" },   // also defines shape= from_defs= to_defs=
     { "hops", "hops=N: call edges on the witness path (a confirmed reach claim only)", false, "verify", MapHeaderRead::No, {}, "verify" },
@@ -1017,7 +1053,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // slice: src/slice.h (the <slice> root emit, kSliceCountsAttrXml)
     { "sym", "sym=/lang=: the sliced definition's name and language; p= is its file:line", false, "slice", MapHeaderRead::No, {}, "slice" },   // also defines lang=
     { "vars", "vars=N: sliceable local bindings in the definition, one v row each; name one to slice it", false, "slice", MapHeaderRead::No, {}, "slice" },
-    { "order", "order=defuse: seed s rows (no v=) ranked by def-use coverage (distinct local names on the line) desc, then line; not source order — flow s rows (v=) keep their (d=,l=,v=) order", false, "slice", MapHeaderRead::No, {}, "slice" },   // slice.h sliceDefUseRowOrder
+    { "order", "order=defuse: seed s rows (no v=) ranked among these rows by def-use coverage (distinct local names on the line) desc, then line; not source order, not a whole-function ranking (measured at chance — docs/EVALS.md) — flow s rows (v=) keep their (d=,l=,v=) order", false, "slice", MapHeaderRead::No, {}, "slice" },   // slice.h sliceDefUseRowOrder
     { "counts", "counts=as-classified: defs=/uses=/vars=/steps= count what the name classifier rowed; neither floors nor totals", false, "slice", MapHeaderRead::No, {}, "slice" },
     // flags: src/darkflags.h (the <flags> root emit)
     { "gates", "gates=/dark_gates=: gate rows (never cut) / those whose default keeps the guarded code out of the build", false, "flags", MapHeaderRead::No, {}, "flags" },   // also defines dark_gates=

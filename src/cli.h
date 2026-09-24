@@ -189,11 +189,11 @@ struct Config
     bool             deps              = false;            // --deps: file→file dependency view (#include/import counts)
     bool             hotspots          = false;            // --hotspots: complexity × recent git churn (maintenance-pain map)
     bool             clones            = false;            // --clones: token-normalized duplicate function bodies
-    bool             readability       = false;            // --readability: the Posnett/Hindle/Devanbu (MSR 2011) lens — per function, Halstead
-                                                            // volume + token entropy + line span → P, emitted LARGEST Halstead volume/token-count/
-                                                            // length first (a size proxy — the readability-ordering claim is WITHDRAWN,
-                                                            // docs/EVALS.md §8). Pages through limit/offset like the other report verbs;
-                                                            // a ranking lens, never a grade (readability.h)
+    bool             readability       = false;            // --biggest-first (was --readability, now a hidden alias): the Posnett/Hindle/Devanbu
+                                                            // (MSR 2011) lens — per function, Halstead volume + token entropy + line span → P,
+                                                            // emitted LARGEST Halstead volume/token-count/length first (a size proxy — the
+                                                            // readability-ordering claim is WITHDRAWN, docs/EVALS.md §8). Pages through
+                                                            // limit/offset like the other report verbs; a ranking lens, never a grade (readability.h)
     bool             nonlocalState     = false;            // --nonlocal-state: per function, the non-local MUTABLE state it or its transitive
                                                             // callees reach — globals/statics/file-scope data — with READS and WRITES kept apart
                                                             // and the site or callee that explains each one. Unsound by construction (indirect
@@ -1126,7 +1126,7 @@ inline constexpr char kHelpHead[] =
         "    --impact=SYM               show everything that reaches SYM — the transitive blast radius before a change\n"
         "                               transitive blast radius — the indexed symbols that reach SYM (a floor, see counts_floor). file:name disambiguates like --callers\n"
         "                               importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM,\n"
-        "                               emitted as <f via=\"import\" lazy=\"0|1\"> rows (format=columnar carries the count only). NEVER added to reaches= —\n"
+        "                               emitted as <f via=\"import\" lazy=\"0|1\"> rows (format=columnar carries the count only; --limit sizes it). NEVER added to reaches= —\n"
         "                               files and symbols are different units, and an importer may use a different symbol from that file, or none at all.\n"
         "                               lazy=\"1\": every one of that importer's edges is written inside a closure — a TS/JS require()/import()\n"
         "                               inside a function body, a Ruby constant receiver or argument inside a method/lambda/block, a Ruby\n"
@@ -1209,10 +1209,12 @@ inline constexpr char kHelpHead[] =
         "                               exit 4 if either obligation is non-empty (run the tests, then rely on green). (default = git diff)\n"
         "      run= on a test row        --affected/--situ/--test-gate/--exercises/--pr-context/--pack-task name harness FILES, not commands. A row carries\n"
         "                               run=\"<cmd>\" when a runner is DERIVABLE from real evidence: a test-dir .sh/.py whose basename stem\n"
-        "                               matches the harness's, or whose TEXT names the harness file. Spelled RELATIVE to the root= the\n"
-        "                               document declares, so it pastes into a shell run from there, and the document does not change\n"
-        "                               with where the tree is checked out (a MULTI-ROOT run declares no single root, so it stays\n"
-        "                               absolute). NO run= means NOT DERIVABLE -- never a guessed suite command\n"
+        "                               matches the harness's, or whose TEXT names the harness file; for TS/JS, the nearest package.json\n"
+        "                               above the test file naming vitest, jest, or node's own test runner (scripts.test, or a\n"
+        "                               vitest/jest dependency -- never guessed from the .ts/.js extension alone). Spelled RELATIVE to\n"
+        "                               the root= the document declares, so it pastes into a shell run from there, and the document\n"
+        "                               does not change with where the tree is checked out (a MULTI-ROOT run declares no single root,\n"
+        "                               so it stays absolute). NO run= means NOT DERIVABLE -- never a guessed suite command\n"
         "    --grep=STR | --regex=PAT   search for a literal or a regex; every hit comes back with its enclosing symbol\n"
         "                               literal / regex search + enclosing symbol + the matched line. SPAN-TIERED by default (see\n"
         "                               --grep-in below): the scan itself is exhaustive, the ANSWER serves one tier and discloses\n"
@@ -1380,7 +1382,7 @@ inline constexpr char kHelpHead[] =
         "                               A function whose extent failed a containment check is LEFT OUT of ccx=/score=/top= and\n"
         "                               counted: extent_suspect_syms= on its row, unranked_extent_suspect= for a file with none left\n"
         "    --clones                   token-normalized duplicate bodies\n"
-        "    --readability              order functions by Halstead volume, token entropy and length, largest first\n"
+        "    --biggest-first            order functions by Halstead volume, token entropy and length, largest first\n"
         "                               per-function lens, LARGEST Halstead volume/token-count/length first (a size proxy, not a\n"
         "                               readability order — see WITHDRAWN below): vol= Halstead volume V (N*log2(eta)),\n"
         "                               ent= Shannon token entropy E, lines= L, posnett= sigmoid(8.87 - 0.033V + 0.40L - 1.5E)\n"
@@ -1824,7 +1826,9 @@ inline constexpr char kHelpHead[] =
         "                               definition SYM (statement-level def-use edges as a queryable primitive — the ARISE result,\n"
         "                               arXiv:2605.03117). One <s l= k= t=> row per line touching VAR, ranked as the root's order=\"defuse\"\n"
         "                               states: def-use coverage (distinct local names on the line) descending, then line — measured\n"
-        "                               (docs/EVALS.md): puts a gold line first more often than a random shuffle. k=def|use|both|\n"
+        "                               (docs/EVALS.md): puts a gold line first more often than a random shuffle, among these rows\n"
+        "                               only — a pre-registered attempt to rank lines over the WHOLE function span did not beat\n"
+        "                               chance (docs/EVALS.md); order=\"defuse\" is not a whole-function relevance ranking. k=def|use|both|\n"
         "                               scope = a Python global/nonlocal statement, neither read nor write; t=param|decl|\n"
         "                               assign|call-arg|read|global|nonlocal = the strongest role on the line; CDATA = the trimmed source\n"
         "                               line; defs=/uses= count occurrences. JS/TS destructuring binders (`const {a, b} = o`,\n"
@@ -2508,7 +2512,7 @@ inline constexpr char kHelpTail[] =
         "                               --lint --hotspots --clones --cochange --owners --communities --community --doc-drift\n"
         "                               --whereis --grep/--regex --match --pattern --impact --uses --exercises --seams\n"
         "                               --zoom --external-surface --dead-code --mentions --graph-query --stray-content\n"
-        "                               --test-gate --readability --ensemble --quality-panel --context-ratio\n"
+        "                               --test-gate --biggest-first --ensemble --quality-panel --context-ratio\n"
         "                               --nonlocal-state --comment-coherence --naming-consistency --safe-delete --pr-context\n"
         "                               --edit-check --flags --situ --for.\n"
         "                               Emit at most N rows, skipping the first M; N overrides the verb's own display cap\n"
@@ -2952,7 +2956,7 @@ inline constexpr BoolFlag kBoolFlags[] =
     { "--deps",               &Config::deps               },
     { "--hotspots",           &Config::hotspots           },
     { "--clones",             &Config::clones             },
-    { "--readability",        &Config::readability        },
+    { "--biggest-first",      &Config::readability        },   // was --readability; the alias is hand-written below (deprecatedReadabilityFlag), kept out of this table by house convention (§ "deprecation-warning aliases")
     { "--nonlocal-state",     &Config::nonlocalState      },
     { "--ensemble",           &Config::ensemble           },
     { "--context-ratio",      &Config::contextRatio       },
@@ -3359,11 +3363,12 @@ inline constexpr IntFlag kIntFlags[] =
 //                              size_t/u64), --limit= / --offset= (their own out-of-range sentence)
 //   • an ENUM value            --order= / --rank-by= / --color-by= / --format= / --export= (a value SET,
 //                              and a refusal that must list it)
-//   • a WARNING on accept      --most-important-last / --stable / --no-auto-order (deprecated aliases that
-//                              warn once per RUN, not per flag — state a BoolFlag row has nowhere to keep)
+//   • a WARNING on accept      --most-important-last / --stable / --no-auto-order / --readability (deprecated
+//                              aliases that warn once per RUN, not per flag — state a BoolFlag row has
+//                              nowhere to keep)
 //   • a bare no-op / bare pair --route, --quality-ack (the =REASON form is a kViewFlags row)
-inline constexpr std::size_t kHandWrittenFlagArms = 22;   // +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=)
-inline constexpr std::size_t kTotalFlagArms = 212;  // +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
+inline constexpr std::size_t kHandWrittenFlagArms = 23;   // +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=); +1 lane/flag-biggest-first (2026-09-23): --readability (deprecation-warning alias, same shape as --stable/--most-important-last/--no-auto-order) — its kBoolFlags row is renamed to --biggest-first (same Config::readability member), so the old spelling moves OUT of the table and becomes a hand-written arm, per the house rule that deprecation-warning aliases stay hand-written
+inline constexpr std::size_t kTotalFlagArms = 213;  // +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
 static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kIntFlags ) + kHandWrittenFlagArms == kTotalFlagArms,
                "a --flag arm was added or removed without updating the ledger above — count the arms in parseArgs and fix the counter" );
 
@@ -3591,7 +3596,7 @@ constexpr const char* kPagingHonoringVerbs =
     "--lint --hotspots --callers --callees --tree --deps --cochange --owners --clones --doc-drift "
     "--communities --community --whereis --grep/--regex --match --pattern --impact --uses --exercises "
     "--seams --zoom --external-surface --dead-code --mentions --graph-query --stray-content --test-gate "
-    "--readability --ensemble --quality-panel --context-ratio --nonlocal-state --comment-coherence "
+    "--biggest-first --ensemble --quality-panel --context-ratio --nonlocal-state --comment-coherence "
     "--naming-consistency --safe-delete --pr-context --edit-check --flags --situ --for";
 
 inline bool honorsPaging( const Config& c ) noexcept
@@ -5022,6 +5027,19 @@ inline Config parseArgs( int argc, char** argv ) noexcept
         orderDeprecWarned = true;
         rw::emitTo( stderr, "ripwire: {} is deprecated — use --order={} instead\n", oldFlag, newValue );
     };
+    // --readability is a hidden alias of --biggest-first now — same shape as the --order= aliases just
+    // above: still works, dropped from --help, warns ONCE per run pointing at the replacement. Only stderr
+    // carries the notice; --biggest-first and --readability must print byte-identical stdout (readabilitycheck.sh).
+    bool readabilityDeprecWarned = false;
+    auto deprecatedReadabilityFlag = [&]() noexcept
+    {
+        if( readabilityDeprecWarned )
+        {
+            return;
+        }
+        readabilityDeprecWarned = true;
+        rw::emitTo( stderr, "ripwire: --readability is deprecated — use --biggest-first instead\n" );
+    };
     for( int i = 1; i < argc; ++i )
     {
         const std::string_view a = argv[i];          // argv strings are NUL-terminated
@@ -5103,6 +5121,7 @@ inline Config parseArgs( int argc, char** argv ) noexcept
             else if( a == "--most-important-last" )       { deprecatedOrderFlag( "--most-important-last", "important-last" );  c.mostImportantLast = true; }
             else if( a == "--stable" )                    { deprecatedOrderFlag( "--stable", "stable" );                       c.stable            = true; }
             else if( a == "--no-auto-order" )             { deprecatedOrderFlag( "--no-auto-order", "important-first" );       c.noAutoOrder       = true; }
+            else if( a == "--readability" )               { deprecatedReadabilityFlag();                                       c.readability       = true; }
             // §B8.2 verifier finding N4 (W2FIX-CLI): reuses parseByteSize's N[K|M|G] grammar (K is the
             // practical case; M/G come free) — a std::size_t BYTE COUNT, so this stays hand-written for the
             // same reason as --pack-budget-bytes (an `int Config::*` table row would narrow the accepted

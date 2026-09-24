@@ -195,6 +195,20 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 [[gnu::always_inline]] inline char* getcwd( char* buf, std::size_t size )                          { return ::getcwd( buf, size ); }
 [[gnu::always_inline]] inline int   setenv( const char* name, const char* value, int overwrite )   { return ::setenv( name, value, overwrite ); }
 
+// rebased_path: the spelling of `path` that THIS layer's own calls above actually touch — identity on POSIX,
+// where a path is never rewritten between the caller and the syscall. Windows rewrites some paths (see the
+// Windows branch); exists for a caller that must hand `path` to something outside os:: that performs no such
+// rewrite itself (std::filesystem, a popen'd shell command) and needs the same answer os::open/os::stat/os::mkdir
+// already give internally — #326.
+[[gnu::always_inline]] inline std::string rebased_path( const char* path )
+{
+    if( path == nullptr )
+    {
+        return {};
+    }
+    return path;   // no rewrite on this platform: `path` already is the spelling every os:: call above touches
+}
+
 // which: the path a shell would run for `command` — `command` itself when it contains a '/' and is executable,
 // otherwise the first executable PATH entry joined with it (an empty entry is the current directory, as sh
 // reads it); "" when there is none. No POSIX call does this search (execvp does it without saying what it found).
@@ -762,6 +776,14 @@ int   access( const char* path, int mode );
 char* realpath( const char* path, char* resolved );
 char* getcwd( char* buf, std::size_t size );
 int   setenv( const char* name, const char* value, int overwrite );
+
+// rebased_path: the spelling of `path` os::open/os::stat/os::mkdir/… above actually touch, for a caller that must
+// hand `path` to something outside os:: performing no such rewrite itself (std::filesystem, a popen'd shell
+// command). Git for Windows' "/tmp" is rebased onto the user's real temp directory and a "/dev/null/…" fail-closed
+// spelling onto one Win32 cannot create (see os_win32_logic.h's oswin::rebasedProgramPath, which does the actual
+// routing and is what NativePath itself calls); any other path — including a path already in its native spelling —
+// is returned unchanged. Never fails: an unrebased path is simply `path` itself. #326.
+std::string rebased_path( const char* path );
 
 // process start and path intake (see the POSIX branch)
 std::string which( std::string_view command );   // PATH is ';'-separated; PATHEXT names; relative entries (the current directory) are never searched

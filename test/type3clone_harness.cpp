@@ -106,12 +106,17 @@ static int runCapFixture( const std::string& dir )
     const std::pair<NodeId, NodeId> canon[6] = { { 0, 1 }, { 0, 2 }, { 0, 3 }, { 1, 2 }, { 1, 3 }, { 2, 3 } };
     const std::size_t               expectN  = std::min<std::size_t>( cap, 6 );
 
-    const std::vector<CloneGroup> t3  = findClonesType3( ing, minTokens );
+    Type3Stats                    st;
+    const std::vector<CloneGroup> t3  = findClonesType3( ing, minTokens, &st );
     const std::vector<CloneGroup> t3b = findClonesType3( ing, minTokens );   // determinism rerun
 
     std::printf( "  INFO  cap=%zu emitted=%zu expected=%zu\n", cap, t3.size(), expectN );
 
     check( t3.size() == expectN, "CAP) emitted pair count == min(cap,6): the pair-cap truncates to the first-N prefilter-surviving pairs" );
+    // 2026-09-24: the cap's DISCLOSE used to be the one-argument trace (compiled out under NDEBUG), so nothing a
+    // caller could read said the list was cut. It now fires the Type3Stats sink — true exactly when pairs dropped.
+    std::printf( "  INFO  pairCapHit=%d\n", st.pairCapHit ? 1 : 0 );
+    check( st.pairCapHit == ( cap < 6 ), "CAP) Type3Stats::pairCapHit is set exactly when the cap dropped pairs (the --clones type3_capped= source)" );
 
     bool orderOk = ( t3.size() == expectN );
     for( std::size_t i = 0; orderOk && i < t3.size(); ++i )

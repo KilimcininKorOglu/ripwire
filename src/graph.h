@@ -757,35 +757,71 @@ inline bool keepRustQualifiedCandidates( const IngestResult& ing, ChaConeMemo& c
 // may not declare into namespace std beyond specializations ([namespace.std]), which live inside it, and `std`
 // can be neither a user alias nor a class at global scope. So a std-qualified call can only mean a def inside std.
 //
-// A candidate survives when it IS inside std: scope `std`; a scope written `std::…` (a member of
-// `template<> struct std::hash<T>`, or of `namespace std::x`); or a standard library's inline ABI namespace
-// (externalnames.h kStdInlineNamespaceNames), because `namespace std { inline namespace __1 { … } }` defs carry
-// the immediate scope "__1". The call side reads the immediate qualifier the same way, so `std::move`,
-// `::std::move` and `std::__1::move` arrive as "std", "std" and "__1".
+// A candidate survives when it IS inside std, AT ANY NESTING DEPTH (#150): scope `std`; a scope written
+// `std::…` (a member of `template<> struct std::hash<T>`, or of `namespace std::x`); a standard library's
+// inline ABI namespace (externalnames.h kStdInlineNamespaceNames), because `namespace std { inline namespace
+// __1 { … } }` defs carry the immediate scope "__1"; OR — #150's widening — Symbol::scopeRootsStd, which is
+// true whenever the def's FULL enclosing-namespace chain roots at std regardless of how many levels sit
+// between (`std::ranges::contains`, `std::__1::ranges::contains`). The three IMMEDIATE-scope tests are kept
+// as a floor alongside `scopeRootsStd`, never replaced by it: they still catch a def whose enclosing-chain
+// walk cannot run (ObjC++'s stated floor below) the same way they always did. The call side is symmetric:
+// `namesStd(r.qualifier)` is #134's original IMMEDIATE-qualifier test (`std::move`, `::std::move` and
+// `std::__1::move` arrive as "std", "std" and "__1"), widened by Reference::qualifierRootsStd, which reads
+// the call's ENTIRE written chain (ingest_names.h cppQualifiedChainRootsStd) so `std::ranges::move` — whose
+// IMMEDIATE qualifier is "ranges", indistinguishable at that field alone from a user's own
+// `mylib::ranges::move` — is still recognised as std-rooted. The two tests can never disagree on a
+// 1-segment call (there the qualifier IS the chain root), so `qualifierRootsStd || namesStd(...)` is
+// strictly WIDER than #134's original rule, never narrower — no call #134 caught stops being caught here.
+//
+// #150 K3 — A STD-ROOTED DECLARATION WITH NO BODY refuses too (`isDefinitionNotDeclaration`), not just a
+// non-std candidate. `namespace std { void terminate() noexcept; }` with nothing else in the corpus
+// defining it is exactly the "no in-repo evidence" case #134's veto already counts — keeping it would swap
+// one confident wrong bind (an unrelated in-repo function) for another (a corpus's own forward declaration
+// standing in for the real standard-library implementation). This filter only ever removes a declaration
+// with no rival body: the decl/def collapse (buildGraph step 1e, above) already evicts a std-rooted
+// declaration whenever a same-key DEFINITION exists anywhere in the corpus, before candidates ever reach
+// here, so a std-rooted declaration that reaches this point by construction has no such rival.
 //
 // STATED FLOORS, not closed here (each pinned or recorded by the gate):
-//   * a NESTED std namespace — `std::chrono::duration_cast` arrives as qualifier "chrono", indistinguishable
-//     from a user's `mylib::chrono::` — keeps today's ladder;
+//   * an ALIAS or using-directive (`namespace sr = std::ranges; sr::move(...)`, `using namespace std::chrono;`
+//     then a bare `duration_cast(...)`) is a DIFFERENT round (prompts/help-wanted/cpp-nested-std-namespaces.md's
+//     own TRAPS section): the call's written qualifier is "sr" or empty, neither of which names std at all, so
+//     it never reaches this guard — test/stdqualcheck.sh §8's alias arm and §11's `using namespace` control
+//     pin that it stays on today's ladder, unchanged, not silently refused;
 //   * ObjC++ (Lang::ObjC, .mm): tree-sitter-objc parses `std::move( x )` as an ERROR node spelling `std::` beside
 //     a bare `move( x )` call (measured), and ingest sets no qualifier for Lang::ObjC, so the reference arrives
 //     unqualified and the guard cannot see it (the Phase-5 veto still refuses table names such as move). The
 //     Lang::ObjC arm below is live the day extraction supplies a qualifier;
 //   * Lang::C is unaffected by construction: C has no `::`, and ingest sets a call qualifier for Lang::Cpp only.
 //     CUDA (.cu/.cuh) and Metal (.metal) ARE Lang::Cpp, so they take this guard exactly as .cpp does.
+//   * LANGUAGE NEUTRALITY (checked, not fixed here): Rust's own qualified-call guard
+//     (keepRustQualifiedCandidates, below) has the IDENTICAL immediate-segment defect for `std::`/`core::` —
+//     confirmed on both the base and this fix's binary (`std::collections::HashMap::new()`,
+//     `core::mem::swap`/`std::mem::swap` all still bind an unrelated in-repo `HashMap::new`/`mem::swap`). It
+//     is a KNOWN, UNTRACKED gap as of this comment: no GitHub issue exists for it yet (searched at the time
+//     this comment was written). C#, Python and Java capture no qualifier/receiver chain at all for an
+//     ordinary qualified call today, so this mechanism cannot reach them without new capture work first.
+//     Go's package-qualified calls are always exactly one segment, so the defect shape cannot arise.
 //
 // Returns false when NOTHING survives, and the caller refuses the site through vetoExternal — `external=`, one
 // `C external` census row, no edge — the Phase-5 veto's own bucket, because a standard-library name with no
 // in-repo evidence is exactly what it counts. `unresolved=` is untouched, as in the Rust guard.
 //
-// WHY `canonical` AND NOT THE RUST GUARD'S `alreadyPinned`. Rule 3 (the include-file narrow) DOES run for a
-// qualified call: `std::exchange` in a file that #includes the one header defining an `exchange` gets narrowed
-// to it and pinned. An #include is evidence about files, never about namespace std, so only the canonical tier
-// exempts a site. A SCIP-pinned site cannot reach here with candidates (the overlay fills `tier`, never `cand`),
-// and the FFI binding tier is Python/JS/TS-only, so neither needs a parameter.
-inline bool keepStdQualifiedCandidates( const IngestResult& ing, const Reference& r, bool canonical, std::vector<NodeId>& cand )
+// WHY NO `canonical`/`alreadyPinned` PARAMETER (#150 removed it). Rule 3 (the include-file narrow) DOES run
+// for a qualified call: `std::exchange` in a file that #includes the one header defining an `exchange` gets
+// narrowed to it and pinned. An #include is evidence about files, never about namespace std — that reasoning
+// is why #134 exempted every canonical hit from a NON-std-rooted qualifier unconditionally (the `canonical ||`
+// early return). But a std-ROOTED qualifier's canonical hit needs the SAME scrutiny as any other candidate of
+// that call (K2: `std::chrono::duration_cast` canonically hits a user `vendorlib::chrono::duration_cast` whose
+// immediate scope also happens to be "chrono") — so `canonical` decided nothing this guard still needs once
+// the std-rootedness test is `qualifierRootsStd`-aware: a NON-std-rooted call already returns early below
+// (whatever produced its candidates), and a std-rooted call is filtered by std-rootedness regardless of how
+// its candidates were found. A SCIP-pinned site cannot reach here with candidates in any case (the overlay
+// fills `tier`, never `cand`), and the FFI binding tier is Python/JS/TS-only.
+inline bool keepStdQualifiedCandidates( const IngestResult& ing, const Reference& r, std::vector<NodeId>& cand )
 {
     const bool cppFamilyRef = r.lang == Lang::Cpp || r.lang == Lang::ObjC;
-    if( canonical || !cppFamilyRef || r.qualifier.empty() || cand.empty() )
+    if( !cppFamilyRef || r.qualifier.empty() || cand.empty() )
     {
         return true; // guard does not apply
     }
@@ -797,22 +833,40 @@ inline bool keepStdQualifiedCandidates( const IngestResult& ing, const Reference
             || std::binary_search( std::begin( externalnames::kStdInlineNamespaceNames ), std::end( externalnames::kStdInlineNamespaceNames ),
                                    segment, rw::sortutil::svLess );
     };
-    if( !namesStd( r.qualifier ) )
+    if( !r.qualifierRootsStd && !namesStd( r.qualifier ) )
     {
         return true; // any other qualifier keeps the unchanged ladder — see WHY ONLY `std` above
     }
 
     // stable in-place compaction, as the namespace gate does — preserves candidate order, allocates nothing.
+    // A candidate survives only when ITS OWN scope is std-rooted too (full-chain OR the immediate-scope
+    // floor) AND — for a FUNCTION-LIKE kind only — it is a real DEFINITION, never a bodyless std
+    // declaration standing in alone (#150 K3). The body test is function/method-only (found by review,
+    // redhat-et/ripwire #150): `isDefinitionNotDeclaration` reads `endByte > sigEndByte`, which is the right
+    // question for a function's body but the wrong one for a VARIABLE — a std-rooted niebloid object
+    // (`namespace std::ranges { inline constexpr sort_fn niebloid{}; }`) is a complete, real definition with
+    // no separate "body" span at all, so the unconditional body test refused it exactly like a bodyless
+    // declaration and lost a true edge. A class/struct/other non-function kind is treated the same as a
+    // variable here — only Function/Method carry the decl/def distinction this filter exists to enforce.
+    const auto isFunctionLikeKind = []( SymKind k ) noexcept { return k == SymKind::Function || k == SymKind::Method; };
     std::size_t keepCount = 0;
     for( std::size_t ci = 0; ci < cand.size(); ++ci )
     {
-        const std::string& scope = ing.symbols[ cand[ ci ] ].scope;
-        if( namesStd( scope ) || scope.starts_with( "std::" ) )
+        const Symbol& sym       = ing.symbols[ cand[ ci ] ];
+        const bool    scopeIsStd = sym.scopeRootsStd || namesStd( sym.scope ) || sym.scope.starts_with( "std::" );
+        const bool    bodyOk    = !isFunctionLikeKind( sym.kind ) || isDefinitionNotDeclaration( sym );
+        if( scopeIsStd && bodyOk )
         {
             cand[ keepCount++ ] = cand[ ci ];
         }
     }
     cand.resize( keepCount );
+    // ENSURES: this filter never hands the tier ladder a bodyless std FUNCTION/METHOD declaration — K3's
+    // whole point. Cheap at this size (cand is a handful of same-name candidates, never the whole symbol
+    // table).
+    ENSURES( std::all_of( cand.begin(), cand.end(),
+                           [ & ]( NodeId id ) { return !isFunctionLikeKind( ing.symbols[ id ].kind ) || isDefinitionNotDeclaration( ing.symbols[ id ] ); } ),
+             "keepStdQualifiedCandidates must never leave a bodyless std function/method declaration as a survivor" );
     return keepCount != 0;
 }
 
@@ -3084,7 +3138,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
 
         // ---- std::-qualified C++ call scope guard — see keepStdQualifiedCandidates -------------------------
-        if( !keepStdQualifiedCandidates( ing, r, canonical, cand ) )
+        if( !keepStdQualifiedCandidates( ing, r, cand ) )
         {
             disposition = vetoExternal( r );                                    // nothing inside std answers → external=, counted External
             continue;
@@ -5703,6 +5757,34 @@ inline std::size_t countTestedIn( const IngestResult& ing, const std::vector<cha
     return n;
 }
 
+// cut-fix C (2026-09-23): the RELEVANCE WEIGHT the navigation lists rank by before a cap (filter.h rankBeforeCap) — a
+// symbol's resolved in-degree, the --metrics fan-in: how much else already depends on this row. Integer-exact,
+// free (one CSR row length) and identical on every surface that holds the graph, so the CLI and MCP twins cannot
+// disagree about which rows a cap keeps. PageRank was the other candidate and was not taken: a float needs a tie
+// rule, a pr_iters= disclosure on every root it orders and a power iteration per call, for the same reading.
+// kNoNode (a file-scope use site: no enclosing symbol) weighs 0, so it ranks after every attributed row.
+inline std::uint32_t navRelevanceWeight( const Graph& g, NodeId n ) noexcept
+{
+    if( n >= g.inEdges.rows() )
+    {
+        return 0u;
+    }
+    const std::uint32_t* ro = g.inEdges.rowOffsets();
+    ASSUME( ro[n] <= ro[n + 1], "CSR row offsets are monotone (verifyCsr holds after every production build)" );
+    return ro[n + 1] - ro[n];
+}
+
+// The --uses row order, shared by its three emitters (the CLI arm, the MCP twin and the member-field arm,
+// fielduses.h): a use SITE weighs what its enclosing symbol (`from`) weighs, so a capped listing keeps the sites
+// inside the most-depended-on code and drops file-scope and leaf sites first. `Site` is each emitter's own row
+// struct; all three carry fileId and from. Called on the documented (tier, path, line, …) order, before the window.
+template<class Site>
+inline void rankUseSites( const IngestResult& ing, const Graph& g, std::vector<Site>& sites )
+{
+    rankBeforeCap( ing, sites, [ ]( const Site& u ) { return u.fileId; },
+                   [ & ]( const Site& u ) { return navRelevanceWeight( g, u.from ); } );
+}
+
 // union-find (LCOM4 components). Deterministic: unions in a fixed order over id-sorted method slots.
 struct UnionFind
 {
@@ -6088,8 +6170,26 @@ inline ImporterScan scanImporterEdges( std::uint32_t f, const std::vector<std::u
 // file runs conditionally; 0 ⇒ at least one edge is a top-level (unconditional) directive. Omitting it
 // skips the per-pair bookkeeping entirely (the pre-72 fast `break`-on-first-hit path), so a caller that
 // only wants membership pays nothing extra.
+// cut-fix C: per FILE, how many distinct files import it — the deduped adjacency's in-degree, the file-granular
+// twin of navRelevanceWeight, which the import tier ranks its importers by before its cap. `adj` must be the
+// dedup=true adjacency, so each (importer, imported) pair counts once; self-edges never count.
+inline void countFileImporters( const std::vector<std::vector<std::uint32_t>>& adj, std::uint32_t F, std::vector<std::uint32_t>& out )
+{
+    out.assign( F, 0u );
+    for( std::uint32_t f = 0; f < F && f < adj.size(); ++f )
+    {
+        for( const std::uint32_t to : adj[f] )
+        {
+            if( to < F && to != f ) { ++out[to]; }
+        }
+    }
+}
+
+// `fileFanInOut` (cut-fix C): optional, default nullptr — when non-null and the scan runs, it receives
+// countFileImporters' per-file counts. Untouched on the two early returns, which find no importer to rank.
 inline std::vector<std::uint32_t> importersOfFiles( const IngestResult& ing, const std::vector<std::uint32_t>& defFiles,
-                                                     std::vector<char>* lazyOut = nullptr )
+                                                     std::vector<char>* lazyOut = nullptr,
+                                                     std::vector<std::uint32_t>* fileFanInOut = nullptr )
 {
     std::vector<std::uint32_t> importers;
     if( lazyOut != nullptr )
@@ -6120,6 +6220,10 @@ inline std::vector<std::uint32_t> importersOfFiles( const IngestResult& ing, con
     // scanImporterEdges' own comment). The narrower, correct exclusion — f is never its own importer — is
     // enforced inside scanImporterEdges via `to == f`, which self-includes make structurally unreachable
     // (buildPreciseIncludeAdj drops them) but which the scan states honestly rather than relying on that.
+    if( fileFanInOut != nullptr )
+    {
+        countFileImporters( adj, F, *fileFanInOut );   // dedup=true above: each (f, to) pair counts once
+    }
     for( std::uint32_t f = 0; f < F && f < adj.size(); ++f )
     {
         const ImporterScan scan = scanImporterEdges( f, adj[f], isDef, F, lazyOut ? &lazyPairs : nullptr );
@@ -6142,9 +6246,13 @@ inline std::vector<std::uint32_t> importersOfFiles( const IngestResult& ing, con
 // XML escaping and JSON quoting are the caller's dialect, not this file's.
 //
 // `files` is the FULL, ordered list; `shown` is how many of it a row-bearing dialect prints. The order is
-// filter.h's shared tier key — SOURCE first, then test/bench, then docs, then by path — so a capped window
-// can never fill with fixtures while the real dependents sit below the cut (LB-G's lesson, applied here
-// before this listing could repeat it).
+// filter.h's shared tier key — SOURCE first, then test/bench, then docs — so a capped window can never fill with
+// fixtures while the real dependents sit below the cut (LB-G's lesson). cut-fix C: within a tier the most-imported
+// importer comes first (its own importer count, filter.h rankBeforeCap), then the path, so the cut drops the
+// least-included files instead of the alphabetically-last ones; and sizeImportTier lets the answer's --limit /
+// MCP limit size the cap like the symbol rows' — one limit, one size in one answer, the rule find_symbol's two
+// arrays already follow — so a cut tier is one known call away (limit=importers=). offset= still windows the
+// symbol rows only (pageview.h rule 6: the paging half is theirs).
 struct ImportTier
 {
     std::vector<std::uint32_t> files;
@@ -6154,6 +6262,21 @@ struct ImportTier
     bool                       capped = false;
     std::string                xmlAttrs;   // " importers= shown_importers= importers_capped=" — pure digits, nothing to escape
 };
+
+// cut-fix C: the tier's DISPLAY size, split from its measurement (callhierarchy.h's rule: the cap policy is the
+// surface's, the rows are not). `pageLimit` is the answer's --limit / MCP limit, 0 = the kImportReachRowCap default;
+// both surfaces call this on the tier impactImportTier measured, so they cannot disagree about shown_importers=.
+inline void sizeImportTier( ImportTier& t, int pageLimit )
+{
+    t.shown  = std::min( t.files.size(), std::size_t( rw::effectiveRowCap( pageLimit, rw::kImportReachRowCap ) ) );
+    t.capped = t.shown < t.files.size();
+    // Emitted UNCONDITIONALLY, zero included: an absent importers= reads as "this build cannot measure it",
+    // and a shown_ without its capped= is the missing-attribute ambiguity pageview.h rule 3 forbids.
+    t.xmlAttrs = " importers=\"" + std::to_string( t.files.size() ) + "\""
+               + " shown_importers=\"" + std::to_string( t.shown ) + "\""
+               + " importers_capped=\"" + ( t.capped ? "1" : "0" ) + "\"";
+    ENSURES( t.shown <= t.files.size(), "the page is a prefix of the ranked tier" );
+}
 
 inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<NodeId>& seeds )
 {
@@ -6167,8 +6290,9 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
     defFiles.erase( std::unique( defFiles.begin(), defFiles.end() ), defFiles.end() );
 
     ImportTier t;
-    std::vector<char> lazyByFileOrder;   // importersOfFiles' own order (ascending file id) — see below
-    t.files = importersOfFiles( ing, defFiles, &lazyByFileOrder );
+    std::vector<char>          lazyByFileOrder;   // importersOfFiles' own order (ascending file id) — see below
+    std::vector<std::uint32_t> fileFanIn;         // per file: how many files import it — the rank-before-cap weight
+    t.files = importersOfFiles( ing, defFiles, &lazyByFileOrder, &fileFanIn );
 
     // t.files is about to be RESORTED into tier/path order; lazyByFileOrder must move WITH each entry, not
     // stay behind at its ascending-file-id slot — sort an index permutation, then rebuild both in lockstep.
@@ -6184,16 +6308,19 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
         sortedFiles[i] = t.files[ order[i] ];
         sortedLazy[i]  = lazyByFileOrder[ order[i] ];
     }
-    t.files = std::move( sortedFiles );
-    t.lazy  = std::move( sortedLazy );
-
-    t.shown  = std::min( t.files.size(), std::size_t( rw::kImportReachRowCap ) );
-    t.capped = t.shown < t.files.size();
-    // Emitted UNCONDITIONALLY, zero included: an absent importers= reads as "this build cannot measure it",
-    // and a shown_ without its capped= is the missing-attribute ambiguity pageview.h rule 3 forbids.
-    t.xmlAttrs = " importers=\"" + std::to_string( t.files.size() ) + "\""
-               + " shown_importers=\"" + std::to_string( t.shown ) + "\""
-               + " importers_capped=\"" + ( t.capped ? "1" : "0" ) + "\"";
+    // cut-fix C: rank before the cap — each importer by how many files import IT (filter.h rankBeforeCap). The
+    // permutation is of INDICES into the two parallel arrays, so `lazy` travels with its file as it does above.
+    std::vector<std::uint32_t> rankOrder( sortedFiles.size() );
+    for( std::size_t i = 0; i < rankOrder.size(); ++i ) { rankOrder[i] = std::uint32_t( i ); }
+    rw::rankBeforeCap( ing, rankOrder, [ & ]( std::uint32_t i ) { return sortedFiles[i]; },
+                       [ & ]( std::uint32_t i ) { return sortedFiles[i] < fileFanIn.size() ? fileFanIn[ sortedFiles[i] ] : 0u; } );
+    for( std::size_t i = 0; i < rankOrder.size(); ++i )
+    {
+        t.files[i] = sortedFiles[ rankOrder[i] ];
+        t.lazy.push_back( sortedLazy[ rankOrder[i] ] );
+    }
+    ENSURES( t.lazy.size() == t.files.size(), "lazy stays parallel to files" );
+    sizeImportTier( t, 0 );   // the default size; a surface with a --limit re-sizes it (sizeImportTier)
     return t;
 }
 

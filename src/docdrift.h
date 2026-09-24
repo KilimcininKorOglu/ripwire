@@ -2771,10 +2771,10 @@ inline std::string docDriftNextAttr( const DriftResult& res, const PageWindow& d
 // page[0:6] and test/pagingsweepcheck.sh's --offset continuity arm goes red on doc-drift — correctly.
 // A paged walk that is not equivalent to the whole is the §P8 bug this family exists to prevent.
 //
-// So this follows the precedent the tool already set for exactly this shape: kImportReachRowCap, the
-// secondary import tier under --impact, which pageview.h states "is NOT raisable by --limit — rule 6
-// reserves the paging half for the PRIMARY listing, so a secondary one discloses through
-// shown_importers=/importers_capped= and nothing else." Same here. What F-06 is actually about is the
+// So this follows the precedent the tool set for secondary listings (pageview.h rule 6): disclose through
+// the listing's own shown_/capped pair and page nothing. (--impact's import tier, the precedent this comment
+// first cited, has since become SIZED by --limit — cut-fix C — which is safe there because its rows are
+// siblings after the paged rows, not text inside them as the <a> rows here are.) What F-06 is actually about is the
 // SILENCE, and that is what closes: the cut says shown_failed=/failed_capped=/failed_total= on the doc
 // it happened to, and the root names the exact invocation that lifts it — --detail, which has lifted
 // this cap since the verb was written and which no output ever mentioned.

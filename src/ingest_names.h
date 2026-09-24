@@ -668,6 +668,143 @@ inline std::string qualifierOfDefinition( TSNode nameNode, std::string_view src 
     return cppQualifierText( nameNode, src, /*isDefinition=*/true );
 }
 
+// #150 — NESTED std NAMESPACES. `qualifierOf`/`qualifierOfDefinition` above return only the IMMEDIATE scope
+// segment ("ranges" for `std::ranges::move`), which cannot be told from a user's own `mylib::ranges::move`:
+// that ambiguity is exactly the gap `keepStdQualifiedCandidates` (graph.h) could not close. These two
+// helpers answer a different, narrower question — is the chain ROOTED in namespace std, at any depth? — by
+// reading the FULL text tree-sitter already gives the outermost node, never by re-deriving it from the
+// (already-truncated) immediate qualifier.
+//
+// `nameNode` here is always the SAME @name node qualifierOf/qualifierOfDefinition read: for a call, the tags
+// query capture (queries/cpp/tags.scm's "QUALIFIED CALLS AT ANY DEPTH" pattern); for an out-of-line
+// definition, the definition pattern's own @name. tree-sitter-cpp nests qualified_identifier
+// RIGHT-recursively — `A::B::C` is qualified_identifier(scope: A, name: qualified_identifier(scope: B, name:
+// C)) — and that outermost node's own TEXT SPAN is the entire chain exactly as written, leading `::`
+// included, so reading only its first segment is safe with a plain `find` (never the template-aware
+// last-segment scanners used elsewhere in this file): nothing can appear before a call's own root, template
+// arguments included — a template argument list is always part of a LATER segment, never a prefix of the
+// first one.
+//
+// `ts_node_parent( nameNode )` reaches that OUTERMOST node directly for a CALL (queries/cpp/tags.scm's call
+// pattern captures @name at the call's own `function:` field, one hop from the outermost identifier — see
+// its "QUALIFIED CALLS AT ANY DEPTH" comment). It does NOT for a 3+-segment OUT-OF-LINE DEFINITION: ingest.cpp
+// re-seats a definition's @name to the INNERMOST link of the chain (queries/cpp/tags.scm's own comment on the
+// method pattern: "ingest.cpp descends it to the innermost name:" — cppDefNameReseat), so `std::detail::f`'s
+// nameNode there is `f` and its immediate parent is only the INNER `detail::f` node, not the outer
+// `std::detail::f` one. Found by review (redhat-et/ripwire #150, adversarial pass 2026-09-23): the prior
+// version of this function trusted `ts_node_parent` alone and read "detail" as the root, wrongly refusing a
+// real std-rooted out-of-line definition. The climb below walks OUTWARD through every further
+// qualified_identifier ancestor (a no-op for a call — its outermost node's own parent is a call_expression,
+// never another qualified_identifier, so the loop tests once and stops) until nothing higher is still part of
+// the chain, and reads the root from THAT node's text instead.
+// The written chain's first segment, and whether it was written from the global scope (`::std::…`); nullopt when
+// nameNode is not the name of a (well-formed) qualified_identifier. The root test below reads `root` alone;
+// cppDefinitionRootsStd also reads `global`, so both answers come from the ONE climb.
+struct CppWrittenChainRoot
+{
+    std::string_view root;
+    bool             global = false;
+};
+inline std::optional<CppWrittenChainRoot> cppWrittenChainRoot( TSNode nameNode, std::string_view src )
+{
+    TSNode outer = ts_node_parent( nameNode );
+    if( ts_node_is_null( outer ) || !kindIs( ts_node_type( outer ), "qualified_identifier" ) || hasPhantomScopeSeparator( outer ) )
+    {
+        return std::nullopt;
+    }
+    for( TSNode up = ts_node_parent( outer ); !ts_node_is_null( up ) && kindIs( ts_node_type( up ), "qualified_identifier" ); up = ts_node_parent( up ) )
+    {
+        outer = up;
+    }
+    std::string_view text   = nodeTextOf( outer, src );
+    const bool       global = text.starts_with( "::" );
+    if( global )
+    {
+        text.remove_prefix( 2 );   // `::std::move` — the leading global-scope operator names no segment
+    }
+    const std::size_t sep = text.find( "::" );
+    return CppWrittenChainRoot{ sep == std::string_view::npos ? text : text.substr( 0, sep ), global };
+}
+
+inline bool cppQualifiedChainRootsStd( TSNode nameNode, std::string_view src )
+{
+    const std::optional<CppWrittenChainRoot> written = cppWrittenChainRoot( nameNode, src );
+    return written.has_value() && written->root == "std";
+}
+
+// The definition-side twin for an IN-CLASS / in-namespace def (`namespace std { namespace ranges { … } }`,
+// or the C++17 nested spelling `namespace std::ranges { … }`) — the shape `cppQualifiedChainRootsStd` above
+// does not reach, because such a def's @name node is never the `name:` field of a qualified_identifier at
+// all. Walks EVERY enclosing namespace_definition out to the translation unit — not just the nearest one
+// enclosingScopeOf reads — because a class sitting inside std must not stop the walk: `namespace std {
+// struct Pair { auto first() {…} } }` needs `first`'s chain walked THROUGH Pair to reach std. Each
+// namespace level's OWN `name:` text is read for only its FIRST written segment, so `namespace std::ranges {
+// … }` (whichever way the grammar nests that C++17 spelling) and `namespace std { namespace ranges { … } }`
+// answer identically. An anonymous namespace (`namespace { … }`, `name:` null) is transparent — the walk
+// continues through it unchanged. The LAST namespace level found while climbing (i.e. the OUTERMOST one) is
+// what decides the answer, which is why `namespace mylib { namespace std { … } }` is correctly NOT
+// std-rooted: the outermost level there is "mylib", and the language itself permits reopening the real
+// `::std` only at file scope ([namespace.std]), never nested inside another namespace.
+// The first written segment of the OUTERMOST named namespace enclosing `node`, or nullopt when no named namespace
+// encloses it (anonymous ones are transparent). cppEnclosingChainRootsStd asks whether it is "std";
+// cppDefinitionRootsStd asks only whether there is one.
+inline std::optional<std::string_view> cppOutermostNamedNamespaceRoot( TSNode node, std::string_view src )
+{
+    std::string_view outermostNsRoot;
+    bool              sawNamespace = false;
+    for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        if( !kindIs( ts_node_type( p ), "namespace_definition" ) )
+        {
+            continue;
+        }
+        const TSNode nm = fieldChild( p, NodeField::Name );
+        if( ts_node_is_null( nm ) )
+        {
+            continue;   // anonymous namespace — transparent, keep climbing
+        }
+        const std::string_view text = nodeTextOf( nm, src );
+        const std::size_t      sep  = text.find( "::" );
+        outermostNsRoot = sep == std::string_view::npos ? text : text.substr( 0, sep );
+        sawNamespace    = true;
+    }
+    return sawNamespace ? std::optional<std::string_view>( outermostNsRoot ) : std::nullopt;
+}
+
+inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
+{
+    return cppOutermostNamedNamespaceRoot( node, src ) == std::optional<std::string_view>( "std" );
+}
+
+// A WRITTEN `std::` qualifier is resolved against where the def sits (CodeRabbit on #331). A qualified definition
+// names an entity of a namespace that ENCLOSES it ([namespace.memdef]), so `void std::ranges::f() {}` written inside
+// `namespace vendor { … }` defines `vendor::std::ranges::f` — the real `::std` can only be re-opened out of line at
+// file scope. Such a def used to be marked std-rooted anyway, and keepStdQualifiedCandidates could then keep it as the
+// target of a call to the real `std::ranges::f`: a false edge to a same-spelled def. So the qualified test holds only
+// when no NAMED namespace encloses the def (an anonymous one stays transparent, as in the walk above) or the chain is
+// written from the global scope (`::std::…`); every other case falls to the enclosing walk, whose outermost-root rule
+// already answers `vendor` there.
+// The definition-side dispatcher: an out-of-line qualified def (`std::SomeType::f() {…}`, rare but legal —
+// re-opening a std entity out of line) is std-rooted exactly as a CALL with the same written chain would be,
+// so it tries cppQualifiedChainRootsStd first. OR, not either/or (found by the same review pass as the climb
+// above): a def can be qualified AND still need the enclosing-namespace walk — `namespace std { int
+// detail::innerHelper(int) {} }` writes only the PARTIAL qualifier `detail::innerHelper` at the declarator
+// (chain root "detail", not "std"), and the real answer lives in the surrounding `namespace std { … }` block
+// the qualified check never looks at. Every def shape that is std-rooted at all is std-rooted by exactly one
+// of the two tests — a bare in-class/in-namespace def only ever reaches the enclosing walk (its declarator is
+// never a qualified_identifier, so the qualified check is a cheap, safe false) — so this is never redundant
+// work pretending to be a belt-and-suspenders check.
+inline bool cppDefinitionRootsStd( TSNode nameNode, std::string_view src )
+{
+    const std::optional<CppWrittenChainRoot> written = cppWrittenChainRoot( nameNode, src );
+    if( written.has_value() && written->root == "std"
+        && ( written->global || !cppOutermostNamedNamespaceRoot( nameNode, src ).has_value() ) )
+    {
+        return true;
+    }
+    return cppEnclosingChainRootsStd( nameNode, src );   // also `namespace std { int detail::f() {} }` (partial qualifier)
+}
+
 // The qualifier the 3+-segment re-split keys a REFERENCE on, from the scope half of its captured text: the last
 // top-level segment, a template-id kept whole and canonical (`numeric_limits<std::size_t>` stays itself; the resolver
 // falls back to the family when nothing is keyed by it). PRECONDITION: `scopeText` holds no operator tail — it is the

@@ -36,7 +36,10 @@ bodies(){ grep -o '<b t=' "$1" | wc -l | tr -d ' '; }
 # shown=/total="): a TRIMMED sigs block is `<sigs shown="S" total="T" capped="1">` — S rows printed of the T the
 # rank-adaptive ladder was handed (src/serialize.h; pageview.h rule 5 / truncvocabcheck arm (F): every capped="1"
 # carries shown= and a total). An untrimmed block is still the bare `<sigs>`. Nothing else counts as a sigs block.
-sigblocks(){ grep -oE '<sigs( shown="[0-9]+" total="[0-9]+" capped="1")?>' "$1" | wc -l | tr -d ' '; }
+# Re-pinned 2026-09-23 (cut-fix lane A): the tag may END with docs_dropped="N" — N shown rows whose doc comment the rank
+# tiers or the ladder removed (serialize.h sigsOpenTag), which used to happen with no trace. Measured on this query: the
+# default bundle carries it, so the shape without it no longer matched and arm #2 read "0 sigs blocks".
+sigblocks(){ grep -oE '<sigs( shown="[0-9]+" total="[0-9]+" capped="1")?( docs_dropped="[0-9]+")?>' "$1" | wc -l | tr -d ' '; }
 
 # ── #1: --detail=0 == no --detail (byte-identical, golden-neutral) ──────────────────────────────────────
 "$BIN" src --for="$TASK" --no-cache >"$TMP/plain" 2>/dev/null

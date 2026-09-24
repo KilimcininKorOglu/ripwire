@@ -1200,7 +1200,9 @@ inline constexpr std::string_view kPatternLegend =
                          "counts_floor=\"1\" and capped=\"1\" — rows exist that no page holds) or ellipsis_capped=\"1\"; "
                          "the latter means an ellipsis probe gave up on ellipsis_skipped= candidate nodes whose sibling run exceeded "
                          "ellipsis_bound, so a node that would have matched can be missing (ellipsis_skipped= counts ABANDONS and is "
-                         "itself a floor on those nodes). raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it) -->";
+                         "itself a floor on those nodes). nest_refused= (absent if 0) counts corpus files a pre-parse nesting guard "
+                         "refused before this walk could reach them, excluded from both eligible_files= and skipped_files=; see the "
+                         "skipped verb's why=\"nest-refused\" rows for which. raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it) -->";
 
 // R2 — everything ONE pattern run answers with before a byte is emitted, as one structured return (the
 // same shape, and the same reason, as MatchQueryOutcome above). A non-empty `refusal` is the whole result:
@@ -1429,14 +1431,22 @@ std::optional<int> runLint( const MainDispatch& d )
             char              mpab[ kPageDisclosureCap ];
             // §L3: no `attr="value"` spelled out below for grammars=/eligible_files=/of_files= — a naive
             // whole-line grep (matchcapturecheck.sh's own idiom) would match the WORDED example first.
+            // #157: a file the nesting guard refused is excluded from eligible_files= and never reaches this
+            // walk, so a reader must be told the corpus held one rather than reading a clean match answer as
+            // proof the pattern does not occur there too. Same reused why token the skipped verb's rows carry.
+            const std::string matchNestRefusedAttr = ing.crawlSkips.nestRefusedFiles > 0
+                ? " nest_refused=\"" + std::to_string( ing.crawlSkips.nestRefusedFiles ) + "\""
+                : std::string();
             lintPrintOut( "<!-- ripwire match: tree-sitter structural query; each hit = a captured node + its enclosing symbol. "
                         "shown=/capped= = rows printed vs found; hits_capped=\"1\" ⇒ hits= is a FLOOR (engine match limit reached) and the "
                         "root then also carries counts_floor=\"1\" and capped=\"1\" — rows exist that NO page holds (the engine cap, not the "
                         "window, dropped them; narrow the query), while has_more= keeps its window meaning so a loop still terminates. "
                         "auto_captured=\"1\" ⇒ the query bound no @capture and ripwire appended `@m` to its single top-level pattern. "
                         "grammars= names every grammar the query compiled against; eligible_files=/of_files= are corpus files in that "
-                        "language set vs total indexed files. raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it) -->" );
-            lintPrintOut( "<match hits=\"{}\"{} hits_capped=\"{}\"{} grammars=\"{}\" eligible_files=\"{}\" of_files=\"{}\"{}>",
+                        "language set vs total indexed files. nest_refused= (absent if 0) counts corpus files a pre-parse nesting guard "
+                        "refused before this walk could reach them, excluded from eligible_files=; see the skipped verb's why=\"nest-refused\" "
+                        "rows for which. raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it) -->" );
+            lintPrintOut( "<match hits=\"{}\"{} hits_capped=\"{}\"{} grammars=\"{}\" eligible_files=\"{}\" of_files=\"{}\"{}{}>",
                         ms.size(),
                         pageDisclosure( mpab, sizeof( mpab ), matchShown, ms.size(), matchPage.end,
                                         cfg.pageLimit, cfg.pageOffset, true, kXmlPageSyntax,
@@ -1446,7 +1456,8 @@ std::optional<int> runLint( const MainDispatch& d )
                         ex( grammarsAttr ),
                         eligibleFiles,
                         ing.files.size(),
-                        lintRootAttr );
+                        lintRootAttr,
+                        matchNestRefusedAttr );
             for( std::size_t hitIndex = matchPage.begin; hitIndex < matchPage.end; ++hitIndex )
             {
                 const AstMatch&         m  = ms[ hitIndex ];
@@ -1483,7 +1494,12 @@ std::optional<int> runLint( const MainDispatch& d )
             // partial resolution is exactly what explains it, hits>0 or not — V-3's second case, where a
             // matched .tsx sat beside a silently unread .ts.
             const bool tellUnresolved = ps.matches.empty() || ps.skippedFiles > 0;
-            lintPrintOut( "<pattern hits=\"{}\"{} hits_capped=\"{}\" q=\"{}\" grammars=\"{}\" shapes=\"{}\" unsupported=\"{}\"{}{} eligible_files=\"{}\" skipped_files=\"{}\" of_files=\"{}\"{}>",
+            // #157: same disclosure as --match, over the same shared walk (AstWalk::Pattern reaches the
+            // identical per-file skip). Absent when nothing was refused.
+            const std::string patNestRefusedAttr = ing.crawlSkips.nestRefusedFiles > 0
+                ? " nest_refused=\"" + std::to_string( ing.crawlSkips.nestRefusedFiles ) + "\""
+                : std::string();
+            lintPrintOut( "<pattern hits=\"{}\"{} hits_capped=\"{}\" q=\"{}\" grammars=\"{}\" shapes=\"{}\" unsupported=\"{}\"{}{} eligible_files=\"{}\" skipped_files=\"{}\" of_files=\"{}\"{}{}>",
                         ps.matches.size(),
                         pageDisclosure( ppab, sizeof( ppab ), patShown, ps.matches.size(), patPage.end, cfg.pageLimit, cfg.pageOffset, true,
                                         kXmlPageSyntax, /*collectionCapped=*/ ps.matches.size() >= rw::pattern::kMaxHits ),   // H8
@@ -1497,7 +1513,8 @@ std::optional<int> runLint( const MainDispatch& d )
                         ps.eligibleFiles,
                         ps.skippedFiles,
                         ing.files.size(),
-                        lintRootAttr );
+                        lintRootAttr,
+                        patNestRefusedAttr );
             for( std::size_t hitIndex = patPage.begin; hitIndex < patPage.end; ++hitIndex )
             {
                 const rw::AstMatch&    m  = ps.matches[ hitIndex ];
@@ -1978,6 +1995,15 @@ std::optional<int> runLint( const MainDispatch& d )
         {
             lintRootExtra += " naming_locals=\"1\"";
         }
+        // #157 (CodeRabbit on #331): the rule walk is astQueryGrouped, which skips every file ingest's nesting guard
+        // refused — the same skip --match and --pattern disclose as nest_refused=, and the one the --skipped legend
+        // says all three share. Without it here a refused .kt file vanished from every rule's count with no trace.
+        // Absent when 0, like inert_rules=, so every lint answer over a corpus with no refusal is byte-identical.
+        const bool lintNestRefused = ing.crawlSkips.nestRefusedFiles > 0;
+        if( lintNestRefused )
+        {
+            lintRootExtra += std::format( " nest_refused=\"{}\"", ing.crawlSkips.nestRefusedFiles );
+        }
 
         // §P8 collision, documented not renamed — see the --grep legend above for the full reasoning.
         lintPrintOut( "<!-- ripwire lint: [AST]-only checks (descriptive facts, not gates). rule=the check; sev=user-rule severity; "
@@ -2007,6 +2033,11 @@ std::optional<int> runLint( const MainDispatch& d )
                     "malformed or misspelled pattern) — its count=\"0\" never ran at all, a different claim from applicable=\"0\" above "
                     "(a well-formed query whose declared language just is not in this corpus) and from an ordinary count=\"0\" (a "
                     "well-formed query that ran and found nothing); absent ⇒ the query compiled. -->" );
+        if( lintNestRefused )
+        {
+            lintPrintOut( "<!-- lint nest_refused= on the root counts corpus files a pre-parse nesting guard refused before any rule's walk "
+                        "could reach them, so no count= includes them; see the skipped verb's why=\"nest-refused\" rows for which. -->" );
+        }
         if( !cfg.withProfile.empty() )
         {
             lintPrintOut( "<!-- with-profile: heat_* on a finding = MEASURED inclusive totals of the joined #PROF_TSV scope — the nearest "

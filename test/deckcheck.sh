@@ -273,6 +273,68 @@ else
     fail=1
 fi
 
+# ── §P10 CHANGELOG HEADING INTEGRITY (added 2026-09-23, lane/ack-backfill-followups incident) ──────
+# A CHANGELOG edit that added an `## [Unreleased]` section REPLACED the `## [0.6.2] — 2026-09-21`
+# heading outright instead of inserting above it — ~2,870 lines of shipped 0.6.2 release notes silently
+# read as unreleased, and nothing in the gate suite caught it: the flag-fabrication scan above only
+# reads CHANGELOG.md's PROSE, never its heading STRUCTURE. A narrow, separate content assertion, same
+# shape as §P9 above: every `## [...]` release heading committed on origin/main must still be present
+# here, in the same relative order (a new heading may be ADDED anywhere, including above the pinned
+# ones, but none of the pinned ones may be dropped, reordered, or renamed), and at most one
+# `## [Unreleased]` heading may exist, sitting above every real release heading, never below one.
+if MAINCHANGELOG="$( git -C "$ROOT" show origin/main:CHANGELOG.md 2>/dev/null )" && [ -n "$MAINCHANGELOG" ]; then
+    printf '%s' "$MAINCHANGELOG" >"$TMP/changelog_main.md"
+    if python3 - "$ROOT/CHANGELOG.md" "$TMP/changelog_main.md" <<'PYEOF'
+import re, sys
+localPath, mainPath = sys.argv[1], sys.argv[2]
+pat = re.compile(r'^(## \[.*)$', re.M)
+local = pat.findall(open(localPath, encoding='utf-8').read())
+main  = pat.findall(open(mainPath, encoding='utf-8').read())
+mainReleases = [h for h in main if '[Unreleased]' not in h]
+
+ok = True
+missing = [h for h in mainReleases if h not in local]
+for h in missing:
+    print("  FAIL  CHANGELOG heading missing (present on origin/main): %s" % h)
+    ok = False
+
+# subsequence order: each pinned heading, in turn, must be found no earlier than the previous one.
+idx = 0
+for h in mainReleases:
+    if h in missing:
+        continue
+    found = local.index(h, idx) if h in local[idx:] else -1
+    if found == -1:
+        print("  FAIL  CHANGELOG heading out of order: %s" % h)
+        ok = False
+        continue
+    idx = found + 1
+
+unreleased = [h for h in local if '[Unreleased]' in h]
+if len(unreleased) > 1:
+    print("  FAIL  CHANGELOG carries %d [Unreleased] headings — at most one is allowed" % len(unreleased))
+    ok = False
+# Against EVERY local release heading, not only origin/main's first: a release heading this branch adds
+# above the pinned ones is a release too, and [Unreleased] below it would file notes under the wrong one.
+localReleases = [h for h in local if '[Unreleased]' not in h]
+if unreleased and localReleases:
+    if local.index(unreleased[0]) > local.index(localReleases[0]):
+        print("  FAIL  CHANGELOG's [Unreleased] heading sits BELOW a release heading (%s) — it must sit above every release" % localReleases[0])
+        ok = False
+
+if ok:
+    print("  PASS  CHANGELOG heading integrity — every origin/main release heading is present, in order, and at most one [Unreleased] sits above them")
+sys.exit(0 if ok else 1)
+PYEOF
+    then
+        :
+    else
+        fail=1
+    fi
+else
+    echo "  SKIP  CHANGELOG heading integrity — origin/main not in this checkout (shallow clone or foreign repo)"
+fi
+
 if [ "${badAllow:-0}" = "1" ]; then
     echo "deckcheck: FAIL — malformed allowlist row(s) above"
     exit 1

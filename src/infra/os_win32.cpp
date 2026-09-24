@@ -389,17 +389,12 @@ public:
     }
 
 private:
+    // The dispatch itself (which rebase, if any, applies to `path`) is pure logic, moved to os_win32_logic.h
+    // (oswin::rebasedProgramPath) so it compiles and is tested on every platform; this keeps only the one thing
+    // that IS a Windows fact — userTempDirectory() reads GetTempPathW().
     static std::string rebase( const char* path )
     {
-        if( path == nullptr || path[ 0 ] != '/' )
-        {
-            return {};
-        }
-        if( std::strncmp( path, "/tmp", 4 ) == 0 )
-        {
-            return oswin::rebaseMsysTmp( path, userTempDirectory() );
-        }
-        return std::strncmp( path, "/dev/null", 9 ) == 0 ? oswin::rebaseDevNull( path ) : std::string();
+        return path == nullptr ? std::string() : oswin::rebasedProgramPath( path, userTempDirectory() );
     }
 
     std::string     rebased_;
@@ -1712,6 +1707,21 @@ char* realpath( const char* path, char* resolved )
         return nullptr;
     }
     return out;
+}
+
+// The public counterpart of NativePath's private rebase(): same routing (oswin::rebasedProgramPath over
+// userTempDirectory()), but for a caller OUTSIDE this file that must hand a path to something which performs no
+// rebase of its own — #326's fix, so --doctor's cache-dir writability probe and blob scan measure the same
+// directory os::mkdir/os::open/os::stat already write into, instead of the un-rebased "/tmp/<cache-dir>-<uid>"
+// spelling read literally off the current drive.
+std::string rebased_path( const char* path )
+{
+    if( path == nullptr )
+    {
+        return {};
+    }
+    const std::string rebased = oswin::rebasedProgramPath( path, userTempDirectory() );
+    return rebased.empty() ? std::string( path ) : rebased;
 }
 
 char* getcwd( char* buf, std::size_t size )

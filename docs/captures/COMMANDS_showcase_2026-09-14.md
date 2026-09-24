@@ -94,7 +94,7 @@
 
 `````
 <ctx root="." est_tokens="1295">
-<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 8 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
+<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 100 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
 <![CDATA[>, rejoin it) or a C0/invalid-UTF-8 byte was replaced; redacted="1" = a credential shape was rewritten to a [REDACTED:kind] marker (the no-redact flag serves the bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already do, so source that spel … [line truncated: 59 more bytes on this line]
 <bodies shown="1" total="1" capped="0">
 <b t="fn" l="3404" p="src/graph.h" n="rankGraphTeleport" sibs="Graph,provLabel,langCompatible,namespaceCompatible,kCommonNameMul,kCommonNameDefThreshold,kPrivateNameMul,kSpecificNameMul,kSpecificMinLen,kSpecificMinWords,wordCount,weight,decodeJniName,splitSegments,isTemplateSegment,pathsMatch,method … [line truncated: 1541 more bytes on this line]
@@ -1478,7 +1478,7 @@ ripwire: --outline=rankGraphTeleport:1-10: --outline has no line-range form — 
 
 `````
 <ctx root="." est_tokens="1295">
-<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 8 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
+<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 100 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
 <![CDATA[>, rejoin it) or a C0/invalid-UTF-8 byte was replaced; redacted="1" = a credential shape was rewritten to a [REDACTED:kind] marker (the no-redact flag serves the bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already do, so source that spel … [line truncated: 59 more bytes on this line]
 <bodies shown="1" total="1" capped="0">
 <b t="fn" l="3404" p="src/graph.h" n="rankGraphTeleport" sibs="Graph,provLabel,langCompatible,namespaceCompatible,kCommonNameMul,kCommonNameDefThreshold,kPrivateNameMul,kSpecificNameMul,kSpecificMinLen,kSpecificMinWords,wordCount,weight,decodeJniName,splitSegments,isTemplateSegment,pathsMatch,method … [line truncated: 1541 more bytes on this line]
@@ -1519,7 +1519,7 @@ ripwire: --outline=rankGraphTeleport:1-10: --outline has no line-range form — 
 
 `````
 <ctx root="." est_tokens="1134">
-<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 8 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
+<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 100 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
 <![CDATA[>, rejoin it) or a C0/invalid-UTF-8 byte was replaced; redacted="1" = a credential shape was rewritten to a [REDACTED:kind] marker (the no-redact flag serves the bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already do, so source that spel … [line truncated: 59 more bytes on this line]
 <bodies shown="1" total="1" capped="0">
 <b t="fn" l="3404" p="src/graph.h" n="rankGraphTeleport" lines="1-12/29" sibs="Graph,provLabel,langCompatible,namespaceCompatible,kCommonNameMul,kCommonNameDefThreshold,kPrivateNameMul,kSpecificNameMul,kSpecificMinLen,kSpecificMinWords,wordCount,weight,decodeJniName,splitSegments,isTemplateSegment,p … [line truncated: 1557 more bytes on this line]
@@ -1543,7 +1543,7 @@ ripwire: --outline=rankGraphTeleport:1-10: --outline has no line-range form — 
 
 `````
 <ctx root="." est_tokens="2158">
-<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 8 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
+<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 100 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
 <![CDATA[>, rejoin it) or a C0/invalid-UTF-8 byte was replaced; redacted="1" = a credential shape was rewritten to a [REDACTED:kind] marker (the no-redact flag serves the bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already do, so source that spel … [line truncated: 59 more bytes on this line]
 <bodies shown="1" total="1" capped="0" compress="1">
 <b t="fn" l="3359" p="src/serialize.h" n="compressBody" sibs="xmlSafeByte,xmlScrubIsLossy,xmlControlCharRef,kXmlEscapeByteset,escapeXml,writeMultiRootTable,kMultiRootTableLegend,multiRootTableLegend,xmlCommentText,ctxRootOpen,ctxRootJsonScrubKeys,appendCdataSafe,XmlWriter,XmlWriter,XmlWriter,operato … [line truncated: 1806 more bytes on this line]
@@ -1581,7 +1581,7 @@ ripwire: --outline=rankGraphTeleport:1-10: --outline has no line-range form — 
 
 `````
 <ctx root="." est_tokens="3026">
-<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 8 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
+<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 100 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
 <![CDATA[>, rejoin it) or a C0/invalid-UTF-8 byte was replaced; redacted="1" = a credential shape was rewritten to a [REDACTED:kind] marker (the no-redact flag serves the bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already do, so source that spel … [line truncated: 59 more bytes on this line]
 <bodies shown="3" total="3" capped="0">
 <b t="fn" l="4912" p="src/quality.h" n="readAckRecords" sibs="kBaselineFile,kMinCloneTokens,kCcxBar,kLocBar,kNestBar,kParamBar,kShortHorizonDays,kShortHorizonMinCommits,kReusedHelperMinFanin,kMinorCcxDelta,kMinorLocDelta,kMinorParamDelta,kMaterialGrowthPct,kSubBarGrowthPct,subBarGrowthFloor,kAcksFil … [line truncated: 1805 more bytes on this line]
@@ -3921,28 +3921,28 @@ ripwire 0.6.1 (dev, AppleClang 21.0.0.21000101, emit=std::print, built_from=f8d4
 
 # navigate — seeds, claims, slices, shapes
 
-## `./build/ripwire . --at=src/graph.h:3954`
+## `./build/ripwire . --at=src/graph.h:4008`
 
 *Hold a LOCATION, not a name: the enclosing-definition chain at FILE:LINE (a compiler error, a diff hunk, a stack frame), outermost -> innermost.*
 
 `````
 <!-- ripwire at: the ENCLOSING-DEFINITION CHAIN at one FILE:LINE seed. p= the resolved file, l= the 1-based seed line, sym= the innermost enclosing definition's name (what the same seed resolves to in a selector position), chain= the row count. Rows are INDEXED definitions only, outermost first, innermost last: n= the definition's name, t= its kind tag, l= its own start line, el= its end line (1-based, inclusive). A namespace or any construct the index does not carry is NOT a row, so an outer scope can be absent rather than misnamed; a seed line inside no indexed definition is refused, never served as an empty chain. The same seed composes into any SYM selector as @FILE:LINE (callers, callees, impact, around, expand, uses, edit-check, slice, safe-delete, path, connect) and resolves to the innermost row. -->
 <!-- root= on this element is the crawl root every p= below is RELATIVE to (single-root runs only; absent => p= is the path ingest itself used, unchanged). -->
-<at p="src/graph.h" l="3954" sym="rankGraphTeleport" chain="1" root=".">
-<s n="rankGraphTeleport" t="fn" l="3954" el="3982"/>
+<at p="src/graph.h" l="4008" sym="rankGraphTeleport" chain="1" root=".">
+<s n="rankGraphTeleport" t="fn" l="4008" el="4036"/>
 </at>
 `````
 
-## `./build/ripwire . --callers=@src/graph.h:3954`
+## `./build/ripwire . --callers=@src/graph.h:4008`
 
 *The same seed in a SELECTOR position: @FILE:LINE resolves to the innermost enclosing definition, then --callers runs on it.*
 
 `````
 <!-- ripwire callers/callees: the 1-hop call hierarchy read off the call graph — the callers form lists symbols that CALL of=; the callees form lists symbols of= itself calls. of= is the selector you passed, defs= how many DEFINITIONS it resolved to (rows UNION every def's neighbours), count= the DISTINCT neighbour symbols (a floor, per counts_floor=), windowed by limit= and offset=. A neighbour that is an indexed function-like #define is a macro row (t="macro", role="macro" on the XML row): the edge crosses a macro expansion, not a plain call — rows carry no role= otherwise. Rows are ordered SOURCE first, then test/bench, then docs, by path within a tier. hop_tested=/hop_untested= partition count= by the tested= lens below (1-hop, never transitive). tested="1" on a row means an indexed test transitively reaches it (never 0, omitted when it does not). BLIND SPOT the test-gate legend also names: only a CALL EDGE from an INDEXED test symbol counts here, so a shell or CLI-level test running a built binary as a SUBPROCESS is invisible to it and a repo tested that way reads all-untested. Read untested= as no in-process test reaches it, not as no test covers it. next= is the one pasteable follow-up (the uses verb on this selector: the call sites). counts_floor="1" means every count here is a FLOOR, never a total: edges are extracted from source TEXT by NAME. Missing: dynamic dispatch (virtual/interface/duck-typed), a most-vexing-parse declaration with no call expression, a function-pointer/callback bound to more than one function in scope (reassigned, table-indexed, lambda-bound, or address-taken/reference-bound), and a plain-name binding (fp=handler) whose variable type is not PROVABLY a function pointer (a same-file typedef/declarator; a HEADER typedef is missed; auto/template types are read as unpinned, so KEPT). A macro-generated call site is role="macro" only when its name uniquely names an indexed function-like #define (C-family, t="macro"); a shared name stays a plain call, an unindexed macro is no edge. Read a zero as "none found", never as "none exists". graph_ambiguous=/graph_unresolved= are the whole graph's resolver gauge (calls split over several defs / calls whose in-repo defs were all language-filtered), the map header's ambiguous=/unresolved=. graph_unindexed=N is a third gauge: files no grammar could read (the map header's unindexed=), whose calls raise neither gauge above; absent when zero, and so is this sentence. COUNTING UNIT differs by verb: callers, callees, edit-check, graph-query and pr-context counts are DISTINCT SYMBOLS (repeated calls from one caller, and calls to two overloads, collapse into ONE row; multiplicity survives only in the call graph's edge weight). The reach counts (impact's reaches=, pr-context's dependents=) are the size of a transitive reach SET, each symbol counted once. The uses verb counts call SITES, one row per occurrence — a larger count there for the same symbol is these units agreeing, not disagreeing. The map header's edges= is a unit again different — distinct (caller,callee) PAIRS — and that document carries neither this marker nor this clause. -->
 <!-- root= on this element is the crawl root every p= below is RELATIVE to (single-root runs only; absent => p= is the path ingest itself used, unchanged). -->
-<callers of="@src/graph.h:3954" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="8071" graph_unresolved="5320" graph_unindexed="221" counts_floor="1" next="--uses=@src/graph.h:3954">
+<callers of="@src/graph.h:4008" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="8071" graph_unresolved="5320" graph_unindexed="221" counts_floor="1" next="--uses=@src/graph.h:4008">
 <s t="fn" n="runEval" p="src/eval.h:171"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3995"/>
+<s t="fn" n="rankGraph" p="src/graph.h:4049"/>
 <s t="fn" n="anchoredLexicalRank" p="src/graph.h:4604"/>
 <s t="fn" n="churnDecayRanking" p="src/main.cpp:1275"/>
 <s t="fn" n="churnRankedGraph" p="src/main.cpp:1310"/>
@@ -4973,7 +4973,7 @@ ripwire: --run-timeout=SECONDS modifies --run-trace — pass it too (e.g. ripwir
 … [188 more display lines; full output is 18154 bytes on 1 raw line(s)]
 `````
 
-## `./build/ripwire . --readability --limit=8`
+## `./build/ripwire . --biggest-first --limit=8`
 
 *Per-function size ranking, largest Halstead volume/token entropy/lines first — a size proxy, not a readability order (withdrawn, docs/EVALS.md §8) — a RANKING lens, not a grade.*
 
@@ -5351,7 +5351,7 @@ ripwire: --run-timeout=SECONDS modifies --run-trace — pass it too (e.g. ripwir
 *The session legend dictionary the MCP server serves as ripwire://legend-dict/full — one definition per line, headed by its dictv= version; no corpus needed. =roster lists the completeness attributes it defines.*
 
 `````
-ripwire legend dictionary ripwire.dict/v1 dictv=7c89394f1b3da99d entries=704
+ripwire legend dictionary ripwire.dict/v1 dictv=1b6d405122e65b6a entries=718
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)
@@ -5381,7 +5381,7 @@ ripwire.impact/v1 <impact>: transitive blast radius of of=: <s t= n= p=> reach s
 ripwire.path/v1 <path>: one DIRECTED call path from= to to=, each <s t= n= p=> a hop; reachable=0 hops=0 when none
 ripwire.connect/v1 <connect>: minimal joining subgraph: <g> groups, <t> terminals, <s connects=> joins, <e f= t=> edges, <unconnected>
 ripwire.at/v1 <at>: enclosing-definition chain at p=:l=: sym= innermost, chain= outermost-first, <s n= t= l= el=> spans
-… [675 more display lines; full output is 68656 bytes on 705 raw line(s)]
+… [689 more display lines; full output is 70130 bytes on 719 raw line(s)]
 `````
 
 ## `./build/ripwire . --lint --lint-select=cache-`
@@ -6553,7 +6553,7 @@ src/infra/sortutil.h::rw::sortutil::lessByScoreDescId	2026-09-14	chose the flat 
 
 `````
 <ctx root="." est_tokens="963">
-<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 8 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
+<!-- a body's sibs="a,b,..." sibs_total=N are the file's OTHER indexed symbols (this body's own name excluded), source order, capped at 100 (sibs_capped="1" when the cap fired); inc="x.h,..." inc_total=N are the file's own #include/import targets, source order, capped at 24 (inc_capped="1" when the cap fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls child (1-hop callee signatures) carries total=/shown=/capped="1" the usual way: capped="1" only when shown is below total. A body's CDATA is the bytes on disk unless the element says otherwise: scrubbed="1" = a ]]> was split (]]]]>
 <![CDATA[>, rejoin it) or a C0/invalid-UTF-8 byte was replaced; redacted="1" = a credential shape was rewritten to a [REDACTED:kind] marker (the no-redact flag serves the bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already do, so source that spel … [line truncated: 59 more bytes on this line]
 <bodies shown="1" total="1" capped="0">
 <b t="fn" l="49" p="src/infra/sortutil.h" n="lessByScoreDescId" sibs="svLess,radixSortUint32ByKey,nonNegativeFloatDescKey,nonNegativeFloatAscKeyCopy,sortScoredIdsWithOptions,radixSortNonNegativeFloatsDesc,scratch,radixSortByScoreDescId,radixSortByScoreDescId,radixSortIdsAscending,lessByFromTo,radixS … [line truncated: 134 more bytes on this line]

@@ -285,8 +285,9 @@ const char* grepTierLegend( const rw::GrepTierReport& tier )
            "suppressed_comment=/suppressed_string= are the classified hits held back: not in hits=, and the "
            "reason complete= cannot appear. Pass grep-in=any (dashes omitted) for every tier. Hit files are parsed on demand "
            "under a fixed budget: tier_parsed= how many were classified, tier_budget= which ceiling stopped it (files or bytes, "
-           "present only then — and the root then also carries counts_floor=\"1\": the tier counts are floors while hits= stays "
-           "exact and every row is served), tier_unclassified= hits in files nothing classified — always EMITTED, never suppressed. ";
+           "present only then, beside tier_files= the hit files it had to cover — and the root then also carries counts_floor=\"1\": "
+           "the tier counts are floors while hits= stays exact and every row is served), tier_unclassified= hits in files nothing "
+           "classified — always EMITTED, never suppressed. ";
 }
 
 // Present only when this answer actually held something back or stopped short — absent-means-nothing-was-
@@ -340,7 +341,11 @@ std::string grepTierAttrs( const rw::GrepTierReport& tier, bool floorAlreadyEmit
     attrs += " tier_unclassified=\"" + std::to_string( tier.unclassifiedHits ) + "\"";
     if( tier.budgetHit != nullptr )
     {
-        attrs += std::string( " tier_budget=\"" ) + tier.budgetHit + "\"" + ( floorAlreadyEmitted ? "" : rw::kGraphCountFloorAttrXml );   // N2: the floor rides with its cause
+        // tier_files= (cut-fix lane D): the TOTAL beside tier_parsed='s shown. tier_budget= named WHICH ceiling cut the
+        // classification but never how much it left, and files= cannot stand in for it (it counts files AFTER suppression,
+        // so a file whose every hit was held back is in tier_parsed= and not in files=). ~16 B, only on a budgeted answer.
+        attrs += std::string( " tier_budget=\"" ) + tier.budgetHit + "\" tier_files=\"" + std::to_string( tier.hitFileCount ) + "\""
+               + ( floorAlreadyEmitted ? "" : rw::kGraphCountFloorAttrXml );   // N2: the floor rides with its cause
     }
     return attrs;
 }

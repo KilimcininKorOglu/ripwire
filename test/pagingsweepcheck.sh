@@ -706,7 +706,7 @@ TABLE = {
     "--graph-query":        ( [ '--graph-query=name("main")' ], None ),
     "--stray-content":      ( [ "--stray-content" ], None ),
     "--test-gate":          ( [ "--test-gate" ], "untested" ),
-    "--readability":        ( [ "--readability" ], None ),
+    "--biggest-first":      ( [ "--biggest-first" ], None ),
     "--ensemble":           ( [ "--ensemble" ], "syms" ),
     "--quality-panel":      ( [ "--quality-panel" ], "syms" ),
     "--context-ratio":      ( [ "--context-ratio" ], "syms" ),
@@ -813,6 +813,60 @@ else:
     print( "  FAIL  (L) mutation: the quintet assertion cannot see a bare capped root" ); fail = 1
 sys.exit( fail )
 PYL
+[ $? = 0 ] || fail=1
+
+# ── (M) --clones: walking next_offset from the BARE run returns every group exactly once ────────────────────
+# 2026-09-24 (cut-fix correctness). The bare run serves the two per-list heads, cg[0,40) + cg3[0,40), and says
+# next_offset="80" — but --offset addressed ONE flat stream (all Type-1/2 groups, then all Type-3), so with more
+# than 40 Type-1/2 groups, --offset=80 landed at cg[80]: cg[40,80) was served by no page, and the Type-3 head was
+# served twice once the walk crossed the seam. The stream is now ordered so the bare run IS its prefix. Fixture:
+# 45 structurally distinct exact-clone pairs (so cg > 40) whose neighbours are also Type-3 near-misses (cg3 > 40).
+# A row's identity is its type plus its member list. Also walks the --limit loop from offset 0 (never broken, kept
+# as the control: both loops must agree on the SET).
+echo "--- (M) --clones: bare run + next_offset pages = every group exactly once ---"
+CLFIX="$TMP/clonepages"; mkdir -p "$CLFIX"
+python3 - "$CLFIX" <<'PYGEN'
+import sys
+ops = [ "+", "-", "*", "//", "%", "&", "|", "^" ]
+for k in range( 45 ):
+    body = "    v0 = 0\n" + "".join( f"    v{i} = v{i-1} {ops[i % 8]} {i}\n" for i in range( 1, 10 + k ) )
+    with open( f"{sys.argv[1]}/g{k:02d}.py", "w" ) as f:
+        for c in "ab":
+            f.write( f"def g{k:02d}{c}():\n{body}    return v0\n\n" )
+PYGEN
+python3 - "$BIN" "$CLFIX" <<'PYM'
+import re, subprocess, sys
+BIN, FIX = sys.argv[1], sys.argv[2]
+def run( *extra ):
+    doc = subprocess.run( [ BIN, FIX, "--clones", "--no-cache" ] + list( extra ), capture_output=True, text=True, errors="replace", timeout=300 ).stdout
+    root = re.search( r'<clones [^>]*>', doc )
+    attrs = dict( re.findall( r'(\w+)="([^"]*)"', root.group( 0 ) ) ) if root else {}
+    rows = [ m.group( 1 ) + "|" + ",".join( re.findall( r'<f n="([^"]*)"', m.group( 2 ) ) )
+             for m in re.finditer( r'<group type="(\d)"[^>]*>(.*?)</group>', doc ) ]
+    return attrs, rows
+fail = 0
+bare, rows = run()
+groups, type3 = int( bare.get( "groups", 0 ) ), int( bare.get( "type3", 0 ) )
+if groups <= 40 or type3 <= 40:
+    print( f"  FAIL  (M) fixture broken: groups={groups} type3={type3}, both must exceed the 40-row per-list head" ); sys.exit( 1 )
+total, walked, nxt, pages = int( bare[ "total" ] ), list( rows ), bare.get( "next_offset" ), 0
+while bare.get( "has_more" ) == "1" and pages < 50:
+    bare, more = run( f"--offset={nxt}", "--limit=40" ); walked += more; nxt = bare.get( "next_offset" ); pages += 1
+if len( walked ) == total and len( set( walked ) ) == total:
+    print( f"  PASS  (M) bare run + {pages} next_offset page(s) returned all {total} groups, each exactly once" )
+else:
+    print( f"  FAIL  (M) bare run + {pages} page(s): {len( walked )} rows, {len( set( walked ) )} distinct, total={total} — groups skipped or served twice" ); fail = 1
+limited, off, pages = [], 0, 0
+while pages < 50:
+    a, more = run( "--limit=40", f"--offset={off}" ); limited += more; pages += 1
+    if a.get( "has_more" ) != "1": break
+    off = int( a[ "next_offset" ] )
+if len( limited ) == total and len( set( limited ) ) == total and ( fail or set( limited ) == set( walked ) ):
+    print( f"  PASS  (M) the --limit=40 loop from offset 0 returns all {total} groups, each once, in {pages} page(s)" )
+else:
+    print( f"  FAIL  (M) the --limit=40 loop returned {len( limited )} rows ({len( set( limited ) )} distinct) vs total={total}" ); fail = 1
+sys.exit( fail )
+PYM
 [ $? = 0 ] || fail=1
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

@@ -224,7 +224,7 @@ declare -a VERBS=(
     "comment-coherence|--comment-coherence"
     "nonlocal-state|--nonlocal-state"
     "naming-consistency|--naming-consistency"
-    "readability|--readability"
+    "biggest-first|--biggest-first"
     "dead-code|--dead-code"
     "field-affinity|--field-affinity"
     "deps|--deps"

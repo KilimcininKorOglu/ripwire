@@ -39,6 +39,30 @@ inline bool isIdentChar( char c ) noexcept
 // ...and the same minus the digits: what may START an identifier.
 inline bool isIdentStart( char c ) noexcept { return isIdentChar( c ) && !( c >= '0' && c <= '9' ); }
 
+// rv-test-gate-tsjs: the ONE "find `word` in `text`, bounded on both sides by a byte `isWordByte` says NO
+// to" scan — planlint.h::containsWholeWord and jsrunner.h::detail::matchesWord both needed exactly this
+// walk (--quality-delta's duplication kind found the pair), over two DIFFERENT boundary predicates
+// (identifier bytes only, vs. identifier bytes plus '-' for a hyphenated CLI/npm token like
+// "jest-report-cleaner.js", which the two callers genuinely disagree about) — the WALK is shared, the
+// predicate stays each caller's own, the same shape src/infra/dirwalk.h already uses for its own pair.
+template<class IsWordByte>
+inline bool containsWordBoundedBy( std::string_view text, std::string_view word, IsWordByte isWordByte )
+{
+    std::size_t pos = 0;
+    while( ( pos = text.find( word, pos ) ) != std::string_view::npos )
+    {
+        const bool leftOk = pos == 0 || !isWordByte( text[pos - 1] );
+        const std::size_t end = pos + word.size();
+        const bool rightOk = end >= text.size() || !isWordByte( text[end] );
+        if( leftOk && rightOk )
+        {
+            return true;
+        }
+        ++pos;
+    }
+    return false;
+}
+
 // the head of `f` before its trailing BALANCED `open…close` group, or `f` unchanged when there is no such
 // group or stripping it would eat the name itself. ONE scan for both delimiter pairs (call signatures and
 // template arguments), so the two strippers below can never drift apart. Guards, in order: nothing to strip

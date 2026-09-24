@@ -1051,7 +1051,7 @@ The structural family's `nest=` reports the single deepest line in a function. O
 a thousand lines at depth 9 produce the same number — which means a long **blocked-sequential** body (a
 run of shallow scoped steps, its max set by one inner loop nobody has to hold in their head) is
 indistinguishable from a **tangled** one that sustains depth for hundreds of lines. Every consumer of
-`nest=` inherited that blindness: the panel's structural family, `--readability`'s rank, the ensemble join.
+`nest=` inherited that blindness: the panel's structural family, `--biggest-first`'s rank, the ensemble join.
 
 `--metrics` now emits the **profile** beside the max — `humps=` (how many maximal regions reach the
 nesting bar, CodeScene's "bumpy road": a rise above the threshold then a fall, so repeated missing
@@ -1097,7 +1097,7 @@ stated reason, not an oversight:
 | --- | --- | --- | --- |
 | `--field-affinity` | which struct fields are read together but declared far apart; each loop's access shape (index vs pointer-chase) | its subject is a **type**, not a function — attributing a struct's finding to the functions touching it is a claim the lens never makes | `MainDispatch`: **12** findings at separation cost **92.88**; **1,374** loops classified, **5** genuine pointer-chases |
 | `cache-*` lint rules + `--with-profile` | cache-hostile access shapes (alloc-in-loop, `p=p->next`, `a[b[i]]`, node containers, …), then which are *measured* hot | rows are facts about **sites**, joined to per-scope hardware counters — not per-function evidence a family vote could count | aggressive rules: **0** hits in shipping `src/`; **327** findings adversarially triaged → **0** fix-worthy; the one open refactor settled by measurement (5.2 ms) |
-| `--readability` | orders by Halstead volume, Posnett sigmoid (a size proxy — the readability-ordering claim is withdrawn) | the fitted score **saturates past 20 lines** — only the ordering is meaningful, and an ordering cannot vote in a count | ordering only, never a grade |
+| `--biggest-first` (was `--readability`) | orders by Halstead volume, Posnett sigmoid (a size proxy — the readability-ordering claim is withdrawn) | the fitted score **saturates past 20 lines** — only the ordering is meaningful, and an ordering cannot vote in a count | ordering only, never a grade |
 | `--naming-consistency` | off-convention names, each with a computed `propose=` | the one lens that emits **advice** — a fix is not evidence, so it does not vote | camelCase dominant at **93.0%**; **136** names flagged with proposals |
 | `--lint --naming-locals` | the naming rules pointed at local variables inside already-flagged functions | **opt-in and unvalidated** — stays outside any join until a real-corpus audit clears it (the withdrawn-rule lesson) | +**973** findings that were structurally invisible before |
 
@@ -1151,7 +1151,8 @@ rather than blurring it:
   measured run — **5.2 ms, 5.9% of the verb** — a wasted afternoon prevented by a number
   ([`docs/CACHELINT.md`](docs/CACHELINT.md) holds the full catalog, the wave-2 specs, and the
   compiler-handled myths deliberately *not* checked).
-- **`--readability`** is a sibling lens, not a panel family either — the one classic model in the tree
+- **`--biggest-first`** (renamed from `--readability`, which still works — a stderr note points scripts at
+  the new spelling) is a sibling lens, not a panel family either — the one classic model in the tree
   with a published closed form: Halstead volume (Halstead, *Elements of Software Science*, 1977) and
   the Posnett/Hindle/Devanbu sigmoid fit (MSR 2011, [doi:10.1145/1985441.1985454](https://doi.org/10.1145/1985441.1985454)),
   fitted on snippets of 20 lines or fewer — past that the fitted score saturates and only the
@@ -1159,7 +1160,7 @@ rather than blurring it:
   grade. Halstead's volume specifically (not the later, less-trusted difficulty/effort derivatives) is
   among the metrics shown to track measured cognitive load directly (Peitek, Apel, Parnin, Brechmann &
   Siegmund, ICSE 2021, [doi:10.1109/ICSE43902.2021.00056](https://doi.org/10.1109/ICSE43902.2021.00056)) —
-  `--readability` emits volume and stops there; difficulty and effort are computed nowhere in this
+  `--biggest-first` emits volume and stops there; difficulty and effort are computed nowhere in this
   tree. **A ranking lens, never a grade, and here is what it actually orders:** on ripwire's own
   history at the pinned `v0.6.2` tag (412 function pairs mined from 80 refactor/simplify/cleanup
   commits), the order between two versions of a function followed the sign of its token-count change
@@ -1174,7 +1175,7 @@ rather than blurring it:
   (CIs include 1), so the order this verb produces is better explained as a residual size proxy,
   measured in the lens's own units, than as an independent readability signal (derivation:
   [`docs/EVALS.md` §8](docs/EVALS.md)). The lens's computation is unchanged pending a proper human
-  study, and `--help=--readability` carries the same figures where a CLI reader meets them.
+  study, and `--help=--biggest-first` carries the same figures where a CLI reader meets them.
 - **`--naming-consistency`** is the *lexical* family's one exception to "evidence, never advice": every
   other lens in this panel tells you WHAT is wrong, never a computed fix. Case-style consistency is
   the one property with a corpus-derivable answer — on this repository's `src/`, camelCase is the
@@ -1346,8 +1347,20 @@ $ ripwire . --test-gate          # exit code: 4
 ```
 
 A `run=` attribute appears only when a runner is derivable from real evidence — a test-dir script
-whose stem matches the harness, or whose text names it. A row with none says so — `run_unknown="1"`,
-never a guessed suite command — and a `<t>` or `<g>` row carries one or the other, never neither. A
+whose stem matches the harness, or whose text names it; for TypeScript/JavaScript, a file already
+recognized as test code (`test/`/`tests/`/`__tests__/`, or a `_test./.test./_spec./.spec.` name — the
+`__tests__/` directory convention is shared with every language, the rest are TS/JS's own) whose name
+ALSO matches vitest/jest's own test-name shape (`.test.`/`.spec.`, or living under `__tests__/` at
+all, jest's own two default conventions — never a `.d.ts` declaration file) — whose nearest
+`package.json` names `vitest`, `jest`, or node's own test runner. Its own `package.json` is
+AUTHORITATIVE for the whole subtree below it: a non-empty, non-placeholder `scripts.test` entry
+decides the runner (or decides none — a same-named dependency never overrides it, whether that
+dependency sits in the same manifest or a parent one), and only a manifest with NEITHER a real
+`scripts.test` NOR a `vitest`/`jest` dependency is skipped in favour of one further up. A TS/JS file
+with no manifest evidence of its own still falls back to the SAME test-dir shell/Python driver search
+every other language uses — a named driver beats an
+unguessed default. A row with none says so — `run_unknown="1"`, never a guessed suite command — and a
+`<t>` or `<g>` row carries one or the other, never neither. A
 `<g hops="2" n="3" p="a,b,c" run_unknown="1"/>` row is **two or more contiguous runner-less rows whose
 attributes are byte-identical**, served as one: `n=` is how many, `p=` is their paths verbatim in list
 order, and the disclosure is paid once per group rather than once per row. Everything else stays its own
@@ -1358,7 +1371,19 @@ over these rows counts test FILES: a `<g>` row is `n=` of them.
 `script_gates_unmodelled="332"` is the same discipline: script-to-binary is not a call edge, so those
 gates are invisible to this walk, and the number says so rather than letting `tests="2"` read as
 complete. The `<u>` rows are the untested blast radius: impacted symbols that no test in the corpus
-reaches.
+reaches — never a file's own `<file-scope>` module scope (a top-level statement or anonymous-callback
+body), since nothing in any language can name it and no test could ever be written for it; it still
+counts toward `impacted=` when it is a real caller in the blast radius, just never as an obligation.
+Those excluded owners are counted, not dropped without a trace: `untested_modscope="N"` (always
+present, alongside `untested=`) says how many, so a change whose only reader is an untestable
+entrypoint discloses why `untested=` reads zero instead of looking like there was nothing to find.
+
+A TS/JS `run_unknown="1"` can mean the manifest genuinely names nothing recognized, or it can mean a
+real runner this tool does not yet derive: node's own test runner invoked through `tsx` (a common way
+to run it against `.ts` files), `bun`'s test runner, and node's test runner against a `.ts` file on a
+node version too old to strip TypeScript types natively. These stay an honest unknown rather than a
+guess; `pnpm`/`yarn`-prefixed test scripts derive correctly today (spelled `npx …`, which finds a
+local binary first).
 
 </details>
 

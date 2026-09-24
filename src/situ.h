@@ -1074,6 +1074,10 @@ struct TestGateResult
     std::vector<std::uint32_t> tests;                 // the same rows as file ids, same order — the --affected answer
     ShellGateIndex             shellGates;            // registered shell gates with exact dependency evidence
     std::vector<NodeId>        untested;              // impacted symbols reached by NO test (ccx desc, file asc, name asc)
+    // rv-test-gate-tsjs F3: <file-scope> owners #324 excludes from `untested` above, counted rather than
+    // silently dropped — a real obligation (a module scope no test reaches) must not read as exit 0 with
+    // nothing to say why. Still counted in impactedSymbols; see writeTestGateReport's reconciliation note.
+    std::size_t                untestedModscope = 0;
     bool                       hasObligations  = false; // !tests.empty() || !untested.empty()
 };
 
@@ -1126,9 +1130,16 @@ inline TestGateResult computeTestGateFor( const IngestResult& ing, const Graph& 
             continue; // the changed symbols are the change, not its radius
         }
         ++r.impactedSymbols;
+        // #324: a <file-scope> (ModuleScope) owner can be a real CALLER in the blast radius (a top-level
+        // statement or anonymous-callback body calling the changed symbol) — it still counts toward
+        // impacted= above — but it is never listed as an UNTESTED obligation: nothing in any language can
+        // name it, so no test can ever be written FOR it, and a row an agent can never discharge is not an
+        // obligation, it is a permanent false alarm. model.h::isUntestableOwner is the ONE predicate this and
+        // flipimpact.h's own untested-hosts loop both apply, so the exclusion cannot drift between the two.
         if( !isTestPath( rootRelPath( ing, f ) ) && !testReach[n] )
         {
-            r.untested.push_back( n );
+            // rv-test-gate-tsjs F3: counted, never silently dropped.
+            if( isUntestableOwner( ing.symbols[n].kind ) ) { ++r.untestedModscope; } else { r.untested.push_back( n ); }
         }
     }
     r.testRows = rankTestRows( ing, reach, gateDepth, &isChangedSym, gateSplit.src, gateSplit.tests );
@@ -1261,6 +1272,20 @@ inline void walkUntestedRows( const IngestResult& ing, const TestGateResult& r, 
 // that MUST survive verbatim (test/testgatecheck.sh arm (g)): "UNIT: untested= here counts impacted
 // SYMBOLS", "call EDGES", "defs a gate lights" — the §B12.5 cross-verb unit-collision disclosure this verb
 // shares with --seams and --flip. docs/EVALS.md §5 has the measured before/after byte table.
+// rv-test-gate-tsjs F3: untested_modscope=N is ALWAYS present (like changed=/impacted=/tests=/untested=
+// beside it) — a reader comparing runs needs to tell "0 excluded" from "this build predates the count", and
+// an absent-when-zero convention cannot. The FULL clause is still G4-gated on N>0, since it costs real bytes and
+// a document with nothing excluded has nothing to explain; at N=0 a one-line definition rides instead, because the
+// attribute is on the root either way and a full legend must define every attribute it prints (CodeRabbit on #331:
+// the first-screen gap this used to leave was recorded in test/legendcoverage_baseline.txt, a downward-only file).
+inline constexpr const char* kUntestedModscopeLegend =
+    "untested_modscope=N counts <file-scope> owners excluded from untested= (#324: uncallable, so untestable) "
+    "— still in impacted=, a real caller. tests= counts FILES not symbols, so impacted != "
+    "tests+untested+untested_modscope in general; read this as the excluded count alone, not a sum term. ";
+inline constexpr const char* kUntestedModscopeZeroLegend =
+    "untested_modscope=0: no <file-scope> owner excluded from untested= (#324). ";
+inline const char* untestedModscopeLegend( bool on ) noexcept { return on ? kUntestedModscopeLegend : kUntestedModscopeZeroLegend; }
+
 inline constexpr const char* kTestGateLegend =
     "ripwire test-gate (TDAD-parity, arXiv 2603.17973, -70% agent-caused regressions): tests to run for this "
     "change + the UNTESTED blast radius; exit 4 if tests OR untested is non-empty, else run them and rely on "
@@ -1367,18 +1392,15 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     const bool        tgHasRows  = ( testRows > 0 || !r.untested.empty() );
     const std::string tgRootAttr = ( root.empty() || !tgHasRows ) ? std::string() : ( " root=\"" + ex( root ) + "\"" );
     // H2H-Graft F1: the evidence clause (testmap.h's ONE wording) rides the rows-gated half, like the run= rule.
-    // #60: exactly when a module-scope owner is one of the untested rows this report prints (it can never
-    // be a <t> test row — a test file's module scope is a caller, and the test rows are files).
-    // CodeRabbit 4057546105: "prints" is `[uw.begin, uw.end)`, which is what walkUntestedRows below emits —
-    // NOT all of r.untested. Scanning the whole set made a page with no owner on it pay for the reading
-    // anyway, which is the same paid-for-nothing defect this round already fixed for --for. The window is
-    // computed above and reused here so the predicate and the emitter cannot drift apart.
-    const bool tgHasModScope = std::any_of( r.untested.begin() + uw.begin, r.untested.begin() + uw.end,
-                                            [ & ]( NodeId n ) { return n < ing.symbols.size() && ing.symbols[ n ].kind == SymKind::ModuleScope; } );
+    // #324: a module-scope owner (<file-scope>) can no longer be one of the untested rows this report prints
+    // — computeTestGateFor excludes it (model.h::isUntestableOwner) before r.untested is even built, so there
+    // is no t="modscope" shape left for a reader of THIS listing to meet and no legend clause to spend bytes
+    // on here. (It remains a legitimate CALLER row elsewhere — --callers/--impact/--for still carry
+    // rw::modScopeLegend for their own t="modscope" rows; this document has none of those, only <u> rows.)
     rw::emitTo( out, "<!-- {}{}{}{}{}{}-->{}", kTestGateLegend,
                   tgHasRows ? kTestGateRowLegend : "", std::string_view( kTestRowEvidenceLegend.data(), tgHasRows ? int( kTestRowEvidenceLegend.size() ) : 0 ),
                   runHintClauseIfRows( testRows, runsAreRootRelative( ing, root ) ),   // the ONE gate: this clause is about <t> rows, so an untested-only report pays nothing
-                  rw::modScopeLegend( tgHasModScope ),                // #60: exactly when a t="modscope" row is
+                  untestedModscopeLegend( r.untestedModscope > 0 ),   // F3: the full clause at N>0, a one-line definition at 0
                   rw::graphUnindexedLegend( g.unindexedFiles > 0 ),   // #66: exactly when the root carries the attribute
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where
@@ -1391,11 +1413,11 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     // sibling untested_capped="0" is pinned by test/testgatepagecheck.sh (a') and test/impactpartitioncheck.sh:
     // dropping one half of a documented pair is a new inconsistency, not a fix for this one.
     const std::size_t shownTests = r.testRows.size() + r.shellGates.obligations.size();
-    rw::emitTo( out, "<test-gate changed=\"{}\" impacted=\"{}\" tests=\"{}\" untested=\"{}\""
+    rw::emitTo( out, "<test-gate changed=\"{}\" impacted=\"{}\" tests=\"{}\" untested=\"{}\" untested_modscope=\"{}\""
                        " shown_tests=\"{}\" tests_capped=\"{}\" shown_untested=\"{}\" untested_capped=\"{}\""
                        " script_gates_unmodelled=\"{}\" script_gates_registered=\"{}\" script_gates_mapped=\"{}\""
                        " script_gates_unresolved_dynamic=\"{}\" ccx_bar=\"{}\"{}{}{}{}{}>",
-                  r.changedFiles, r.impactedSymbols, testRows, r.untested.size(),
+                  r.changedFiles, r.impactedSymbols, testRows, r.untested.size(), r.untestedModscope,
                   shownTests, shownTests < testRows ? 1 : 0, shownRows, shownRows < r.untested.size() ? 1 : 0,
                   scriptGatesUnmodelledCount( ing ),
                   r.shellGates.registered, r.shellGates.mapped, r.shellGates.unresolvedDynamic, kTestGateCcxBarMirror,   // P8 (L7): ccx_bar=
@@ -1459,11 +1481,11 @@ inline void writeTestGateReportJson( std::FILE* out, const IngestResult& ing, co
     const std::string  tgJRootJson = ( root.empty() || !tgJHasRows ) ? std::string() : ( ",\"root\":\"" + jsonStr( root ) + "\"" );
     // The XML twin's derived pair, mirrored key-for-key: "tests_capped":false was a literal here too.
     const std::size_t shownTestsJ = r.testRows.size() + r.shellGates.obligations.size();
-    rw::emitTo( out, "{{\"changed\":{},\"impacted\":{},\"tests\":{},\"untested\":{}"
+    rw::emitTo( out, "{{\"changed\":{},\"impacted\":{},\"tests\":{},\"untested\":{},\"untested_modscope\":{}"
                        ",\"shown_tests\":{},\"tests_capped\":{},\"shown_untested\":{},\"untested_capped\":{}"
                        ",\"script_gates_unmodelled\":{},\"script_gates_registered\":{},\"script_gates_mapped\":{}"
                        ",\"script_gates_unresolved_dynamic\":{},\"ccx_bar\":{}{}{},\"at\":{}{}{},\"tests_to_run\":[",
-                 r.changedFiles, r.impactedSymbols, testRows, r.untested.size(),
+                 r.changedFiles, r.impactedSymbols, testRows, r.untested.size(), r.untestedModscope,
                  shownTestsJ, shownTestsJ < testRows ? "true" : "false", shownRows,
                  shownRows < r.untested.size() ? "true" : "false",
                  scriptGatesUnmodelledCount( ing ), r.shellGates.registered, r.shellGates.mapped, r.shellGates.unresolvedDynamic, kTestGateCcxBarMirror,

@@ -468,6 +468,35 @@ else
     no "(9) no fixture ledger to strip — arm 8's --quality-ack produced none"
 fi
 
+# ── (9h) HEAL SURVIVES A REFUSED --ack-only (M1 follow-up, rv-ack-provenance-backfill.md) ────────────────
+# backfillCloneAckProvenance runs BEFORE --ack-only's selection and BEFORE the "matched none" refusal — so a
+# refusal used to discard the healing this run already computed in memory along with the (correctly) refused
+# acceptance. `--ack-only=zzz-no-such-finding` matches nothing in this fixture on purpose: the run must still
+# exit 1 (nothing was ACCEPTED — the refusal itself is unchanged) but the ledger must come out healed anyway,
+# the same canonical-bytes heal H10's ackNothingToAccept already performs when there is nothing to accept at
+# all. RED on the pre-fix binary: it returns 1 before ever calling writeAckRecords, so the stripped-legacy
+# fixture ledger is byte-IDENTICAL to what strip_prov produced — no prov=recon anywhere.
+BFH="$WORK/backfillheal"; cp -R "$PROV" "$BFH" 2>/dev/null
+if [ -f "$BFH/.ripwire_quality_acks" ]; then
+    strip_prov "$BFH/.ripwire_quality_acks"
+    ( cd "$BFH" && "$BIN" . --quality-delta --ack-only=zzz-no-such-finding --quality-ack="heal-only probe" >/dev/null 2>"$WORK/bfh.err" )
+    BFH_RC=$?
+    if [ "$BFH_RC" != 1 ]; then
+        no "(9h) --ack-only=zzz-no-such-finding did not refuse (exit $BFH_RC) — the refusal itself must be unchanged"
+    else
+        ok "(9h) a refused --ack-only still exits 1 — nothing was ACCEPTED"
+    fi
+    case "$( grep '^ack duplication ' "$BFH/.ripwire_quality_acks" 2>/dev/null )" in
+        *" prov=recon "*) ok "(9h) …but the ledger was healed anyway — the backfill this run computed survives a refused --ack-only" ;;
+        *)                no "(9h) the refusal discarded the in-memory backfill — the ledger is still legacy after a matched-none --ack-only"; printf '%s\n' "$( grep '^ack duplication ' "$BFH/.ripwire_quality_acks" 2>/dev/null )" ;;
+    esac
+    grep -q 'matched none' "$WORK/bfh.err" \
+        && ok "(9h) …and the refusal still says so on stderr" \
+        || no "(9h) the refusal stopped naming --ack-only's own reason"
+else
+    no "(9h) no fixture ledger to strip — the shared PROV fixture produced none"
+fi
+
 # ── (9f) THE LEDGER-TEXT ROUND TRIP ───────────────────────────────────────────────────────────────────
 # The write-path ENSURES re-scores the in-memory AckRecord right after it is built; it never goes through
 # renderAckRecords/readAckRecords, so it cannot catch a SERIALISATION or PARSING bug — see the corrected
@@ -491,9 +520,10 @@ cat > "$RT/.ripwire_quality_acks" <<'EOF'
 # ripwire quality acks v1 — hand-written fixture
 ack duplication 1111111111111111 7 now=7 was=0 prov=recon facet=threshold-ladder canonical order
 ack duplication 2222222222222222 7 facet=switch-name-table was=0 now=7 prov=recon permuted order
-ack duplication 3333333333333333 7 now=7 was=0 prov=from-the-future facet=builder-chain unknown prov value
+ack duplication 3333333333333333 7 now=7 was=0 prov=from-the-future facet=builder-chain unknown prov value, clone kind, group not in this tree
 ack complexity  4444444444444444 9 now=9 half a pair: the second token is absent
 ack complexity  5555555555555555 9 now=9 was=2 p=src/a:b/c.py:41 colon inside the path
+ack complexity  6666666666666666 9 now=9 was=2 prov=weird unknown prov value, numeric kind — never eligible for the backfill
 EOF
 ( cd "$RT" && "$BIN" . --quality-delta --quality-ack="round-trip probe" >/dev/null 2>&1 )
 rt_row(){ grep "^ack [a-z-]* $1 " "$RT/.ripwire_quality_acks" 2>/dev/null; }
@@ -511,12 +541,31 @@ case "$( rt_row 2222222222222222 )" in
     *" now=7 was=0 prov=recon facet=switch-name-table "*) ok "(9f) a PERMUTED token order is read and re-emitted in canonical order, losing no field" ;;
     *) no "(9f) a permuted token order lost or reordered a field on rewrite"; printf '%s\n' "$( rt_row 2222222222222222 )" ;;
 esac
-# An unknown prov= must degrade to the WEAKER confidence. Reading it as Measured would silently promote a
-# spelling this binary does not understand into the audited-as-measured population.
+# An unknown prov= must never be promoted into either real claim. Reading it as Measured would silently
+# promote a spelling this binary does not understand into the audited-as-measured population; reading it as
+# Reconstructed (rewriting it to prov=recon, the pre-fix bug — review finding L3) FALSELY claims
+# backfillCloneAckProvenance verified this row from the current tree, which it did not: this key's member set
+# is not in the fixture tree at all (RED on the pre-fix binary, which reads any unrecognized value as
+# Reconstructed and then leaves it exactly that way when the group is not found — see the "unverified" arm
+# above for the same not-found path on a value it DID recognize). GREEN: the exact bytes round-trip.
 case "$( rt_row 3333333333333333 )" in
-    *" prov=recon "*) ok "(9f) an unrecognized prov= value degrades to reconstructed — never promoted to measured" ;;
-    *" now="*)        no "(9f) an unrecognized prov= was read as MEASURED — an unknown confidence must never become the strongest one"; printf '%s\n' "$( rt_row 3333333333333333 )" ;;
-    *) no "(9f) the unknown-prov row lost its provenance entirely"; printf '%s\n' "$( rt_row 3333333333333333 )" ;;
+    *" prov=from-the-future "*) ok "(9f) an unrecognized prov= value on a clone-kind row round-trips verbatim when its group is not found here — never promoted to measured, never rewritten to recon" ;;
+    *" prov=recon "*)           no "(9f) an unrecognized prov= value was rewritten to prov=recon — a false claim of a reconstruction this run never performed (L3)"; printf '%s\n' "$( rt_row 3333333333333333 )" ;;
+    *" now="*)                  no "(9f) an unrecognized prov= was read as MEASURED — an unknown confidence must never become the strongest one"; printf '%s\n' "$( rt_row 3333333333333333 )" ;;
+    *)                          no "(9f) the unknown-prov row lost its provenance entirely"; printf '%s\n' "$( rt_row 3333333333333333 )" ;;
+esac
+# THE L3 REPRO, verbatim: an unrecognized prov= on a NUMERIC row (never eligible for the clone backfill at
+# all — base != duplication/new-clone-of-reused-helper short-circuits to `ineligible` before the clone lookup
+# even runs) must round-trip exactly as written. RED on the pre-fix binary: ackProvenanceFor mapped ANY
+# unrecognized token to Reconstructed unconditionally, and ineligible rows are left untouched by the backfill
+# loop, so the row kept that (wrong) Reconstructed state and renderAckRecords serialized it as the canonical
+# `prov=recon` — a numeric row silently gained a claim the code comment two lines above it says only the two
+# clone kinds can ever earn.
+case "$( rt_row 6666666666666666 )" in
+    *" prov=weird "*) ok "(9f) an unrecognized prov= value on a NUMERIC row round-trips verbatim (L3: never rewritten to recon on an ineligible kind)" ;;
+    *" prov=recon "*) no "(9f) L3 REGRESSION: a numeric row's unrecognized prov= was rewritten to prov=recon — the ledger now falsely claims a clone-idiom reconstruction on a kind the backfill never touches"; printf '%s\n' "$( rt_row 6666666666666666 )" ;;
+    *" now="*)        no "(9f) an unrecognized prov= on a numeric row was read as MEASURED — an unknown confidence must never become the strongest one"; printf '%s\n' "$( rt_row 6666666666666666 )" ;;
+    *)                no "(9f) the numeric unknown-prov row lost its provenance entirely"; printf '%s\n' "$( rt_row 6666666666666666 )" ;;
 esac
 # now= without was= is half the pair rescoreAckRecord needs; it must read as NO provenance rather than as a
 # half-answer, so the rewrite carries neither token and the stray text stays in the reason.
