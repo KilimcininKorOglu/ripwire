@@ -213,7 +213,7 @@ its behaviour, and records the negative under `## Results` — the round A rule,
 The hypothesis, from `slice-line-recall.md` R5: under a budget smaller than the function, delivering
 ranked *lines* puts more of the answer in front of the agent than delivering the whole body truncated (32.1%
 against 17.6% of gold lines at 512 bytes, n = 150 bodies that did not fit; +10.0 pp from filtering alone, a
-further +4.4 pp from ordering; the gap closes by 4 KB and the ordering gain was *negative* at 2 KB). The
+further +4.4 pp from ordering; the gap narrows to +5.0 pp at 4 KB (n = 51) and the ordering gain was *negative* at 2 KB). The
 limit, from the same note: 70.8% of that corpus's gold lines are in fixes that touch more than one function,
 which no within-function granularity can reach, and directed cross-function reach recovers 6.14% of that
 ceiling — killed at the 20% line. So the lever is real, small-budget, within-function, and worth nothing if
