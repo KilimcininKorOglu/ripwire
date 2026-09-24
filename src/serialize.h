@@ -5135,9 +5135,14 @@ inline std::vector<NodeId> calleeWalkOrder( NodeId id, const std::vector<std::ui
 // order on ripwire and mypy, above it on scrapy and sqlglot, below this order on all four but scrapy's reachable
 // (31.0 vs 29.5). The score is 1/count, so equal counts compare equal and calleeWalkOrder's node-id tie-break decides —
 // a total order, byte-stable.
+// the callable kinds as one declarative bit table over SymKind (the house's table-over-switch rule)
+inline constexpr std::uint32_t kCallableKindBits = ( 1u << unsigned( SymKind::Function ) ) | ( 1u << unsigned( SymKind::Method ) )
+                                                 | ( 1u << unsigned( SymKind::Class ) ) | ( 1u << unsigned( SymKind::Struct ) )
+                                                 | ( 1u << unsigned( SymKind::Macro ) );
+static_assert( kSymKindCount <= 32, "kCallableKindBits holds one bit per SymKind" );
 inline bool isCallableKind( SymKind k ) noexcept
 {
-    return k == SymKind::Function || k == SymKind::Method || k == SymKind::Class || k == SymKind::Struct || k == SymKind::Macro;
+    return ( ( kCallableKindBits >> unsigned( k ) ) & 1u ) != 0u;
 }
 
 inline std::vector<float> calleeNameSpecificity( const IngestResult& ing )
