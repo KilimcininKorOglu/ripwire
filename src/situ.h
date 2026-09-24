@@ -561,6 +561,21 @@ inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<
     return out;
 }
 
+// cut-fix E: a small fixed [1] block's row count under --limit, and its "showing" note with the next: that lifts the
+// cut. One place for the decl/def partner rows and the lexical siblings, which are the same kind of block: a cap
+// --limit raises, never an --offset page (review of #219), and a cut that names the call showing every row.
+struct SituBlockCut
+{
+    std::size_t shown;
+    std::string note;
+};
+inline SituBlockCut situBlockCut( std::size_t rowTotal, std::size_t defaultCap, const SituPageArgs& page )
+{
+    const std::size_t cap   = std::size_t( effectiveRowCap( page.limit, int( defaultCap ) ) );
+    const std::size_t shown = rowTotal < cap ? rowTotal : cap;
+    return { shown, situShowingNote( shown, rowTotal, "files", situNextInvocation( page.selector, rowTotal ) ) };
+}
+
 // Section [1]'s decl/def rows and section [3]'s empty-co-change line, as their own emitters: writeSituation
 // is already this file's largest function and the quality bar counts what a caller ADDS to it, so a fact that
 // is nameable gets a name. `pathRel` is the caller's own root-relative spelling, passed in rather than
@@ -576,15 +591,13 @@ inline void writeSituDeclDefRows( std::FILE* out, const std::vector<DeclDefPartn
     {
         return;
     }
-    const std::size_t shownRows = std::min( partnerFiles.size(),
-                                            std::size_t( effectiveRowCap( page.limit, int( kSituPartnerFileRowsShown ) ) ) );
+    const SituBlockCut cut = situBlockCut( partnerFiles.size(), kSituPartnerFileRowsShown, page );
     // A5: the 229 B sentence said one nameable thing the reader could not otherwise know — these rows are
     // NOT transitive dependents, so they are absent from the [1] list below. That is not_dependents=1.
     rw::emitTo( out, "        decl/def partners ({}) not_dependents=1{} — symbols declared there and defined here, or the reverse (header/impl, stub, partial class); "
                        "NOT transitive dependents, so they are absent from the list below:\n",
-                  partnerFiles.size(), situShowingNote( shownRows, partnerFiles.size(), "files",
-                                                        situNextInvocation( page.selector, partnerFiles.size() ) ).c_str() );
-    for( std::size_t i = 0; i < shownRows; ++i )
+                  partnerFiles.size(), cut.note.c_str() );
+    for( std::size_t i = 0; i < cut.shown; ++i )
     {
         const std::string_view pp = pathRel( partnerFiles[i].fileId );
         rw::emitTo( out, "        {}  ({} shared symbols)\n", std::string_view( pp.data(), pp.size() ), partnerFiles[i].shared );
@@ -607,19 +620,17 @@ inline void writeSituSiblingRows( std::FILE* out, const SituSiblings& sibs, Path
     // printed "shown=0 total=9 capped=1" with a next= offering --limit=9 — relief that cannot restore rows an
     // OFFSET removed — and --offset=7 dropped six rows silently. This is a small fixed block with a cap and
     // --limit, like the decl/def partner rows above it, not a paged listing.
-    const std::size_t cap   = effectiveRowCap( page.limit, int( kSituSiblingRowsShown ) );
-    const std::size_t shown = sibs.paths.size() < cap ? sibs.paths.size() : cap;
+    const SituBlockCut cut = situBlockCut( sibs.paths.size(), kSituSiblingRowsShown, page );
     rw::emitTo( out, "        lexical siblings ({}){}{} — same directory and stem as a changed file (its header/impl partner, its test, its .inl): "
                        "NOT transitive dependents, so they are absent from the list below; lexical and static, never a graph result{}\n",
                   sibs.paths.size(),
                   " not_dependents=1",
-                  situShowingNote( shown, sibs.paths.size(), "files",
-                                   situNextInvocation( page.selector, sibs.paths.size() ) ).c_str(),
+                  cut.note.c_str(),
                   sibs.unindexedRowsFloor
                       ? " — unindexed_rows_floor=1: the crawl rows at most 500 unreadable-extension files, and it hit that cut here, "
                         "so a sibling no grammar can read may be missing and this count is a FLOOR"
                       : "" );
-    for( std::size_t i = 0; i < shown; ++i )
+    for( std::size_t i = 0; i < cut.shown; ++i )
     {
         const std::string_view rp = pathRel( sibs.paths[i] );
         rw::emitTo( out, "        {}\n", std::string_view( rp.data(), rp.size() ) );
