@@ -51,9 +51,9 @@ inline bool containsWordBoundedBy( std::string_view text, std::string_view word,
     std::size_t pos = 0;
     while( ( pos = text.find( word, pos ) ) != std::string_view::npos )
     {
-        const bool       leftOk  = pos == 0 || !isWordByte( text[ pos - 1 ] );
-        const std::size_t end    = pos + word.size();
-        const bool       rightOk = end >= text.size() || !isWordByte( text[ end ] );
+        const bool leftOk = pos == 0 || !isWordByte( text[pos - 1] );
+        const std::size_t end = pos + word.size();
+        const bool rightOk = end >= text.size() || !isWordByte( text[end] );
         if( leftOk && rightOk )
         {
             return true;
