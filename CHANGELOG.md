@@ -62,6 +62,25 @@ an `docs/EVALS.md` pre-registration and result for the ordering, fixes a well-fo
 inside a full-tier XML comment), and adds a new slicecheck arm (train 16, PR #322, merged 2026-09-22;
 ships in the next release).
 
+### Fixed — a file refused for pathological nesting no longer disappears silently
+
+JSON, YAML and Markdown-family files that fail the pre-parse nesting guard (memory-safety load-bearing for
+YAML and Markdown; a performance guard for JSON) used to print one stderr line on a cold run only, carry no
+row in `--skipped`, and go completely silent on a warm run — the cache had no record that the file was ever
+refused. Worse, the `--match`/`--pattern`/`--lint` structural-query walk parsed the refused file anyway, in
+the same run whose ingest had just refused it, so the guard protected the map but not those three verbs.
+
+- Every nesting refusal — json/yaml/markdown, and Kotlin's pre-existing one — is now itemized in `--skipped`
+  (`why="nest-refused"`), on cold **and** warm runs: the refused file's cache record is forgotten before the
+  save, so a warm run re-refuses and re-rows it instead of silently reusing an empty hit.
+- The default map's header gains `nest_refused=N` (absent when zero; `--json` twin `"nest_refused"`), so a
+  reader of the map itself — not only `--skipped` — can tell a file was excluded and why.
+- `--match` and `--pattern` no longer parse a file ingest refused: they apply the same refusal, exclude the
+  file from `eligible_files=`, and disclose `nest_refused=N` on their own answer (absent when zero).
+- An index cache written before this change is invalidated on load (`kCacheVersion` 24 → 25) so a refused
+  file already hidden in an old cache is re-scanned and rowed once, rather than staying hidden until the
+  file's content next changes.
+
 ---
 
 ## [0.6.2] — 2026-09-21

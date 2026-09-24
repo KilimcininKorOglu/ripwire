@@ -723,6 +723,43 @@ else
     no "escapes: the map (rc=$NESC_RC) or --skipped (rc=$SKE_RC) over the escape tree failed — its arms were NOT evaluated"
 fi
 
+# #157: --match must apply the SAME refusal the ingest above just rowed — over $NEST (Deep.kt 600, OverCeiling.kt
+# 129, both refused; AtCeiling.kt 128 and Sibling.kt indexed). Kotlin is the one guarded language --match actually
+# SERVES (json/yaml/markdown are unserved by tree-sitter queries the way --match uses them is fine, but --pattern
+# names them kUnsupportedGrammars explicitly — see below), so this is the arm that proves the shared walk
+# (astQueryGrouped, ingest_astquery.h) checks IngestResult::nestRefusedFile for real, not just for the languages
+# --pattern never reaches.
+"$BIN" "$NEST" --no-cache --match='(string_literal)' --limit=1000 >"$TMP/nest_match.xml" 2>"$TMP/nest_match.err"; NM_RC=$?
+if [ "$NM_RC" -ne 0 ]; then
+    no "#157 --match: exited $NM_RC over the nesting fixture — the walk crashed instead of refusing: $( head -2 "$TMP/nest_match.err" )"
+else
+    grep -qE '<m p="Deep\.kt:' "$TMP/nest_match.xml" \
+        && no "#157 REGRESSED: --match returns hits INSIDE Deep.kt, the same run whose ingest refused it — the bypass is back" \
+        || ok "#157: --match returns zero hits inside the refused Deep.kt"
+    grep -qE '<m p="OverCeiling\.kt:' "$TMP/nest_match.xml" \
+        && no "#157 REGRESSED: --match returns hits INSIDE OverCeiling.kt, the same run whose ingest refused it" \
+        || ok "#157: --match returns zero hits inside the refused OverCeiling.kt"
+    grep -q 'nest_refused="2"' "$TMP/nest_match.xml" \
+        && ok "#157: --match discloses nest_refused=\"2\" over a tree holding two Kotlin nesting refusals" \
+        || no "#157 REGRESSED: --match's answer does not disclose nest_refused=\"2\": $( grep -o '<match [^>]*>' "$TMP/nest_match.xml" )"
+    grep -q 'eligible_files="2"' "$TMP/nest_match.xml" \
+        && ok "#157: --match's eligible_files=\"2\" excludes the two refused files (AtCeiling.kt + Sibling.kt only)" \
+        || no "#157 REGRESSED: --match's eligible_files= counts a refused file as scanned: $( grep -o '<match [^>]*>' "$TMP/nest_match.xml" )"
+    ATC_HITS="$( grep -oE '<m p="AtCeiling\.kt:' "$TMP/nest_match.xml" | wc -l | tr -d ' ' )"
+    SIB_HITS="$( grep -oE '<m p="Sibling\.kt:'   "$TMP/nest_match.xml" | wc -l | tr -d ' ' )"
+    [ "$(( ATC_HITS + SIB_HITS ))" -gt 0 ] \
+        && ok "#157: the two surviving siblings (AtCeiling.kt + Sibling.kt) still contribute $(( ATC_HITS + SIB_HITS )) string_literal hits — the refusal is per file, not per tree" \
+        || no "#157: the surviving siblings contributed ZERO hits — the walk over-refused (or the fixture changed)"
+fi
+# --pattern is deliberately NOT exercised here: src/pattern.h's kUnsupportedGrammars names json/yaml/toml/
+# markdown/ruby/bash as never served, and (verified 2026-09-23, grep -n kotlin src/pattern.h: no hit)
+# pattern.h's templateTable() carries no "kotlin" TemplateSet either, so supportedPatternGrammars() drops
+# Kotlin from --pattern's served set today independent of #157 — a --pattern arm over ANY of the four
+# nesting-guarded languages would be vacuous (0 hits whether or not the file were refused, since --pattern
+# never reaches it either way). The shared walk still applies the SAME per-file skip to AstWalk::Pattern
+# (the check sits above the grammar dispatch in astQueryGrouped's worker, ingest_astquery.h), so the fix
+# covers --pattern by construction; there is no served+guarded language left to prove it with an arm.
+
 # ═══════════════════════════════════════════════════════════════════════════
 echo
 echo "=== 13. BODYLESS KOTLIN TYPES ARE DEFINITIONS, and the decl/def collapse never crosses the Kotlin/Java line ==="

@@ -1798,14 +1798,20 @@ void writeNestRefusedLegend( rw::XmlWriter& w, const rw::CrawlSkips& cs )
     {
         return;
     }
-    char clause[ 1024 ];
+    // #157: generalized from a Kotlin-only clause. Four independent guards feed this one row kind — ext=
+    // on the row is what tells them apart, so why= stays the single reused token every one of them writes.
+    char clause[ 1280 ];
     rw::formatTo( clause, sizeof( clause ),
                   "<!-- nest_refused= counts indexed files a pre-parse nesting guard REFUSED so that parsing them could not take the"
-                  " process down: a .kt file whose string templates nest more than {} levels deep (the vendored Kotlin scanner's"
-                  " string stack gives out near 512). Each is one <f why=\"nest-refused\" bytes= ext=/> row. Such a file IS inside"
-                  " indexed= and unmeasured=, contributes no symbols, and is not one of the accounting invariant's drop classes."
-                  " The json, yaml and markdown nesting guards refuse the same way but are counted in unmeasured= only, without a row. -->",
-                  rw::kMaxKotlinStringNestDepth );
+                  " process down or run away: a .json file nesting brackets/braces more than {} levels (superlinear error recovery),"
+                  " a .yml/.yaml file nesting blocks more than {} levels or a markdown-family file nesting blockquotes/lists more than"
+                  " {} levels (both memory-safety — the vendored scanner's serialize() has no bounds check past that), or a .kt file"
+                  " whose string templates nest more than {} levels deep (the vendored Kotlin scanner's string stack gives out near"
+                  " 512). Each is one <f why=\"nest-refused\" bytes= ext=/> row, ext= naming which guard fired. Such a file IS inside"
+                  " indexed= and unmeasured=, contributes no symbols, and is not one of the accounting invariant's drop classes. The"
+                  " structural-query walk behind match/pattern/lint applies the SAME refusal (see their own nest_refused=) rather than"
+                  " parsing a file ingest already declined. -->",
+                  rw::kMaxJsonNestDepth, rw::kMaxYamlNestDepth, rw::kMaxMdBlockDepth, rw::kMaxKotlinStringNestDepth );
     w.write( clause );
 }
 

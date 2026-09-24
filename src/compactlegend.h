@@ -395,6 +395,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "locality_pinned",   "locality_pinned=K: K calls pinned by locality alone (a guess)", false, {}, MapHeaderRead::Only },
     { "extent_suspect_syms", "extent_suspect_syms=K: K defs failed containment, corpus-wide", false, {}, MapHeaderRead::Only },
     { "macro_blanked_files", "macro_blanked_files=K: K files indexed from a macro-blanked re-parse", false, {}, MapHeaderRead::Only },
+    // #157: the map header's own nest-refused gauge (kNestRefusedMapLegend, serialize.h) — same absent-at-zero,
+    // header-only shape as its siblings just above.
+    { "nest_refused",       "nest_refused=K: K indexed files a pre-parse nesting guard refused (json/yaml/markdown/kotlin)", false, {}, MapHeaderRead::Only },
     { "ignored_files",     "ignored_files=K: K files git's ignore rules dropped", false, {}, MapHeaderRead::Only },
     { "ignored_dirs",      "ignored_dirs=K: K subtrees git's ignore rules pruned, contents unknown", false, {}, MapHeaderRead::Only },
     { "max_tokens",        "max_tokens=/fit_bytes=: tokens asked/the byte cap applied", false, {}, MapHeaderRead::Only },

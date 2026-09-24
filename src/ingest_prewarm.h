@@ -157,18 +157,21 @@ inline void forgetNestRefusalsForCache( IngestFileScan& scan ) noexcept
     }
 }
 
-// The Kotlin string-template nesting guard, as one named step of the parse worker (the json/yaml/markdown guards sit
-// inline beside its call). PROCESS-SURVIVAL load-bearing: tree-sitter-kotlin's scanner abort()ed the whole run past ~512
-// nested string templates (see kMaxKotlinStringNestDepth in ingest.h; the vendored scanner now refuses the push under
-// third_party/patches/kotlin/, so this is the FIRST of two independent layers). Unlike those three guards a refusal here
-// is ITEMIZED — its size lands in scan.nestRefusedBytes, which collectNestRefusals turns into --skipped rows — because a
-// .kt file refused here takes real code out of the map. True means "refused: skip the parse".
-// The DISCLOSE sink for one refusal: recording the refused file's size in its scan slot IS the disclosure — collectNestRefusals
-// turns the slot into the --skipped row (why="nest-refused") and nest_refused=, in every build flavour.
+// #157: generalized from the Kotlin-only guard this struct used to name alone. PROCESS-SURVIVAL /
+// MEMORY-SAFETY load-bearing for all four cases refuseNesting below switches on (see ingest.h for each
+// ceiling's own defect arithmetic). A refusal here is ITEMIZED — its size lands in scan.nestRefusedBytes,
+// which collectNestRefusals turns into --skipped rows — because a refused file takes real content out of
+// the map and the reader must be told which file and why, not just counted into unmeasured=.
+// The DISCLOSE sink for one refusal: recording the refused file's size in its scan slot IS the disclosure —
+// collectNestRefusals turns the slot into the --skipped row (why="nest-refused") and nest_refused=, in every
+// build flavour, whichever LANGUAGE's guard fired.
 struct NestRefusal
 {
     enum class DisclosureWhy : std::uint8_t
     {
+        JsonNesting,
+        YamlNesting,
+        MarkdownBlockNesting,
         KotlinStringTemplates,
     };
     IngestFileScan& scan;
@@ -180,17 +183,77 @@ struct NestRefusal
     }
 };
 
-inline bool refuseKotlinNesting( const LangEntry& le, std::string_view bytes, const char* path, std::size_t fileId, IngestFileScan& scan )
+// The one call site every corpus-file parse uses (#157), generalized from the Kotlin-only
+// refuseKotlinNesting this replaces. Before it, JSON/YAML/Markdown were three hand-copied `if` blocks
+// with no --skipped row and no warm-cache forgetting, and Kotlin was a fourth, separately-itemized one;
+// the fact that three of the four were forgotten is exactly what a second hand-copied site risks doing
+// again. Deliberately NOT a runtime table of function pointers: `&jsonNestsTooDeep` etc. taken as data
+// left every prescan with ZERO call-graph edges into it (ripwire's own resolver tracks AST call
+// expressions, not values read out of an aggregate — `--callers=jsonNestsTooDeep` measured count="0" on a
+// function four verbs actually call), so quality-delta's own dead-code check gated on FOUR bogus findings
+// against this very diff. A `switch` keeps every prescan a textually direct call, at the cost of the
+// per-case repetition the table used to buy — the DISCLOSE call needed a compile-time-literal `why` at
+// each site regardless (RW_DISCLOSE_SINK_ binds it to a `constexpr` local), so this is one switch doing
+// the job two used to.
+inline bool refuseNesting( const LangEntry& le, std::string_view bytes, const char* path, std::size_t fileId, IngestFileScan& scan )
 {
-    if( le.lang != Lang::Kotlin || !kotlinStringsNestTooDeep( bytes ) )
+    // EXPECTS, not VALIDATE: fileId is not external input here — it is the parse worker's own loop index into
+    // the SAME scan the crawl sized (makeFileScan assigns every per-file array, nestRefusedBytes included, to
+    // exactly files.size() before the pool starts). A violation would be a caller bug, not a hostile corpus.
+    EXPECTS( fileId < scan.nestRefusedBytes.size(), "refuseNesting: fileId must index the scan the crawl already sized" );
+    switch( le.lang )
     {
-        return false;
+        case Lang::Json:
+        {
+            if( !jsonNestsTooDeep( bytes ) )
+            {
+                return false;
+            }
+            NestRefusal refusal{ scan, fileId, static_cast<std::uint32_t>( std::min<std::size_t>( bytes.size(), UINT32_MAX ) ) };
+            DISCLOSE( refusal, NestRefusal::DisclosureWhy::JsonNesting,
+                      "ingest: a .json file nests brackets/braces past kMaxJsonNestDepth — refused before the parse (--skipped why=nest-refused)" );
+            rw::emitTo( stderr, "[ripwire] {}: json nesting > {} levels — treated as data, not config (skipped)\n", path, kMaxJsonNestDepth );
+            return true;
+        }
+        case Lang::Yaml:
+        {
+            if( !yamlNestsTooDeep( bytes ) )
+            {
+                return false;
+            }
+            NestRefusal refusal{ scan, fileId, static_cast<std::uint32_t>( std::min<std::size_t>( bytes.size(), UINT32_MAX ) ) };
+            DISCLOSE( refusal, NestRefusal::DisclosureWhy::YamlNesting,
+                      "ingest: a .yml/.yaml file nests blocks past kMaxYamlNestDepth — refused before the parse (--skipped why=nest-refused)" );
+            rw::emitTo( stderr, "[ripwire] {}: yaml nesting > {} levels — treated as data, not config (skipped)\n", path, kMaxYamlNestDepth );
+            return true;
+        }
+        case Lang::Markdown:
+        {
+            if( !mdNestsTooDeep( bytes ) )
+            {
+                return false;
+            }
+            NestRefusal refusal{ scan, fileId, static_cast<std::uint32_t>( std::min<std::size_t>( bytes.size(), UINT32_MAX ) ) };
+            DISCLOSE( refusal, NestRefusal::DisclosureWhy::MarkdownBlockNesting,
+                      "ingest: a markdown file nests blockquotes/lists past kMaxMdBlockDepth — refused before the parse (--skipped why=nest-refused)" );
+            rw::emitTo( stderr, "[ripwire] {}: markdown blockquote/list nesting > {} levels — treated as data, not a doc (skipped)\n", path, kMaxMdBlockDepth );
+            return true;
+        }
+        case Lang::Kotlin:
+        {
+            if( !kotlinStringsNestTooDeep( bytes ) )
+            {
+                return false;
+            }
+            NestRefusal refusal{ scan, fileId, static_cast<std::uint32_t>( std::min<std::size_t>( bytes.size(), UINT32_MAX ) ) };
+            DISCLOSE( refusal, NestRefusal::DisclosureWhy::KotlinStringTemplates,
+                      "ingest: a .kt file nests string templates past kMaxKotlinStringNestDepth — refused before the parse (--skipped why=nest-refused)" );
+            rw::emitTo( stderr, "[ripwire] {}: kotlin string-template nesting > {} levels — refused before the parse (skipped)\n", path, kMaxKotlinStringNestDepth );
+            return true;
+        }
+        default:
+            return false;   // no nesting guard applies to this language
     }
-    NestRefusal refusal{ scan, fileId, static_cast<std::uint32_t>( std::min<std::size_t>( bytes.size(), UINT32_MAX ) ) };
-    DISCLOSE( refusal, NestRefusal::DisclosureWhy::KotlinStringTemplates,
-              "ingest: a .kt file nests string templates past kMaxKotlinStringNestDepth — refused before the parse (--skipped why=nest-refused)" );
-    rw::emitTo( stderr, "[ripwire] {}: kotlin string-template nesting > {} levels — refused before the parse (skipped)\n", path, kMaxKotlinStringNestDepth );
-    return true;
 }
 
 // The compile/ready state the prewarm launch hands to the parse pool's install moment. Non-movable on
