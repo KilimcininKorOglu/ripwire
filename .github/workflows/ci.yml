@@ -862,6 +862,33 @@ jobs:
           test "$syms"  -ge 15 || { echo "ci: the fixture crawl found $syms symbol(s), expected >= 15" >&2; exit 1; }
           case "$iters" in pr_iters=\"0\"|'') echo "ci: PageRank ran 0 iterations — the graph was empty ($iters)" >&2; exit 1 ;; esac
 
+      # #326: cacheDirLadder() (src/quality.h) is the one function every cache consumer builds a path from —
+      # --doctor's cache-dir row, resolveCacheBlobPath (nearly every cache-blob path), cache eviction, --slice/
+      # edit-preview temp roots, crossref, the doc-bridge cache, and the remote-clone cache all took its
+      # un-rebased return, real only through os::mkdir's own silent Windows rebase. Fixed at the source:
+      # cacheDirLadder() now returns the already-rebased path, so every consumer is correct by construction.
+      # Reproduces the filed condition, then proves --doctor's report AND a warm-run cache hit
+      # (resolveCacheBlobPath) end to end; eviction shares the fix by construction (same dir=, see CHANGELOG).
+      # --doctor exits 1 on ANY non-ok row (binary-path included): the helper records that code instead of
+      # aborting on it under `bash -eo pipefail`, and asserts on the cache-dir row alone.
+      - name: "--doctor cache-dir and cache reuse must be TRUE (#326): no false unwritable/empty, no missed cache hit"
+        run: |
+          unset TMPDIR XDG_CACHE_HOME
+          ./build/ripwire.exe test/fixture > populate.xml || { echo "ci: the populating crawl itself failed" >&2; exit 1; }
+          row="$( bash scripts/ci-windows-doctor-row.sh ./build/ripwire.exe doctor.xml )"
+          cat doctor.xml
+          blobs1="$( printf '%s' "$row" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' || true )"
+          [ -n "$blobs1" ] && [ "$blobs1" -ge 1 ] \
+            || { echo "ci: #326 regressed — cache-dir row reports blobs=$blobs1 right after a crawl that just wrote there: $row" >&2; exit 1; }
+
+          # a second identical crawl must reuse the SAME blob (resolveCacheBlobPath), not write a new one.
+          ./build/ripwire.exe test/fixture > populate2.xml || { echo "ci: the warm crawl itself failed" >&2; exit 1; }
+          cmp populate.xml populate2.xml || { echo "ci: cold and warm crawls of the same tree produced different bytes" >&2; exit 1; }
+          row2="$( bash scripts/ci-windows-doctor-row.sh ./build/ripwire.exe doctor2.xml )"
+          blobs2="$( printf '%s' "$row2" | grep -o 'blobs="[0-9]*"' | grep -o '[0-9]*' || true )"
+          [ -n "$blobs2" ] && [ "$blobs2" -eq "$blobs1" ] \
+            || { echo "ci: #326 regressed — a warm, identical crawl changed blobs= from $blobs1 to $blobs2 (a cache miss/duplicate write, not a reuse)" >&2; exit 1; }
+
       # The ASan flavour's own configure+build. It is here because it is a BUILD failure this round fixed —
       # clang-cl refuses `-fsanitize=address` together with the debug CRT a plain configure selects — and a
       # fix to a build failure that no build exercises is not fixed. ripwire_probe alone, not the whole

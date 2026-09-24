@@ -1617,6 +1617,22 @@ inline ContentIdIndex contentIdsBySym( const IngestResult& ing, const Graph& g, 
 // /tmp/ripwire-<uid>, always mode 0700. Keeping our artifacts one level below TMPDIR is a performance
 // boundary as well as a security one: cache hygiene must never enumerate an unbounded shared TMPDIR full of
 // unrelated agent-session files. Returns the dir with NO trailing slash. Deterministic per (user, env).
+//
+// #326 (structural follow-up): the value RETURNED here is what EVERY consumer in the tree builds cache paths
+// from — resolveCacheBlobPath (the choke point nearly every blob path routes through), evictOldCacheFamily/
+// sweepStaleCacheBlobsOnce, slicediff.h/editpreview.h's temp parse roots, crossref.h's blob-batch listing,
+// ingest_docpass.h's doc-bridge cache, and main.cpp's remote-clone cache all take this string and either hand
+// it straight to os:: calls (already correctly rebased internally, no bug there) or to something OUTSIDE the
+// os:: layer — std::filesystem, a bare std::fopen — that is not. `--doctor`'s cache-dir check used to be the
+// one LOCAL fix (rebasing only its own copy of this string before use); rebasing HERE instead makes every one
+// of those consumers correct by construction, with none of them needing to know this ever mattered. os::
+// mkdir/lstat/chmod below still verify the PRE-rebase spelling (harmless either way — rebased_path is a no-op
+// on an already-native path, since NativePath's own dispatch only fires on a leading "/tmp" or "/dev/null"),
+// so the verification logic is unchanged; only the RETURN value is now the spelling every downstream reader
+// needs. Identity on POSIX (rebased_path is `return path;` there), and identity on Windows for the two
+// TMPDIR/XDG_CACHE_HOME tiers too UNLESS the value they hold is itself "/tmp"-shaped (a plausible real case:
+// Git Bash sets TMPDIR=/tmp) — rebasing unconditionally, regardless of which tier produced the string, is
+// what makes that case correct too, rather than special-casing only the hardcoded third tier.
 inline std::string cacheDirLadder()
 {
     std::string d;
@@ -1647,10 +1663,14 @@ inline std::string cacheDirLadder()
             && os::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == os::getuid()
             && ( st.st_mode & 0777 ) == 0700 )
         {
-            return d;
+            return os::rebased_path( d.c_str() );
         }
     }
-    return "/dev/null/ripwire-cache-unavailable";   // unsafe/unusable candidate: make cache I/O fail closed
+    // unsafe/unusable candidate: make cache I/O fail closed. Rebased too, for the same reason — Windows'
+    // rebaseDevNull spelling ("|unusable|...", a byte no Win32 filename may hold) is what actually makes it
+    // unopenable there; the raw "/dev/null/..." spelling is only fail-closed by accident (drive-relative,
+    // usually absent) the way the bug this file exists for relied on.
+    return os::rebased_path( "/dev/null/ripwire-cache-unavailable" );
 }
 
 // popen a shell command and return its trimmed stdout ("" on any failure — never crashes). THE one copy of

@@ -631,6 +631,36 @@ inline std::string rebaseMsysTmp( std::string_view path, std::string_view native
     return out;
 }
 
+// The dispatch every os_win32.cpp syscall body makes before it touches Win32: which rebase (if any) applies to
+// `path`. Extracted from NativePath::rebase() (os_win32.cpp) so a caller OUTSIDE the os:: layer — one that hands a
+// path to something Win32-shaped that is not os:: itself, such as std::filesystem or a popen'd shell command — can
+// ask the same question without a Win32 call, and so this routing is exercised by test/verify_os_win32_logic.cpp
+// instead of only by whichever Windows CI leg happens to touch it. Pure prefix routing: "" (not "/tmp" or
+// "/dev/null") is returned unchanged by both branches above, and reaches here as-is; NativePath treats an empty
+// result as "no rebase, use `path` verbatim" and os::rebased_path does the same.
+//
+// #326: this is the seam --doctor's cache-dir check was missing — its writability probe called bare std::fopen and
+// its blob scan called std::filesystem::directory_iterator directly on cacheDirLadder()'s un-rebased "/tmp/ripwire-
+// <uid>" spelling, neither of which passes through NativePath, so on Windows both silently measured a directory
+// (the CURRENT DRIVE's "\tmp\ripwire-<uid>") that the cache never actually uses (rw::os::mkdir DID rebase, via this
+// same routing, so the real cache directory the tool writes to was elsewhere and always healthy).
+inline std::string rebasedProgramPath( std::string_view path, std::string_view nativeTmp ) noexcept
+{
+    if( path.empty() || path.front() != '/' )
+    {
+        return {};
+    }
+    if( path.substr( 0, 4 ) == "/tmp" )
+    {
+        return rebaseMsysTmp( path, nativeTmp );   // may itself answer {} — see that function's own boundary checks
+    }
+    if( path.substr( 0, 9 ) == "/dev/null" )
+    {
+        return rebaseDevNull( path );              // may itself answer {} — see that function's own boundary checks
+    }
+    return {};
+}
+
 // The extended-length spelling of an ABSOLUTE native path, for the -W calls that must work past MAX_PATH whatever the
 // machine's LongPathsEnabled setting: "C:\\x" → "\\\\?\\C:\\x", "\\\\server\\share" → "\\\\?\\UNC\\server\\share", '/' → '\\'. A path that already
 // carries the prefix is returned as it is; a relative or drive-relative path is returned empty — "\\\\?\\" turns off

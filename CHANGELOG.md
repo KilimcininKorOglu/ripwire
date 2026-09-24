@@ -121,6 +121,27 @@ of this writing; C#, Python and Java capture no qualifier chain at all for these
 mechanism does not reach them without new capture work; Go's package-qualified calls are always exactly one
 segment, so the defect shape cannot arise there.
 
+### Fixed — the whole Windows cache path, not just `--doctor`'s report of it
+
+On Windows with neither `TMPDIR` nor `XDG_CACHE_HOME` set, `--doctor` reported the cache directory `ok="0"`
+with `blobs="0" bytes="0" truncated="1"` for a cache that was in fact writable and populated (#326).
+`cacheDirLadder()`'s fallback tier returns a POSIX-spelled `/tmp/ripwire-<uid>`; `os::mkdir`/`os::lstat`/
+`os::chmod` — what the ladder itself calls to create and verify the directory — silently rebase that onto the
+real user temp directory on Windows, but anything reaching for the SAME directory string through
+`std::filesystem` or a bare `std::fopen`, bypassing `os::`, does not get that rebase and reads/writes a
+directory the tool never actually uses (typically nonexistent on the current drive). `--doctor`'s cache-dir
+probe and blob/edit-lock scans were the reported symptom, but not the only consumer: `resolveCacheBlobPath`
+(the one choke point nearly every cache-blob path in the tree routes through), the cache-eviction sweep
+(`evictOldCacheFamily`/`sweepStaleCacheBlobsOnce`), `--slice`'s and the MCP edit-preview's temp parse roots,
+the cross-branch blob-batch listing, the markitdown doc-bridge cache, and the remote-clone reuse cache all
+shared the exact same defect shape. Fixed at the source: `cacheDirLadder()` itself now returns the
+already-rebased spelling (via the new `rw::os::rebased_path()`, the same routing `os::open`/`os::stat`/
+`os::mkdir` already apply internally; identity on POSIX, where `/tmp` is already a real, directly usable
+directory), so every one of the consumers above is correct by construction — none of them needed their own
+fix. `--doctor`'s cache-dir row's `dir=`/`hint=` now also name the real cache location instead of a path the
+tool never touches, and its writability probe still measures the only thing "writable" can honestly mean on
+either platform — creating and removing a real file — never a mode-bit check.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

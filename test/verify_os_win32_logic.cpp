@@ -367,6 +367,93 @@ TEST_CASE( "rebaseMsysTmp: Git for Windows' /tmp is the user's temp directory; n
     CHECK( rebaseMsysTmp( "/tmp/x", "" ).empty() );
 }
 
+// #326: the dispatch NativePath makes at every os_win32.cpp syscall — which of rebaseMsysTmp / rebaseDevNull (if
+// either) applies to a program path — extracted to oswin::rebasedProgramPath so a caller outside os_win32.cpp
+// (os::rebased_path, for a consumer like std::filesystem or a bare std::fopen that performs no rebase of its own)
+// can ask the same question. ORACLE: reimplemented here independently (manual prefix dispatch, not a call into the
+// function under test) against the exact bug this seam exists for — --doctor's cache-dir probe measuring
+// "/tmp/ripwire-<uid>" via std::fopen/std::filesystem, which on Windows resolves against the CURRENT DRIVE rather
+// than the real, os::mkdir-created cache directory os_win32.cpp's NativePath rebases every os:: call onto.
+TEST_CASE( "rebasedProgramPath: routes exactly like NativePath's own dispatch, for a non-os:: caller" )
+{
+    const std::string nativeTmp = "C:\\Users\\x\\AppData\\Local\\Temp\\";
+    const auto        oracle    = [ & ]( std::string_view path ) -> std::string
+    {
+        if( path.empty() || path.front() != '/' ) { return {}; }
+        if( path.substr( 0, 4 ) == "/tmp" ) { return rebaseMsysTmp( path, nativeTmp ); }
+        if( path.substr( 0, 9 ) == "/dev/null" ) { return rebaseDevNull( path ); }
+        return {};
+    };
+
+    // the exact repro from the issue: cacheDirLadder()'s third-tier literal for uid 1001.
+    const std::string doctorCacheDir = "/tmp/ripwire-1001";
+    CHECK( rebasedProgramPath( doctorCacheDir, nativeTmp ) == oracle( doctorCacheDir ) );
+    CHECK( rebasedProgramPath( doctorCacheDir, nativeTmp ) == "C:/Users/x/AppData/Local/Temp/ripwire-1001" );
+
+    // the sentinel cacheDirLadder() returns when the ladder itself judged the directory unsafe/unusable — must
+    // still fail closed (a '|' byte, never a real openable Windows path), same as calling rebaseDevNull directly.
+    const std::string unusableCacheDir = "/dev/null/ripwire-cache-unavailable";
+    CHECK( rebasedProgramPath( unusableCacheDir, nativeTmp ) == oracle( unusableCacheDir ) );
+    CHECK( rebasedProgramPath( unusableCacheDir, nativeTmp ).find( '|' ) != std::string::npos );
+
+    // an already-native or unrelated absolute path: no rebase applies, dispatch answers empty (the caller's
+    // contract, matching NativePath, is "empty means use `path` itself unchanged").
+    CHECK( rebasedProgramPath( "C:/Users/x/project", nativeTmp ) == oracle( "C:/Users/x/project" ) );
+    CHECK( rebasedProgramPath( "C:/Users/x/project", nativeTmp ).empty() );
+    CHECK( rebasedProgramPath( "/home/x/project", nativeTmp ) == oracle( "/home/x/project" ) );
+    CHECK( rebasedProgramPath( "/home/x/project", nativeTmp ).empty() );
+
+    // relative and empty input: never crashes, never fabricates an absolute answer.
+    CHECK( rebasedProgramPath( "", nativeTmp ).empty() );
+    CHECK( rebasedProgramPath( "tmp/x", nativeTmp ).empty() );
+
+    // GetTempPathW itself failed (userTempDirectory() empty): degrades to "no rebase" rather than a garbage path —
+    // the caller (os::rebased_path) then falls back to the ORIGINAL spelling, same failure shape as before #326,
+    // not a crash or a fabricated location.
+    CHECK( rebasedProgramPath( doctorCacheDir, "" ).empty() );
+}
+
+// #326 structural follow-up: cacheDirLadder() (src/quality.h) itself now calls os::rebased_path on its return
+// value, so EVERY consumer in the tree (resolveCacheBlobPath, evictOldCacheFamily, slicediff.h/editpreview.h's
+// temp roots, crossref.h, ingest_docpass.h, main.cpp's clone cache — see that function's own comment for the
+// full list) is correct by construction, not just --doctor. This case exercises rebasedProgramPath against the
+// EXACT three shapes cacheDirLadder's three tiers can hand it, so a change to either function is caught here
+// regardless of which one actually changed. It is not a NEW dispatch rule — rebasedProgramPath's prefix-only
+// routing already covers every one of these inputs generically (proved by the previous test case) — so, unlike
+// that case, these assertions do not fail to compile on 8a2d9ce1: rebasedProgramPath itself is unchanged since
+// that commit. What changed is an ADDITIONAL, new CALL SITE (cacheDirLadder(), in a different translation
+// unit this seam cannot link against — it takes os::mkdir/os::getenv, which is exactly what os_win32_logic.h
+// exists to stay free of). That change is proven instead by: (a) reading the diff — cacheDirLadder() at
+// src/quality.h now ends every return path through os::rebased_path; (b) the extended Windows CI step, which
+// is genuinely red on unfixed code and green after, on the one platform where the two spellings differ.
+TEST_CASE( "rebasedProgramPath: the exact shapes quality.h::cacheDirLadder's three tiers produce" )
+{
+    const std::string nativeTmp = "C:\\Users\\x\\AppData\\Local\\Temp\\";
+
+    // tier 3 (neither TMPDIR nor XDG_CACHE_HOME set): the hardcoded fallback literal — must rebase.
+    CHECK( rebasedProgramPath( "/tmp/ripwire-1001", nativeTmp ) == "C:/Users/x/AppData/Local/Temp/ripwire-1001" );
+
+    // tier 1 (TMPDIR set): os::init_process already normalises TMPDIR into the program's spelling at intake
+    // (CONTRIBUTING.md §3, "Windows spells them once where they enter"), so the ordinary case is an
+    // already-native path the ladder appends "/ripwire" to — no rebase applies, identity.
+    CHECK( rebasedProgramPath( "C:/Users/x/AppData/Local/Temp/ripwire", nativeTmp ).empty() );
+
+    // tier 1, the edge case: nothing stops a user (or Git Bash's own default environment) from setting
+    // TMPDIR=/tmp verbatim. cacheDirLadder() rebases UNCONDITIONALLY on its return value, regardless of which
+    // tier produced the string — so this tier-1 output is rebased exactly like tier 3's, uniformly, rather
+    // than only the hardcoded fallback literal receiving special treatment.
+    CHECK( rebasedProgramPath( "/tmp/ripwire", nativeTmp ) == "C:/Users/x/AppData/Local/Temp/ripwire" );
+
+    // tier 2 (XDG_CACHE_HOME set): same as tier 1's ordinary case — an already-native path, identity.
+    CHECK( rebasedProgramPath( "D:/CacheRoot/ripwire", nativeTmp ).empty() );
+
+    // the ladder's own fail-closed sentinel, in full: rebases to the unusable '|' spelling, never silently
+    // "worked" by accident the way a bare drive-relative "/dev/null/..." would on some machines.
+    const std::string sentinel = rebasedProgramPath( "/dev/null/ripwire-cache-unavailable", nativeTmp );
+    CHECK( sentinel.find( '|' ) != std::string::npos );
+    CHECK( sentinel.find( "ripwire-cache-unavailable" ) != std::string::npos );
+}
+
 TEST_CASE( "extendedLengthPath: only an absolute, clean path gets the \\\\?\\ prefix" )
 {
     CHECK( extendedLengthPath( u"C:\\Users\\x\\Temp\\" ) == u"\\\\?\\C:\\Users\\x\\Temp\\" );
