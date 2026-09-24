@@ -1015,6 +1015,14 @@ if(WIN32)
 endif()
 
 if(RIPWIRE_ASAN)
+  # AppleClang 17's ASan runtime hangs in its own start-up on macOS 26 (Darwin 25), before main, so every
+  # sanitizer run times out. CI's Xcode 26.6 AppleClang 21 is unaffected. A warning, not an error: the
+  # tree still builds, and CONTRIBUTING's sanitizer section has the Homebrew LLVM 22 recipe.
+  if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 21
+     AND CMAKE_HOST_SYSTEM_VERSION VERSION_GREATER_EQUAL 25)
+    message(WARNING "RIPWIRE_ASAN: AppleClang ${CMAKE_CXX_COMPILER_VERSION} on macOS 26 is known to hang in "
+      "ASan start-up before main. Configure this tree with Homebrew LLVM 22 (CONTRIBUTING.md, Sanitizer build).")
+  endif()
   set(_ripwire_windows_clangcl_asan OFF)
   set(_ripwire_no_omit_frame_pointer -fno-omit-frame-pointer)
   # The optimization and debug-info spellings the sanitizer arm needs, in the driver's own dialect. clang-cl only
