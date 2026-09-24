@@ -697,38 +697,39 @@ inline std::string qualifierOfDefinition( TSNode nameNode, std::string_view src 
 // qualified_identifier ancestor (a no-op for a call — its outermost node's own parent is a call_expression,
 // never another qualified_identifier, so the loop tests once and stops) until nothing higher is still part of
 // the chain, and reads the root from THAT node's text instead.
-// The OUTERMOST qualified_identifier of the chain nameNode belongs to (the climb described above), or a null node
-// when nameNode's parent is not a qualified_identifier at all. Shared by the root test below and
-// cppQualifiedChainWrittenGlobal, so the two can never disagree about which node spells the chain.
-inline TSNode cppOutermostQualified( TSNode nameNode )
+// The written chain's first segment, and whether it was written from the global scope (`::std::…`); nullopt when
+// nameNode is not the name of a (well-formed) qualified_identifier. The root test below reads `root` alone;
+// cppDefinitionRootsStd also reads `global`, so both answers come from the ONE climb.
+struct CppWrittenChainRoot
+{
+    std::string_view root;
+    bool             global = false;
+};
+inline std::optional<CppWrittenChainRoot> cppWrittenChainRoot( TSNode nameNode, std::string_view src )
 {
     TSNode outer = ts_node_parent( nameNode );
-    if( ts_node_is_null( outer ) || !kindIs( ts_node_type( outer ), "qualified_identifier" ) )
+    if( ts_node_is_null( outer ) || !kindIs( ts_node_type( outer ), "qualified_identifier" ) || hasPhantomScopeSeparator( outer ) )
     {
-        return TSNode{};
+        return std::nullopt;
     }
     for( TSNode up = ts_node_parent( outer ); !ts_node_is_null( up ) && kindIs( ts_node_type( up ), "qualified_identifier" ); up = ts_node_parent( up ) )
     {
         outer = up;
     }
-    return outer;
+    std::string_view text   = nodeTextOf( outer, src );
+    const bool       global = text.starts_with( "::" );
+    if( global )
+    {
+        text.remove_prefix( 2 );   // `::std::move` — the leading global-scope operator names no segment
+    }
+    const std::size_t sep = text.find( "::" );
+    return CppWrittenChainRoot{ sep == std::string_view::npos ? text : text.substr( 0, sep ), global };
 }
 
 inline bool cppQualifiedChainRootsStd( TSNode nameNode, std::string_view src )
 {
-    const TSNode inner = ts_node_parent( nameNode );
-    if( ts_node_is_null( inner ) || !kindIs( ts_node_type( inner ), "qualified_identifier" ) || hasPhantomScopeSeparator( inner ) )
-    {
-        return false;
-    }
-    std::string_view text = nodeTextOf( cppOutermostQualified( nameNode ), src );
-    if( text.starts_with( "::" ) )
-    {
-        text.remove_prefix( 2 );   // `::std::move` — the leading global-scope operator names no segment
-    }
-    const std::size_t      sep  = text.find( "::" );
-    const std::string_view root = sep == std::string_view::npos ? text : text.substr( 0, sep );
-    return root == "std";
+    const std::optional<CppWrittenChainRoot> written = cppWrittenChainRoot( nameNode, src );
+    return written.has_value() && written->root == "std";
 }
 
 // The definition-side twin for an IN-CLASS / in-namespace def (`namespace std { namespace ranges { … } }`,
@@ -783,12 +784,6 @@ inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
 // when no NAMED namespace encloses the def (an anonymous one stays transparent, as in the walk above) or the chain is
 // written from the global scope (`::std::…`); every other case falls to the enclosing walk, whose outermost-root rule
 // already answers `vendor` there.
-inline bool cppQualifiedChainWrittenGlobal( TSNode nameNode, std::string_view src )
-{
-    const TSNode outer = cppOutermostQualified( nameNode );
-    return !ts_node_is_null( outer ) && nodeTextOf( outer, src ).starts_with( "::" );
-}
-
 // The definition-side dispatcher: an out-of-line qualified def (`std::SomeType::f() {…}`, rare but legal —
 // re-opening a std entity out of line) is std-rooted exactly as a CALL with the same written chain would be,
 // so it tries cppQualifiedChainRootsStd first. OR, not either/or (found by the same review pass as the climb
@@ -801,8 +796,9 @@ inline bool cppQualifiedChainWrittenGlobal( TSNode nameNode, std::string_view sr
 // work pretending to be a belt-and-suspenders check.
 inline bool cppDefinitionRootsStd( TSNode nameNode, std::string_view src )
 {
-    if( cppQualifiedChainRootsStd( nameNode, src )
-        && ( !cppOutermostNamedNamespaceRoot( nameNode, src ).has_value() || cppQualifiedChainWrittenGlobal( nameNode, src ) ) )
+    const std::optional<CppWrittenChainRoot> written = cppWrittenChainRoot( nameNode, src );
+    if( written.has_value() && written->root == "std"
+        && ( written->global || !cppOutermostNamedNamespaceRoot( nameNode, src ).has_value() ) )
     {
         return true;
     }
