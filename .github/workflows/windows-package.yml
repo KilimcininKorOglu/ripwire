@@ -98,7 +98,9 @@ jobs:
             || { echo "windows-package: not the Release flavour: $( grep '^CMAKE_BUILD_TYPE:' build/CMakeCache.txt )" >&2; exit 1; }
           grep -E '^CMAKE_MSVC_RUNTIME_LIBRARY:[A-Z]+=MultiThreaded$' build/CMakeCache.txt \
             || { echo "windows-package: CMAKE_MSVC_RUNTIME_LIBRARY is not MultiThreaded (/MT)" >&2; exit 1; }
-          if grep -nE '(^|[ "])[-/]MDd?([ "]|$)' build/build.ninja | head -5 | grep .; then
+          # grep -m, not `| head -5 | grep .`: under the step's pipefail a head that closes early can SIGPIPE grep, and the
+          # pipeline's non-zero status would then read as "no /MD found" and skip the rejection.
+          if grep -m5 -nE '(^|[ "])[-/]MDd?([ "]|$)' build/build.ninja; then
             echo "windows-package: a compile line still selects the DLL runtime (/MD or /MDd), above" >&2; exit 1
           fi
           grep -qE '(^|[ "])[-/]MT([ "]|$)' build/build.ninja \
@@ -211,7 +213,7 @@ jobs:
           files="$( grep -o 'files=[0-9][0-9]*' self-map.xml | head -1 | tr -dc 0-9 )"
           echo "self-map files=$files"
           [ -n "$files" ] && [ "$files" -ge 1000 ] || { echo "windows-package: the map of this repository indexed '$files' files, expected >= 1000" >&2; exit 1; }
-          if grep -o ' p="[^"]*\\[^"]*"' self-map.xml | head -3 | grep .; then
+          if grep -m3 -o ' p="[^"]*\\[^"]*"' self-map.xml; then   # -m, not | head: see the /MD check above
             printf '%s\n' "windows-package: a p= path above is spelled with a backslash — program paths are '/'-separated on every platform" >&2; exit 1
           fi
 
