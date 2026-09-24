@@ -187,6 +187,186 @@ else
     no "(F2) /$f2pat/ prefiltered != full-scan under src/ (DROPPED A MATCH) — (?:...) still invents a seam"
 fi
 
+# ── seeded differential fuzz: --regex vs --no-prefilter file sets must be EQUAL, always ────────────
+# Makes the prefilter's soundness a permanent gate rather than a one-time review finding: a fixed seed
+# over the engine's dialect (escapes \xHH/\XX/\u00HH, classes [c]/[cC], groups (c)/(?:c), lookarounds
+# (?=c)/(?!c), quantifiers ? + * {1} {1,2} {0,1} {1,}, \w \d \s \b, '.', backrefs, top-level and grouped
+# alternation, ^.* prefixes), mutating real lines of the small committed fixture so the patterns are
+# reproducible across machines. Any divergence (a file the prefilter drops that the full scan finds, or
+# vice-versa refusing differently) is a FAIL — this is the exact failure class F1/F2 were.
+cat >"$TMP/seeded_fuzz.py" <<'PYEOF'
+import sys, os, random, subprocess, re
+
+BIN, CORPUS = sys.argv[1], sys.argv[2]
+SEED, N = 424242, 260
+rnd = random.Random(SEED)
+
+lines = []
+for fn in sorted(os.listdir(CORPUS)):
+    p = os.path.join(CORPUS, fn)
+    if not os.path.isfile(p):
+        continue
+    try:
+        b = open(p, 'rb').read()
+    except OSError:
+        continue
+    for l in b.split(b'\n'):
+        if 6 <= len(l) <= 200:
+            lines.append(l)
+if not lines:
+    print('no fixture lines to fuzz from')
+    sys.exit(1)
+
+META = set(b'.[](){}|^$\\*+?/')
+
+
+def lit(c):
+    return (b'\\' + bytes([c])) if c in META else bytes([c])
+
+
+def esc_byte(c):
+    k = rnd.randrange(6)
+    if k == 0:
+        return b'\\x%02x' % c
+    if k == 1:
+        return b'\\x%02X' % c
+    if k == 2:
+        return b'\\u%04x' % c
+    if k == 3:
+        return b'[\\x%02x]' % c
+    if k == 4:
+        return b'[' + bytes([c]) + b']'
+    return b'(?:' + lit(c) + b')'
+
+
+def piece():
+    for _ in range(50):
+        l = rnd.choice(lines)
+        n = rnd.randint(4, 12)
+        if len(l) <= n:
+            continue
+        st = rnd.randrange(len(l) - n)
+        s = l[st:st + n]
+        if sum(1 for c in s if c > 0x20) >= 3 and b'\x0b' not in s and b'\x0c' not in s:
+            return s
+    return b'compute'
+
+
+def mutate(s):
+    out = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        r = rnd.random()
+        if r < 0.20:
+            out.append(esc_byte(c))
+            i += 1
+        elif r < 0.28 and i + 2 < len(s):
+            j = rnd.randint(i + 1, min(len(s), i + 4))
+            inner = b''.join(lit(x) for x in s[i:j])
+            kind = rnd.choice([b'(', b'(?:', b'(?=', b'(?!'])
+            if kind == b'(?=':
+                out.append(b'(?=' + inner + b')' + inner)
+            elif kind == b'(?!':
+                out.append(b'(?!zqzq)' + inner)
+            else:
+                q = rnd.choice([b'', b'', b'+', b'{1}', b'{1,2}', b'?', b'{0,1}', b'{1,}'])
+                out.append(kind + inner + b')' + q)
+            i = j
+            continue
+        elif r < 0.34:
+            out.append(lit(c) + rnd.choice([b'?', b'+', b'{1}', b'{0,1}', b'{1,}']))
+            i += 1
+        elif r < 0.40 and chr(c).isalpha():
+            out.append(rnd.choice([b'[' + bytes([c]) + b']',
+                                    b'[' + bytes([c]) + chr(c).swapcase().encode() + b']', b'\\w']))
+            i += 1
+        elif r < 0.44 and chr(c).isdigit():
+            out.append(b'\\d')
+            i += 1
+        elif r < 0.47 and c in b' \t':
+            out.append(b'\\s')
+            i += 1
+        elif r < 0.50:
+            out.append(b'.')
+            i += 1
+        else:
+            out.append(lit(c))
+            i += 1
+    p = b''.join(out)
+    r = rnd.random()
+    if r < 0.12:
+        p = p + b'|' + b''.join(lit(x) for x in piece()[:5])
+    elif r < 0.20:
+        p = b'(' + p + b'|zqzqzq)'
+    elif r < 0.24:
+        p = b'zqzq|' + p
+    if rnd.random() < 0.10 and len(s) >= 2 and s[0] not in META and s[0] == s[1]:
+        p = b'(' + bytes([s[0]]) + b')\\1' + p[1:]
+    if rnd.random() < 0.06:
+        p = b'^.*' + p
+    if rnd.random() < 0.04:
+        p = p + b'\\b'
+    return p
+
+
+pats = set()
+tries = 0
+while len(pats) < N and tries < N * 20:
+    tries += 1
+    p = mutate(piece())
+    if b'\n' in p or b'\r' in p or b'\x00' in p or not p:
+        continue
+    pats.add(p)
+pats = sorted(pats)
+
+
+def fileset(pat, no_prefilter):
+    args = [BIN, CORPUS, b'--regex=' + pat, '--grep-in=any', '--no-cache', '--limit=100000']
+    if no_prefilter:
+        args.append('--no-prefilter')
+    try:
+        r = subprocess.run(args, capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return None, None
+    out = r.stdout.decode('utf-8', 'replace')
+    if r.returncode != 0 or '<grep ' not in out:
+        return 'REFUSED', None
+    body = out.split('-->', 1)[-1]
+    return 'OK', sorted(set(re.findall(r'<f p="([^"]*)"', body)))
+
+
+fails = []
+ran = 0
+for p in pats:
+    st_pf, fs_pf = fileset(p, False)
+    st_fs, fs_fs = fileset(p, True)
+    if st_pf is None or st_fs is None:
+        fails.append((p, 'TIMEOUT'))
+        continue
+    ran += 1
+    if st_pf == 'REFUSED' and st_fs == 'REFUSED':
+        continue
+    if st_pf != st_fs or fs_pf != fs_fs:
+        fails.append((p, '%s:%s vs %s:%s' % (st_pf, fs_pf, st_fs, fs_fs)))
+
+print('seeded fuzz: %d/%d patterns compared (seed=%d)' % (ran, len(pats), SEED))
+if fails:
+    for p, why in fails[:15]:
+        print('  DIVERGE %r: %s' % (p, why))
+    print('%d divergence(s)' % len(fails))
+    sys.exit(1)
+print('0 divergences')
+sys.exit(0)
+PYEOF
+if python3 "$TMP/seeded_fuzz.py" "$BIN" "$CORPUS" >"$TMP/fuzz.out" 2>&1; then
+    ok "seeded differential fuzz (260 patterns, seed=424242): $( tail -1 "$TMP/fuzz.out" )"
+else
+    no "seeded differential fuzz FAILED — --regex vs --no-prefilter file sets diverged"
+    cat "$TMP/fuzz.out"
+fi
+
+
 # ── (O) independent grep oracle: ripwire's matched-FILE set must be a SUPERSET of grep -lE's ──
 # (BRE-safe subset of the battery; uses grep -E so the pattern syntax matches.)
 for p in 'compute' 'Widget' 'open|close' '[A-Z][a-z]+' 'Foo.*Bar' 'zylophoneXyzzy' '(open|close)'; do

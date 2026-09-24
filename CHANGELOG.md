@@ -46,7 +46,11 @@ branch is the only match in two fixture files, and both must be listed with the 
 and above the first branch's alone); (O2) checks the escape patterns against ripgrep, which spells `\xHH` where
 `grep -E` cannot; (F1) runs `[\x7e-\x7f]` under a short alarm and fails on a hang; (F2) runs `std::(?:string)&`
 against this repo's own `src/` and requires prefiltered == full-scan. Red on the previous binary: (S) 4 of 17,
-(E), and (O2) 3 of 3; (F1) hangs (rc=142); (F2) diverges from full-scan.
+(E), and (O2) 3 of 3; (F1) hangs (rc=142); (F2) diverges from full-scan. A seeded differential fuzz (fixed
+seed, 260 patterns mutated from this dialect: `\xHH`/`\u00HH`, `[c]`/`[cC]`, `(c)`/`(?:c)`, `(?=c)`/`(?!c)`,
+`? + * {1} {1,2} {0,1} {1,}`, `\w \d \s`, `.`, backrefs, alternation, `^.*`) now compares `--regex` against
+`--no-prefilter` on every run, so a future soundness regression in this analyser is a gate failure, not
+another review finding.
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
 
