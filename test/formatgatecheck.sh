@@ -57,7 +57,7 @@ WANT_MAJOR="$( sed -n 's/^WANT_MAJOR=\([0-9][0-9]*\).*$/\1/p' "$FC" | head -1 )"
 #
 # F2 (2026-09-24): a machine can carry clang-format 20 on PATH (SKIPping on the old order, which never
 # looked past PATH and the UNVERSIONED homebrew keg) while the pinned major sits, installed and unused,
-# at the versioned keg /opt/homebrew/opt/llvm@$WANT_MAJOR/bin/clang-format — `brew install llvm@22`
+# at the versioned keg <brew prefix>/opt/llvm@$WANT_MAJOR/bin/clang-format — `brew install llvm@22`
 # never touches PATH or the unversioned `opt/llvm` symlink. Probing the versioned keg BEFORE the
 # unversioned one turns that SKIP into a real run, without weakening the major check: the versioned
 # keg's OWN measured major must still equal the pin, exactly like every other candidate.
@@ -79,10 +79,15 @@ pick_cf()
 
 CAND_ENV="${CLANG_FORMAT:-}"
 CAND_PATH="$( command -v clang-format 2>/dev/null || true )"
+# Homebrew's prefix is /opt/homebrew on Apple silicon but /usr/local on Intel macOS (and elsewhere on Linux), so it is
+# read from brew itself, not assumed; /opt/homebrew stays the default where brew is not on PATH.
+BREW_PREFIX="${HOMEBREW_PREFIX:-}"
+[ -n "$BREW_PREFIX" ] || { command -v brew >/dev/null 2>&1 && BREW_PREFIX="$( brew --prefix 2>/dev/null )"; }
+[ -n "$BREW_PREFIX" ] || BREW_PREFIX=/opt/homebrew
 CAND_BREW_VER=""
-[ -n "$WANT_MAJOR" ] && [ -x "/opt/homebrew/opt/llvm@$WANT_MAJOR/bin/clang-format" ] && CAND_BREW_VER="/opt/homebrew/opt/llvm@$WANT_MAJOR/bin/clang-format"
+[ -n "$WANT_MAJOR" ] && [ -x "$BREW_PREFIX/opt/llvm@$WANT_MAJOR/bin/clang-format" ] && CAND_BREW_VER="$BREW_PREFIX/opt/llvm@$WANT_MAJOR/bin/clang-format"
 CAND_BREW=""
-[ -x /opt/homebrew/opt/llvm/bin/clang-format ] && CAND_BREW=/opt/homebrew/opt/llvm/bin/clang-format
+[ -x "$BREW_PREFIX/opt/llvm/bin/clang-format" ] && CAND_BREW="$BREW_PREFIX/opt/llvm/bin/clang-format"
 MAJ_ENV="$( llvm_major "$CAND_ENV" )"
 MAJ_PATH="$( llvm_major "$CAND_PATH" )"
 MAJ_BREW_VER="$( llvm_major "$CAND_BREW_VER" )"

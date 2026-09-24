@@ -19,14 +19,18 @@
 # VERSION PIN. clang-tidy's checks change across majors; the zero was measured with 22. The resolution order is
 # formatgatecheck.sh's: CLANG_TIDY when set (named explicitly: always used, and a wrong major is an ERROR, exit 2 —
 # CI names it, so CI can never skip), else a major-22 clang-tidy-22 / clang-tidy on PATH, else Homebrew's keg-only
-# /opt/homebrew/opt/llvm@22/bin/clang-tidy (pinned by major: /opt/homebrew/opt/llvm may be a different major).
+# <brew prefix>/opt/llvm@22/bin/clang-tidy (pinned by major: <brew prefix>/opt/llvm may be a different major).
 # When none of those is major 22 the script prints a SKIP line naming what it found and exits 0 — a SKIP is not a
 # pass, and it prints no verdict before it.
 
 set -uo pipefail
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 WANT_MAJOR=22
-BREW_TIDY="${RIPWIRE_TIDY_BREW:-/opt/homebrew/opt/llvm@22/bin/clang-tidy}"   # override only to test the SKIP arm
+# Homebrew's prefix: /opt/homebrew on Apple silicon, /usr/local on Intel macOS; read from brew when it is on PATH.
+BREW_PREFIX="${HOMEBREW_PREFIX:-}"
+[ -n "$BREW_PREFIX" ] || { command -v brew >/dev/null 2>&1 && BREW_PREFIX="$( brew --prefix 2>/dev/null )"; }
+[ -n "$BREW_PREFIX" ] || BREW_PREFIX=/opt/homebrew
+BREW_TIDY="${RIPWIRE_TIDY_BREW:-$BREW_PREFIX/opt/llvm@22/bin/clang-tidy}"   # override only to test the SKIP arm
 
 # ─── the gating checks: each one at 0 rows on the TUs below when admitted ────────────────────────────────────────
 GATING='bugprone-use-after-move,bugprone-dangling-handle,bugprone-sizeof-expression,bugprone-integer-division,bugprone-infinite-loop,modernize-use-override,clang-analyzer-core.*'
