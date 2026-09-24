@@ -15,6 +15,30 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [0.6.2] — 2026-09-21
 
+### Fixed — `--grep`'s collection ceiling ranks before it cuts, and every grep cut has a compact reading
+
+- **The 4,000,000-hit collection ceiling cut the head.** `grepCollect` spent the ceiling in ascending file order and
+  only then sorted SOURCE before test/bench before docs, so a pattern dense in files that sort early kept those and
+  dropped the rest. On a fixture of two hit-dense `docs/*.md` files and one `src/` file (5M hits),
+  `--grep=x` answered `files="2" hits="4000000" hits_capped="1"` with no source row at all. The hit files are now
+  ranked first (the shared tier-then-path key, `src/filter.h`) and the ceiling spends in that order, so it drops only
+  the tail of the least relevant tier: the same answer now leads with `src/main.c` and `files="3"`. The cut is
+  disclosed as before (`hits_capped="1" counts_floor="1" capped="1"`). On this repository no literal reaches the
+  ceiling (`--grep=e`: 2.6M hits), so every answer here is row-for-row unchanged. CLI and the MCP `grep` verb share
+  the collection.
+- **The span-tier classification budget says how much it left.** `tier_budget=` named which ceiling (128 files or
+  8 MB) stopped the code/comment/string classification, but not how many hit files it had to cover; `files=` cannot
+  stand in, because it counts files after suppression. `tier_files=` now rides beside `tier_budget=` (MCP:
+  `tier_files`), e.g. `--grep=std::string` on this tree: `tier_parsed="128" tier_budget="files" tier_files="256"`
+  where `files="251"`. About 16 bytes, on budgeted answers only.
+- **Three grep attributes had no reading in the default (compact) legend.** `tier_budget=` (which `tier_parsed=`'s
+  own reading pointed at), `tier=` on a comment- or string-only answer, and `line_bytes=`, the one sign that a row's
+  matched text was cut at 512 bytes. Each now has a present-only reading: +56 to +190 bytes on the answers that carry
+  them, nothing on the rest.
+
+Gate: `test/collectioncapcheck.sh` (J) (the ceiling fixture, CLI and MCP) and (K) (`tier_files=` CLI and MCP, and
+the three compact readings). Red on the previous binary: (J) 3 of 5, (K) 5 of 7.
+
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
 
 The native Windows port (#44) built with clang-cl only; `cl.exe` stopped at the GCC/Clang language extensions
