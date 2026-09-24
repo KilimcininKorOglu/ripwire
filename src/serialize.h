@@ -4523,8 +4523,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
     // (the same (score desc, id asc) `order` the head was chosen by) and stops at the rank tail; the rows it
     // admits are then emitted in the shape this path always had — files in first-seen-rank order, rows in
     // source order inside each — so an uncut answer is byte-identical. The cut is disclosed with the pageview.h
-    // triple on the element: <sigs shown= total= capped="1">, total= being every symbol the ranking ordered
-    // (the --pack-top-n window, default 50, is a cut too, and it used to be as silent as the budget's).
+    // triple on the element: <sigs shown= total= capped="1">, total= being the rows handed to the byte gate.
     struct SigRowText
     {
         std::uint32_t sigStart = 0;   // the emitted (source) order inside a file; id breaks a tie
@@ -4677,11 +4676,13 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
     }
 
     // pageview.h THE TRUNCATION VOCABULARY: the triple rides only a cut listing, so an uncut <sigs> stays bare.
-    // total= = the rows this listing could have printed: every ranked symbol, less the visited ones that have no
-    // signature to print (an unreadable span or an empty declaration is nothing cut, the packBodies bodyless rule).
-    // So capped="1" ⇔ the budget or the --pack-top-n window left ranked rows unvisited.
-    ASSUME( shownRows <= visitedRows && visitedRows <= order.size() );
-    const std::size_t totalRows = order.size() - ( visitedRows - shownRows );
+    // total= = the rows handed to the byte gate (pageview.h THE TRUNCATION VOCABULARY rule 5, the lens <sigs>'s own
+    // definition): the --pack-top-n window `keep`, less the visited rows that have no signature to print (an
+    // unreadable span or an empty declaration is nothing cut, the packBodies bodyless rule). So capped="1" ⇔ the
+    // BYTE BUDGET dropped rows of the window. The window itself is the request (the map's top-k is the same
+    // shape and carries no total=); counting the whole ranking here made capped="1" ride every default call.
+    ASSUME( shownRows <= visitedRows && visitedRows <= keep );
+    const std::size_t totalRows = keep - ( visitedRows - shownRows );
     if( shownRows < totalRows )
     {
         char open[ 96 ];
