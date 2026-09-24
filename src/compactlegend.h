@@ -437,7 +437,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // into the always-on header clause below (the `files` row): buildStats writes it into EVERY map header beside files=, so
     // one clause is present exactly when both fields are, and the header-ONLY read still keeps it off <trace unresolved=>,
     // which counts frames. compactlegendcheck (S) accepts an always-on header field spelled inside that clause.
-    { "shown_importers",   "shown_importers=: <f> rows", true, "impact" },
+    { "shown_importers",   "shown_importers=: <f> rows (limit= sizes them)", true, "impact" },
     // THE SWEEP'S LAST PASS (2026-09-12) listed every attribute the compact --impact, --safe-delete, --communities,
     // --community=ID and map-header documents emit and found these still without a reading. Each rides only SOME answers of
     // its root, so each is a present-only term rather than a purpose-line clause. Checked against the emitters:

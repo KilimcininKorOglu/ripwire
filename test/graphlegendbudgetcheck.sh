@@ -103,9 +103,18 @@ budgetFor(){
         # a correction stated in the shortest honest form (the clause that went is 22 B, the clause that came
         # is 78 B), not the essay re-inflating — and 4060 still sits below the 4303 B pre-fix number cited at
         # the top, so this gate is still RED on the 1dc7b01 binary.
+        # RE-PINNED impact +75 and uses +54 (2026-09-23, cut-fix C, lane/cutfix-navlists): two sentences restate what
+        # CHANGED about the rows, compressed to their shortest honest form first (the drafts were +55 and +54 B over the
+        # base). uses: "by path within a tier" -> "within a tier by the enclosing symbol's callers, then path" (+37 B) —
+        # the rows are ranked before the cap now, and a legend that still says "by path" is the false claim. impact: the
+        # import-tier clause "limit=/offset= window the symbol rows only" -> "most-imported first; limit= sizes it, offset=
+        # windows the symbol rows only" (+32 B) — --limit now reaches that tier, and the old sentence said it could not.
+        # Measured on the base binary 3894 / 4052 B, on this lane 3926 / 4089 B; each keeps the headroom its #66 re-pin
+        # left (impact 48 B, uses 25 B). callers' own sentence (+28 B) fits its 3429 unchanged. uses 4114 still sits below
+        # the 4303 B pre-fix number at the top, so the gate stays RED on the 1dc7b01 binary.
         callers) echo 3429 ;;
-        impact)  echo 3899 ;;
-        uses)    echo 4060 ;;
+        impact)  echo 3974 ;;
+        uses)    echo 4114 ;;
     esac
 }
 VERBS="callers impact uses"

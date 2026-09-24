@@ -1126,7 +1126,7 @@ inline constexpr char kHelpHead[] =
         "    --impact=SYM               show everything that reaches SYM — the transitive blast radius before a change\n"
         "                               transitive blast radius — the indexed symbols that reach SYM (a floor, see counts_floor). file:name disambiguates like --callers\n"
         "                               importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM,\n"
-        "                               emitted as <f via=\"import\" lazy=\"0|1\"> rows (format=columnar carries the count only). NEVER added to reaches= —\n"
+        "                               emitted as <f via=\"import\" lazy=\"0|1\"> rows (format=columnar carries the count only; --limit sizes it). NEVER added to reaches= —\n"
         "                               files and symbols are different units, and an importer may use a different symbol from that file, or none at all.\n"
         "                               lazy=\"1\": every one of that importer's edges is written inside a closure — a TS/JS require()/import()\n"
         "                               inside a function body, a Ruby constant receiver or argument inside a method/lambda/block, a Ruby\n"

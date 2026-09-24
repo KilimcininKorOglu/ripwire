@@ -635,6 +635,30 @@ inline std::string docDriftText( const std::string& root, const std::string& fil
     return captureXml( [ & ]( std::FILE* f ) { docdrift::writeDocDriftPage( f, res, maxPerDoc, /*gateability=*/false, page.limit, page.offset ); } );
 }
 
+// cut-fix C: find_symbol's calledBy array is a SECONDARY listing (pageview.h rule 6), windowed by the same
+// limit/offset as `calls`, and it was that payload's one SILENT cut — count= and the paging keys describe `calls`
+// only. Its own trio in the --impact import tier's spelling, plus the one call that fetches the rest (the CLI
+// --callers pages the same ranked order, callhierarchy.h). Empty on an uncut window: an uncut array is its own
+// total (THE TRUNCATION VOCABULARY rule 3's --skill-scan precedent), so an uncapped answer is byte-identical.
+inline std::string calledByCutJson( std::string_view name, std::size_t total, const PageWindow& window, int pageLimit )
+{
+    EXPECTS( window.begin <= window.end && window.end <= total, "the window is pageWindow()'s over this same array" );
+    const std::size_t shown = window.end - window.begin;
+    if( shown >= total )
+    {
+        return {};
+    }
+    std::string out = ",\"calledBy_total\":" + std::to_string( total ) + ",\"shown_calledBy\":" + std::to_string( shown )
+                    + ",\"calledBy_capped\":true";
+    if( window.end < total )
+    {
+        const std::string next = nextFlag( "--callers=", name ) + ( pageLimit > 0 ? " --limit=" + std::to_string( pageLimit ) : std::string() )
+                               + " --offset=" + std::to_string( window.end );
+        out += ",\"calledBy_next\":\"" + mcpdetail::jsonEscape( next ) + "\"";
+    }
+    return out;
+}
+
 // build ing+graph for `root`, resolve `name`, return a JSON object: the symbol + its callers
 // (in-edges) and — unless referencingOnly — its callees (out-edges). "" if the symbol isn't found.
 // (find_symbol / find_referencing_symbols — the Serena/LocAgent agent verbs, answered from the CSR.)
@@ -754,6 +778,10 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     out += unprovenDefsKeyJson( chRows.unprovenDefs );
     out += pageDisclosure( pab, sizeof( pab ), pwPrimary.end - pwPrimary.begin, rowTotal, pwPrimary.end,
                            page.limit, page.offset, discloseCap, kJsonPageSyntax );
+    if( !referencingOnly )
+    {
+        out += calledByCutJson( name, calledBy.size(), pwSecond, page.limit );   // cut-fix C: the second array's own cut
+    }
     out += ",\"calledBy\":" + rowArray( calledBy, referencingOnly ? pwPrimary : pwSecond );
     if( !referencingOnly )
     {
@@ -2640,7 +2668,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const std::string  imRootAttr   = imSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     // LB-H: ONE derivation, shared with the CLI arm (graph.h::impactImportTier) — mcpclidiffcheck compares
     // the two surfaces' attribute sets, and an honesty marker that lands on one of them is the §B4 class.
-    const ImportTier imports = impactImportTier( ing, seeds );
+    ImportTier imports = impactImportTier( ing, seeds );
+    sizeImportTier( imports, page.limit );   // cut-fix C: limit sizes the tier, as on the CLI
     rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
                   ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: where the CLI root carries it
                   imports.xmlAttrs.c_str(), radiusTested, radiusUntested, declinedCallsAttrXml( declinedCalls ).c_str(), imRootAttr.c_str(),
@@ -2867,7 +2896,7 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
         return renderFieldUses( ing, fields[ 0 ], FieldUsesArgs{ symbol, ing.realPaths.empty(), root, page.limit, page.offset, ix.g } );
     }
 
-    struct UseSite { std::uint32_t fileId; std::uint32_t line; RefRole role; std::string in; };
+    struct UseSite { std::uint32_t fileId; std::uint32_t line; RefRole role; std::string in; NodeId from; };   // from: rankUseSites' weight
     std::vector<UseSite> sites;
     const ElixirResolver elixirResolver( ing );
     // CLI parity (mcpclidiffcheck): the Elixir resolver path is gated on the selector's ELIXIR definitions —
@@ -2899,7 +2928,7 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
             // R-R: same root the <u p=…> beside it strips, so in_id= and p= agree on the spelling
             in = canonicalIdForEmit( ing, fs, ing.realPaths.empty() ? std::string_view( root ) : std::string_view() );
         }
-        sites.push_back( { r.fileId, r.line, r.role, std::move( in ) } );
+        sites.push_back( { r.fileId, r.line, r.role, std::move( in ), r.fromSymbol } );
     }
     // LB-G (r10 §5): TIER before path and the CLI --uses' own default site cap. mcpclidiffcheck LENS 1
     // pins the two surfaces' root-attribute sets equal, so a cap on one and not the other is a divergence.
@@ -2913,6 +2942,7 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
         if( a.role   != b.role ) {   return std::uint8_t( a.role ) < std::uint8_t( b.role );
 }
         return a.in < b.in; } );
+    rankUseSites( ing, ix.g, sites );   // cut-fix C: the CLI --uses order, shared — the cap drops the lightest sites
 
     const PageWindow  upw           = pageWindow( sites.size(), effectiveRowCap( page.limit, kUseSiteRowCap ), page.offset );
     const std::size_t upageRows     = upw.end - upw.begin;

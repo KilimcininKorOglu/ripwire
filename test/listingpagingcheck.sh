@@ -10,8 +10,9 @@
 #         PRIMARY <doc> rows that --limit already windows, so one flag governing both makes the same doc
 #         print shown_failed="3" at --limit=3 and shown_failed="6" at --limit=6 — page[0:3] + page[3:6]
 #         stops equalling page[0:6] and the --offset continuity arm goes red, correctly. The tool had
-#         already settled this shape (pageview.h kImportReachRowCap: a secondary listing "is NOT raisable
-#         by --limit … discloses through shown_importers=/importers_capped= and nothing else"), so what
+#         already settled this shape (pageview.h rule 6: a secondary listing discloses through its own
+#         shown_/capped pair and never pages; --impact's import tier, once the example here, is SIZED by
+#         --limit since cut-fix C because its rows sit after the paged rows, not inside them), so what
 #         closes here is the SILENCE: the pair on the doc that was cut, and next= naming --detail.
 #   F-07  src/darkflags.h and src/flipimpact.h emitted NO shown=/total=/capped= token at all (grep: 0 hits
 #         in either file). --flags cut the <read> sites under a gate at 8 and --flip cut six listings at 25,

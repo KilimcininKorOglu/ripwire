@@ -266,6 +266,11 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # only against a binary whose DEFAULT is the full legend (a pre-L1 build) — recording with this binary's
 # --legend=full would make the pin self-referential and let a full-dialect regression pin itself:
 #   for each row below:  ( cd <the fixture repo> && <pre-L1 bin> . <args> ) > <pin>   (pinNorm masks at= on compare)
+# RE-ANCHORED BY HAND 2026-09-23 (cut-fix C, lane/cutfix-navlists), two sentences and nothing else, because a pre-L1 binary
+# cannot print a legend written after it: callers.xml's ordering sentence ("by path within a tier" -> "within a tier the
+# most-called first, then by path", +28 B) and impact.xml's import-tier clause ("limit=/offset= window the symbol rows only"
+# -> "most-imported first; limit= sizes it, offset= windows the symbol rows only", +32 B). Both
+# restate the rows' new order and the tier's new --limit reach; the rows of both pins are unchanged on this fixture.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
@@ -464,6 +469,10 @@ probeFor()
 # beside it), so its compactlegend.h completeness reading rides every --test-gate compact answer, not just
 # one gated on a real exclusion — the #324 disclosure this lane's own review found silent (exit 0 with
 # nothing explaining why on a module-scope-only change).
+# RE-PINNED 2026-09-23 (cut-fix C, lane/cutfix-navlists): ripwire.impact/v1 780 -> 810 (measured 797, the --impact=distance
+# probe). The shown_importers= reading gained "(limit= sizes them)" (+20 B): --limit now sizes the import tier, and a cut tier
+# with no reading of the one call that fetches the rest is the silent-cut shape METHODOLOGY §9 principle 3 rules out. The
+# old 770 had drifted to 777 before this lane (measured on the base binary, 60b65f02). No other schema moved.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -506,7 +515,7 @@ ripwire.doc-drift/v1              960   949
 ripwire.notes/v1                  310   292
 ripwire.path/v1                   550   535
 ripwire.connect/v1                760   741
-ripwire.impact/v1                780   770
+ripwire.impact/v1                810   797
 ripwire.mentions/v1               260   243
 ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
@@ -943,7 +952,9 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 # RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
 # (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
 # Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
-for pair in "impact:780:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
+# RE-PINNED 2026-09-23 (cut-fix C): impact 780 -> 810 (measured 797; 777 on the base binary) — the same +20 B
+# shown_importers= reading the (U) table's ripwire.impact/v1 row states: --limit now sizes the import tier.
+for pair in "impact:810:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "uses:510:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "path_between:540:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
             "lego:260:{\"path\":\".\",\"type\":\"Point\",\"legend\":\"compact\"}" \
