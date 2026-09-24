@@ -24,6 +24,13 @@
 #        truncated="1" next=…>, no `<!-- truncated -->` inside the CDATA, and following next= at the same
 #        budget reassembles the whole body byte for byte. RED on 60b65f02 (capped="0", marker in the CDATA).
 #   (B4) determinism and well-formedness of every B-arm document.
+#   (B5) WHOLE LINES, AND next= ALWAYS ADVANCES (review M1): on a body whose FIRST line exceeds the budget, one whose
+#        LAST line does, and a 70 KB line at the DEFAULT budget, follow next= with a strict-progress assertion (each
+#        call's first line is past the previous call's, the chain ends, and it reassembles the body). A line that
+#        alone exceeds the budget is served WHOLE with over_ceiling="1". RED on d4395e7e (next= served itself).
+#   (B6) no sub-line fragment: formaxtokenscheck's own fixture (--for --detail=30 --token-budget=800) cut its top
+#        body to ONE BYTE under lines="1-1/7"; every truncated body's CDATA must now be exactly the whole lines its
+#        lines= names, re-derived from an uncut --expand of the same definition. RED on d4395e7e.
 #
 # Usage:  test/overbudgetcommentcheck.sh   [ RIPWIRE_BIN=path/to/ripwire ]
 # Exits non-zero on any failure. Does NOT edit regression.sh.
@@ -167,6 +174,89 @@ for a in "--expand=alpha_head,gamma_mid,beta_tail --pack-budget-bytes=500" "--ex
     printf '%s' "$X1" | xmllint --noout - 2>/dev/null || no "(B4) not well-formed: $a"
 done
 ok "(B4) the B documents are deterministic and well-formed (a failure above names the one that is not)"
+
+# ── B5 / B6 (review M1) ──────────────────────────────────────────────────────────────────────────────────────
+LFX="$TMP/lfx"; mkdir -p "$LFX/src"
+python3 - "$LFX/src" <<'PY'
+import os, sys
+d = sys.argv[1]
+w = lambda n, t: open( os.path.join( d, n ), "w" ).write( t )
+# first line (the signature, a long default argument) 2.6 KB, then 40 short lines
+w( "firstlong.c", "int first_long( int a, const char* s = \"" + "x" * 2600 + "\" )\n{\n" + "".join( "    a += %d;\n" % i for i in range( 40 ) ) + "    return a;\n}\n" )
+# 30 short lines, then one 1.8 KB line, then the close
+w( "lastlong.c", "int last_long( int a )\n{\n" + "".join( "    a += %d;\n" % i for i in range( 30 ) ) + "    const char* t = \"" + "y" * 1800 + "\";\n    return a;\n}\n" )
+# a 70 KB line inside a four-line function: it alone exceeds the DEFAULT 64 KB budget
+w( "big.js", "function big_table() {\n  const t = [" + ",".join( str( i % 10 ) for i in range( 35000 ) ) + "];\n  return t;\n}\n" )
+PY
+cat > "$TMP/chain.py" <<'PY'
+import re, subprocess, sys, html
+BIN, ROOT, SEL, BUDGET = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+def run( sel, budget ):
+    a = [ BIN, ROOT, "--no-cache", "--top-k=0", "--legend=full", "--expand=" + sel ] + ( [ "--pack-budget-bytes=" + budget ] if budget else [] )
+    out = subprocess.run( a, capture_output=True, timeout=300 ).stdout
+    m = re.findall( rb'<b ([^>]*)><!\[CDATA\[(.*?)\]\]>(?:<calls|<note|</b>)', out, re.S )
+    if len( m ) != 1:
+        print( "FAIL %s: %d bodies" % ( sel, len( m ) ) ); sys.exit( 1 )
+    at = dict( ( k.decode(), html.unescape( v.decode() ) ) for k, v in re.findall( rb'(\w+)="([^"]*)"', m[0][0] ) )
+    return m[0][1].replace( b']]]]><![CDATA[>', b']]>' ).decode( "utf-8" ), at
+whole, wa = run( SEL, "100000000" )
+if wa.get( "truncated" ):
+    print( "FAIL the uncut reference is itself truncated" ); sys.exit( 1 )
+lines = whole.split( "\n" )
+parts, sel, prevLo, calls, over = [], SEL, 0, 0, 0
+while True:
+    calls += 1
+    if calls > 40:
+        print( "FAIL no progress after 40 calls (last %s)" % sel ); sys.exit( 1 )
+    text, at = run( sel, BUDGET )
+    over += at.get( "over_ceiling" ) == "1"
+    if "lines" in at:
+        lo, hi = map( int, at["lines"].split( "/" )[0].split( "-" ) )
+        if lo <= prevLo:
+            print( "FAIL next= did not advance: lines=%s after a call starting at line %d" % ( at["lines"], prevLo ) ); sys.exit( 1 )
+        if text != "\n".join( lines[ lo - 1 : hi ] ):
+            print( "FAIL lines=%s but the CDATA is not exactly those whole lines (%d B)" % ( at["lines"], len( text ) ) ); sys.exit( 1 )
+        prevLo = lo
+    parts.append( text )
+    if at.get( "truncated" ) != "1":
+        break
+    sel = at["next"][ len( "--expand=" ): ]
+ok = "\n".join( parts ) == whole
+print( "%s calls=%d over_ceiling=%d reassembled=%s" % ( "OK" if ok and calls > 1 or ( ok and over ) else "FAIL", calls, over, ok ) )
+PY
+for spec in "first_long 1000" "last_long 500" "big_table "; do
+    set -- $spec
+    R="$( python3 "$TMP/chain.py" "$BIN" "$LFX" "$1" "${2:-}" 2>&1 )"
+    case "$R" in
+        OK*) ok "(B5) $1 @${2:-default} budget: next= strictly advances, whole lines only, reassembles ($R)" ;;
+        *)   no "(B5) $1 @${2:-default} budget: $R" ;;
+    esac
+done
+FMX="$TMP/fmx"; mkdir -p "$FMX/src"
+for i in $( seq -w 1 30 ); do
+    printf '// Process one entry: trim the raw input and normalise it for lane %s.\nexport function processEntry%s( input: string ): string {\n    const trimmed = input.trim();\n    if( trimmed.length === 0 ) {\n        return "";\n    }\n    return trimmed.toLowerCase();\n}\n' "$i" "$i" > "$FMX/src/entry$i.ts"
+done
+"$BIN" "$FMX" --no-cache --for="processEntry input trim" --detail=30 --token-budget=800 --legend=full > "$TMP/fmx.xml" 2>/dev/null
+B6="$( python3 - "$TMP/fmx.xml" "$BIN" "$FMX" <<'PY'
+import re, subprocess, sys, html
+doc = open( sys.argv[1], "rb" ).read()
+cut = [ ( dict( ( k.decode(), html.unescape( v.decode() ) ) for k, v in re.findall( rb'(\w+)="([^"]*)"', a ) ), t.decode() )
+        for a, t in re.findall( rb'<b ([^>]*truncated="1"[^>]*)><!\[CDATA\[(.*?)\]\]>', doc, re.S ) ]
+if not cut:
+    print( "FAIL no truncated body — the arm measures nothing" ); sys.exit( 0 )
+for at, text in cut:
+    out = subprocess.run( [ sys.argv[2], sys.argv[3], "--no-cache", "--top-k=0", "--legend=full", "--expand=%s:%s:%s" % ( at["p"], at["l"], at["n"] ) ],
+                          capture_output=True ).stdout
+    # anchored on the <b> element: the full legend itself quotes the literal "<![CDATA[" (the ]]> split rule)
+    whole = re.search( rb'<b [^>]*><!\[CDATA\[(.*?)\]\]>(?:<calls|<note|</b>)', out, re.S ).group( 1 ).replace( b']]]]><![CDATA[>', b']]>' ).decode()
+    lo, hi = map( int, at["lines"].split( "/" )[0].split( "-" ) )
+    if text != "\n".join( whole.split( "\n" )[ lo - 1 : hi ] ):
+        print( "FAIL %s lines=%s serves %d B, not those whole lines" % ( at["n"], at["lines"], len( text ) ) ); sys.exit( 0 )
+print( "OK %d truncated body(ies), each exactly its whole lines%s" % ( len( cut ), " (over_ceiling)" if any( a.get( "over_ceiling" ) == "1" for a, _ in cut ) else "" ) )
+PY
+)"
+case "$B6" in OK*) ok "(B6) formaxtokens fixture: $B6" ;; *) no "(B6) formaxtokens fixture: $B6" ;; esac
+xmllint --noout "$TMP/fmx.xml" 2>/dev/null && ok "(B6) the document is well-formed" || no "(B6) the document is not well-formed"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

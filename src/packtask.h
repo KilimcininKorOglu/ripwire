@@ -1002,17 +1002,26 @@ inline SectionOpenTag findSectionOpenTag( std::string_view xml, std::string_view
     return t;
 }
 
-// P10 (partitioncheck): packBodies writes kTruncatedBodyLegend right after the <bodies …> open tag of a bundle whose
-// body it cut, and a partitioned answer would then repeat that reading once per slice. A slice drops it and the outer
-// <ctx-partitions> legend states it once (partition.h). POSITIONAL, never a search: the legend is removed only where
-// packBodies put it, so a CDATA body that quotes the same sentence is never touched.
-inline void hoistTruncatedBodyLegend( std::string& bodiesXml )
+// P10 (partitioncheck): packBodies writes kTruncatedBodyLegend, then kOverCeilingBodyLegend, right after the <bodies …>
+// open tag of a bundle whose body it cut or served past the budget, and a partitioned answer would then repeat those
+// readings once per slice. A slice drops them and the outer <ctx-partitions> legend states each once (partition.h).
+// POSITIONAL, never a search: a reading is removed only where packBodies put it, so a CDATA body that quotes the same
+// sentence is never touched. Bits: kBodyReadingTruncated / kBodyReadingOverCeiling (what the kept bodies carry).
+inline constexpr std::uint8_t kBodyReadingTruncated   = 1u;
+inline constexpr std::uint8_t kBodyReadingOverCeiling = 2u;
+inline void hoistBodyReadings( std::string& bodiesXml )
 {
-    const SectionOpenTag     tag    = findSectionOpenTag( bodiesXml, "<bodies" );
-    const std::string_view   legend = kTruncatedBodyLegend;
-    if( tag.end != std::string::npos && bodiesXml.compare( tag.end + 1, legend.size(), legend ) == 0 )
+    const SectionOpenTag tag = findSectionOpenTag( bodiesXml, "<bodies" );
+    if( tag.end == std::string::npos )
     {
-        bodiesXml.erase( tag.end + 1, legend.size() );
+        return;
+    }
+    for( const std::string_view legend : { std::string_view( kTruncatedBodyLegend ), std::string_view( kOverCeilingBodyLegend ) } )
+    {
+        if( bodiesXml.compare( tag.end + 1, legend.size(), legend ) == 0 )
+        {
+            bodiesXml.erase( tag.end + 1, legend.size() );
+        }
     }
 }
 
@@ -1397,7 +1406,7 @@ inline std::vector<NodeId> selectMonotoneBodySubset( const IngestResult& ing, co
 inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, const std::string& task,
                                        const LensRanking& lr, const PackTaskInputs& inArg,
                                        std::string* jsonOut = nullptr, std::vector<NodeId>* surfaceOut = nullptr,
-                                       std::size_t* testsKeptOut = nullptr, bool* bodyTruncatedOut = nullptr )
+                                       std::size_t* testsKeptOut = nullptr, std::uint8_t* bodyReadingsOut = nullptr )
 {
     // P2.4 — reuse-count self-supply. --pack-task's CLI/MCP call-sites only compute fan-in when --for or
     // --metrics was ALSO given, so the bundle used to print in="0" on every row while --for reported the real
@@ -1561,7 +1570,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     // the budget did not cut — contradicting the <bodies capped="0" bodyless="1"> the same document emits.
     const std::size_t  bodiesBodyless = countBodylessCandidates( ing, bodyIds );
     std::size_t        bodiesKept  = 0;
-    bool               bodyTruncated = false;   // a kept body was cut at the budget (<b truncated="1">): partition.h's gate
+    std::uint8_t       bodyReadings = 0;   // kBodyReading* bits the kept bodies carry: partition.h's outer-legend gate
 
     // ── section 3 — d1: the anchors' 1-hop callers+callees (computed above), each shown with its OWN one-line
     //    SIGNATURE (R2: d1's detail tier) + its declaration site — never a full body (that stays d0-only).
@@ -1727,10 +1736,13 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
             // §W2-K: restate total=/capped= and splice in omission markers for whatever OUR pre-selection
             // dropped that packBodies itself never saw — see restatePackTaskBodiesWrapper's own comment.
             bodiesStr  = restatePackTaskBodiesWrapper( ing, bodies.text, bodyIds, emittedBodies, ex, in.compress );
-            bodyTruncated = std::any_of( emittedBodies.kept.begin(), emittedBodies.kept.end(), []( const EmittedBody& e ) { return e.isTruncated; } );
-            if( bodyTruncated && in.innerBundle )
+            for( const EmittedBody& e : emittedBodies.kept )
             {
-                hoistTruncatedBodyLegend( bodiesStr );   // P10: a partition slice's reading rides the outer legend once
+                bodyReadings |= ( e.isTruncated ? kBodyReadingTruncated : 0u ) | ( e.isOverCeiling ? kBodyReadingOverCeiling : 0u );
+            }
+            if( bodyReadings != 0 && in.innerBundle )
+            {
+                hoistBodyReadings( bodiesStr );   // P10: a partition slice's readings ride the outer legend once
             }
         }
         else
@@ -2200,9 +2212,9 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     {
         *testsKeptOut = testsKept;
     }
-    if( bodyTruncatedOut )
+    if( bodyReadingsOut )
     {
-        *bodyTruncatedOut = bodyTruncated;   // lane/cutfix-bodies: the same report-not-grep rule, for kTruncatedBodyLegend
+        *bodyReadingsOut = bodyReadings;   // lane/cutfix-bodies: the same report-not-grep rule, for the body readings
     }
     if( surfaceOut )
     {

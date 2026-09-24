@@ -4990,6 +4990,7 @@ struct EmittedBody
     std::vector<EmittedBodyCall> calls;
     std::uint32_t                callsTotal  = 0;   // outOff[id+1]-outOff[id] — the denominator behind calls.size()
     std::string                  next;              // isTruncated ⇒ the --expand call that serves the rest (bodyNextCall); else empty
+    bool                         isOverCeiling = false;   // served past the budget: its first line alone exceeds it (BodyCut)
 };
 
 struct EmittedBodies
@@ -5462,34 +5463,48 @@ inline void appendFileExpandContextAttrs( std::string& children, const FileExpan
 //     <bodies … capped="1"><b … lines="lo-hi/T" truncated="1" next="--expand=P:L:N:A-B">
 // lines= is the partial-fetch vocabulary (the def lines shown, of its T); next= is the one pasteable call
 // that serves the rest — the file:line:name selector names exactly this definition, overloads included,
-// and A-B runs from the first line not shown whole to the last line the request covered.
+// and A-B runs from the first line not shown to the last line the request covered.
+//
+// WHOLE LINES ONLY, AND next= ALWAYS ADVANCES (review of lane/cutfix-bodies, M1). The cut used to fall back to
+// the budget's byte offset when no line ended inside the budget: a first line longer than the budget was served
+// as a fragment (one BYTE on a nearly spent --detail budget), lines= counted that fragment as a shown line, and
+// next= asked for the very range it had just served — at the same budget the same cut, forever (a 70 KB line
+// did this at the default 64 KB budget). Now the cut is always at a line end. When not even the FIRST line fits,
+// that line is served WHOLE and the body says over_ceiling="1" (METHODOLOGY §9's order: the ceiling bounds the
+// tail, never the head — exceed and say so rather than serve a fragment or drop the row). So every call shows at
+// least one whole line and next= starts past it: a chain of next= calls strictly advances and ends.
 struct BodyCut
 {
-    std::uint32_t hiLine    = 0;   // the last def line (1-based, def-relative) any byte of which is shown
-    std::uint32_t nextStart = 0;   // the first def line the next= call must serve: hiLine + 1, or hiLine when it was cut mid-line
+    std::uint32_t hiLine      = 0;       // the last def line (1-based, def-relative) shown — always WHOLE
+    std::uint32_t nextStart   = 0;       // the first def line next= serves: hiLine + 1, always
+    bool          isComplete  = false;   // nothing after the cut but an empty last line: the body is served whole
+    bool          overCeiling = false;   // the first line alone exceeds the budget, and is served whole anyway
 };
 
-// Cut `body` to at most `budgetBytes` at the last line end (UTF-8 safe — never mid-codepoint) and say which
-// lines survived. `loLine` is the def-relative number of body's first line (1, or a slice's start).
+// Cut `body` to at most `budgetBytes` at the last line end and say which lines survived — or, when no line end
+// lies inside the budget, keep the first whole line (overCeiling). A cut always lands on a '\n', so it can never
+// split a UTF-8 sequence. `loLine` is the def-relative number of body's first line (1, or a slice's start).
 inline BodyCut cutOversizedBody( std::string& body, std::size_t budgetBytes, std::uint32_t loLine )
 {
     EXPECTS( body.size() > budgetBytes, "only a body larger than the whole budget is cut" );
-    std::size_t cut       = body.rfind( '\n', budgetBytes );
-    const bool  atLineEnd = cut != std::string::npos;   // else no line ends inside the budget: the first line is cut mid-way
-    if( !atLineEnd )
+    BodyCut     out;
+    std::size_t cut = body.rfind( '\n', budgetBytes );
+    if( cut == std::string::npos )
     {
-        cut = budgetBytes;
+        out.overCeiling = true;              // not even the first line fits: it is the head, served whole
+        cut             = body.find( '\n' );
     }
-    while( cut > 0 && ( static_cast<unsigned char>( body[cut] ) & 0xC0 ) == 0x80 )
+    // nothing left after the cut (a one-line body, or only an empty line after the last '\n'): serve it whole
+    if( cut == std::string::npos || cut + 1 >= body.size() )
     {
-        --cut;
+        out.isComplete  = true;
+        out.overCeiling = true;              // it is larger than the budget by construction (EXPECTS)
+        return out;
     }
     body.resize( cut );
-    const std::uint32_t wholeLines = std::uint32_t( std::count( body.begin(), body.end(), '\n' ) );
-    BodyCut out;
-    out.hiLine    = loLine + wholeLines;   // cut at a '\n': lines lo..lo+n are whole; else line lo+n is partial (n is then 0)
-    out.nextStart = atLineEnd ? out.hiLine + 1 : out.hiLine;
-    ENSURES( body.size() <= budgetBytes && out.nextStart >= loLine );
+    out.hiLine    = loLine + std::uint32_t( std::count( body.begin(), body.end(), '\n' ) );   // lines lo..hi, every one whole
+    out.nextStart = out.hiLine + 1;
+    ENSURES( out.nextStart > loLine && ( body.size() <= budgetBytes || out.overCeiling ), "a cut shows whole lines and advances" );
     return out;
 }
 
@@ -5515,6 +5530,9 @@ inline std::string bodyNextCall( std::string_view path, const Symbol& s, std::ui
 inline constexpr const char* kTruncatedBodyLegend =
     "<!-- b truncated=\"1\": cut at the byte budget (bodies capped=\"1\"); lines=\"lo-hi/T\": the def lines shown, of T; "
     "next=: the call serving the rest -->";
+// …and of <b over_ceiling="1">, written only into a document that carries it.
+inline constexpr const char* kOverCeilingBodyLegend =
+    "<!-- b over_ceiling=\"1\": its first line alone exceeds the byte budget, served whole -->";
 
 // THE SPENT-BUDGET TAIL, named in ONE comment, walk (rank) order: `<!-- bodies omitted (budget spent): a, b, c -->`.
 // Every request met after the byte budget was spent is named — the old walk `break`s named none of them — but in
@@ -5733,6 +5751,7 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     std::vector<NodeId>          spentTail;   // met after the budget was spent: named once, last (spentTailComment)
     std::size_t shownCount     = 0;       // counted at the emission, never by substring-matching the pieces
     bool        anyTruncated   = false;   // a body cut by the oversized-first floor: capped="1" + its legend
+    bool        anyOverCeiling = false;   // a body served past the budget because its first line alone exceeds it
     // NEVER CUT SILENTLY: every body the budget drops is named — too big for what was left (a marker where it
     // sits, below) or met after the budget was spent (spentTail, one comment). The `break`s this replaces named
     // only the first kind (see THE BUDGET WALK in the header: a marker count that moved with the budget while
@@ -5803,6 +5822,7 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
         // `budgetBytes - used`, and for the re-diagnosed non-monotonicity the walk is NOT the cause of.
         const std::size_t remainingBytes = used < budgetBytes ? budgetBytes - used : 0;
         bool              truncated      = false;
+        bool              overCeiling    = false;   // the first whole line alone exceeds the budget (cutOversizedBody)
         std::string       nextCall;   // the call that serves what a truncation cut; empty on a whole body
         if( body.size() > remainingBytes )                     // doesn't fit the remaining budget
         {
@@ -5821,11 +5841,16 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
             }
             const std::uint32_t askedHi = hiLine;   // the last line the request covered: the whole def, or the slice's end
             const BodyCut       cut     = cutOversizedBody( body, budgetBytes, loLine );
-            hiLine    = cut.hiLine;
-            truncated = true;
-            nextCall  = bodyNextCall( pathRel( f ), s, cut.nextStart, askedHi );
+            overCeiling = cut.overCeiling;
+            if( !cut.isComplete )
+            {
+                hiLine    = cut.hiLine;
+                truncated = true;
+                nextCall  = bodyNextCall( pathRel( f ), s, cut.nextStart, askedHi );
+            }
         }
-        anyTruncated = anyTruncated || truncated;
+        anyTruncated   = anyTruncated || truncated;
+        anyOverCeiling = anyOverCeiling || overCeiling;
 
         // lines="lo-hi/total" — an explicit marker so the agent knows this is a SLICE, not the whole def
         // (octocode's ask: never let a partial fetch masquerade as the complete body). A truncated body
@@ -5880,6 +5905,10 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
             // OUTSIDE the CDATA, where every other cut is stated: the body is cut, and next= serves the rest.
             piece += " truncated=\"1\" next=\"";  piece += escapeXml( nextCall, esc );  piece += "\"";
         }
+        if( overCeiling )
+        {
+            piece += " over_ceiling=\"1\"";   // this body's first line alone exceeds the budget: served whole, never a fragment
+        }
         appendBodyFidelityAttrs( piece, bodyScrubbed, bodyRedacted );
         appendExtentSuspectAttr( piece, s );   // extent honesty: this body's span may be a recovery artifact
         // V1 (octocode F2): sibs=/inc= — the file-context lookup an --expand caller used to need a
@@ -5909,7 +5938,7 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
         {
             keptIndex = outEmitted->kept.size();
             outEmitted->kept.push_back( EmittedBody{ id, body, lineSpanValue, truncated, bodyScrubbed, {},
-                                                     ( id + 1 < outOff.size() ) ? outOff[id + 1] - outOff[id] : 0u, nextCall } );
+                                                     ( id + 1 < outOff.size() ) ? outOff[id + 1] - outOff[id] : 0u, nextCall, overCeiling } );
             record = &outEmitted->kept.back();
         }
 
@@ -5985,6 +6014,10 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
         // the same rule: exactly when a <b truncated="1"> is emitted, on every caller. INSIDE <bodies>, so the one
         // chargeSection that prices this element prices the reading at the rate the element is read at.
         w.write( kTruncatedBodyLegend );
+    }
+    if( anyOverCeiling )
+    {
+        w.write( kOverCeilingBodyLegend );   // the same rule, for <b over_ceiling="1">
     }
     w.write( children );
     w.write( "</bodies>" );
@@ -8866,6 +8899,10 @@ inline void packBodiesJson( std::FILE* out, const IngestResult& ing, const Emitt
         {
             w.write( ",\"truncated\":true,\"next\":" );
             writeJsonStr( w, e.next, esc );
+        }
+        if( e.isOverCeiling )
+        {
+            w.write( ",\"over_ceiling\":true" );   // the XML <b over_ceiling="1">, the same fact
         }
         // §B12.7/F-MED-1: THIS dialect's `body` is the faithful one, and the XML CDATA for the same def is
         // NOT byte-equal to it — appendCdataSafe's scrub mapped a C0 byte to a space or an invalid UTF-8
