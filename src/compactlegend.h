@@ -231,6 +231,7 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
     "<!-- format=columnar: ",          // the columnar re-serialization block
     "<!-- a body's sibs=",             // --expand's sibs= block
     "<!-- extent_suspect=",            // the extent-honesty row reading (serialize.h kExtentSuspectRowLegend)
+    "<!-- b truncated=",               // a cut --expand/pack-task body's reading (serialize.h kTruncatedBodyLegend)
 };
 
 // Comments that share a prose opener and must stay: --for's trailer (est_tokens=/dropped_positive=/weak= are
@@ -528,6 +529,10 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "caveat",            "methods=0 caveat=not-extracted-for-lang: no <m> contract read for this language", true, "iface" },
     { "next",              "next=: the one pasteable follow-up", true },
     { "scrubbed",          "scrubbed=1: this CDATA is not the bytes (]]> split or C0 replaced)", true },
+    // lane/cutfix-bodies (2026-09-23): a body cut at the byte budget used to say so only INSIDE its CDATA; the cut is now
+    // three attributes on the <b> (serialize.h kTruncatedBodyLegend is the full reading). ELEMENT-qualified: pr-context's
+    // root truncated= and the doctor/naming-calibration truncated= rows below are other elements' attributes.
+    { "truncated",         "<b truncated=1 lines=lo-hi/T next=>: cut at the byte budget; lines= shown of its T, next= serves the rest", true, "b" },
     { "preview",           "preview=1: an UNWRITTEN payload; <overwrite l= end= bytes=> = the span an apply replaces, CDATA as on disk (shown=/capped=1/elided_lines= when cut)" },
     { "redacted",          "redacted=1: a credential shape rewritten to [REDACTED:kind]; the no-redact flag serves the bytes", true },
     // extent honesty (serialize.h kExtentSuspectRowLegend): a ROW-level term on the map, <d> and <b> rows alike.

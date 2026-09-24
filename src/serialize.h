@@ -268,7 +268,7 @@ inline const char* multiRootTableLegend( bool multiRoot ) noexcept
 // `git grep -c 'xmlCommentText(' -- src/` (excluding this definition) and FAILS if it disagrees with the
 // count on the CALL-SITES line below, so the next divergence is a red gate rather than a stale sentence.
 //
-//   CALL-SITES: 15
+//   CALL-SITES: 16
 //     main.cpp     --for task echo · --exemplar request note · --query route note
 //                  · --run-trace command echo (runTraceLegendComment)                   (4)
 //     packtask.h   task · mention · co-change-boost · doc-mention notes                 (4)
@@ -276,7 +276,8 @@ inline const char* multiRootTableLegend( bool multiRoot ) noexcept
 //                  · W2-K restated body-omission marker name echo                       (1)
 //     mcpverbs.h   for/pack-task task · exemplar request note                           (2)
 //     tracelocus.h --from-trace src note                                                (1)
-//     serialize.h  the <b>/<o> per-symbol name echo inside a comment                    (1)
+//     serialize.h  the <b>/<o> per-symbol name echo inside a comment: packBodies'        (2)
+//                  over-budget marker and spentTailComment (lane/cutfix-bodies, 2026-09-23)
 // 2026-08-08 (final-sweep): 14 -> 11. L1 (density audit) dropped the comment-echoed `route note` from THREE
 // of the fourteen sites — main.cpp's --for route note, packtask.h's route note, and mcpverbs.h's route
 // reason — because the route= attribute (ctxRootOpen, attribute-escaped) is now the ONE copy of that text
@@ -4930,15 +4931,16 @@ struct EmittedBody
                                                           // emission, carried here so BOTH dialects can disclose it.
     std::vector<EmittedBodyCall> calls;
     std::uint32_t                callsTotal  = 0;   // outOff[id+1]-outOff[id] — the denominator behind calls.size()
+    std::string                  next;              // isTruncated ⇒ the --expand call that serves the rest (bodyNextCall); else empty
 };
 
 struct EmittedBodies
 {
     std::vector<EmittedBody> kept;
     std::vector<NodeId>      omitted;      // exactly the ids the XML named in a `<!-- body omitted (over budget) -->`
-                                           // marker, so the JSON dialect can name the SAME set and no more. A body
-                                           // dropped after the budget was fully spent is silent in BOTH dialects and
-                                           // is covered by total=/capped= (XML) and bodies_total/bodies_kept (JSON).
+                                           // marker, so the JSON dialect can name the SAME set and no more. Since
+                                           // lane/cutfix-bodies that is EVERY body the budget dropped, including the
+                                           // ones met after it was fully spent (they used to be silent in both).
     std::size_t              requested = 0; // valid ids handed in: the denominator for total=/capped=
 };
 
@@ -5222,8 +5224,12 @@ inline void emitCalleeCallsBlock( std::string& out, NodeId id, const std::vector
 // the same four bodies. Nothing is hidden by it — the aggregate `capped="1"` plus shown=/total= carry the
 // fact either way, and the JSON `bodies_omitted` key is built from the same set — but a reader diffing two
 // budgets sees a marker count move without the body count moving, and is owed the reason here.
+// lane/cutfix-bodies (2026-09-23) closed it rather than explaining it: the walk no longer `break`s at all.
+// Every body the budget drops is named, spent budget or not, so the marker count is the omitted count.
 //
-// The real cause is RANK PRIORITY, and it is not a defect: bodies fill top-rank-first, so a larger budget can
+// The real cause is RANK PRIORITY, and it is not a defect: bodies fill top-rank-first (and since
+// lane/cutfix-bodies they really do — the walk used to run in FILE order, see THE SELECTION ORDER in the
+// body), so a larger budget can
 // newly admit a large high-rank body that then consumes the room several smaller low-rank ones had. MEASURED
 // `--pack-task="redact secrets from emitted text"`: 5 bodies at --token-budget=6500, 2 at 7000, while the
 // delivered bytes went UP (8 687 -> 11 461). Making the count monotone means filling smallest-first, i.e.
@@ -5356,10 +5362,140 @@ inline void appendFileExpandContextAttrs( std::string& children, const FileExpan
     }
 }
 
+// ── THE OVERSIZED-FIRST CUT, STATED ON THE BODY (lane/cutfix-bodies, 2026-09-23) ─────────────────────────
+// A first body larger than the WHOLE budget is cut at a line boundary (truncateOversizedFirst). Until this
+// round the only trace of the cut was `\n<!-- truncated -->` appended INSIDE the CDATA — invisible to a
+// reader of the element, and bytes a paste-back would carry into the file — while the body still counted in
+// shown= and the wrapper said capped="0": a cut answer claiming completeness (METHODOLOGY §9 #3). The cut
+// is now stated where every other cut is, in attributes outside the CDATA:
+//     <bodies … capped="1"><b … lines="lo-hi/T" truncated="1" next="--expand=P:L:N:A-B">
+// lines= is the partial-fetch vocabulary (the def lines shown, of its T); next= is the one pasteable call
+// that serves the rest — the file:line:name selector names exactly this definition, overloads included,
+// and A-B runs from the first line not shown whole to the last line the request covered.
+struct BodyCut
+{
+    std::uint32_t hiLine    = 0;   // the last def line (1-based, def-relative) any byte of which is shown
+    std::uint32_t nextStart = 0;   // the first def line the next= call must serve: hiLine + 1, or hiLine when it was cut mid-line
+};
+
+// Cut `body` to at most `budgetBytes` at the last line end (UTF-8 safe — never mid-codepoint) and say which
+// lines survived. `loLine` is the def-relative number of body's first line (1, or a slice's start).
+inline BodyCut cutOversizedBody( std::string& body, std::size_t budgetBytes, std::uint32_t loLine )
+{
+    EXPECTS( body.size() > budgetBytes, "only a body larger than the whole budget is cut" );
+    std::size_t cut       = body.rfind( '\n', budgetBytes );
+    const bool  atLineEnd = cut != std::string::npos;   // else no line ends inside the budget: the first line is cut mid-way
+    if( !atLineEnd )
+    {
+        cut = budgetBytes;
+    }
+    while( cut > 0 && ( static_cast<unsigned char>( body[cut] ) & 0xC0 ) == 0x80 )
+    {
+        --cut;
+    }
+    body.resize( cut );
+    const std::uint32_t wholeLines = std::uint32_t( std::count( body.begin(), body.end(), '\n' ) );
+    BodyCut out;
+    out.hiLine    = loLine + wholeLines;   // cut at a '\n': lines lo..lo+n are whole; else line lo+n is partial (n is then 0)
+    out.nextStart = atLineEnd ? out.hiLine + 1 : out.hiLine;
+    ENSURES( body.size() <= budgetBytes && out.nextStart >= loLine );
+    return out;
+}
+
+// The --expand call that serves lines [fromLine, toLine] of this definition: the partial-fetch selector
+// P:L:N:A-B (main.cpp parseExpandToken splits the range at the LAST ':', and file:line:name resolves one
+// definition). Unescaped — each dialect escapes its own way.
+inline std::string bodyNextCall( std::string_view path, const Symbol& s, std::uint32_t fromLine, std::uint32_t toLine )
+{
+    std::string next = "--expand=";
+    next += path;
+    next += ':';
+    next += std::to_string( s.line );
+    next += ':';
+    next += s.name;
+    next += ':';
+    next += std::to_string( fromLine );
+    next += '-';
+    next += std::to_string( std::max( fromLine, toLine ) );
+    return next;
+}
+
+// the reading of <b truncated="1">, written only into a document that carries it (the kBodylessBodiesLegend rule).
+inline constexpr const char* kTruncatedBodyLegend =
+    "<!-- b truncated=\"1\": cut at the byte budget (bodies capped=\"1\"); lines=\"lo-hi/T\": the def lines shown, of T; "
+    "next=: the call serving the rest -->";
+
+// THE SPENT-BUDGET TAIL, named in ONE comment, walk (rank) order: `<!-- bodies omitted (budget spent): a, b, c -->`.
+// Every request met after the byte budget was spent is named — the old walk `break`s named none of them — but in
+// one comment rather than one marker each: the tail can be most of the request (--detail=30 under a small
+// --token-budget drops 29), and the per-body marker's 37 B of frame would then be most of the answer. The ceiling
+// bounds the tail, so it bounds the tail's disclosure too; a body skipped because it did not fit while budget
+// REMAINED keeps its own `<!-- body omitted (over budget): NAME -->`, where it sits. "" when the tail is empty.
+inline std::string spentTailComment( const IngestResult& ing, const std::vector<NodeId>& tail, std::vector<char>& esc, std::string_view noun )
+{
+    if( tail.empty() )
+    {
+        return {};
+    }
+    std::string c = "<!-- ";
+    c += noun;
+    c += " omitted (budget spent): ";
+    for( std::size_t i = 0; i < tail.size(); ++i )
+    {
+        if( i > 0 )
+        {
+            c += ", ";
+        }
+        c += escapeXml( xmlCommentText( ing.symbols[ tail[i] ].name ), esc );   // A4-F9 / W3FIX M3: a name inside a comment
+    }
+    c += " -->";
+    return c;
+}
+
+// One rendered <b> (or its omission marker) of packBodies' rank-order walk, before the file grouping.
+struct PackedBodyPiece
+{
+    std::uint32_t fileSlot  = 0;          // the file's first-appearance slot: the emitted grouping key
+    NodeId        id        = 0;
+    std::size_t   keptIndex = SIZE_MAX;   // this body's index in EmittedBodies::kept; SIZE_MAX ⇒ a marker, or no record
+    bool          isMarker  = false;
+    std::string   xml;
+};
+
+// §H5: the record is appended in WALK (rank) order, and the XML is emitted grouped by file. Re-lay the
+// record in the emitted order, so a dialect rendering `kept` and `omitted` reads the bodies in the order the
+// XML prints them — the order they always had, when walk order and emitted order were the same thing — and
+// append the spent-budget tail (spentTailComment), which the XML names last.
+inline void regroupEmittedRecord( EmittedBodies* out, const std::vector<PackedBodyPiece>& emittedOrder, const std::vector<NodeId>& spentTail )
+{
+    if( out == nullptr )
+    {
+        return;
+    }
+    std::vector<EmittedBody> kept;
+    kept.reserve( out->kept.size() );
+    std::vector<NodeId> omitted;
+    for( const PackedBodyPiece& p : emittedOrder )
+    {
+        if( p.isMarker )
+        {
+            omitted.push_back( p.id );
+        }
+        else if( p.keptIndex < out->kept.size() )
+        {
+            kept.push_back( std::move( out->kept[p.keptIndex] ) );
+        }
+    }
+    ENSURES( kept.size() == out->kept.size() && omitted.size() == out->omitted.size(), "a permutation, not a filter" );
+    omitted.insert( omitted.end(), spentTail.begin(), spentTail.end() );   // the spent-budget tail, after the markers, as emitted
+    out->kept    = std::move( kept );
+    out->omitted = std::move( omitted );
+}
+
 // --expand (L4 middle ground): emit the FULL definition source [sigStartByte, endByte) for each
 // requested symbol — "give me this def's body, not the whole file" (Agentless rung-3 / Serena
-// include_body). Grouped under <bodies>, CDATA-safe, budget-capped, self-describing (truncation
-// marker). Reads each file once (nodes grouped by file). Emitted AFTER </r>.
+// include_body). Grouped under <bodies>, CDATA-safe, budget-capped (rank-first, then grouped by file),
+// self-describing (<b truncated="1" next=>, omission markers). Reads each file once. Emitted AFTER </r>.
 // compress=true → strip comments and collapse blank runs (P2-B) before CDATA encoding.
 // ranges: optional NodeId→LineRange map (octocode partial-fetch). A node absent from `ranges`, or
 // present with hasRange=false, takes the ORIGINAL whole-body path byte-for-byte — no ranges map at
@@ -5435,15 +5571,26 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
         return contents.emplace( fid, std::move( s ) ).first->second;
     };
 
-    // group requested nodes by file so each file is read once; keep id order within a file
-    HashMap<std::uint32_t, std::vector<NodeId>> byFile;
-    std::vector<std::uint32_t>                             fileOrder;
-    std::size_t                                            requestedCount = 0;
+    // THE SELECTION ORDER (lane/cutfix-bodies, 2026-09-23): RANK FIRST, then grouped by file for emission.
+    // Every caller hands `nodes` in its own priority order — --for and --pack-task in rank order, --expand in
+    // the order its tokens were typed — and the byte budget below is walked in THAT order.
+    // Until this round the walk ran over the ids regrouped BY FILE, so the order of the cut was file order: a
+    // low-ranked body that shared a file with the top one was admitted ahead of the second-ranked body in the
+    // next file, and a budget that ran out dropped the higher-ranked one. The grouping itself is kept (it is
+    // the emitted shape every packBodies caller documents: files in first-appearance order, each file's bodies
+    // in walk order); it is applied to the SURVIVORS, after the budget has chosen them. Each file is still read
+    // once — contentOf caches it — so walking in rank order costs no extra read.
+    // A first-appearance slot per file, computed up front because V1's per-file context table needs the file
+    // list before the first body is rendered.
+    HashMap<std::uint32_t, std::uint32_t> fileSlotOf;
+    std::vector<std::uint32_t>            fileOrder;
+    std::size_t                           requestedCount = 0;
     // #60: a module-scope owner is BODYLESS BY CONSTRUCTION — its Symbol extent is empty, which is what
     // every legend naming the kind promises. It is not a body the budget cut, so it must not raise
     // capped="1" ("1 = cut" is that attribute's whole definition, and a false _capped is a wrong answer).
     // It is counted and named instead, the same shape --callees' bodyless_defs= already uses.
-    std::size_t                                            bodylessCount  = 0;
+    std::size_t                           bodylessCount  = 0;
+    fileSlotOf.reserve( nodes.size() );
     for( NodeId id : nodes )
     {
         if( id >= ing.symbols.size() )
@@ -5457,11 +5604,11 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
             continue;   // never reaches a file read: there is no span to slice
         }
         const std::uint32_t f = ing.symbols[id].fileId;
-        if( byFile.find( f ) == byFile.end() )
+        if( fileSlotOf.find( f ) == fileSlotOf.end() )
         {
+            fileSlotOf.emplace( f, std::uint32_t( fileOrder.size() ) );
             fileOrder.push_back( f );
         }
-        byFile[f].push_back( id );
     }
     if( outEmitted )
     {
@@ -5474,184 +5621,216 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     const HashMap<std::uint32_t, FileExpandContext> fileCtx =
         withFileContext ? buildFileExpandContexts( ing, fileOrder ) : HashMap<std::uint32_t, FileExpandContext>{};
 
-    std::string children;         // see THE <bodies> DISCLOSURE in the header for why this is buffered, not streamed
-    std::size_t shownCount = 0;   // counted at the emission, never by substring-matching `children`
-    for( std::uint32_t f : fileOrder )
+    // The walk renders each body (or its omission marker) into its own piece (PackedBodyPiece, above); the pieces
+    // are concatenated in file-grouped order after the walk.
+    std::vector<PackedBodyPiece> pieces;
+    pieces.reserve( requestedCount );
+    std::vector<NodeId>          spentTail;   // met after the budget was spent: named once, last (spentTailComment)
+    std::size_t shownCount     = 0;       // counted at the emission, never by substring-matching the pieces
+    bool        anyTruncated   = false;   // a body cut by the oversized-first floor: capped="1" + its legend
+    // NEVER CUT SILENTLY: every body the budget drops is named — too big for what was left (a marker where it
+    // sits, below) or met after the budget was spent (spentTail, one comment). The `break`s this replaces named
+    // only the first kind (see THE BUDGET WALK in the header: a marker count that moved with the budget while
+    // the body count did not).
+    const auto omit = [ & ]( NodeId id, std::uint32_t slot )
     {
+        std::string marker = "<!-- body omitted (over budget): ";
+        // A4-F9: the name rides inside an XML COMMENT, where "--" is ill-formed (and "-->" would
+        // terminate it early). A `--`-bearing name (C++ operator--, a markdown "-- heading") would
+        // break the G4 xmllint gate. W3FIX M3: xmlCommentText above is that collapse plus the two
+        // scrubs a comment also needs (control bytes, invalid UTF-8) — a name is corpus-derived, so
+        // a mis-parse can hand this site any byte sequence at all. Byte-identical on clean names.
+        marker += escapeXml( xmlCommentText( ing.symbols[id].name ), esc );
+        marker += " -->";
+        pieces.push_back( PackedBodyPiece{ slot, id, SIZE_MAX, true, std::move( marker ) } );
+    };
+    for( NodeId id : nodes )
+    {
+        if( id >= ing.symbols.size() || ing.symbols[id].kind == SymKind::ModuleScope )
+        {
+            continue;   // counted in the pre-pass above: an invalid id is no request, a module scope has no body
+        }
+        const Symbol&       s    = ing.symbols[id];
+        const std::uint32_t f    = s.fileId;
+        const std::uint32_t slot = fileSlotOf.find( f )->second;
+        ASSUME( slot < fileOrder.size(), "the pre-pass registered every non-module-scope request's file" );
+
+        // re-fetch the content EVERY iteration: `contents` is a flat HashMap (values stored
+        // contiguously), so the cross-file callee-signature contentOf() below can reallocate the
+        // table and dangle any reference held across it — never cache `src` past an insert.
+        const std::string& src = contentOf( f );
+        const std::size_t  a = s.sigStartByte, b = s.endByte;
+        if( src.empty() || a >= b || b > src.size() )
+        {
+            continue; // graceful: file gone / empty, or an unreadable span — covered by total=/capped=
+        }
         if( used >= budgetBytes )
         {
-            break;
+            spentTail.push_back( id );   // the budget is spent: the rest of the rank order is the tail, named below
+            continue;
         }
 
-        if( contentOf( f ).empty() )
-        {
-            continue; // graceful: file gone / empty
-        }
+        std::string body( src.data() + a, b - a );
 
-        for( NodeId id : byFile[f] )
+        // octocode partial-fetch (--expand=SYM:START-END): slice to the requested 1-based lines,
+        // relative to the def's own first line, BEFORE the budget/compress/redact pipeline below —
+        // everything downstream (truncation, compress, redact, CDATA-escape) then operates on the
+        // already-sliced text exactly as it would on a whole small body, so no other code path needs
+        // to know a slice happened. A node absent from `ranges` (or hasRange=false) is untouched:
+        // `body` is exactly what the pre-range code produced — the whole-body path is byte-identical.
+        // §B14: the lines="lo-hi/total" attribute is composed on std::string, never a fixed buffer.
+        bool          isSliced = false;
+        std::uint32_t loLine = 1, hiLine = 0, lineTotal = 0;
+        if( ranges )
         {
-            if( used >= budgetBytes )
+            if( const auto it = ranges->find( id ); it != ranges->end() && it->second.hasRange )
             {
-                break;
+                const SlicedBody sliced = sliceBodyLines( body, it->second.startLine, it->second.endLine );
+                body      = sliced.text;
+                isSliced  = true;
+                loLine    = sliced.loLine;
+                hiLine    = sliced.hiLine;
+                lineTotal = sliced.total;
             }
+        }
 
-            // re-fetch the content EVERY iteration: `contents` is a flat HashMap (values stored
-            // contiguously), so the cross-file callee-signature contentOf() below can reallocate the
-            // table and dangle any reference held across it — never cache `src` past an insert.
-            const std::string& src = contentOf( f );
-            const Symbol&      s = ing.symbols[id];
-            const std::size_t  a = s.sigStartByte, b = s.endByte;
-            if( a >= b || b > src.size() )
+        // the floored remaining budget — see THE BUDGET WALK in this function's header for why it is not
+        // `budgetBytes - used`, and for the re-diagnosed non-monotonicity the walk is NOT the cause of.
+        const std::size_t remainingBytes = used < budgetBytes ? budgetBytes - used : 0;
+        bool              truncated      = false;
+        std::string       nextCall;   // the call that serves what a truncation cut; empty on a whole body
+        if( body.size() > remainingBytes )                     // doesn't fit the remaining budget
+        {
+            // a single def larger than the WHOLE budget → truncate it (UTF-8 safe) — unless the caller
+            // asked for whole-body-or-not-at-all (T3 auto bundle), in which case it takes the marker path.
+            if( !( used == 0 && body.size() > budgetBytes && truncateOversizedFirst ) )
             {
+                omit( id, slot );                // never cut mid-def: skip whole, leave a visible marker
+                noteOmittedBody( outEmitted, id );   // §H5: the JSON dialect names the same ones
                 continue;
             }
-
-            std::string body( src.data() + a, b - a );
-
-            // octocode partial-fetch (--expand=SYM:START-END): slice to the requested 1-based lines,
-            // relative to the def's own first line, BEFORE the budget/compress/redact pipeline below —
-            // everything downstream (truncation, compress, redact, CDATA-escape) then operates on the
-            // already-sliced text exactly as it would on a whole small body, so no other code path needs
-            // to know a slice happened. A node absent from `ranges` (or hasRange=false) is untouched:
-            // `body` is exactly what the pre-range code produced — the whole-body path is byte-identical.
-            // §B14 — was `char partAttr[40]`, the third latent site: ` lines=""` is 9 literal bytes and
-            // "lo-hi/total" is 3×10 digits + 2 separators = 32 at the u32 ceiling, so 41 B + NUL against a
-            // 40-byte buffer. Unreachable (it needs a 10^9-line file) but off by exactly the margin the class
-            // is about, so it is composed on std::string rather than left as an arithmetic claim to re-audit.
-            std::string partAttr;
-            std::string lineSpanValue;   // §H5: the same "lo-hi/total" the XML attribute carries, for the record
-            if( ranges )
+            if( !isSliced )
             {
-                if( const auto it = ranges->find( id ); it != ranges->end() && it->second.hasRange )
-                {
-                    const SlicedBody sliced = sliceBodyLines( body, it->second.startLine, it->second.endLine );
-                    body = sliced.text;
-                    // lines="lo-hi/total" — an explicit marker so the agent knows this is a SLICE, not the
-                    // whole def (octocode's ask: never let a partial fetch masquerade as the complete body).
-                    lineSpanValue = std::to_string( sliced.loLine ) + "-" + std::to_string( sliced.hiLine ) + "/" + std::to_string( sliced.total );
-                    partAttr = " lines=\"" + lineSpanValue + "\"";
-                }
+                lineTotal = std::uint32_t( std::count( body.begin(), body.end(), '\n' ) ) + 1;   // sliceBodyLines' own line count
+                hiLine    = lineTotal;
             }
-
-            // the floored remaining budget — see THE BUDGET WALK in this function's header for why it is not
-            // `budgetBytes - used`, and for the re-diagnosed non-monotonicity the walk is NOT the cause of.
-            const std::size_t remainingBytes = used < budgetBytes ? budgetBytes - used : 0;
-            bool              truncated      = false;
-            if( body.size() > remainingBytes )                     // doesn't fit the remaining budget
-            {
-                // a single def larger than the WHOLE budget → truncate it (UTF-8 safe) — unless the caller
-                // asked for whole-body-or-not-at-all (T3 auto bundle), in which case it takes the marker path.
-                if( used == 0 && body.size() > budgetBytes && truncateOversizedFirst )
-                {
-                    std::size_t cut = body.rfind( '\n', budgetBytes );
-                    if( cut == std::string::npos )
-                    {
-                        cut = budgetBytes;
-                    }
-                    while( cut > 0 && ( static_cast<unsigned char>( body[cut] ) & 0xC0 ) == 0x80 )
-                    {
-                        --cut;
-                    }
-                    body.resize( cut );
-                    truncated = true;
-                }
-                else                                                // never cut mid-def: skip whole, leave a visible marker
-                {
-                    // A4-F9: the name rides inside an XML COMMENT, where "--" is ill-formed (and "-->" would
-                    // terminate it early). A `--`-bearing name (C++ operator--, a markdown "-- heading") would
-                    // break the G4 xmllint gate. W3FIX M3: xmlCommentText above is that collapse plus the two
-                    // scrubs a comment also needs (control bytes, invalid UTF-8) — a name is corpus-derived, so
-                    // a mis-parse can hand this site any byte sequence at all. Byte-identical on clean names.
-                    children += "<!-- body omitted (over budget): ";
-                    children += escapeXml( xmlCommentText( s.name ), esc );
-                    children += " -->";
-                    noteOmittedBody( outEmitted, id );   // §H5: the JSON dialect names the same ones
-                    continue;
-                }
-            }
-
-            // --compress (P2-B): strip comments + collapse blank runs from the body text.
-            // Applied AFTER truncation so the budget check above sees the un-compressed size
-            // (conservative — compression only makes the output smaller, never larger).
-            //
-            // anti-growth guard (octocode's rule, Wave 4 #3): compressBody only ever REMOVES bytes
-            // (comment spans, excess blank lines), so it cannot grow the payload — but the guard is kept
-            // here anyway as the general contract's enforcement point: compare the reduced payload against
-            // the pre-compress original (not the wrapper tags) and never emit a "reduction" that lost.
-            // Deterministic pure size comparison; compression must never cost tokens.
-            if( compress )
-            {
-                std::string compressed = compressBody( body );
-                if( compressed.size() < body.size() )
-                {
-                    body = std::move( compressed );
-                }
-            }
-
-            // Redact credential shapes from the def body (a full-body emission seam). After compress /
-            // truncation so those size-based decisions see the un-redacted bytes; no-op under --no-redact.
-            const bool bodyRedacted = redactBodyDisclosed( body, redact );
-
-            std::string safe;  safe.reserve( body.size() );        // split ]]>; scrub C0 controls (G4) + invalid UTF-8 (A4-F20)
-            appendCdataSafe( body, safe );
-
-            // §B12.7 / F-MED-1: appendCdataSafe is not an escape, it is a LOSSY SCRUB — C0 (bar \t\n\r) to a
-            // space, invalid UTF-8 to '?'. `body` is what the JSON twin carries, `safe` is what this CDATA
-            // carries, and until now nothing said when they differed. Decided from the bytes, not from a
-            // predicate re-derivation, so the flag cannot disagree with the scrub that produced them.
-            const bool bodyScrubbed = ( safe.size() != body.size() ) || xmlScrubIsLossy( body );
-
-            char hdr[ 64 ];  rw::formatTo( hdr, sizeof( hdr ), "<b t=\"{}\" l=\"{}\" p=\"", symTag( s.kind ), s.line );
-            children += hdr;  children += escapeXml( pathRel( f ), esc );
-            children += "\" n=\"";  children += escapeXml( s.name, esc );  children += "\"";
-            children += partAttr;                                 // octocode partial-fetch: lines="lo-hi/total" (empty on the whole-body path)
-            appendBodyFidelityAttrs( children, bodyScrubbed, bodyRedacted );
-            appendExtentSuspectAttr( children, s );   // extent honesty: this body's span may be a recovery artifact
-            // V1 (octocode F2): sibs=/inc= — the file-context lookup an --expand caller used to need a
-            // second --outline call for. `fileCtx` is empty when withFileContext is false, so this is a
-            // single failed HashMap::find per body (no-op) on every other packBodies caller. The actual
-            // attribute-building lives in appendFileExpandContextAttrs above, out of this function's own
-            // complexity count — same rationale as emitCalleeCallsBlock's own extraction.
-            if( withFileContext )
-            {
-                if( const auto fcIt = fileCtx.find( f ); fcIt != fileCtx.end() )
-                {
-                    appendFileExpandContextAttrs( children, fcIt->second, id, esc );
-                }
-            }
-            children += "><![CDATA[";
-            children += safe;
-            if( truncated )
-            {
-                children += "\n<!-- truncated -->";
-            }
-            children += "]]>";
-            used += safe.size();
-
-            ++shownCount;
-
-            // §H5: the record IS the emission — same id, same post-pipeline bytes, same truncation bit, and
-            // (filled by emitCalleeCallsBlock below) the same callee rows this body actually showed.
-            EmittedBody* record = nullptr;
-            if( outEmitted )
-            {
-                outEmitted->kept.push_back( EmittedBody{ id, body, lineSpanValue, truncated, bodyScrubbed, {},
-                                                         ( id + 1 < outOff.size() ) ? outOff[id + 1] - outOff[id] : 0u } );
-                record = &outEmitted->kept.back();
-            }
-
-            // L4+: the 1-hop callee signatures — a body in isolation is the worst context unit (cAST);
-            // its callees' shapes make it a self-contained, composable bundle. §P10.1: the disclosed
-            // total=/shown=/capped= block — see emitCalleeCallsBlock above; `calleeRank` decides which
-            // rows survive when it CUTS one, which is far from rare here (CalleeCallsSink::rank).
-            emitCalleeCallsBlock( children, id, outOff, outTargets, ing, contentOf, esc, used, budgetBytes,
-                                  CalleeCallsSink{ redact, record ? &record->calls : nullptr, /*namesOnly=*/false, calleeRank } );
-            const std::string bodyNotes = renderNoteChildren( noteIndex, symbolNoteTarget( noteIndex, ing, s ), esc );   // L3/D5
-            children += bodyNotes;
-            used += bodyNotes.size();                                                                   // W3-N2: same charge-never-trim rule
-            children += "</b>";
+            const std::uint32_t askedHi = hiLine;   // the last line the request covered: the whole def, or the slice's end
+            const BodyCut       cut     = cutOversizedBody( body, budgetBytes, loLine );
+            hiLine    = cut.hiLine;
+            truncated = true;
+            nextCall  = bodyNextCall( pathRel( f ), s, cut.nextStart, askedHi );
         }
+        anyTruncated = anyTruncated || truncated;
+
+        // lines="lo-hi/total" — an explicit marker so the agent knows this is a SLICE, not the whole def
+        // (octocode's ask: never let a partial fetch masquerade as the complete body). A truncated body
+        // carries it too: the lines it actually shows, of the def's total.
+        std::string lineSpanValue;   // §H5: the same "lo-hi/total" the XML attribute carries, for the record
+        if( isSliced || truncated )
+        {
+            lineSpanValue = std::to_string( loLine ) + "-" + std::to_string( hiLine ) + "/" + std::to_string( lineTotal );
+        }
+
+        // --compress (P2-B): strip comments + collapse blank runs from the body text.
+        // Applied AFTER truncation so the budget check above sees the un-compressed size
+        // (conservative — compression only makes the output smaller, never larger).
+        //
+        // anti-growth guard (octocode's rule, Wave 4 #3): compressBody only ever REMOVES bytes
+        // (comment spans, excess blank lines), so it cannot grow the payload — but the guard is kept
+        // here anyway as the general contract's enforcement point: compare the reduced payload against
+        // the pre-compress original (not the wrapper tags) and never emit a "reduction" that lost.
+        // Deterministic pure size comparison; compression must never cost tokens.
+        if( compress )
+        {
+            std::string compressed = compressBody( body );
+            if( compressed.size() < body.size() )
+            {
+                body = std::move( compressed );
+            }
+        }
+
+        // Redact credential shapes from the def body (a full-body emission seam). After compress /
+        // truncation so those size-based decisions see the un-redacted bytes; no-op under --no-redact.
+        const bool bodyRedacted = redactBodyDisclosed( body, redact );
+
+        std::string safe;  safe.reserve( body.size() );        // split ]]>; scrub C0 controls (G4) + invalid UTF-8 (A4-F20)
+        appendCdataSafe( body, safe );
+
+        // §B12.7 / F-MED-1: appendCdataSafe is not an escape, it is a LOSSY SCRUB — C0 (bar \t\n\r) to a
+        // space, invalid UTF-8 to '?'. `body` is what the JSON twin carries, `safe` is what this CDATA
+        // carries, and until now nothing said when they differed. Decided from the bytes, not from a
+        // predicate re-derivation, so the flag cannot disagree with the scrub that produced them.
+        const bool bodyScrubbed = ( safe.size() != body.size() ) || xmlScrubIsLossy( body );
+
+        std::string piece;
+        char hdr[ 64 ];  rw::formatTo( hdr, sizeof( hdr ), "<b t=\"{}\" l=\"{}\" p=\"", symTag( s.kind ), s.line );
+        piece += hdr;  piece += escapeXml( pathRel( f ), esc );
+        piece += "\" n=\"";  piece += escapeXml( s.name, esc );  piece += "\"";
+        if( !lineSpanValue.empty() )
+        {
+            piece += " lines=\"" + lineSpanValue + "\"";      // octocode partial-fetch, or the lines a truncation kept
+        }
+        if( truncated )
+        {
+            // OUTSIDE the CDATA, where every other cut is stated: the body is cut, and next= serves the rest.
+            piece += " truncated=\"1\" next=\"";  piece += escapeXml( nextCall, esc );  piece += "\"";
+        }
+        appendBodyFidelityAttrs( piece, bodyScrubbed, bodyRedacted );
+        appendExtentSuspectAttr( piece, s );   // extent honesty: this body's span may be a recovery artifact
+        // V1 (octocode F2): sibs=/inc= — the file-context lookup an --expand caller used to need a
+        // second --outline call for. `fileCtx` is empty when withFileContext is false, so this is a
+        // single failed HashMap::find per body (no-op) on every other packBodies caller. The actual
+        // attribute-building lives in appendFileExpandContextAttrs above, out of this function's own
+        // complexity count — same rationale as emitCalleeCallsBlock's own extraction.
+        if( withFileContext )
+        {
+            if( const auto fcIt = fileCtx.find( f ); fcIt != fileCtx.end() )
+            {
+                appendFileExpandContextAttrs( piece, fcIt->second, id, esc );
+            }
+        }
+        piece += "><![CDATA[";
+        piece += safe;   // the bytes on disk (or their scrub): a truncation appends nothing inside the CDATA
+        piece += "]]>";
+        used += safe.size();
+
+        ++shownCount;
+
+        // §H5: the record IS the emission — same id, same post-pipeline bytes, same truncation bit, and
+        // (filled by emitCalleeCallsBlock below) the same callee rows this body actually showed.
+        EmittedBody* record    = nullptr;
+        std::size_t  keptIndex = SIZE_MAX;
+        if( outEmitted )
+        {
+            keptIndex = outEmitted->kept.size();
+            outEmitted->kept.push_back( EmittedBody{ id, body, lineSpanValue, truncated, bodyScrubbed, {},
+                                                     ( id + 1 < outOff.size() ) ? outOff[id + 1] - outOff[id] : 0u, nextCall } );
+            record = &outEmitted->kept.back();
+        }
+
+        // L4+: the 1-hop callee signatures — a body in isolation is the worst context unit (cAST);
+        // its callees' shapes make it a self-contained, composable bundle. §P10.1: the disclosed
+        // total=/shown=/capped= block — see emitCalleeCallsBlock above; `calleeRank` decides which
+        // rows survive when it CUTS one, which is far from rare here (CalleeCallsSink::rank).
+        emitCalleeCallsBlock( piece, id, outOff, outTargets, ing, contentOf, esc, used, budgetBytes,
+                              CalleeCallsSink{ redact, record ? &record->calls : nullptr, /*namesOnly=*/false, calleeRank } );
+        const std::string bodyNotes = renderNoteChildren( noteIndex, symbolNoteTarget( noteIndex, ing, s ), esc );   // L3/D5
+        piece += bodyNotes;
+        used += bodyNotes.size();                                                                   // W3-N2: same charge-never-trim rule
+        piece += "</b>";
+        pieces.push_back( PackedBodyPiece{ slot, id, keptIndex, false, std::move( piece ) } );
     }
+
+    // …and the survivors (with the markers naming what the budget dropped) grouped by file: the emitted shape.
+    // stable_sort keeps walk order inside a file, so the grouping is total and the bytes deterministic.
+    std::stable_sort( pieces.begin(), pieces.end(), []( const PackedBodyPiece& x, const PackedBodyPiece& y ) { return x.fileSlot < y.fileSlot; } );
+    std::string children;         // see THE <bodies> DISCLOSURE in the header for why this is buffered, not streamed
+    for( const PackedBodyPiece& p : pieces )
+    {
+        children += p.xml;
+    }
+    children += spentTailComment( ing, spentTail, esc, "bodies" );
+    regroupEmittedRecord( outEmitted, pieces, spentTail );   // §H5: the JSON dialect in the SAME order as the XML
 
     // §B8.3 / pageview.h THE TRUNCATION VOCABULARY rules 1+2+3: shown= rows printed, total= rows requested,
     // capped= the bit that always rides with shown=. `total` counts the ids the CALLER handed in (invalid ids
@@ -5671,8 +5850,10 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     {
         rw::formatTo( bodylessAttr, sizeof( bodylessAttr ), " bodyless=\"{}\"", bodylessCount );   // #60, absent at zero
     }
+    // capped="1" also when every requested body is present but one was TRUNCATED: "1 = cut", and a cut body is
+    // a cut (METHODOLOGY §9 #3 — never capped="0" on a truncated item). Its own <b truncated="1"> says which.
     rw::formatTo( open, sizeof( open ), "<bodies shown=\"{}\" total=\"{}\" capped=\"{}\"{}{}>",
-                   shownCount, requestedCount, shownCount + bodylessCount < requestedCount ? 1 : 0,
+                   shownCount, requestedCount, ( shownCount + bodylessCount < requestedCount || anyTruncated ) ? 1 : 0,
                    rw::cstr( bodylessAttr ), compress ? " compress=\"1\"" : "" );
     // §L10: sibs=/inc=/<calls> are only ever emitted when withFileContext is on (--expand's own call sites),
     // so the legend that defines them rides the SAME gate — every other packBodies caller (--for auto-body,
@@ -5694,6 +5875,12 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
         w.write( kExtentSuspectRowLegend );
     }
     w.write( open );
+    if( anyTruncated )
+    {
+        // the same rule: exactly when a <b truncated="1"> is emitted, on every caller. INSIDE <bodies>, so the one
+        // chargeSection that prices this element prices the reading at the rate the element is read at.
+        w.write( kTruncatedBodyLegend );
+    }
     w.write( children );
     w.write( "</bodies>" );
     w.flush();
@@ -8532,12 +8719,14 @@ inline void packBodiesJson( std::FILE* out, const IngestResult& ing, const Emitt
         // exactly as the attribute is.
         if( !e.lineSpan.empty() ) { w.write( ",\"lines\":" );  writeJsonStr( w, e.lineSpan, esc ); }
         w.write( ",\"body\":" );  writeJsonStr( w, e.text, esc );
-        // §H5: the per-body truncation vocabulary this dialect had NONE of. The XML appends
-        // `\n<!-- truncated -->` inside the CDATA; a JSON consumer gets a boolean it can branch on. Emitted
-        // only when true, matching the tool's silence-means-nothing-happened convention.
+        // §H5: the per-body truncation vocabulary, the same three facts the XML <b truncated="1" lines= next=>
+        // carries (lines rides above, from the same lineSpan): a boolean a JSON consumer can branch on, and the
+        // call that serves the rest. Emitted only when true, matching the tool's silence-means-nothing-happened
+        // convention.
         if( e.isTruncated )
         {
-            w.write( ",\"truncated\":true" );
+            w.write( ",\"truncated\":true,\"next\":" );
+            writeJsonStr( w, e.next, esc );
         }
         // §B12.7/F-MED-1: THIS dialect's `body` is the faithful one, and the XML CDATA for the same def is
         // NOT byte-equal to it — appendCdataSafe's scrub mapped a C0 byte to a space or an invalid UTF-8

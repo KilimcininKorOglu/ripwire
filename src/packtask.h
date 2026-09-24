@@ -1006,6 +1006,20 @@ inline SectionOpenTag findSectionOpenTag( std::string_view xml, std::string_view
     return t;
 }
 
+// P10 (partitioncheck): packBodies writes kTruncatedBodyLegend right after the <bodies …> open tag of a bundle whose
+// body it cut, and a partitioned answer would then repeat that reading once per slice. A slice drops it and the outer
+// <ctx-partitions> legend states it once (partition.h). POSITIONAL, never a search: the legend is removed only where
+// packBodies put it, so a CDATA body that quotes the same sentence is never touched.
+inline void hoistTruncatedBodyLegend( std::string& bodiesXml )
+{
+    const SectionOpenTag     tag    = findSectionOpenTag( bodiesXml, "<bodies" );
+    const std::string_view   legend = kTruncatedBodyLegend;
+    if( tag.end != std::string::npos && bodiesXml.compare( tag.end + 1, legend.size(), legend ) == 0 )
+    {
+        bodiesXml.erase( tag.end + 1, legend.size() );
+    }
+}
+
 
 template<class EscFn>
 inline RankingSection renderRankingWithFar( const IngestResult& ing, const RankingSectionInputs& ri, EscFn&& ex )
@@ -1387,7 +1401,7 @@ inline std::vector<NodeId> selectMonotoneBodySubset( const IngestResult& ing, co
 inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, const std::string& task,
                                        const LensRanking& lr, const PackTaskInputs& inArg,
                                        std::string* jsonOut = nullptr, std::vector<NodeId>* surfaceOut = nullptr,
-                                       std::size_t* testsKeptOut = nullptr )
+                                       std::size_t* testsKeptOut = nullptr, bool* bodyTruncatedOut = nullptr )
 {
     // P2.4 — reuse-count self-supply. --pack-task's CLI/MCP call-sites only compute fan-in when --for or
     // --metrics was ALSO given, so the bundle used to print in="0" on every row while --for reported the real
@@ -1551,6 +1565,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     // the budget did not cut — contradicting the <bodies capped="0" bodyless="1"> the same document emits.
     const std::size_t  bodiesBodyless = countBodylessCandidates( ing, bodyIds );
     std::size_t        bodiesKept  = 0;
+    bool               bodyTruncated = false;   // a kept body was cut at the budget (<b truncated="1">): partition.h's gate
 
     // ── section 3 — d1: the anchors' 1-hop callers+callees (computed above), each shown with its OWN one-line
     //    SIGNATURE (R2: d1's detail tier) + its declaration site — never a full body (that stays d0-only).
@@ -1716,6 +1731,11 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
             // §W2-K: restate total=/capped= and splice in omission markers for whatever OUR pre-selection
             // dropped that packBodies itself never saw — see restatePackTaskBodiesWrapper's own comment.
             bodiesStr  = restatePackTaskBodiesWrapper( ing, bodies.text, bodyIds, emittedBodies, ex, in.compress );
+            bodyTruncated = std::any_of( emittedBodies.kept.begin(), emittedBodies.kept.end(), []( const EmittedBody& e ) { return e.isTruncated; } );
+            if( bodyTruncated && in.innerBundle )
+            {
+                hoistTruncatedBodyLegend( bodiesStr );   // P10: a partition slice's reading rides the outer legend once
+            }
         }
         else
         {
@@ -2183,6 +2203,10 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     if( testsKeptOut )
     {
         *testsKeptOut = testsKept;
+    }
+    if( bodyTruncatedOut )
+    {
+        *bodyTruncatedOut = bodyTruncated;   // lane/cutfix-bodies: the same report-not-grep rule, for kTruncatedBodyLegend
     }
     if( surfaceOut )
     {

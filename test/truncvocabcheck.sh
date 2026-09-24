@@ -412,7 +412,10 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], "sweep_*.xml"))):
         if a["shown"] != str(rows):
             problems.append(f'{name}: <{tag} shown="{a["shown"]}"> but {rows} <{ROSTER[tag]}> rows emitted')
         try:
-            if (a["capped"] == "1") != (int(a["shown"]) < int(a["total"])):
+            # a <bodies> whose rows are all present but one is CUT (<b truncated="1">, lane/cutfix-bodies) is cut
+            # too: capped="1" with shown == total, the same reading as the lens <sigs> "rows shrunk, none dropped".
+            shrunk = tag == "bodies" and any(b.get("truncated") == "1" for b in el.findall("b"))
+            if (a["capped"] == "1") != (int(a["shown"]) < int(a["total"]) or shrunk):
                 problems.append(f'{name}: <{tag} shown={a["shown"]} total={a["total"]} '
                                 f'capped="{a["capped"]}"> — the bit contradicts the arithmetic')
         except ValueError:

@@ -416,6 +416,7 @@ struct BundleOut
     std::uint32_t       assigned = 0;
     std::uint32_t       modules  = 0;
     std::size_t         testsKept = 0;   // E1: test FILES this bundle's <tests> section kept — the outer legend's gate
+    bool                bodyTruncated = false;   // a kept body was cut (<b truncated="1">): the outer legend states its reading
 };
 
 // the fixed context every bundle render shares — grouped (not individual params) so renderMaskedBundle stays
@@ -446,7 +447,8 @@ inline BundleOut renderMaskedBundle( const BundleRenderCtx& ctx, const std::vect
     in.innerBundle    = true;   // P10 (L7): one outer legend for the whole document
     in.rankTopN       = std::min( std::size_t( kPackTaskRankTopN ), keep.size() );   // never widen the window past the slice
 
-    out.xml = packTaskBundleText( *ctx.ing, *ctx.g, *ctx.task, masked, in, ctx.wantJson ? &out.json : nullptr, &out.surface, &out.testsKept );
+    out.xml = packTaskBundleText( *ctx.ing, *ctx.g, *ctx.task, masked, in, ctx.wantJson ? &out.json : nullptr, &out.surface, &out.testsKept,
+                                  &out.bodyTruncated );
     std::sort( out.surface.begin(), out.surface.end() );
     out.surface.erase( std::unique( out.surface.begin(), out.surface.end() ), out.surface.end() );
     return out;
@@ -607,6 +609,12 @@ inline std::string packTaskPartitionText( const IngestResult& ing, const Graph& 
     whole += "<!-- ripwire task bundle (every ctx below)";  whole += kPackTaskBundleLegendBody;   // P10 (L7): stated once
     whole += rw::runHintClauseIfRows( sliceTests, rw::runsAreRootRelative( ing, inBase.rootArg ) );
     whole += " -->";
+    // the <b truncated="1"> reading, once for every slice that cut a body (each slice dropped its own copy:
+    // packtask.h hoistTruncatedBodyLegend) — gated on the bundles' REPORTS, never on a search of their bytes.
+    if( core.bodyTruncated || std::any_of( parts.begin(), parts.end(), []( const BundleOut& b ) { return b.bodyTruncated; } ) )
+    {
+        whole += kTruncatedBodyLegend;
+    }
     whole += bundleOpen( "core", -1, core );
     whole += core.xml;
     whole += "</bundle>";
