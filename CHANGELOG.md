@@ -37,14 +37,20 @@ entity with no in-repo body (no real implementation anywhere in the corpus) is r
 the forward declaration standing in for it. A namespace-alias or using-directive call (`namespace sr =
 std::ranges; sr::move(...)`, or an unqualified call after `using namespace std::chrono;`) is a stated,
 disclosed floor — its written qualifier never names `std` at all, so it is unaffected, unchanged from
-today's ladder. `kParserVer` moves 119 → 120 (two new per-record extraction facts) and `kCacheVersion` moves
-24 → 25, so any cache written by an earlier binary is refused and reparsed.
+today's ladder. An out-of-line std-rooted definition (`std::detail::f(){}`, `std::hash<Foo>::mix(...){}`) and
+a partially-qualified one written inside `namespace std { … }` (`namespace std { int detail::f(){} }`) are
+recognised too, and a std-rooted VARIABLE (a niebloid: `namespace std::ranges { inline constexpr sort_fn
+niebloid{}; }`) is never refused for having no function body. `kParserVer` moves 119 → 121 (two new
+per-record extraction facts, then a same-day correctness fix to how one of them is computed) and
+`kCacheVersion` moves 24 → 25, so any cache written by an earlier binary is refused and reparsed.
 
 The same "a qualified call binds by its immediate segment alone" shape was checked in Rust, C#, Python,
-Java/Kotlin and Go: Rust's `std::`/`core::` guard has the identical gap (tracked separately); C#, Python and
-Java capture no qualifier chain at all for these calls today, so the shared mechanism does not reach them
-without new capture work; Go's package-qualified calls are always exactly one segment, so the defect shape
-cannot arise there.
+Java/Kotlin and Go: Rust's `std::`/`core::` guard has the identical gap — confirmed on both binaries
+(`std::collections::HashMap::new()` and `core::mem::swap`/`std::mem::swap` all still bind an unrelated
+in-repo `HashMap::new`/`mem::swap`) and **currently a known, UNTRACKED gap**, not filed as its own issue as
+of this writing; C#, Python and Java capture no qualifier chain at all for these calls today, so the shared
+mechanism does not reach them without new capture work; Go's package-qualified calls are always exactly one
+segment, so the defect shape cannot arise there.
 
 ## [0.6.2] — 2026-09-21
 

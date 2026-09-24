@@ -572,4 +572,93 @@ else
     no "§13 cannot verify G4: xmllint is NOT INSTALLED — this check did not run (install libxml2)"
 fi
 
+# ── §14 (F1/F2, adversarial review of #150, 2026-09-23) — OUT-OF-LINE std DEFINITIONS, 3+ SEGMENTS ─────────
+# The review that found this: cppDefinitionRootsStd (ingest_names.h) trusted `ts_node_parent(nameNode)` to
+# always be the OUTERMOST qualified_identifier of a definition's written chain, the way it genuinely is for a
+# CALL. It is not, for a 3+-segment OUT-OF-LINE DEFINITION: ingest.cpp re-seats a definition's @name to the
+# INNERMOST link (queries/cpp/tags.scm's own comment: "ingest.cpp descends it to the innermost name:"), so
+# `std::detail::f`'s nameNode there is `f`, whose immediate parent is only the inner `detail::f` node — its
+# root reads as "detail", not "std", and a real std-rooted definition loses every true caller (RED on lane
+# head 70dfdf09, BEFORE this fix: `test/stdqualcheck.sh` itself passed ALL PASS at that commit, because §11's
+# fixture has no 3+-segment out-of-line std definition — these three shapes are what a probe build had to
+# add to find it). A second, narrower bug shared the same root cause: a PARTIALLY-qualified out-of-line def
+# written inside `namespace std { … }` (`namespace std { int detail::innerHelper(int){} }`) never reached the
+# enclosing-namespace fallback at all, qualified or not. §14 also covers F2: the K3 "must have a body" filter
+# (graph.h) applied to every candidate kind, including a std-rooted VARIABLE (a niebloid), which has no
+# separate body by construction and was wrongly refused as if it were a bodyless declaration.
+F1FIX="$TMP/f1fix"
+mkdir -p "$F1FIX"
+cat >"$F1FIX/f1shapes.h" <<'EOF'
+#pragma once
+
+struct Foo { int v; };
+
+namespace std
+{
+template<class T> struct hash;
+template<> struct hash<Foo>
+{
+    unsigned long operator()( const Foo& f ) const { return f.v; }
+    static unsigned long mix( unsigned long x );          // out-of-line def below: 3 segments, a template-id middle link
+};
+namespace detail { int polyfillHelper( int x ); }          // out-of-line def below: 3 plain segments
+namespace ranges
+{
+struct sort_fn { int operator()( int x ) const { return x; } };
+inline constexpr sort_fn niebloid{};                        // F2: a std-rooted VARIABLE, no body by construction
+}
+}
+EOF
+cat >"$F1FIX/f1shapes.cpp" <<'EOF'
+#include "f1shapes.h"
+
+unsigned long std::hash<Foo>::mix( unsigned long x ) { return x ^ 0x9e3779b9UL; }   // 3-seg, template-id middle
+int std::detail::polyfillHelper( int x ) { return x + 1; }                          // 3-seg, plain
+
+namespace std
+{
+namespace detail { int innerHelper( int x ); }
+int detail::innerHelper( int x ) { return x; }   // PARTIAL qualifier ("detail::innerHelper") inside namespace std {}
+}
+
+unsigned long callMix( unsigned long x ) { return std::hash<Foo>::mix( x ); }
+int callPolyfill( int x ) { return std::detail::polyfillHelper( x ); }
+int callInner( int x ) { return std::detail::innerHelper( x ); }
+int callNiebloid( int x ) { return std::ranges::niebloid( x ); }
+EOF
+frun(){ run "$F1FIX" "$@" --no-cache; }
+fexpect(){   # $1 sym  $2 want  $3 PASS prose  $4 FAIL prose
+    local out; out="$( frun "--callees=$1" )"
+    local got; got="$( cnt "$out" )"
+    [ "${got:-REFUSED}" = "$2" ] && ok "$3" || no "$4 — got '${got:-REFUSED}': $( el "$out" )"
+}
+fexpect callMix 1 \
+    "#150 §14 F1: --callees=callMix count=1 -> std::hash<Foo>::mix, a 3-segment out-of-line def with a template-id middle link (was count=0 on 70dfdf09: the innermost-link bug read the root as 'hash<Foo>')" \
+    "#150 §14 F1 REGRESSED: std::hash<Foo>::mix must resolve — an out-of-line std definition with a template-id in its chain lost its true edge"
+fexpect callPolyfill 1 \
+    "#150 §14 F1: --callees=callPolyfill count=1 -> std::detail::polyfillHelper, a 3-segment out-of-line def (was count=0 on 70dfdf09)" \
+    "#150 §14 F1 REGRESSED: std::detail::polyfillHelper must resolve — a 3+-segment out-of-line std definition lost its true edge"
+fexpect callInner 1 \
+    "#150 §14 F1: --callees=callInner count=1 -> detail::innerHelper, a PARTIALLY-qualified out-of-line def inside namespace std {} (was count=0 on 70dfdf09: the dispatcher never fell back to the enclosing-namespace walk)" \
+    "#150 §14 F1 REGRESSED: a partially-qualified out-of-line def inside namespace std {} must still resolve via the enclosing-namespace walk"
+fexpect callNiebloid 1 \
+    "#150 §14 F2: --callees=callNiebloid count=1 -> the std::ranges niebloid VARIABLE (was count=0 on 70dfdf09: the body test applied to every kind, not just functions/methods)" \
+    "#150 §14 F2 REGRESSED: a std-rooted variable (a niebloid) must not be refused for having no function body"
+[ "$( cnt "$( frun --callers=polyfillHelper )" )" = 1 ] && frun --callers=polyfillHelper | grep -qF 'n="callPolyfill"' \
+    && ok "#150 §14 F1: --callers=polyfillHelper count=1 -> callPolyfill (the verb the review named alongside --callees/--impact)" \
+    || no "#150 §14 F1 REGRESSED: --callers=polyfillHelper must show callPolyfill as a true caller"
+[ "$( frun --impact=polyfillHelper | grep -oE 'reaches="[0-9]+"' )" = 'reaches="1"' ] \
+    && ok "#150 §14 F1: --impact=polyfillHelper reaches=1 -> callPolyfill (the blast radius is not silently empty)" \
+    || no "#150 §14 F1 REGRESSED: --impact=polyfillHelper expected reaches=1, got $( frun --impact=polyfillHelper | grep -oE 'reaches="[0-9]+"' )"
+frun --pin-census="$TMP/f1a.tsv" >"$TMP/f1a.xml"
+frun --pin-census="$TMP/f1b.tsv" >"$TMP/f1b.xml"
+cmp -s "$TMP/f1a.xml" "$TMP/f1b.xml" && cmp -s "$TMP/f1a.tsv" "$TMP/f1b.tsv" \
+    && ok "§14 deterministic: f1shapes map + census byte-identical across two --no-cache runs" \
+    || no "§14 non-deterministic: f1shapes map or census differs between two runs"
+if command -v xmllint >/dev/null 2>&1; then
+    if xmllint --noout "$TMP/f1a.xml" 2>/dev/null; then ok "§14 xml well-formed (f1shapes fixture map)"; else no "§14 f1shapes fixture map is malformed XML"; fi
+else
+    no "§14 cannot verify G4: xmllint is NOT INSTALLED — this check did not run (install libxml2)"
+fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

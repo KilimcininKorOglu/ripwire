@@ -794,6 +794,14 @@ inline bool keepRustQualifiedCandidates( const IngestResult& ing, ChaConeMemo& c
 //     Lang::ObjC arm below is live the day extraction supplies a qualifier;
 //   * Lang::C is unaffected by construction: C has no `::`, and ingest sets a call qualifier for Lang::Cpp only.
 //     CUDA (.cu/.cuh) and Metal (.metal) ARE Lang::Cpp, so they take this guard exactly as .cpp does.
+//   * LANGUAGE NEUTRALITY (checked, not fixed here): Rust's own qualified-call guard
+//     (keepRustQualifiedCandidates, below) has the IDENTICAL immediate-segment defect for `std::`/`core::` —
+//     confirmed on both the base and this fix's binary (`std::collections::HashMap::new()`,
+//     `core::mem::swap`/`std::mem::swap` all still bind an unrelated in-repo `HashMap::new`/`mem::swap`). It
+//     is a KNOWN, UNTRACKED gap as of this comment: no GitHub issue exists for it yet (searched at the time
+//     this comment was written). C#, Python and Java capture no qualifier/receiver chain at all for an
+//     ordinary qualified call today, so this mechanism cannot reach them without new capture work first.
+//     Go's package-qualified calls are always exactly one segment, so the defect shape cannot arise.
 //
 // Returns false when NOTHING survives, and the caller refuses the site through vetoExternal — `external=`, one
 // `C external` census row, no edge — the Phase-5 veto's own bucket, because a standard-library name with no
@@ -832,22 +840,33 @@ inline bool keepStdQualifiedCandidates( const IngestResult& ing, const Reference
 
     // stable in-place compaction, as the namespace gate does — preserves candidate order, allocates nothing.
     // A candidate survives only when ITS OWN scope is std-rooted too (full-chain OR the immediate-scope
-    // floor) AND it is a real DEFINITION, never a bodyless std declaration standing in alone (#150 K3).
+    // floor) AND — for a FUNCTION-LIKE kind only — it is a real DEFINITION, never a bodyless std
+    // declaration standing in alone (#150 K3). The body test is function/method-only (found by review,
+    // redhat-et/ripwire #150): `isDefinitionNotDeclaration` reads `endByte > sigEndByte`, which is the right
+    // question for a function's body but the wrong one for a VARIABLE — a std-rooted niebloid object
+    // (`namespace std::ranges { inline constexpr sort_fn niebloid{}; }`) is a complete, real definition with
+    // no separate "body" span at all, so the unconditional body test refused it exactly like a bodyless
+    // declaration and lost a true edge. A class/struct/other non-function kind is treated the same as a
+    // variable here — only Function/Method carry the decl/def distinction this filter exists to enforce.
+    const auto isFunctionLikeKind = []( SymKind k ) noexcept { return k == SymKind::Function || k == SymKind::Method; };
     std::size_t keepCount = 0;
     for( std::size_t ci = 0; ci < cand.size(); ++ci )
     {
         const Symbol& sym       = ing.symbols[ cand[ ci ] ];
         const bool    scopeIsStd = sym.scopeRootsStd || namesStd( sym.scope ) || sym.scope.starts_with( "std::" );
-        if( scopeIsStd && isDefinitionNotDeclaration( sym ) )
+        const bool    bodyOk    = !isFunctionLikeKind( sym.kind ) || isDefinitionNotDeclaration( sym );
+        if( scopeIsStd && bodyOk )
         {
             cand[ keepCount++ ] = cand[ ci ];
         }
     }
     cand.resize( keepCount );
-    // ENSURES: this filter never hands the tier ladder a declaration-only std candidate — K3's whole point.
-    // Cheap at this size (cand is a handful of same-name candidates, never the whole symbol table).
-    ENSURES( std::all_of( cand.begin(), cand.end(), [ & ]( NodeId id ) { return isDefinitionNotDeclaration( ing.symbols[ id ] ); } ),
-             "keepStdQualifiedCandidates must never leave a bodyless std declaration as a survivor" );
+    // ENSURES: this filter never hands the tier ladder a bodyless std FUNCTION/METHOD declaration — K3's
+    // whole point. Cheap at this size (cand is a handful of same-name candidates, never the whole symbol
+    // table).
+    ENSURES( std::all_of( cand.begin(), cand.end(),
+                           [ & ]( NodeId id ) { return !isFunctionLikeKind( ing.symbols[ id ].kind ) || isDefinitionNotDeclaration( ing.symbols[ id ] ); } ),
+             "keepStdQualifiedCandidates must never leave a bodyless std function/method declaration as a survivor" );
     return keepCount != 0;
 }
 

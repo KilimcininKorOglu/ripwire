@@ -679,20 +679,36 @@ inline std::string qualifierOfDefinition( TSNode nameNode, std::string_view src 
 // query capture (queries/cpp/tags.scm's "QUALIFIED CALLS AT ANY DEPTH" pattern); for an out-of-line
 // definition, the definition pattern's own @name. tree-sitter-cpp nests qualified_identifier
 // RIGHT-recursively — `A::B::C` is qualified_identifier(scope: A, name: qualified_identifier(scope: B, name:
-// C)) — so `ts_node_parent( nameNode )` is ALWAYS the OUTERMOST qualified_identifier of the whole written
-// chain (the call's `function:` field, or the definition's `declarator:` field), and that parent's own TEXT
-// SPAN is the entire chain exactly as written, leading `::` included. Reading only its first segment is
-// therefore safe with a plain `find` (never the template-aware last-segment scanners used elsewhere in this
-// file): nothing can appear before a call's own root, template arguments included — a template argument
-// list is always part of a LATER segment, never a prefix of the first one.
+// C)) — and that outermost node's own TEXT SPAN is the entire chain exactly as written, leading `::`
+// included, so reading only its first segment is safe with a plain `find` (never the template-aware
+// last-segment scanners used elsewhere in this file): nothing can appear before a call's own root, template
+// arguments included — a template argument list is always part of a LATER segment, never a prefix of the
+// first one.
+//
+// `ts_node_parent( nameNode )` reaches that OUTERMOST node directly for a CALL (queries/cpp/tags.scm's call
+// pattern captures @name at the call's own `function:` field, one hop from the outermost identifier — see
+// its "QUALIFIED CALLS AT ANY DEPTH" comment). It does NOT for a 3+-segment OUT-OF-LINE DEFINITION: ingest.cpp
+// re-seats a definition's @name to the INNERMOST link of the chain (queries/cpp/tags.scm's own comment on the
+// method pattern: "ingest.cpp descends it to the innermost name:" — cppDefNameReseat), so `std::detail::f`'s
+// nameNode there is `f` and its immediate parent is only the INNER `detail::f` node, not the outer
+// `std::detail::f` one. Found by review (redhat-et/ripwire #150, adversarial pass 2026-09-23): the prior
+// version of this function trusted `ts_node_parent` alone and read "detail" as the root, wrongly refusing a
+// real std-rooted out-of-line definition. The climb below walks OUTWARD through every further
+// qualified_identifier ancestor (a no-op for a call — its outermost node's own parent is a call_expression,
+// never another qualified_identifier, so the loop tests once and stops) until nothing higher is still part of
+// the chain, and reads the root from THAT node's text instead.
 inline bool cppQualifiedChainRootsStd( TSNode nameNode, std::string_view src )
 {
-    const TSNode parent = ts_node_parent( nameNode );
-    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "qualified_identifier" ) || hasPhantomScopeSeparator( parent ) )
+    TSNode outer = ts_node_parent( nameNode );
+    if( ts_node_is_null( outer ) || !kindIs( ts_node_type( outer ), "qualified_identifier" ) || hasPhantomScopeSeparator( outer ) )
     {
         return false;
     }
-    std::string_view text = nodeTextOf( parent, src );
+    for( TSNode up = ts_node_parent( outer ); !ts_node_is_null( up ) && kindIs( ts_node_type( up ), "qualified_identifier" ); up = ts_node_parent( up ) )
+    {
+        outer = up;
+    }
+    std::string_view text = nodeTextOf( outer, src );
     if( text.starts_with( "::" ) )
     {
         text.remove_prefix( 2 );   // `::std::move` — the leading global-scope operator names no segment
@@ -740,16 +756,17 @@ inline bool cppEnclosingChainRootsStd( TSNode node, std::string_view src )
 
 // The definition-side dispatcher: an out-of-line qualified def (`std::SomeType::f() {…}`, rare but legal —
 // re-opening a std entity out of line) is std-rooted exactly as a CALL with the same written chain would be,
-// so it reuses cppQualifiedChainRootsStd verbatim rather than re-deriving the same rule; every other def
-// shape (in-class, in-namespace, a bare top-level function) falls back to the enclosing-owner walk.
+// so it tries cppQualifiedChainRootsStd first. OR, not either/or (found by the same review pass as the climb
+// above): a def can be qualified AND still need the enclosing-namespace walk — `namespace std { int
+// detail::innerHelper(int) {} }` writes only the PARTIAL qualifier `detail::innerHelper` at the declarator
+// (chain root "detail", not "std"), and the real answer lives in the surrounding `namespace std { … }` block
+// the qualified check never looks at. Every def shape that is std-rooted at all is std-rooted by exactly one
+// of the two tests — a bare in-class/in-namespace def only ever reaches the enclosing walk (its declarator is
+// never a qualified_identifier, so the qualified check is a cheap, safe false) — so this is never redundant
+// work pretending to be a belt-and-suspenders check.
 inline bool cppDefinitionRootsStd( TSNode nameNode, std::string_view src )
 {
-    const TSNode parent = ts_node_parent( nameNode );
-    if( !ts_node_is_null( parent ) && kindIs( ts_node_type( parent ), "qualified_identifier" ) && !hasPhantomScopeSeparator( parent ) )
-    {
-        return cppQualifiedChainRootsStd( nameNode, src );
-    }
-    return cppEnclosingChainRootsStd( nameNode, src );
+    return cppQualifiedChainRootsStd( nameNode, src ) || cppEnclosingChainRootsStd( nameNode, src );
 }
 
 // The qualifier the 3+-segment re-split keys a REFERENCE on, from the scope half of its captured text: the last

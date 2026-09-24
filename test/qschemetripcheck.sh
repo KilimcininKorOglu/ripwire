@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-23 (later same day), lane/std-nested-binding-150 (#150 adversarial review, F1/F2): RE-DERIVED with
+#   UPDATE_GOLDEN=1 (new hash acd95b16fc…1ac9a7d). ONE manifest input moves again: kParserVer 120 -> 121 — the
+#   VALUE RawDef::scopeRootsStd computes changed (a 3+-segment out-of-line std definition's chain root was
+#   read from the wrong node; a std-rooted variable's "has a body" test was fixed to skip non-function kinds),
+#   not the record shape, so kCacheVersion stays 25 and kQSnapCacheScheme is untouched. Mirrored in quality.h's
+#   kIngestParserVerMirror in the same commit. See ingest_cache.h's own kParserVer 121 history entry.
 # 2026-09-23, lane/std-nested-binding-150 (#150) on origin/main 60b65f02: RE-DERIVED with UPDATE_GOLDEN=1
 #   (new hash 82d60238f7…08e7e9b). ONE manifest input moves: ingest_cache.h's kParserVer 119 -> 120 and
 #   kCacheVersion 24 -> 25 (RawRef gains `qualifierRootsStd`, RawDef gains `scopeRootsStd` — the two facts

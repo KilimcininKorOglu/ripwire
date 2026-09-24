@@ -265,7 +265,30 @@ constexpr std::uint32_t kCacheVersion = 25;           // 25: #150 — nested std
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 120;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 121;          // bump on any grammar/.scm/extraction change
+                                                      // 121 = 2026-09-23 (#150 review fix, F1/F2): the VALUE
+                                                      //   RawDef::scopeRootsStd computes changed, not the record
+                                                      //   shape (kCacheVersion stays 25). cppDefinitionRootsStd
+                                                      //   (ingest_names.h) trusted ts_node_parent(nameNode) to
+                                                      //   always be the OUTERMOST qualified_identifier of a
+                                                      //   definition's written chain; for a 3+-segment OUT-OF-LINE
+                                                      //   definition (`std::detail::f(){}`, `std::hash<Foo>::mix`)
+                                                      //   it is only the INNERMOST link (ingest.cpp re-seats a
+                                                      //   definition's @name there), so the fix ADDS a climb to
+                                                      //   the true outermost node before reading the root, and OR's
+                                                      //   in the enclosing-namespace walk (fixes a second shape,
+                                                      //   `namespace std { int detail::innerHelper(){} }`, whose
+                                                      //   PARTIAL written qualifier never reached that walk at
+                                                      //   all). Also graph.h::keepStdQualifiedCandidates: the "has
+                                                      //   a body" test now applies to function-like kinds only, so
+                                                      //   a std-rooted VARIABLE (a niebloid) is no longer refused
+                                                      //   for having no body. Found by adversarial review of
+                                                      //   kParserVer 120 (this lane, same commit range) BEFORE it
+                                                      //   reached main — a cache written under 120 carries this
+                                                      //   fix's WRONG scopeRootsStd value for the three shapes
+                                                      //   above; 121 forces a full reparse rather than trusting a
+                                                      //   cached bit a corrected binary would otherwise silently
+                                                      //   believe. See test/stdqualcheck.sh §14.
                                                       // 120 = 2026-09-23 (#150): two new per-record extraction
                                                       //   facts — RawRef::qualifierRootsStd (a C++ call's FULL
                                                       //   written qualifier chain is rooted at namespace std, at
