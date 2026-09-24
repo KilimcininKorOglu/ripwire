@@ -288,6 +288,43 @@ seed, 260 patterns mutated from this dialect: `\xHH`/`\u00HH`, `[c]`/`[cC]`, `(c
 `--no-prefilter` on every run, so a future soundness regression in this analyser is a gate failure, not
 another review finding.
 
+### Fixed — body packing, `--outline` and `--pack-signatures` rank before they cut, and every cut is named
+
+- **Bodies were cut in file order.** `packBodies` (the `<bodies>` of `--expand`, `--for` auto-bodies and `--detail`,
+  `--pack-task`, `--from-trace`) grouped its requests by file before the byte budget ran, so a low-ranked body sharing
+  the top body's file was admitted ahead of the second-ranked body in the next file. The budget now walks the caller's
+  own order and only the survivors are grouped by file (the emitted shape is unchanged). On a three-body fixture,
+  `--expand=alpha_head,gamma_mid,beta_tail --pack-budget-bytes=500` shipped `beta_tail` and dropped `gamma_mid`; it
+  now ships `gamma_mid`. On the 92 held-out LocBench issues, `--for --detail=6` selects a different body set on 1/92
+  (gold-body-served 52/92 before and after); the default `--for` route serves no bodies there and is byte-identical.
+- **Every dropped body is named.** Bodies met after the budget was spent used to be dropped with no name at all; they
+  are now listed, in rank order, in ONE `<!-- bodies omitted (budget spent): a, b -->` comment (one list rather than a
+  marker each, so a long tail's disclosure stays small: 29 dropped `--for --detail=30` bodies on a 30-function fixture
+  under `--token-budget=800` are named in 502 B, against 1,479 B as one marker each). A body
+  skipped because it did not fit while budget remained keeps its `<!-- body omitted (over budget): NAME -->`. Every
+  requested body is shown, named as omitted, counted as `bodyless=`, or (an unreadable span) only counted in
+  `total=`; the JSON `bodies_omitted` lists the same names.
+- **A truncated body says so outside its CDATA.** An oversized first body used to carry `<!-- truncated -->` inside
+  its CDATA while `<bodies>` said `capped="0"`. It is now `<bodies … capped="1">` and
+  `<b … lines="1-17/377" truncated="1" next="--expand=P:L:N:18-377">`; following `next=` at the same budget
+  reassembles the body byte for byte. The cut always falls at a line end and `lines=` counts whole lines only: when
+  not even the first line fits (a 70 KB line at the default 64 KB budget, or a nearly spent `--detail` budget that
+  used to serve one byte), that line is served whole with `over_ceiling="1"`, so every `next=` starts past what was
+  served and a chain of them always ends. The JSON twin carries the same `lines`/`truncated`/`next`/`over_ceiling`.
+- **`--expand`'s cut `<calls>` listing** (16 rows) kept the lowest node ids. It now keeps the callees whose names have
+  the fewest callable definitions in the index first. Over the first 60 cut listings of this repo and three held-out
+  corpora, the share of kept callees defined in the body's own file rose on all four (here 11.5% to 16.2%; scrapy
+  3.9% to 9.4%; sqlglot 23.6% to 31.4%; mypy 8.9% to 9.5%), but the share defined in the body's file or a file it
+  imports fell on mypy (75.1% to 69.8%). The map's PageRank, the other candidate, is corpus-dependent: better than
+  node-id order on scrapy and sqlglot, worse on this repo and mypy, and below the shipped order on all four.
+- **`--outline` and the map's `--pack-signatures`** walked their byte budget file-major and closed a cut with a bare
+  element. Both now walk rank-first, emit the survivors in the same grouped shape, and disclose a cut with
+  `shown= total= capped="1"` (`<!-- outlines omitted (budget spent): a, b -->` names the dropped skeletons). An uncut
+  answer is byte-identical, except that `--pack-signatures` rows sharing one start byte in a file now tie-break by id.
+  `--pack-signatures`' `total=` is the rows handed to the byte budget (its `--pack-top-n` window), as on `--for`'s
+  `<sigs>`, so a default call that the budget did not cut stays a bare `<sigs>`.
+- The full `--expand` legend said `sibs=` is "capped at 8"; the cap has been 100 since 2026-09-10.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

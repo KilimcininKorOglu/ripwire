@@ -105,18 +105,32 @@ for task in TASKS:
         if bodiesEl is not None and bodiesEl.get("shown") != str(len(xnames)):
             bad.append(f'{task!r}@{bud}: <bodies shown="{bodiesEl.get("shown")}"> but {len(xnames)} <b> elements')
 
-        # truncation parity: the XML appends "<!-- truncated -->" INSIDE the CDATA of a body it cut.
-        xtrunc = sorted(b.get("n") for b in (bodiesEl.findall("b") if bodiesEl is not None else [])
-                        if b.text and "<!-- truncated -->" in b.text)
-        jtrunc = sorted(b["n"] for b in d.get("bodies", []) if b.get("truncated"))
-        truncSeen += len(xtrunc)
-        if xtrunc != jtrunc:
-            bad.append(f"{task!r}@{bud}: TRUNCATION differs — XML {xtrunc} vs JSON {jtrunc}")
+        # truncation parity: a cut body is <b truncated="1" lines= next=> in the XML (since lane/cutfix-bodies;
+        # it used to be a "<!-- truncated -->" appended INSIDE the CDATA) and truncated/lines/next in the JSON.
+        # The three facts must agree, not just the flag, and a cut body must raise the wrapper's capped="1".
+        xcut = sorted((b.get("n"), b.get("lines"), b.get("next"))
+                      for b in (bodiesEl.findall("b") if bodiesEl is not None else []) if b.get("truncated") == "1")
+        jcut = sorted((b["n"], b.get("lines"), b.get("next")) for b in d.get("bodies", []) if b.get("truncated"))
+        truncSeen += len(xcut)
+        if xcut != jcut:
+            bad.append(f"{task!r}@{bud}: TRUNCATION differs — XML {xcut} vs JSON {jcut}")
+        if xcut and bodiesEl.get("capped") != "1":
+            bad.append(f'{task!r}@{bud}: a truncated body under <bodies capped="{bodiesEl.get("capped")}"> — a cut must say capped="1"')
+        if any(b.text and "<!-- truncated -->" in b.text for b in (bodiesEl.findall("b") if bodiesEl is not None else [])):
+            bad.append(f"{task!r}@{bud}: a '<!-- truncated -->' marker is still written inside a CDATA")
 
-        # omission parity: the XML names each over-budget skip in a comment; the JSON lists bodies_omitted.
-        xomit = sorted(c.text.split(": ", 1)[1].strip()
-                       for c in (list(bodiesEl) if bodiesEl is not None else [])
-                       if not isinstance(c.tag, str) and "body omitted (over budget)" in (c.text or ""))
+        # omission parity: the XML names each over-budget skip in a comment (and, since lane/cutfix-bodies, the
+        # bodies met after the budget was spent in ONE "bodies omitted (budget spent): a, b" list); the JSON lists
+        # bodies_omitted.
+        xomit = []
+        for c in (list(bodiesEl) if bodiesEl is not None else []):
+            if isinstance(c.tag, str):
+                continue
+            if "body omitted (over budget)" in (c.text or ""):
+                xomit.append(c.text.split(": ", 1)[1].strip())
+            elif "bodies omitted (budget spent)" in (c.text or ""):
+                xomit += [n.strip() for n in c.text.split(": ", 1)[1].split(", ")]
+        xomit = sorted(xomit)
         jomit = sorted(d.get("bodies_omitted", []))
         omitSeen += len(xomit)
         if xomit != jomit:
@@ -342,8 +356,8 @@ b = x.find( ".//bodies/b" )
 d = json.load( open( sys.argv[2] ) )
 jb = ( d.get( "bodies" ) or [ {} ] )[0]
 xt = b.text if b is not None and b.text is not None else ""
-# the XML appends "\n<!-- truncated -->" INSIDE the CDATA on a cut body; strip it before comparing bytes.
-xt = xt.split( "\n<!-- truncated -->" )[0]
+# (a cut body used to carry "\n<!-- truncated -->" INSIDE its CDATA; since lane/cutfix-bodies the CDATA is the
+# bytes alone, so nothing is stripped before comparing.)
 print( len( xt.encode( "utf-8", "surrogateescape" ) ),
        len( ( jb.get( "body" ) or "" ).encode( "utf-8", "surrogateescape" ) ),
        "1" if ( b is not None and b.get( "scrubbed" ) == "1" ) else "0",

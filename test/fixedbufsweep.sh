@@ -132,7 +132,7 @@ TABLE = {
     # unchanged; only the file is.
     ( "src/lexical.h", "attrBuf" ):  ( 1, "safe", "attrBuf[48]: ' confidence=\"%s\" margin_pct=\"%d\"' where %s is the two-value literal high|low and %d is a 0..100 percent — worst case ' confidence=\"high\" margin_pct=\"100\"' = 34 B against 47 usable + NUL, 13 B of margin. No user text can reach either interpoland." ),
     ( "src/packtask.h", "tag" ):       ( 2, "safe", "tag[112], two sites: '<bodies shown=\"0\" total=\"%zu\" capped=\"%d\"%s></bodies>' — %zu is a vector size (20 digits at absolute most), %d is 0|1, %s is the literal ' compress=\"1\"' or empty. Worst case 40 fixed + 20 + 1 + 13 = 74 B against 111 usable. The render-failed marker '<bodies shown=\"0\" total=\"%zu\" render_failed=\"1\"></bodies>' is 54 fixed + 20 = 74 B. Escaper irrelevant: no interpoland carries text." ),
-    ( "src/serialize.h", "open" ): ( 3, "safe", "open[112]: '<bodies shown=\"%zu\" total=\"%zu\" capped=\"%d\"%s>' — two sizes, a 0|1, and the same fixed compress literal. Worst case 33 fixed + 40 + 1 + 13 = 87 B against 111 usable. Same all-numeric/fixed-vocab class as its packtask.h sibling." ),
+    ( "src/serialize.h", "open" ): ( 5, "safe", "open[112]: '<bodies shown=\"%zu\" total=\"%zu\" capped=\"%d\"%s>' — two sizes, a 0|1, and the same fixed compress literal. Worst case 33 fixed + 40 + 1 + 13 = 87 B against 111 usable. Same all-numeric/fixed-vocab class as its packtask.h sibling. lane/cutfix-bodies (2026-09-23) added two open[96]: the cut non-lens '<sigs shown=\"{}\" total=\"{}\" capped=\"1\">' (packSignatures) and the cut '<outline shown=\"{}\" total=\"{}\" capped=\"1\">' (packOutline) — 36 and 39 B of literal plus two std::size_t at 20 digits = 79 B worst case against 95 usable, all-numeric. Train 18 re-derived this row on the merged tree (4 on main, -1 for lane A's packSignatures open[80] now built by sigsOpenTag's nb[96], +2 for lane B's cuts = 5: the <sigs>, <bodies>, two <hops> and <outline> open tags)." ),
     # ── src/arch.h ───────────────────────────────────────────────────────────────────────────────────────
     ( "src/arch.h", "hex" ):           ( 1, "not-markup", "hex[17] in archWriteBaseline: '{:016x}' of ONE uint64 violation hash and no string argument — exactly 16 lowercase digits + NUL = 17 B, so it cannot truncate. Appended to the .ripwire_arch_baseline sidecar's bytes, which go to that file through pathguard::writeAllAndClose; never emitted as a document." ),
     # ── src/cli.h ────────────────────────────────────────────────────────────────────────────────────────
@@ -575,7 +575,11 @@ if not bad:
 #            formatTo) is gone, the tag is now built by sigsOpenTag, whose TWO formatTo into `char nb[96]` join the
 #            EXISTING `src/serialize.h nb` row (1 -> 3); the `src/serialize.h open` row loses that site (4 -> 3).
 #            Net +1 of each. All three are counts-only (no caller text).
-EXPECTED = { "mentions": 345, "calls": 235, "sites": 235, "rows": 103, "widthforms": 0 }
+#            2026-09-24 (train 18 merge of lanes A + B): RE-DERIVED on the merged tree, not summed: lane A's
+#            +1/+1/+1 (above) and lane B's +2 open[96] (<sigs>/<outline> cut tags) are disjoint sites, so the merged
+#            enumeration is 347 mentions / 237 calls / 237 sites, rows UNCHANGED at 103; the serialize.h `open`
+#            row is 5 (A's -1, B's +2 on main's 4).
+EXPECTED = { "mentions": 347, "calls": 237, "sites": 237, "rows": 103, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

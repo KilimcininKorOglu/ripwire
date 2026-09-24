@@ -442,14 +442,10 @@ inline std::string packTaskOmittedBodiesJson( const IngestResult& ing, const rw:
         return {};
     }
     std::string out = ",\"bodies_omitted\":[";
-    for( std::size_t i = 0; i < emitted.omitted.size(); ++i )
+    appendJoinedSymbolNames( out, ing, emitted.omitted, ",", []( std::string& o, std::string_view name )
     {
-        if( i )
-        {
-            out += ",";
-        }
-        out += "\"" + jsonStr( ing.symbols[ emitted.omitted[i] ].name ) + "\"";
-    }
+        o += "\"" + jsonStr( name ) + "\"";   // serialize.h's one join loop, this dialect's quoting
+    } );
     return out + "]";
 }
 
@@ -1007,6 +1003,29 @@ inline SectionOpenTag findSectionOpenTag( std::string_view xml, std::string_view
     return t;
 }
 
+// P10 (partitioncheck): packBodies writes kTruncatedBodyLegend, then kOverCeilingBodyLegend, right after the <bodies …>
+// open tag of a bundle whose body it cut or served past the budget, and a partitioned answer would then repeat those
+// readings once per slice. A slice drops them and the outer <ctx-partitions> legend states each once (partition.h).
+// POSITIONAL, never a search: a reading is removed only where packBodies put it, so a CDATA body that quotes the same
+// sentence is never touched. Bits: kBodyReadingTruncated / kBodyReadingOverCeiling (what the kept bodies carry).
+inline constexpr std::uint8_t kBodyReadingTruncated   = 1u;
+inline constexpr std::uint8_t kBodyReadingOverCeiling = 2u;
+inline void hoistBodyReadings( std::string& bodiesXml )
+{
+    const SectionOpenTag tag = findSectionOpenTag( bodiesXml, "<bodies" );
+    if( tag.end == std::string::npos )
+    {
+        return;
+    }
+    for( const std::string_view legend : { std::string_view( kTruncatedBodyLegend ), std::string_view( kOverCeilingBodyLegend ) } )
+    {
+        if( bodiesXml.compare( tag.end + 1, legend.size(), legend ) == 0 )
+        {
+            bodiesXml.erase( tag.end + 1, legend.size() );
+        }
+    }
+}
+
 
 template<class EscFn>
 inline RankingSection renderRankingWithFar( const IngestResult& ing, const RankingSectionInputs& ri, EscFn&& ex )
@@ -1390,7 +1409,7 @@ inline std::vector<NodeId> selectMonotoneBodySubset( const IngestResult& ing, co
 inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, const std::string& task,
                                        const LensRanking& lr, const PackTaskInputs& inArg,
                                        std::string* jsonOut = nullptr, std::vector<NodeId>* surfaceOut = nullptr,
-                                       std::size_t* testsKeptOut = nullptr )
+                                       std::size_t* testsKeptOut = nullptr, std::uint8_t* bodyReadingsOut = nullptr )
 {
     // P2.4 — reuse-count self-supply. --pack-task's CLI/MCP call-sites only compute fan-in when --for or
     // --metrics was ALSO given, so the bundle used to print in="0" on every row while --for reported the real
@@ -1554,6 +1573,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     // the budget did not cut — contradicting the <bodies capped="0" bodyless="1"> the same document emits.
     const std::size_t  bodiesBodyless = countBodylessCandidates( ing, bodyIds );
     std::size_t        bodiesKept  = 0;
+    std::uint8_t       bodyReadings = 0;   // kBodyReading* bits the kept bodies carry: partition.h's outer-legend gate
 
     // ── section 3 — d1: the anchors' 1-hop callers+callees (computed above), each shown with its OWN one-line
     //    SIGNATURE (R2: d1's detail tier) + its declaration site — never a full body (that stays d0-only).
@@ -1719,6 +1739,14 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
             // §W2-K: restate total=/capped= and splice in omission markers for whatever OUR pre-selection
             // dropped that packBodies itself never saw — see restatePackTaskBodiesWrapper's own comment.
             bodiesStr  = restatePackTaskBodiesWrapper( ing, bodies.text, bodyIds, emittedBodies, ex, in.compress );
+            for( const EmittedBody& e : emittedBodies.kept )
+            {
+                bodyReadings |= ( e.isTruncated ? kBodyReadingTruncated : 0u ) | ( e.isOverCeiling ? kBodyReadingOverCeiling : 0u );
+            }
+            if( bodyReadings != 0 && in.innerBundle )
+            {
+                hoistBodyReadings( bodiesStr );   // P10: a partition slice's readings ride the outer legend once
+            }
         }
         else
         {
@@ -2189,6 +2217,10 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     if( testsKeptOut )
     {
         *testsKeptOut = testsKept;
+    }
+    if( bodyReadingsOut )
+    {
+        *bodyReadingsOut = bodyReadings;   // lane/cutfix-bodies: the same report-not-grep rule, for the body readings
     }
     if( surfaceOut )
     {

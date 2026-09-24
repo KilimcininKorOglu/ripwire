@@ -61,6 +61,49 @@ echo "capdisclosurecheck: BIN=$BIN"
 # fixtures. Written by python3 rather than a heredoc so the CROSSING sizes are computed, not eyeballed:
 # a fixture that lands one byte short of a cap is a green arm that asserts nothing.
 # ---------------------------------------------------------------------------------------------------
+# (E) the NON-lens --pack-signatures budget (lane/cutfix-bodies, 2026-09-23). The map's <sigs> section walked
+#     its byte budget FILE-MAJOR — every row of the best file before any row of the next — and stopped with a
+#     bare <sigs>. Fixture: top_alpha (rank 1) shares a_first.cpp with twenty long unreferenced fillers;
+#     second_beta (rank 2) is alone in b_second.cpp. At 400 B the old walk spent the budget on fillers and
+#     dropped second_beta, silently. Now the walk is rank-first (second_beta survives) and the cut element says
+#     <sigs shown= total= capped="1">; at a budget holding every row it stays a bare <sigs> (SILENCE).
+# ---------------------------------------------------------------------------------------------------
+EFX="$TMP/efx"; mkdir -p "$EFX/src"
+{
+    echo 'int top_alpha( int v ) { return v + 1; }'
+    for i in $( seq -w 0 19 ); do
+        printf 'int filler_%s( int first_long_parameter_name, int second_long_parameter_name ) { return first_long_parameter_name; }\n' "$i"
+    done
+} > "$EFX/src/a_first.cpp"
+echo 'int second_beta( int v ) { return v + 2; }' > "$EFX/src/b_second.cpp"
+for i in 1 2 3 4 5; do
+    if [ "$i" -le 3 ]; then printf 'int caller_%s( int v ) { return top_alpha( v ) + second_beta( v ); }\n' "$i"
+    else printf 'int caller_%s( int v ) { return top_alpha( v ); }\n' "$i"; fi
+done > "$EFX/src/z_callers.cpp"
+"$BIN" "$EFX" --no-cache --pack-signatures --top-k=0 --legend=full --pack-budget-bytes=400 > "$TMP/e_cut.xml" 2>/dev/null
+"$BIN" "$EFX" --no-cache --pack-signatures --top-k=0 --legend=full --pack-budget-bytes=60000 > "$TMP/e_whole.xml" 2>/dev/null
+ECUT="$( grep -o '<sigs [^>]*>' "$TMP/e_cut.xml" | tail -1 )"
+EROWS="$( grep -o '<d [^>]*n="[^"]*"' "$TMP/e_cut.xml" | sed 's/.*n="//;s/"$//' | tr '\n' ' ' )"
+WROWS="$( grep -o '<d [^>]*n="[^"]*"' "$TMP/e_whole.xml" | grep -c . )"
+[ "$WROWS" -ge 27 ] && [ "$( printf '%s' "$EROWS" | wc -w | tr -d ' ' )" -lt "$WROWS" ] \
+    && ok "E1 the 400 B budget really cuts the listing ($( printf '%s' "$EROWS" | wc -w | tr -d ' ' ) of $WROWS rows)" \
+    || no "E1 the fixture does not cross the budget (cut=$( printf '%s' "$EROWS" | wc -w ) whole=$WROWS) — this arm measures nothing"
+case " $EROWS " in
+    *" top_alpha "*" second_beta "*|*" second_beta "*" top_alpha "*) ok "E2 rank first: rank 2 (second_beta, a later file) survives the cut" ;;
+    *) no "E2 the budget dropped the rank-2 row second_beta while lower-ranked fillers shipped: $EROWS" ;;
+esac
+SHOWNE="$( printf '%s' "$ECUT" | sed -n 's/.*shown="\([0-9]*\)".*/\1/p' )"
+if printf '%s' "$ECUT" | grep -q 'capped="1"' && [ "$SHOWNE" = "$( printf '%s' "$EROWS" | wc -w | tr -d ' ' )" ] \
+   && printf '%s' "$ECUT" | grep -q "total=\"$WROWS\""; then
+    ok "E2 the cut <sigs> discloses it: $ECUT (shown= = the rows printed, total= = the rows uncut)"
+else
+    no "E2 the cut <sigs> does not disclose shown=/total=/capped=\"1\" arithmetically: ${ECUT:-<bare sigs>} rows=$EROWS whole=$WROWS"
+fi
+grep -q '<sigs>' "$TMP/e_whole.xml" && ! grep -q '<sigs shown=' "$TMP/e_whole.xml" \
+    && ok "E3 silence: the uncut listing stays a bare <sigs>" \
+    || no "E3 an uncut <sigs> carries the cut triple"
+
+# ---------------------------------------------------------------------------------------------------
 FIX="$TMP/fix"
 mkdir -p "$FIX"
 python3 - "$FIX" <<'PY'
@@ -364,7 +407,7 @@ run "$BIG" --for="$FORQ" > "$TMP/d_b.xml"
 if cmp -s "$TMP/d_a.xml" "$TMP/d_b.xml"; then ok "D1 the disclosed default --for is byte-identical run to run"; else no "D1 the default --for is not deterministic"; fi
 if command -v xmllint >/dev/null 2>&1; then
     xmlfail=0
-    for f in "$TMP/a_grep.xml" "$TMP/a_verify.xml" "$TMP/b_sigs.xml" "$TMP/b_for.xml" "$TMP/c_default.xml" "$TMP/c_tiny.xml"; do
+    for f in "$TMP/a_grep.xml" "$TMP/a_verify.xml" "$TMP/b_sigs.xml" "$TMP/b_for.xml" "$TMP/c_default.xml" "$TMP/c_tiny.xml" "$TMP/e_cut.xml" "$TMP/e_whole.xml"; do
         [ -s "$f" ] || continue
         xmllint --noout "$f" >/dev/null 2>&1 || { xmlfail=1; echo "      ill-formed: $f"; }
     done

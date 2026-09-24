@@ -2283,12 +2283,18 @@ int runDefaultMap( const MainDispatch& d )
             { packSource( f, ing, rank, cfg.packTopN, cfg.packBudgetBytes, redactPtr ); },
             rw::kBytesPerTokenBody );
     }
+    // &calleeOrder (lane/cutfix-bodies): each body's <calls> listing is cut at 16 rows, and with no query in scope it
+    // kept the sixteen LOWEST node ids — an arbitrary cut, however honestly disclosed. It is now ordered FEWEST
+    // SAME-NAMED DEFINITIONS FIRST (serialize.h calleeNameSpecificity: why that and not the map's PageRank, with the
+    // measurement). Built only when a body is expanded; the same vector rides the two emissions below, so the
+    // charged render and the emitted one cannot differ.
+    const std::vector<float> calleeOrder = expandNodes.empty() ? std::vector<float>{} : rw::calleeNameSpecificity( ing );
     if( !expandNodes.empty() )
     {
         bodiesSection = rw::chargeSection( [ & ]( std::FILE* f )
             { packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                           expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
-                          /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg ); },   // V1: octocode F2 sibs=/inc=
+                          /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); },   // V1: octocode F2 sibs=/inc=
             rw::kBytesPerTokenBody );
     }
     if( !outlineNodes.empty() )
@@ -2628,7 +2634,7 @@ int runDefaultMap( const MainDispatch& d )
         {
             emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                                                            expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
-                                                           /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg ); } );
+                                                           /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); } );
             bodiesEmittedEarly = true;
         }
         // T3: fill-aware auto important-last — ONLY on this, the default map emission. --no-auto-order opts
@@ -2702,7 +2708,7 @@ int runDefaultMap( const MainDispatch& d )
     {
         emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                                                        expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
-                                                       /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg ); } );   // L3: --expand bodies surface notes; V1: sibs=/inc=
+                                                       /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); } );   // L3: --expand bodies surface notes; V1: sibs=/inc=
     }
     if( !outlineNodes.empty() )
     { // resolved (and refused on a miss) above, before the first stdout byte

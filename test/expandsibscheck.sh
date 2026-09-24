@@ -163,5 +163,18 @@ printf '%s' "$WITHMAP_XML" | xmllint --noout - 2>/dev/null \
     && ok "(F) with-map + legend output is well-formed XML" \
     || no "(F) with-map + legend output is malformed XML"
 
+# (G) the legend states the cap the code applies (lane/cutfix-bodies, 2026-09-23). kMaxExpandSibs went 8 -> 100
+#     on 2026-09-10 and the in-document legend kept saying "capped at 8" — a reader told the list stops at 8
+#     meets 100 names and cannot tell which is wrong. The cap is read from the emitted document (the number of
+#     names a capped row actually shows, arm C's many.xml) and from the full legend in that same document.
+LEGCAP="$( grep -o 'source order, capped at [0-9]* (sibs_capped' "$TMP/many.xml" | head -1 | sed 's/[^0-9]//g' )"
+if [ -z "$LEGCAP" ]; then
+    no "(G) the full legend states no sibs= cap (many.xml)"
+elif [ "$LEGCAP" = "$SIBS_SHOWN" ]; then
+    ok "(G) the legend's sibs= cap ($LEGCAP) is the cap a capped row applies ($SIBS_SHOWN names shown)"
+else
+    no "(G) the legend says sibs= is capped at $LEGCAP but a capped row shows $SIBS_SHOWN names"
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
