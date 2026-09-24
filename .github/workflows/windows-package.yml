@@ -151,7 +151,9 @@ jobs:
             echo "windows-package: the files above carry CR bytes; skills/install.sh and hooks/*.sh must ship LF" >&2; exit 1
           fi
           ( cd dist && python -m zipfile -c "${asset}.zip" "${asset}" )
-          ( cd dist && sha256sum "${asset}.zip" > "${asset}.zip.sha256" )
+          ( cd dist && h="$( sha256sum -b "${asset}.zip" | cut -c1-64 )" && printf '%s  %s\n' "$h" "${asset}.zip" > "${asset}.zip.sha256" )
+          grep -qE "^[0-9a-f]{64}  ${asset}\.zip\$" "dist/${asset}.zip.sha256" \
+            || { echo "windows-package: ${asset}.zip.sha256 is not 'HASH  NAME' (two spaces), as the tarballs' are" >&2; exit 1; }
           cat "dist/${asset}.zip.sha256"
           ls -la dist
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"

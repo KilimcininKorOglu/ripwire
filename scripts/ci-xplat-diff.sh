@@ -11,9 +11,13 @@
 #                 repo-map.xml: a root typed with '\' enters the program as '/' (os::normalize_path_arg), and root=
 #                 and every p= print it that way.
 #   R3 CRLF       on EACH side, crlf-{map,for,callers,impact} equal tree-{map,for,callers,impact}: CRLF line endings
-#                 change no symbol, rank, edge, line number or count. crlf-expand is exempt from R3 on purpose —
-#                 --expand prints the source bytes, so its CDATA carries the CRs and its reason=/est_tokens= count
-#                 them — but it is still under R1, so both platforms must print the SAME CRLF bytes.
+#                 change no symbol, rank, edge, line number or count. crlf-expand is narrowed, not exempt: on EACH
+#                 side, crlf-expand must equal tree-expand once CR bytes and the reason=/est_tokens= attributes are
+#                 dropped — so a CRLF-only line-number (l=) or symbol-list bug in --expand is still caught even when
+#                 the two platforms happen to agree. It is also still under R1, so both platforms must print the
+#                 SAME CRLF bytes.
+#   R0 rc floor   every Linux-side *.rc must be 0. A verb that fails the same way on both platforms (rc != 0 on
+#                 both, same error bytes) would otherwise pass R1 vacuously.
 # Usage: bash scripts/ci-xplat-diff.sh <linux outputs dir> <windows outputs dir>
 set -u
 LIN="${1:?usage: ci-xplat-diff.sh <linux dir> <windows dir>}"
@@ -24,6 +28,11 @@ verdict() { printf '  %s  %s\n' "$1" "$2"; if [ "$1" = FAIL ]; then fail=1; rule
 show() { # first differing bytes, readable
     diff <( tr '>' '\n' <"$1" ) <( tr '>' '\n' <"$2" ) | head -12 | sed 's/^/        /'
 }
+
+for f in "$LIN"/*.rc; do
+    [ -e "$f" ] || continue
+    [ "$( cat "$f" )" = 0 ] || verdict FAIL "R0 ${f##*/}: the Linux reference itself exited $( cat "$f" ) — a shared failure would pass R1"
+done
 
 n=0; rulefail=0
 for f in "$LIN"/*.xml "$LIN"/*.rc "$LIN"/*.json "$LIN"/*.txt; do
@@ -62,7 +71,12 @@ for side in "$LIN" "$WIN"; do
         fi
     done
 done
-[ "$rulefail" -eq 0 ] && verdict PASS "R3 CRLF copies give the same map/--for/--callers/--impact as LF on both sides (crlf-expand under R1 only)"
+nx() { tr -d '\r' <"$1" | sed -E 's/ (reason|est_tokens)="[^"]*"//g'; }
+for side in "$LIN" "$WIN"; do
+    diff -q <( nx "$side/tree-expand.xml" ) <( nx "$side/crlf-expand.xml" ) >/dev/null \
+        || verdict FAIL "R3 ${side##*/}: crlf-expand differs from tree-expand beyond its CR bytes and reason=/est_tokens="
+done
+[ "$rulefail" -eq 0 ] && verdict PASS "R3 CRLF copies give the same map/--for/--callers/--impact as LF on both sides, and crlf-expand agrees with tree-expand modulo CR bytes and reason=/est_tokens="
 
 if [ "$fail" -ne 0 ]; then
     echo "SOME CHECKS FAILED"; exit 1
