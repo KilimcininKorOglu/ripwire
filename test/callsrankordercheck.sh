@@ -25,9 +25,14 @@
 #   (3) the comparator is TOTAL — (rank desc, id asc). Every leaf scores zero on the task, so the rows
 #       after the target must be leaf_00…leaf_14 in ASCENDING node-id order, not any order a sort
 #       implementation happens to produce. Non-negotiable #2: determinism is a contract.
-#   (4) THE CENSUS ARM: --expand has NO query in scope and must stay byte-identical — its <calls> rows are
-#       still leaf_00…leaf_15 in node-id order and the target is still ABSENT. This arm is what stops the
-#       fix leaking a ranking into a listing that never asked for one; it pins the pre-fix bytes exactly.
+#   (4) --expand has NO query, and until lane/cutfix-bodies (2026-09-23) it kept the CSR's node-id order — the
+#       sixteen LOWEST node ids, an arbitrary cut however honestly disclosed, the defect this gate was written
+#       about left standing on one verb. It now orders the cut FEWEST SAME-NAMED DEFINITIONS FIRST (serialize.h
+#       calleeNameSpecificity, which records why that and not PageRank). Arm 4 runs on a copy of the fixture with
+#       a Python file defining four namesakes (leaf_00..leaf_03): the C++ calls still bind to the C++ leaves, and
+#       those four names now have two definitions each, so they fall behind the seventeen unique ones. The
+#       expected order is RE-DERIVED from two other verbs (--callees' CSR listing and the map's per-name
+#       definition counts), never spelled out here. RED on 60b65f02 (node-id order keeps leaf_00..leaf_03).
 #   (5) THE COMPACT ROUTE keeps its already-correct ordering. Worth an arm because a search of test/ for
 #       calleeWalkOrder / CalleeCallsSink / namesOnly / the measurement's own symbol names finds NOTHING:
 #       compactroutecheck asserts the <hops><calls><c n= SHAPE and no gate asserts the ORDER, so the
@@ -168,24 +173,43 @@ else
         || { no "(3) --from-trace row order is not (rank desc, id asc)"; printf '        want: %s\n        got:  %s\n' "$EXPECT_RANKED" "$S"; }
 fi
 
-# ── (4) THE CENSUS ARM: --expand has no query — byte-identical node-id order, target still absent ─────────
+# ── (4) --expand orders its cut <calls> fewest-same-named-definitions first, re-derived from two other verbs ──
 # --top-k=0 is only there to take the bundle route: an --expand this small auto-serves the whole file
 # (mode="whole-file"), which emits no <calls> at all and would measure nothing.
-EX="$( "$BIN" "$FX" --expand=hub_dispatch --top-k=0 --legend=full 2>/dev/null )"
+FX4="$TMP/fx4"; cp -R "$FX" "$FX4"
+printf 'def leaf_00(v):\n    return v\n\ndef leaf_01(v):\n    return v\n\ndef leaf_02(v):\n    return v\n\ndef leaf_03(v):\n    return v\n' > "$FX4/src/namesakes.py"
+EX="$( "$BIN" "$FX4" --expand=hub_dispatch --top-k=0 --legend=full 2>/dev/null )"
+EXPECT_SPEC="$( python3 - "$BIN" "$FX4" <<'PY'
+import re, subprocess, sys, collections
+b, fx = sys.argv[1], sys.argv[2]
+run = lambda *a: subprocess.run( [ b, fx ] + list( a ), capture_output=True, text=True ).stdout
+defs = collections.Counter()
+for at in re.findall( r'<s ([^>]*)>', run( "--top-k=1000000", "--legend=full" ) ):
+    a = dict( re.findall( r'(\w+)="([^"]*)"', at ) )
+    if "n" in a:
+        defs[ a["n"] ] += int( a.get( "overloads", "1" ) )
+csr = re.findall( r'<s [^>]*n="([^"]*)" p="', run( "--callees=hub_dispatch" ) )   # the CSR (node-id) order
+if len( csr ) != 21 or defs["leaf_00"] != 2 or defs["leaf_04"] != 1:
+    print( "GUARD callees=%d defs(leaf_00)=%d defs(leaf_04)=%d" % ( len( csr ), defs["leaf_00"], defs["leaf_04"] ) ); sys.exit( 0 )
+print( " ".join( sorted( csr, key=lambda n: defs[n] )[:16] ) )   # stable: node id breaks ties
+PY
+)"
 V="$( rows_of "$EX" )"
-if [ -z "$V" ] || [ "${V#OK}" = "$V" ]; then
+if [ "${EXPECT_SPEC#GUARD}" != "$EXPECT_SPEC" ] || [ -z "$EXPECT_SPEC" ]; then
+    no "(4) the namesake fixture did not come out as built ($EXPECT_SPEC) — the arm measures nothing"
+elif [ -z "$V" ] || [ "${V#OK}" = "$V" ]; then
     no "(4) --expand: $V"
 else
     S="$( seq_of "$V" )"
-    if [ "$S" = "$EXPECT_NODEID" ]; then
-        ok "(4) census: --expand keeps the CSR's own node-id order, leaf_00…leaf_15, unchanged"
+    if [ "$S" = "$EXPECT_SPEC" ]; then
+        ok "(4) --expand's cut <calls> is fewest-same-named-definitions first, node id breaking ties"
     else
-        no "(4) --expand's callee order CHANGED — a ranking leaked into a listing with no query"
-        printf '        want: %s\n        got:  %s\n' "$EXPECT_NODEID" "$S"
+        no "(4) --expand's callee order is not the re-derived specificity order"
+        printf '        want: %s\n        got:  %s\n' "$EXPECT_SPEC" "$S"
     fi
     case " $S " in
-        *" quarantine_ledger_sweep "*) no "(4) --expand surfaced the target — the census route was reordered" ;;
-        *) ok "(4) census: the target stays absent from --expand (no query ⇒ no ranking)" ;;
+        *" leaf_00 "*) no "(4) --expand still cuts by node id (leaf_00, a two-definition name, survived the cut)" ;;
+        *) ok "(4) …and the two-definition names fall behind the unique ones (not the node-id cut)" ;;
     esac
 fi
 
@@ -248,7 +272,7 @@ det_fail=0
 d(){ A="$( eval "$1" )"; B="$( eval "$1" )"; [ "$A" = "$B" ] || { no "(7) not byte-identical across two runs: $2"; det_fail=1; }; }
 d "\"$BIN\" \"$FX\" --pack-task=\"$TASK\" --token-budget=9000 2>/dev/null" "--pack-task"
 d "\"$BIN\" \"$FX\" --from-trace=\"$TMP/trace.txt\" 2>/dev/null" "--from-trace"
-d "\"$BIN\" \"$FX\" --expand=hub_dispatch --top-k=0 2>/dev/null" "--expand"
+d "\"$BIN\" \"$FX4\" --expand=hub_dispatch --top-k=0 2>/dev/null" "--expand"
 d "\"$BIN\" \"$FX\" --for=\"$CONC\" 2>/dev/null" "--for compact"
 [ "$det_fail" = 0 ] && ok "(7) all four bundles byte-identical across two runs"
 if command -v xmllint >/dev/null 2>&1; then

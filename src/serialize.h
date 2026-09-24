@@ -4977,8 +4977,11 @@ struct CalleeCallsSink
     // It also reads no files: a name and a line come from the symbol table, where the signature has to be
     // sliced out of the callee's own source. Nothing is silently dropped for an unreadable span here.
     bool                          namesOnly = false;
-    // Optional query relevance for ORDERING a callee listing that has to be CUT. nullptr ⇒ the CSR's own
-    // node-id order, which is what a caller with NO query in scope keeps (--expand, --around, --exemplar).
+    // Optional relevance for ORDERING a callee listing that has to be CUT. nullptr ⇒ the CSR's own node-id
+    // order, which --around and --exemplar keep. --expand has no query; since lane/cutfix-bodies it passes the
+    // callee NAME SPECIFICITY (calleeNameSpecificity, below: fewest same-named definitions first — measured
+    // against node-id order and against PageRank, which lost to both), so its sixteen-row cut keeps the
+    // bindings the resolver is surest of instead of the lowest node ids.
     //
     // A callee listing was node-id order everywhere because it is OFTEN complete, and the order of a
     // complete listing carries no claim. But both routes that render one cut it routinely — the compact
@@ -5053,6 +5056,36 @@ inline std::vector<NodeId> calleeWalkOrder( NodeId id, const std::vector<std::ui
         return a < b;
     } );
     return walk;
+}
+
+// THE --expand CALLEE ORDER (lane/cutfix-bodies, 2026-09-23): FEWEST SAME-NAMED DEFINITIONS FIRST, node id breaking
+// ties. --expand has no query to rank a cut <calls> listing by, and it used to keep the sixteen lowest node ids. The
+// obvious replacement, the map's own PageRank, was MEASURED and is WORSE than node-id order: over the first 60 cut
+// listings (map rows out>16) of this repo and three public LocBench held-out corpora, the share of the kept sixteen
+// defined in the body's OWN file fell 11.4% -> 6.4% (ripwire), 4.6 -> 4.3 (aiohttp), 57.6 -> 55.6 (meson), 79.0 ->
+// 78.5 (pydantic) — PageRank promotes `empty`/`find`/`push_back`, the names a name-based resolver binds most
+// loosely, because every loosely bound call feeds them rank (simulated over --callees' full listing and the map's
+// per-name counts; on this repo's real --expand output 11.5% -> 16.2%, 945 rows). A callee whose
+// name has ONE definition in the index is a binding the resolver could not have got wrong; one of twelve same-named
+// defs is the likeliest to be a mis-bind. Ordering by that count raised the same-file share on all four corpora:
+// 17.0% / 5.0 / 59.3 / 79.0. The score is 1/count, so equal counts compare equal and calleeWalkOrder's node-id
+// tie-break decides — a total order, byte-stable.
+inline std::vector<float> calleeNameSpecificity( const IngestResult& ing )
+{
+    HashMap<std::string_view, std::uint32_t> defsOfName;
+    defsOfName.reserve( ing.symbols.size() );
+    for( const Symbol& s : ing.symbols )
+    {
+        ++defsOfName[ std::string_view( s.name ) ];
+    }
+    std::vector<float> score( ing.symbols.size(), 0.0f );
+    for( std::size_t i = 0; i < ing.symbols.size(); ++i )
+    {
+        const std::uint32_t n = defsOfName.find( std::string_view( ing.symbols[i].name ) )->second;
+        ASSUME( n >= 1, "every symbol's own name was counted above" );
+        score[i] = 1.0f / float( n );
+    }
+    return score;
 }
 
 // One callee of the names-only rendering (`<c n= l=/>`), COLLECTED rather than written: row 6 (2026-09-12)
@@ -5524,9 +5557,10 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
                                                                         //   false (every caller but --expand) ⇒ byte-identical.
                         std::string_view rootArg = {},   // R-E (2026-08-17): same single-root-only root
                                                           // argument serialize() takes — see its comment.
-                        const std::vector<float>* calleeRank = nullptr )   // orders each body's CUT <calls> listing; nullptr (a verb with
-                                                                            //   no query: --expand/--around/--exemplar) ⇒ node-id order,
-                                                                            //   byte-identical. See CalleeCallsSink::rank.
+                        const std::vector<float>* calleeRank = nullptr )   // orders each body's CUT <calls> listing: the query relevance
+                                                                            //   on --for/--pack-task/--from-trace, calleeNameSpecificity on
+                                                                            //   --expand; nullptr (--around/--exemplar) ⇒ node-id order.
+                                                                            //   See CalleeCallsSink::rank.
 {
     // budgetBytes == 0 ⇒ UNLIMITED (A3-F2): the MCP `exemplar` verb has no byte budget, and 0 must never
     // mean "cap at zero bytes" (the cap fired before the first body and emitted a bare <bodies></bodies>).
