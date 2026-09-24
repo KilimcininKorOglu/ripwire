@@ -34,7 +34,11 @@ Static binding of `record.name = v` to the `name=` def: static-pinned (rubyattrs
 |---|---|
 | multi-symbol `attr_accessor :multi_a, :multi_b` | proven (multi_attr.rb) |
 | typed `attribute :quantity, :integer, default: 0` — metadata args define nothing | proven (typed_attr.rb; `respond_to?(:integer)` is false) |
-| INLINE VISIBILITY: `private attr_reader :x` / `protected attr_accessor` / `public attr_writer` / `module_function attr_accessor` | static-pinned (priv_attr.rb) plus core-Ruby semantics: the argument evaluates FIRST (the macro runs, the method IS defined), then visibility applies — so the defs are exactly the macro's own |
+| INLINE VISIBILITY: `private attr_reader :x` / `protected attr_accessor` / `public attr_writer` | static-pinned (priv_attr.rb) plus core-Ruby semantics: the argument evaluates FIRST (the macro runs, the method IS defined), then visibility applies — so the defs are exactly the macro's own |
+| `module_function attr_accessor :x` — defines nothing | static-pinned only; modfn_attr.rb is never executed (it would raise). Measured on Ruby 4.0.7: NoMethodError in a class (Class undefines `module_function`), TypeError in a module (`module_function` refuses the `[:x, :x=]` array `attr_accessor` returns), so it is not an inline-visibility form |
+| a comment before the first argument: `attribute( # note` then `:name, :string )` | static-pinned (comment_attr.rb): the comment is skipped, `:name` defines |
+| `class << self` accessors inside a class | plain-Ruby run (singleton_attr.rb): class-level accessors of that class; static-pinned as Var rows scoped to it |
+| `class << Registry` accessors (another object's singleton) — define nothing | plain-Ruby run (singleton_attr.rb): `Registry.other_tok` exists, the enclosing class has none; static-pinned undefinable, a floor rather than a def on the wrong class |
 | plural `attributes :x, :y` | **MEASURED FLOOR — no class-level plural exists** in base Rails/ActiveModel (NoMethodError at runtime). Static capture is READERS-ONLY by measurement: the two dominant third-party owners, `ActiveModel::Serializer` and `jsonapi-serializer`, define read accessors only, and `dry-struct`'s singular `attribute :name, Types::String` defines a reader only — no setter is minted by the capture (pinned). |
 | `attributes :block_a do … end` — the do-block body (with its block parameter) defines nothing | static-pinned only; block_attr.rb is never executed (it would raise) — valid syntax so the static walk can prove the block-body guard |
 

@@ -8,6 +8,5 @@ module Spike
     private attr_reader :priv_name
     protected attr_accessor :prot_pair
     public attr_writer :pub_set
-    module_function attr_accessor :mod_acc
   end
 end

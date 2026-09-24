@@ -575,8 +575,12 @@ measured — so no phantom setter weight) — the exact spelling the setter-call
 or `default:` argument is metadata, not a def. An `attributes` do-block body is walked but defines nothing.
 An INLINE-VISIBILITY wrapper is also class-DSL position: `private attr_reader :x` (Ruby 3, RuboCop's
 Style/AccessModifierDeclarations: inline) evaluates its argument first — the macro runs and the method IS
-defined — then applies visibility, so the capture unwraps one receiverless `private`/`protected`/`public`/
-`module_function` call when the family call is its sole argument. This REVERSES a stated floor:
+defined — then applies visibility, so the capture unwraps one receiverless `private`/`protected`/`public`
+call when the family call is its sole argument. `module_function attr_accessor :x` is not unwrapped: it raises
+in a class (NoMethodError) and in a module (TypeError), so it defines nothing. Accessors inside `class << self`
+define on the class; inside `class << Registry` (another object's singleton) they define nothing, rather than a
+def on the enclosing class. A comment before `attribute`'s first argument is skipped, not taken as that
+argument. This REVERSES a stated floor:
 queries/ruby/tags.scm used to say "attr_accessor/attr_writer/attr_reader define nothing in the source TEXT
 … a write against one is an honest nothing". That posture predated measurement; tested to be working in a
 real, running Rails application (test/rubyattrsfix/USECASES.md), these macros define methods that every

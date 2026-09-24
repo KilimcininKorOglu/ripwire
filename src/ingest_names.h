@@ -1114,7 +1114,7 @@ inline bool rubyCallIsAssignmentTarget( TSNode nameNode ) noexcept
 // setter where the family spells writers — attr_writer/accessor/attribute; attr_reader (getter only) and the
 // plural `attributes` (third-party DSLs measured readers-only: AMS, jsonapi-serializer, dry-struct) spell no
 // setter. Keyword args (`default:`, a type) and non-symbol args are data, not defs: the singular
-// `attribute` stops at its first named child. defs come ONLY from the call's own argument_list — a do-block
+// `attribute` stops at its first argument (a comment before it is skipped, it is no argument). defs come ONLY from the call's own argument_list — a do-block
 // body is not one of the call's fields, so a block body can never leak defs.
 inline void captureRubyAttrDefsCall( TSNode n, std::uint32_t fileId, std::string_view src,
                                      std::string_view fam, std::vector<RawDef>& defs )
@@ -1130,6 +1130,10 @@ inline void captureRubyAttrDefsCall( TSNode n, std::uint32_t fileId, std::string
     ChildCursor ac( args );
     forEachNamedChild( args, ac.cur, [ & ]( TSNode a )
     {
+        if( ts_node_is_extra( a ) )
+        {
+            return true;   // a comment is a named child too (`attribute( # note` then `:name )`); it is no argument
+        }
         if( !kindIs( ts_node_type( a ), "simple_symbol" ) )
         {
             return !firstNameOnly;   // a non-symbol argument: the singular stops at its first arg whatever it is

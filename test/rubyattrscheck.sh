@@ -34,8 +34,13 @@
 #                             `Struct.new`/`Class.new`/`Module.new` do-block body and a non-modifier
 #                             `if … then … end` block are not unwrapped — Ruby defines all of these, ripwire does not
 #   priv_attr.rb         the Ruby 3 INLINE-VISIBILITY lift: `private attr_reader :x` / `protected attr_accessor`
-#                             / `public attr_writer` / `module_function attr_accessor` DO define (the macro runs
-#                             before visibility applies, so the family macro still decides which side exists)
+#                             / `public attr_writer` DO define (the macro runs before visibility applies, so the
+#                             family macro still decides which side exists)
+#   modfn_attr.rb        NEGATIVE: `module_function attr_accessor` raises in a class AND in a module, so it is not
+#                             unwrapped and defines nothing (static only, never executed)
+#   comment_attr.rb      a comment before `attribute`'s first argument is skipped, not taken as that argument
+#   singleton_attr.rb    `class << self` accessors define, scoped to the class; `class << Registry` (another
+#                             object's singleton) defines nothing — a disclosed floor, never a def on the wrong class
 #
 # Usage:  test/rubyattrscheck.sh   |   RIPWIRE_BIN=asan/ripwire test/rubyattrscheck.sh
 # Exit:   0 = clean · 1 = an arm failed · 2 = usage / missing prerequisite
@@ -104,12 +109,24 @@ undefinable pub_set \
 [ "$( useshead 'pub_set=' )" = 'of="pub_set=" defs="1" external="0" count="0"' ] \
     && ok 'lift: public attr_writer — pub_set= setter defines' \
     || no "lift: pub_set= defs: $( useshead 'pub_set=' )"
-[ "$( useshead mod_acc )"   = 'of="mod_acc" defs="1" external="0" count="0"' ] \
-    && ok 'lift: module_function attr_accessor — both sides define (reader)' \
-    || no "lift: mod_acc defs: $( useshead mod_acc )"
-[ "$( useshead 'mod_acc=' )" = 'of="mod_acc=" defs="1" external="0" count="0"' ] \
-    && ok 'lift: module_function attr_accessor — mod_acc= setter defines' \
-    || no "lift: mod_acc= defs: $( useshead 'mod_acc=' )"
+undefinable mod_acc \
+    && ok 'negative: module_function attr_accessor is not a visibility wrapper (it raises in a class and in a module) — mod_acc defines nothing' \
+    || no 'negative: mod_acc — module_function attr_accessor was unwrapped and minted a def'
+undefinable 'mod_acc=' \
+    && ok 'negative: module_function attr_accessor — no mod_acc= setter either' \
+    || no 'negative: mod_acc= — module_function attr_accessor was unwrapped and minted a setter'
+[ "$( useshead cmt_name )"  = 'of="cmt_name" defs="1" external="0" count="0"' ] \
+    && ok 'capture: attribute( # comment, then :cmt_name ) — the comment is skipped and the first ARGUMENT defines' \
+    || no "capture: cmt_name defs (a leading comment was taken as the first argument?): $( useshead cmt_name )"
+[ "$( useshead 'cmt_name=' )" = 'of="cmt_name=" defs="1" external="0" count="0"' ] \
+    && ok 'capture: attribute( # comment, :cmt_name ) — the cmt_name= setter defines too' \
+    || no "capture: cmt_name= defs: $( useshead 'cmt_name=' )"
+[ "$( useshead self_tok )"  = 'of="self_tok" defs="1" external="0" count="0"' ] \
+    && ok 'capture: class << self; attr_accessor :self_tok — the class-level accessor defines' \
+    || no "capture: self_tok defs: $( useshead self_tok )"
+undefinable other_tok \
+    && ok 'floor: class << Registry; attr_accessor :other_tok — another object'"'"'s singleton defines nothing (never a def on the enclosing class)' \
+    || no 'floor: other_tok — an accessor of another object'"'"'s singleton class was defined (on the enclosing class)'
 undefinable integer \
     && ok 'capture: the singular attribute stops at the first named child — :integer (type arg) defines nothing' \
     || no 'capture: integer — a type-metadata argument minted a def'
@@ -172,6 +189,9 @@ done
 grep -q '<s t="var" n="quantity" sc="TypedAttr"' "$TMP/map" \
     && ok 'kind: attribute :quantity emits a Var row scoped to its class' \
     || no 'kind: quantity var row missing/malformed'
+grep -q '<s t="var" n="self_tok" sc="SingletonAttr"' "$TMP/map" \
+    && ok 'kind: a class << self accessor is a Var row scoped to the class that owns the singleton' \
+    || no 'kind: SingletonAttr self_tok var row missing/malformed'
 grep -q '<s t="var" n="name" sc="SetReader"' "$TMP/map" \
     && ok 'kind: attr_reader :name is a Var def — the getter exists, the setter does not' \
     || no 'kind: SetReader var row missing'

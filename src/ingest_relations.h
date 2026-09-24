@@ -1312,7 +1312,10 @@ inline std::string_view fieldIdentifierText( TSNode n, NodeField field, std::str
 // disclosure lives in the CHANGELOG and the tags.scm header.
 inline constexpr std::array<std::string_view, 4> kRubyConstantDirectives = { "include", "extend", "prepend", "autoload" };
 inline constexpr std::array<std::string_view, 5> kRubyAttrFamilyNames    = { "attribute", "attributes", "attr_reader", "attr_writer", "attr_accessor" };
-inline constexpr std::array<std::string_view, 4> kRubyVisibilityNames    = { "module_function", "private", "protected", "public" };
+// `module_function` is NOT a visibility wrapper here: `module_function attr_accessor :x` raises in either position
+// (measured, Ruby 4.0.7: NoMethodError in a class, which undefines module_function; TypeError in a module, which
+// refuses the [:x, :x=] array attr_accessor returns), so no running program spells it and it defines nothing.
+inline constexpr std::array<std::string_view, 3> kRubyVisibilityNames    = { "private", "protected", "public" };
 
 // A receiver-less `call` node's method-name TEXT when it is one of `names`, else empty — the shared reader of
 // the Ruby named directives (`obj.include X` / `obj.attr_writer :x` are somebody's own methods and read as
@@ -1355,14 +1358,14 @@ inline std::vector<std::string> rubyMixinTargets( TSNode n, std::string_view src
     return out;
 }
 
-// Is this macro call at class-DSL position — a class/module/singleton_class body, optionally through the
+// Is this macro call at class-DSL position — a class/module/`class << self` body, optionally through the
 // macro call's OWN do/{ } block wrapper or an INLINE VISIBILITY wrapper? In tree-sitter-ruby 0.23.1 the call's
 // do/{ } block is a FIELD (`(call … block: (do_block (body_statement …)))`; `{ }` interposes `block_body`
 // between the field and its statements), so the call itself sits directly at the class body — the fixture
 // passes through the plain body_statement ascent and the `ownBlockWrapper` branch below is a conservatively-
 // unreachable guard against a future grammar that reintroduces a wrapping `block` node. An INLINE visibility
 // wrapper — `private attr_reader :x` (Ruby 3, RuboCop's Style/AccessModifierDeclarations: inline) — parses as
-// the family call being the SOLE argument of a receiverless private/protected/public/module_function call:
+// the family call being the SOLE argument of a receiverless private/protected/public call:
 // the visibility call's own parent chain must ALSO pass this gate (its argument is evaluated first — the
 // macro runs and the method IS defined — then visibility applies). A method body, a lambda, or a block
 // nested under anything else is not: a method body runs at call time, and a file top level
@@ -1380,9 +1383,17 @@ inline bool rubyAttrAtClassBodyLevel( TSNode n, std::string_view src ) noexcept
             return false;
         }
         const char* const pt = ts_node_type( p );
-        if( kindIs( pt, "class" ) || kindIs( pt, "module" ) || kindIs( pt, "singleton_class" ) )
+        if( kindIs( pt, "class" ) || kindIs( pt, "module" ) )
         {
             return true;
+        }
+        if( kindIs( pt, "singleton_class" ) )
+        {
+            // `class << self` opens the ENCLOSING class's singleton, so its accessors are that class's and scope to
+            // it. `class << Registry` opens ANOTHER object's singleton: its accessors are not the enclosing class's,
+            // and rubyEnclosingScopeOf would name the enclosing class, so they define nothing (a disclosed floor).
+            const TSNode value = fieldChild( p, NodeField::Value );
+            return !ts_node_is_null( value ) && kindIs( ts_node_type( value ), "self" );
         }
         if( kindIs( pt, "argument_list" ) )
         {

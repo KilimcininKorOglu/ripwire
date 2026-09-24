@@ -290,7 +290,11 @@ constexpr std::uint32_t kParserVer    = 121;          // bump on any grammar/.sc
                                                       //   corpus. Landed at 115 on the pre-train-6 base, carried
                                                       //   as 120 on the PR, renumbered 121 when merged after #150
                                                       //   took 120. No record layout change: kCacheVersion stays
-                                                      //   25 (NOT 24); kQSnapCacheScheme stays 14.
+                                                      //   25 (NOT 24); kQSnapCacheScheme stays 14. Folded in at 121
+                                                      //   (unreleased) in the train-19 review round: a comment before
+                                                      //   `attribute`'s first argument is skipped, `class << X` for
+                                                      //   X != self and `module_function attr_*` define nothing. A
+                                                      //   121 cache written before that round differs only there.
                                                       // 120 = 2026-09-23 (#150): two new per-record extraction
                                                       //   facts — RawRef::qualifierRootsStd (a C++ call's FULL
                                                       //   written qualifier chain is rooted at namespace std, at

@@ -54,7 +54,7 @@
 ; Stated floors, all pinned by test/rubysettercheck.sh: an operator_assignment (`obj.count += 1`,
 ; `obj.count ||= 1`) reads AND writes and one capture carries one name, so it keeps the getter edge
 ; only; a left_assignment_list (`a.x, b.y = 1, 2`) wraps its targets one level below `left:` and is
-; not read either. This rule still captures only the CALL shape — but note the parser-version-120
+; not read either. This rule still captures only the CALL shape — but note the parser-version-121
 ; REVERSAL: the class-level attribute DSL (attr_reader/attr_writer/attr_accessor/attribute/attributes
 ; — EXACTLY these five; ActiveSupport's cattr_accessor/mattr_accessor/thread_mattr_accessor/
 ; class_attribute/attr_internal are deliberately not in the family) is no longer "an honest nothing".
@@ -71,6 +71,9 @@
 ; `Struct.new`/`Class.new`/`Module.new`, or a non-modifier `if … then … end` block are NOT unwrapped to
 ; class position; and only `simple_symbol` arguments define — a quoted (`:"x"`/`:'x'`), string, or
 ; splat/`%i[]` argument stays an honest nothing. All of these define real methods at runtime; the
-; silence is stated, never silent.
+; silence is stated, never silent. Also a floor: accessors inside `class << Registry` (another object's
+; singleton class) define nothing, since a def on the enclosing class would be wrong; `class << self`
+; accessors define on the class. `module_function attr_accessor :x` is not a visibility wrapper (it
+; raises in a class and in a module) and defines nothing.
 (call
   method: (identifier) @name) @reference.call
