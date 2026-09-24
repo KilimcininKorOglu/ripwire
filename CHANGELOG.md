@@ -30,7 +30,8 @@ weakest rows: on this repository `--callers=kindIs` kept the 40 alphabetically-f
   read, so a page is a slice of it and `page[0:k] + page[k:2k] == page[0:2k]` still holds. Selecting by rank
   and then re-sorting each page by path was considered and rejected because it would break that identity.
   The MCP twins (`find_referencing_symbols`, `find_symbol`'s `calledBy`, `uses`, `impact`) share the order.
-- **`--callees` and `find_symbol`'s `calls` are UNCHANGED — byte-identical to origin/main.** A first cut of
+- **`--callees` and `find_symbol`'s `calls` keep their order — rows and default output byte-identical to
+  before;** only the full legend's shared ordering sentence changed. A first cut of
   this change ranked callees by the same key (each callee's own caller count), reasoning that one rule should
   cover both directions of the same call hierarchy. Measured, it was worse: on this repository's own co-change
   instrument, `--callees`' default-cap recall fell 0.592 → 0.466 (n=18), because a callee's own caller count
@@ -46,24 +47,25 @@ weakest rows: on this repository `--callers=kindIs` kept the 40 alphabetically-f
   limit, one size in one answer). `offset=` still windows the symbol rows only.
 
 Measured on this repository's own history at 60b65f02, with a new instrument (no existing recall measure
-covered these lists; see `docs/EVALS.md`). The "row that mattered" is a caller or use site last rewritten, per
+covered these lists). The "row that mattered" is a caller or use site last rewritten, per
 `git blame -w`, by the same commit that last rewrote a line of the symbol's definition. Commits touching more
 than 40 files are excluded. For importers it is a file changed by such a commit. Default cap, before → after,
 on the SMALL populations this repository has over the cap — **17 / 19 / 9 symbols** for callers / uses /
 importers: `--callers` hit rate 0.41 → 0.71, recall 0.32 → 0.51; `--uses` hit rate 0.53 → 0.74, recall
 0.43 → 0.52; import tier hit rate 0.78 → 1.00, recall 0.40 → 0.70. With `--limit=10` (76 / 80 / 30 symbols),
 `--callers` recall is 0.62 → 0.67 and `--uses` 0.51 → 0.54. The import tier's recall is 0.47 → 0.46, a slight
-drop at that depth. `--callees` is proven byte-identical to origin/main on representative symbols, both the
-CLI and the MCP `calls` array. Bytes on the ranked lists are otherwise unchanged apart from the legend: the
+drop at that depth. `--callees` rows and default output are byte-identical to before on representative
+symbols, both on the CLI and in the MCP `calls` array. Bytes on the ranked lists are otherwise unchanged apart from the legend: the
 rows are the same set whenever nothing is cut.
 
-**Honesty, from an independent review (`rv-cutfix-navlists.md`).** The review re-ran this instrument with
+**Honesty, from an independent review.** The review re-ran this instrument with
 paired bootstrap 95% CIs and two baselines — path order (above) and a within-tier random shuffle — plus a
 prospective gold (this repo, later commits) and a second corpus (LocBench). At the default cap the n above is
-small (17 / 19 / 9), and every callers/uses figure there is directional: the lane-minus-path delta crosses
-zero for both lists at the default cap, and the gain over random order reaches significance only at
-`--limit=10` (callers +0.082 [+0.008, +0.155], uses +0.116 [+0.048, +0.187]). The **import-tier gain holds up
-outside this instrument's own assumption**: a forward-in-time gold (commits after a later snapshot) gives
+small (17 / 19 / 9), and every callers/uses figure there is directional: the ranked-minus-path delta crosses
+zero for both lists at the default cap, and the gain over random order reaches significance at
+`--limit=10` (callers +0.082 [+0.008, +0.155], uses +0.116 [+0.048, +0.187]) and, for uses alone, barely at
+the default cap (+0.159 [+0.004, +0.325]). The **import-tier gain holds up
+outside this instrument's own assumption**: a forward-in-time gold (the lists ranked on an earlier snapshot, scored on the commits made after it) gives
 `--limit=10` recall 0.307 → 0.659 (n=11, 95% CI [+0.149, +0.574]) and `--limit=20` 0.185 → 0.792 (n=6,
 [+0.379, +0.845]); LocBench gives `--limit=20` 0.143 → 1.000 (n=7, [+0.571, +1.0]) and `--limit=10`
 0.500 → 0.857 (n=14, [0, +0.714]). The **uses gain is modest and replicates at k=10**: LocBench
