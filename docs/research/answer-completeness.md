@@ -31,9 +31,9 @@ An answer is **complete** when the thing the question asked for is inside the se
 
 | question type | verb(s) | gold | complete when | judge that exists |
 | --- | --- | --- | --- | --- |
-| localisation | `--for=TASK`, MCP `for` | the file(s) / function(s) a fix touched | every gold function is a `<sigs><d>` row of the served head (**strict**); at least one is (**any**); a gold path appears anywhere in `<sigs>`, `<tail>` or `<hops>` (**lenient**) | `served_head()` in `bench/locbench/calibrate_confidence.py` (research branch); `run_locbench.py`'s strict / any / lenient grades; `labels_ranking.tsv`'s `path#Symbol` targets in `bench/recalleval/run_recalleval.py` |
+| localisation | `--for=TASK`, MCP `for` | the file(s) / function(s) a fix touched | every gold function is a `<sigs><d>` row of the served head (**strict**); at least one is (**any**); a gold path appears anywhere in `<sigs>`, `<tail>` or `<hops>` (**lenient**) | `served_head()` in `bench/locbench/calibrate_confidence.py` (on `lane/served-syms-result`, not on main); `run_locbench.py`'s strict / any / lenient grades; `labels_ranking.tsv`'s `path#Symbol` targets in `bench/recalleval/run_recalleval.py` |
 | set questions | `--callers=X`, `--impact=X`, `--uses=X`, `--affected=F` | the set the graph holds | the emitted rows plus the disclosed remainder equal the set: `shown == total`, or `capped="1"` with a `next=` whose answer, unioned once, reaches `total` | the verbs' own `shown= total= capped= counts_floor= next=`; the re-derivation gates §9 principle 6 names (`--uses` against `--callers`, `--format=candidates` against a bundle) |
-| a body or its lines | `--expand=SEL`, `--slice=SEL[:VAR]`, auto-bodies in `--for` | the lines a fix changed inside the served function | every gold line's text is in the delivered payload (line recall 1.0); the score is the fraction otherwise | `bench/slice/run_slicerecall.py` (own history, cpp family); the R5 protocol of `docs/research/slice-line-recall.md` (research branch) |
+| a body or its lines | `--expand=SEL`, `--slice=SEL[:VAR]`, auto-bodies in `--for` | the lines a fix changed inside the served function | every gold line's text is in the delivered payload (line recall 1.0); the score is the fraction otherwise | `bench/slice/run_slicerecall.py` (own history, cpp family); the R5 protocol of `docs/research/slice-line-recall.md` (on `lane/research-arise-slice`, not on main) |
 | orientation | the default map, `--handoff`, `--communities` | none that is mechanical | **not judged complete offline.** Judged by terminality only, and by the *structural* half of the chop rate (§1.3), which needs no gold | the meter; the silent-cut gate of §3.2 |
 
 The strict/any/lenient split is kept apart everywhere, as `run_locbench.py` keeps single-file / multi-file /
@@ -56,6 +56,20 @@ A **chop** is a §9 violation in one served document. There are exactly two kind
 
 A **disclosed cut** — fewer rows than the uncapped run, *with* the attributes and a `next=` that is
 deterministic (same binary, same tree, same answer) — is **not a chop**. It is principle 3's "two known calls".
+A cut that is counted but carries no `next=` (and no paging attributes a documented call can continue from) is
+a **dead-end cut**: not a chop, because the reader knows what is missing, but principle 3 is only half met. It
+is counted apart from both chops and from disclosed cuts, and §3.2 reds on it as its own class.
+
+**What `total=` counts on a byte-trimmed element (ruling, 2026-09-24, adopted for every verb).** `total=` = the
+rows handed to the byte gate: after the verb's documented candidate window (the `--for` lens head,
+`kForLensDefaultTopN` or `--pack-top-n`; the non-lens `--pack-top-n` window) and after visited rows with
+nothing to print, *before* any byte budget. `shown=` = rows printed; `capped="1"` ⇔ the byte budget dropped
+rows (or, on the `--for` lens only, shrank them — `shown == total` with `capped="1"`). This is
+`src/pageview.h` THE TRUNCATION VOCABULARY rule 5 ("rows handed to the ladder") extended to every byte gate,
+so no byte cut can hide inside `total=`. On `60b65f02` the `--pack-budget-bytes` collection gate breaks it —
+its cut rows are absent from `total=`, so `shown == total` can print over a cut (§5.1). A candidate *window*
+is not a byte cut and is not counted in `total=`; disclosing the ranking universe beyond the window needs its
+own attribute (for example `ranked=`), decided once for every ranking verb.
 
 **Chop rate** = documents with at least one chop of either kind / documents scored, reported as the pair
 (head-chop rate, silent-chop rate) with n, never pooled. The silent-chop rate's registered target is **zero**
@@ -160,8 +174,10 @@ runs the fixture tree at defaults and at the tightest budget the verb honours (`
 `--top-k`, `--pack-budget-bytes`, the verb's own cap), parses both documents, and asserts: **for every
 element whose row count fell, the served element carries `shown=`+`total=`+`capped=` (or the verb's registered
 equivalent, `has_more=`/`next_offset=`/`counts_floor=`/`over_ceiling=`) and a `next=` that, run once,
-returns the missing rows.** It fails on the first element that shrank silently, naming verb, element and cap.
-Red-first: it must be RED on today's binary for every row of §5 marked SILENT and GREEN after step 2. It
+returns the missing rows.** It fails on the first element that shrank silently, naming verb, element and cap,
+and reports a counted cut with no `next=` separately as a dead-end cut (§1.3), so the two classes never pool.
+It also asserts the `total=` ruling of §1.3: on a byte-trimmed element, `total=` equals the rows the same call
+prints with only the byte budget lifted. Red-first: it must be RED on today's binary for every row of §5 marked SILENT and GREEN after step 2. It
 replaces nothing: `capdisclosurecheck.sh` already asserts this for three named caps, and `docs/LIMITS.md`
 records per cap whether its file discloses; this generalises the document-level assertion to every verb and
 every budget the flag universe can reach.
@@ -222,7 +238,7 @@ the cut is disclosed.
 
   | verb | priority order | disclosed as |
   | --- | --- | --- |
-  | `--for` `<sigs>` | the named partner row (`<hdr>`), then lens rank `r=` ascending; file grouping is a *presentation* of that order, and the trim runs on `r=` before grouping | `r=` on the row; `order=` on the root is not emitted today |
+  | `--for` `<sigs>` | the named partner row (`<hdr>`), then lens rank `r=` ascending; the lens `<sigs>` has emitted in `r=` order since P7 (2026-09-05, the `<f>` wrapper removed), and its ladder drops from the rank tail; the one pre-rank cut left is the `--pack-budget-bytes` collection gate (§5.1) | `r=` on the row; `order=` on the root is not emitted today |
   | `--for --limit=N` page | `score=` descending (file share of positive lens score, then best symbol, then path); the registered path-subtoken blend of `lane/r1-page-blend` is **not on main** | none today — that lane proposed `order="blend"` |
   | `--for` `<tail>` | trimmed rows first, in rank order, then the rest | `shown= total= capped=` |
   | `--slice=SEL:VAR` | def-use coverage, then line | `order="defuse"` |
@@ -337,7 +353,7 @@ generically). **SILENT** = content dropped and nothing in the document says so.
 | lego methods per interface, 6 (64 targeted) | `src/serialize.h:6904`, `:6929` | source | `<!-- +more methods -->`, no count | data comment kept | |
 | lego implementors per interface, 16 | `src/serialize.h:6940`, `:6951` | list order (?) | `<!-- +more -->`, no count | data comment kept | |
 | `--with-graph` `kWithGraphNodeCap`=8 | `src/serialize.h:6534` | rank | **SILENT** | n.a. | |
-| `--limit` file page `kForPageRowsDefault`=40 | `src/forpage.h:287`, `:300`, `:303` | rank | quintet + `next=` | yes | `docs/LIMITS.md` lists `forpage.h` as disclosing nothing — stale |
+| `--limit` file page `kForPageRowsDefault`=40 | `src/forpage.h:287`, `:300`, `:303` | rank | quintet + `next=` | yes | `docs/LIMITS.md` lists `forpage.h` as disclosing nothing: a blind spot of the generator (`docs/limits_build.py` counts only `<noun>_capped` spellings, not `pageDisclosure`'s bare `capped=`), not a hand-editable stale row |
 | `--token-budget` header ladder (legend clauses, task echo) | `src/verbs_for.h:3315ff` | n.a. | `legendDroppedNote`, `[task_echo: dropped (ceiling)]`, `over_ceiling=` | yes | drops explanation, not rows |
 | `--json`: same ladder on JSON bytes; collection gate | `src/serialize.h:8424`; `:8209`, `:8249` | rank / file-major | `"capped":bool`, `dropped_positive`, `budget_bytes`; **no shown/total for sigs** | n.a. | `serialize.h:7259` says JSON skips the ladder — stale |
 | `--json`: compose/lego/routes/docs not served | `src/verbs_for.h:1473–1476` | n.a. | `lego_total`, `compose_total`, `routes_total`, `lens=` | n.a. | |
@@ -423,7 +439,8 @@ ladder and tail, `--for --limit` page, `--adaptive`, the relevance floor, `--imp
 map under `--top-k`/`--max-tokens` (the auto-flip reorders after K is fixed and nothing trims after it).
 
 **Docs out of step with code, found on the way:** `docs/LIMITS.md` marks `src/forpage.h` as disclosing nothing
-(it carries the quintet); the `--expand` full legend says `sibs=` is "capped at 8" where the code caps at 100;
+(it carries the quintet — a generator blind spot: `docs/limits_build.py` reads only `<noun>_capped`, so the fix
+is in the generator, never a hand edit of the generated file); the `--expand` full legend says `sibs=` is "capped at 8" where the code caps at 100;
 `serialize.h:7259`'s note that JSON skips the ladder is stale (`:8424` runs it).
 
 ### 5.6 INDEXING-class caps (bound what can be found; a miss here is a recall miss, not a chop)
@@ -481,15 +498,64 @@ disclosure; none needs step 3 or 4, and none changes what is *served* — only w
 document says about it. The §3.2 gate is what keeps the seven silent sites and the `capped="0"` case from
 returning after they are fixed.
 
+### 5.8 Where each row stands against the cut-fix lanes (status as of 2026-09-24)
+
+Every table above describes `60b65f02`, and nothing in this note claims a fix. On 2026-09-24 four lanes that
+address rows of §5 were in review. Each row below names the lane that *proposes* the change, so it stays true
+in whatever order they merge. A row is closed only when the step-0 re-run under `## Results` confirms it on a
+merged `main`.
+
+| §5 row | proposing lane | what the lane proposes |
+| --- | --- | --- |
+| `--for` collection byte gate (XML and JSON); `--for --json` `<sigs>` with no `shown=`/`total=`; the stale `serialize.h:7259` note | `lane/cutfix-for-sigs` | a rank-first gate with `total=` per §1.3; JSON `sigs_shown`/`sigs_total`; the note rewritten |
+| `--for` rank tiers: the doc removed past r=24 | `lane/cutfix-for-sigs` | `docs_dropped=N` and a present-only legend clause |
+| `kMaxSig` 240 B | `lane/cutfix-for-sigs` | no change, by decision: the per-row `…` is the disclosure, and the row's `--expand` recovers the text |
+| trim ladder, `shown == total` with `capped="1"` | `lane/cutfix-for-sigs` | a present-only clause that gives that case a reading |
+| auto-bodies, and `--expand`/`--detail`/`--pack-task` bodies (`packBodies`, file-major) | `lane/cutfix-bodies` | a rank-first budget walk, survivors regrouped by file, every omitted body named |
+| `--expand` oversized first body (`capped="0"`) | `lane/cutfix-bodies` | `capped="1"`, and `truncated="1" lines= next=` on the body; nothing inside the CDATA |
+| `--expand` `<calls>` in node-id order | `lane/cutfix-bodies` | fewest same-named definitions first, then id |
+| `--expand` `sibs=` legend ("capped at 8") | `lane/cutfix-bodies` | the legend says 100 |
+| `--outline`; non-lens `--pack-signatures` | `lane/cutfix-bodies` | a rank-first walk; `shown= total= capped="1"` on a cut, `total=` per §1.3 |
+| `--callers`/`--callees`; `--uses` (CLI, MCP, member-field arm) | `lane/cutfix-navlists` | tier, then resolved in-degree, then path: one order for the cap, the rows and paging |
+| MCP `find_symbol` `calledBy` window | `lane/cutfix-navlists` | `calledBy_total`, `shown_calledBy`, `calledBy_capped`, `calledBy_next` when cut |
+| `--impact` importers | `lane/cutfix-navlists` | ranked by each importer's own importer count; `--limit` sizes the tier. **Still no `next=`**: a dead-end cut under §1.3 that a documented `--limit` can continue. The columnar form keeps the count only |
+| `--grep` collection budget in fileId order | `lane/cutfix-grep` | the files are ranked by tier before the budget is spent |
+| `--grep` rows | `lane/cutfix-grep` | no change: the window is already a slice of the tier-sorted list, so the cut drops the doc/test tier first ("path-id" here means tier, then path) |
+| `--grep` line text `line_bytes=`; the tier classification budget | `lane/cutfix-grep` | compact readings for `line_bytes=`, `tier=`, `tier_budget=`; `tier_files=` gives the classification its total |
+| `--grep` `<unindexed>` list | `lane/cutfix-grep` | tried and reverted, so path order stays: a tier sort put `CMakeLists.txt` below lock files |
+
+**Rows no lane addresses** (SILENT first):
+
+- SILENT: the rendered `<lego>` interface cap of 12 (`--sections=lego`); `--with-graph`'s 8 nodes;
+  `--pack-top-n` files past the truncated one; the `--pack-task` ranking window past 12.
+- Counted nowhere: `--for` `<sigs>` positives at rank 41+ whose file is already in the head; auto-body
+  positives past the 6 candidates; lego methods (6) and implementors (16) (`<!-- +more -->` with no count);
+  MCP body fetch `kOtherDefCap` 4 (`name_defs=` with no flag).
+- Disclosed, but with no compact reading or no count: `--around` `fanout_cut=`; `--connect`
+  `truncated="paths"` (no count) and its `--max-tokens` signature removal (legend only).
+- Unresolved (`?` in §5): `--connect`'s terminal clamp in the core; `--deps`' cycle cut; whether MCP `for`
+  says it has no bodies section; the map's `--top-k` window (`shown=` in the header comment, no `capped=`).
+- The generator blind spot: `docs/limits_build.py` misses `pageDisclosure`'s bare `capped=` (the `forpage.h` row).
+- Window disclosure: whether a candidate window (`--for` 40, `--pack-task` 12, auto-bodies 6) should say what
+  lies past it (a `ranked=`-style attribute, §1.3) is one decision for every ranking verb, not a per-site fix.
+
+**This inventory is a floor, not a census.** The 2026-09-24 review re-read the emit code and found
+output-class cuts this survey did not list, among them `--zoom`'s bridges and its `--mermaid` module caps,
+`--tree`'s three symbols per file, `--situ`'s co-change probe window and its decl/def partner cap,
+`--plan-lanes --brief` claims per lane, the `--run-trace` tail view with no `capped=`, MCP `owners` and
+`mentions` windows with the cap half switched off, and LSP `workspace/symbol`. They join these tables when
+step 0 runs; until then, a verb missing from §5 has not been shown to be free of silent cuts.
+
 ---
 
 ## 6. Decisions this note needs from the owner
 
 1. **Chop rate as a gate.** Adopt §3.3's hard zero on silent-chop for the train, or keep it a reported number
    for one release first.
-2. **The `--for` bundle's emit order.** The rows carry `r=` but the document groups by file. Step 1 keeps the
-   grouping and only guarantees the trim runs on rank; emitting in pure rank order would be a contract change
-   for every parser of `<sigs>`, and needs a separate decision.
+2. **The emit order of the file-grouped lists.** The `--for` lens `<sigs>` already emits in `r=` order (P7,
+   2026-09-05). What still groups by file is `<bodies>` (`packBodies`) and the non-lens `--pack-signatures`
+   `<sigs>`. Step 1 keeps that grouping and only guarantees the cut runs on rank; emitting them in pure rank
+   order would be a contract change for their parsers, and needs a separate decision.
 3. **Callee lists in node-id order** (`--expand`, `--around`, `--exemplar`). Step 1 proposes query rank when a
    query exists and caller-count descending otherwise; the alternative is to leave them and only disclose the
    cap (step 2). Either is honest; only one moves the head.

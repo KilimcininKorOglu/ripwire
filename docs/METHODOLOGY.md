@@ -215,8 +215,8 @@ which is where the two goals meet.
 
 1. **Terminality is the objective; the ceiling is a constraint.** Maximise the probability that the agent needs
    no further native read after the call, subject to output ≤ budget. The substitution meter yields that
-   probability per verb (a call followed by a native read or grep within the next three tool calls is
-   non-terminal). A default changed without that number is a guess; the round's own budget proposal for the cold
+   probability per verb (a call followed by a native read or grep within the next five tool calls is
+   non-terminal; `TERMINALITY_WINDOW` in `bench/substitution_report.py`). A default changed without that number is a guess; the round's own budget proposal for the cold
    map was one, and the data said the budget flag does not make an answer more terminal — it trims a ranking from
    the tail and cannot know which row would have ended the search.
 
@@ -274,8 +274,10 @@ The practical order when an answer is bigger than its ceiling: rank; cut below t
 
 Principle 2 says the ceiling bounds the tail, never the head. Between 2026-09-05 and 2026-09-23 the 0.6.0–0.6.2
 releases and the research lanes measured *how* that becomes true, and the answer is the same in every verb:
-**the head is only safe from a cut if it is emitted first, and "first" has to mean "the rows most likely to end
-the search", which is a verb-specific order, not source order and never path or id order.** The six principles
+**the head is only safe from a cut if the cut walks the rows in priority order — rank before you cut — and
+"priority" has to mean "the rows most likely to end the search", which is a verb-specific order, not source
+order and never path or id order.** Emitting in that order is the simplest way to get it; a verb that documents
+another emit order (bodies grouped by file) ranks, cuts, and then re-groups the survivors. The six principles
 above stand unchanged; what follows is the record of the ordering findings that make them mechanical, each with
 its number and its source, so the next default is set from the ledger rather than from taste.
 
@@ -283,23 +285,25 @@ its number and its source, so the next default is set from the ledger rather tha
 number: the share of a verb's calls not followed by a native read or grep within the next five tool calls
 (`bench/substitution_report.py` §5, the FIND band registered in `docs/EVALS.md` "Terminality round A"). The
 *chop rate* is the share of answers in which a §9 violation occurred: a HEAD row — a row the answer needed — was
-removed by a ceiling (principle 2), or content was removed with no `shown= total= capped=` and no `next=`
+removed by a ceiling (principle 2), or content was removed with no `shown= total= capped=` on the element
 (principle 3). A disclosed tail cut with a deterministic `next=` is **not** a chop; a silent one is, whatever its
-size. Bytes are the cost, and the honest byte unit is bytes-before-the-row-that-answers (the legend-once round's
+size. A cut that is counted but has no `next=` is a *dead-end cut*, counted apart: not a chop, but only half of
+principle 3. Bytes are the cost, and the honest byte unit is bytes-before-the-row-that-answers (the legend-once round's
 TTCA), because bytes after the answering row cost the agent little and bytes before it cost everything.
 `docs/research/answer-completeness.md` carries the pre-registered scoreboard for both quantities and the
 verb-by-verb inventory of where a cut can still be silent.
 
 **The findings, as worked examples of the principles.**
 
-1. **Rank before you trim, and carry the rank onto the row.** `--for` groups its bundle by file and sorts by line
-   inside the group, so once the payload ceiling trimmed it the ranker's order was gone. Assigning `r=` before
+1. **Rank before you trim, and carry the rank onto the row.** `--for` grouped its bundle by file and sorted by
+   line inside the group, so once the payload ceiling trimmed it the ranker's order was gone. Assigning `r=` before
    the trim and adding a file-grain tail moved SWE-Explore `hit_file_rate` at a 500-byte budget from 0.260 to
    0.281 to 0.311 across the two changes (EVALS "Deep-tail serving (2026-08-29)"; instrument v2 the same day).
    A round later found the compact bundle showing 4 of 40 candidates with the 36 trimmed rows served *nowhere*
    — the tail listed only the files already shown — and re-pointing the tail at the trimmed rows, rank first,
    moved completed questions from 11/30 to 14/30 and gold from 34 to 42 of 129 (EVALS "LANE 2", `9273f346`).
-   Principle 2 is not satisfied by having a rank; it is satisfied by emitting in it.
+   On 2026-09-05 (terminality round A, P7) the lens `<sigs>` began to emit in `r=` order and its ladder to drop
+   from the rank tail. Principle 2 is not satisfied by having a rank; it is satisfied by cutting in it.
 
 2. **Spend a budget in rank order, never in document order.** `--recall` put its sections back in document order
    and cut from the front: the #1-ranked section of the 616 KB `docs/COMMANDS.md`, at line 3,570 of 4,755, was
@@ -384,8 +388,19 @@ verb-by-verb inventory of where a cut can still be silent.
     hypothesis, and the tool answers in full and discloses.
 
 **What these add to the practical order at the end of §9.** Before "rank; cut below the cliff": *decide the
-verb's priority order and emit in it* — the named row, then rank, with `r=` on the row; *price the ceiling in the
-emitted unit*; *let the tail name what the head cut*. And one rule the rounds kept re-learning: **a
+verb's priority order and cut in it* — the named row, then rank, with `r=` on the row, emitted in that order
+unless the verb documents another, in which case the survivors are re-grouped after the cut; *price the ceiling
+in the emitted unit*; *let the tail name what the head cut*. And one rule the rounds kept re-learning: **a
 `--top-k`, quota, fanout or page cap applied to a list in source, path or id order is a head cut waiting to
-happen**, because nothing ranks what it drops. Every such site is in the inventory in
-`docs/research/answer-completeness.md`, with whether it discloses today.
+happen**, because nothing ranks what it drops. The sites the 2026-09-23 survey found are in the inventory in
+`docs/research/answer-completeness.md`, with whether each discloses at `60b65f02`. The survey is a floor: a
+verb it does not list has not been shown to be free of silent cuts.
+
+**What the disclosure attributes mean, as emitted.** The vocabulary is `src/pageview.h` THE TRUNCATION
+VOCABULARY, and §9's names are the emitted ones: `shown=` (rows printed), `total=` (the verb's own count
+attribute where it has one: `hits=`, `count=`, `importers=`), `capped="0|1"` (a boolean, never a count), `next=`,
+`over_ceiling="1"`, and `counts_floor="1"` beside a `<noun>_capped=` floor marker. On an element trimmed by a
+byte budget, **`total=` is the number of rows handed to the byte gate**: after the verb's documented candidate
+window and after rows with nothing to print, before any byte budget (rule 5, extended to every byte gate on
+2026-09-24). A byte cut can therefore never hide inside `total=`. A candidate window, such as `--for`'s 40-row
+head, is not a byte cut. What lies past a window needs its own attribute, decided once for every ranking verb.
