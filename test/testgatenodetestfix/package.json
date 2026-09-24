@@ -1,0 +1,5 @@
+{
+  "name": "testgatenodetestfix",
+  "private": true,
+  "scripts": { "test": "node --test" }
+}

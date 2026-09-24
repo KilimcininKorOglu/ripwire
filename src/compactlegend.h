@@ -649,6 +649,10 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "script_gates_unresolved_dynamic", "script_gates_unresolved_dynamic=N: registered gates with no mappable deps; they may cover the change unlisted", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "evidence", "t evidence=script_literal|manifest_declared: why a shell gate joins tests=, its text names the changed path or its RIPWIRE_TEST_DEPS does", true, "t", MapHeaderRead::No, {}, "test-gate" },
     { "ccx_bar", "ccx_bar=N: the cognitive-complexity bar a u row's ccx= is read against", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    // rv-test-gate-tsjs F3: untested_modscope=N is ALWAYS present (like the terms above), so the COMPACT
+    // (default) legend needs its own reading too — the full-legend clause (situ.h::kUntestedModscopeLegend)
+    // is row-gated on N>0 and pays nothing on the compact default otherwise.
+    { "untested_modscope", "untested_modscope=N: <file-scope> owners excluded from untested= (#324, uncallable); still in impacted=", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     // uses: src/verbs_navigate.h (the <uses> root emit)
     { "defs", "defs=N: definitions the selector matched; qualify file:name to narrow the call sites", false, "uses", MapHeaderRead::No, {}, "uses" },
     { "external", "external=1: of= has no definition in the indexed tree under any spelling (stdlib/third-party)", false, "uses", MapHeaderRead::No, {}, "uses" },

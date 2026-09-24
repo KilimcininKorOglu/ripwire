@@ -1347,8 +1347,20 @@ $ ripwire . --test-gate          # exit code: 4
 ```
 
 A `run=` attribute appears only when a runner is derivable from real evidence — a test-dir script
-whose stem matches the harness, or whose text names it. A row with none says so — `run_unknown="1"`,
-never a guessed suite command — and a `<t>` or `<g>` row carries one or the other, never neither. A
+whose stem matches the harness, or whose text names it; for TypeScript/JavaScript, a file already
+recognized as test code (`test/`/`tests/`/`__tests__/`, or a `_test./.test./_spec./.spec.` name — the
+`__tests__/` directory convention is shared with every language, the rest are TS/JS's own) whose name
+ALSO matches vitest/jest's own test-name shape (`.test.`/`.spec.`, or living under `__tests__/` at
+all, jest's own two default conventions — never a `.d.ts` declaration file) — whose nearest
+`package.json` names `vitest`, `jest`, or node's own test runner. Its own `package.json` is
+AUTHORITATIVE for the whole subtree below it: a non-empty, non-placeholder `scripts.test` entry
+decides the runner (or decides none — a same-named dependency never overrides it, whether that
+dependency sits in the same manifest or a parent one), and only a manifest with NEITHER a real
+`scripts.test` NOR a `vitest`/`jest` dependency is skipped in favour of one further up. A TS/JS file
+with no manifest evidence of its own still falls back to the SAME test-dir shell/Python driver search
+every other language uses — a named driver beats an
+unguessed default. A row with none says so — `run_unknown="1"`, never a guessed suite command — and a
+`<t>` or `<g>` row carries one or the other, never neither. A
 `<g hops="2" n="3" p="a,b,c" run_unknown="1"/>` row is **two or more contiguous runner-less rows whose
 attributes are byte-identical**, served as one: `n=` is how many, `p=` is their paths verbatim in list
 order, and the disclosure is paid once per group rather than once per row. Everything else stays its own
@@ -1359,7 +1371,19 @@ over these rows counts test FILES: a `<g>` row is `n=` of them.
 `script_gates_unmodelled="332"` is the same discipline: script-to-binary is not a call edge, so those
 gates are invisible to this walk, and the number says so rather than letting `tests="2"` read as
 complete. The `<u>` rows are the untested blast radius: impacted symbols that no test in the corpus
-reaches.
+reaches — never a file's own `<file-scope>` module scope (a top-level statement or anonymous-callback
+body), since nothing in any language can name it and no test could ever be written for it; it still
+counts toward `impacted=` when it is a real caller in the blast radius, just never as an obligation.
+Those excluded owners are counted, not dropped without a trace: `untested_modscope="N"` (always
+present, alongside `untested=`) says how many, so a change whose only reader is an untestable
+entrypoint discloses why `untested=` reads zero instead of looking like there was nothing to find.
+
+A TS/JS `run_unknown="1"` can mean the manifest genuinely names nothing recognized, or it can mean a
+real runner this tool does not yet derive: node's own test runner invoked through `tsx` (a common way
+to run it against `.ts` files), `bun`'s test runner, and node's test runner against a `.ts` file on a
+node version too old to strip TypeScript types natively. These stay an honest unknown rather than a
+guess; `pnpm`/`yarn`-prefixed test scripts derive correctly today (spelled `npx …`, which finds a
+local binary first).
 
 </details>
 

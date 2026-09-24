@@ -138,7 +138,10 @@ for name in seed_names:
         no("--impact=%s:%s produced no <impact> root" % (SAMPLE_FILE, name))
         continue
     attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', root.group(1)))
-    rows = re.findall(r'<s t="\w+" n="([^"]+)" p="([^"]+)"( tested="1")?/>', doc)
+    # t= is captured (not just matched) so the loop below can single out t="modscope" — #324's <file-scope>
+    # exclusion — without changing what THIS list counts: reaches= still counts every caller row, module
+    # scope included, so len(rows) == reaches stays the row-count invariance it always was.
+    rows = re.findall(r'<s t="(\w+)" n="([^"]+)" p="([^"]+)"( tested="1")?/>', doc)
     reaches = int(attrs.get("reaches", "-1"))
     if len(rows) != reaches:
         row_count_ok = False
@@ -149,12 +152,21 @@ for name in seed_names:
         no("--impact=%s:%s: radius_tested(%d) + radius_untested(%d) != reaches(%d)" % (SAMPLE_FILE, name, rt, ru, reaches))
     if attrs.get("capped") not in ("0", None):
         no("--impact=%s:%s: capped=%s at --limit=5000 — raise the limit in this script" % (SAMPLE_FILE, name, attrs.get("capped")))
-    for rn, rp, rtested in rows:
+    for rkind, rn, rp, rtested in rows:
         np = norm_path(rp)
         if np == SAMPLE_FILE:
             continue                       # the changed file's own symbols — excluded, as --test-gate excludes them
         if np in testgate_testfiles:
             continue                       # a test-file row — --test-gate folds these into <t>, never <u>
+        if rkind == "modscope":
+            continue                       # #324: a synthetic <file-scope> owner is a legitimate CALLER row
+                                            # here (t="modscope", unchanged) but --test-gate's <u> listing now
+                                            # excludes it on purpose — nothing can call it, so no test can ever
+                                            # be written FOR it, and situ.h's computeTestGateFor drops it before
+                                            # <u> is built (model.h::isUntestableOwner). Keeping it on THIS side
+                                            # of the comparison would fail assertion (1) on a correct fix, not a
+                                            # real regression — it stays counted in reaches=/row-count above,
+                                            # only excluded from the untested/tested SET EQUALITY projection.
         line = rp.split(":", 1)[1] if ":" in rp else ""
         def_key = (rn, np, line)
         tested = bool(rtested)

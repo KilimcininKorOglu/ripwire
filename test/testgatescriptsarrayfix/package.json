@@ -1,0 +1,1 @@
+{ "name": "x", "scripts": [ "vitest run" ], "devDependencies": { "jest": "^29" } }

@@ -1,0 +1,1 @@
+{ "name": "x", "scripts": { "test": "node ./tools/jest-report-cleaner.js && mocha" }, "devDependencies": { "mocha": "^10" } }

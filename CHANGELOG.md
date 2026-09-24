@@ -164,6 +164,93 @@ canonical bytes — a canonical ledger is still left untouched), the same "heal 
 rule `--quality-ack` already applies when a run's report has zero findings at all. The refusal itself, and its
 exit code, are unchanged.
 
+### Fixed — `--test-gate` derives a TS/JS runner from package.json evidence, and never lists a file's own module scope as untested
+
+Two `--test-gate` defects, both reported against real TS/JS repos:
+
+`--test-gate` had no runner derivation for TypeScript/JavaScript test files — only `.sh`/`.py` were
+recognized — so every TS/JS `<t>` row carried `run_unknown="1"` and the gate could never clear on a
+TS/JS change with a test partner (one report measured 154 of 154 runs over three days hitting this on
+a vitest project). The runner is now derived the same evidence-first way Python's already is: the
+nearest `package.json` above the test file (walking up, so a monorepo/workspace test file's own
+manifest is used, not the repo root's) is read for a `scripts.test` entry or a `vitest`/`jest`
+dependency naming one of the three runners this recognizes — `vitest`, `jest`, or node's own built-in
+test runner. A manifest naming none of the three, or no manifest at all, stays the honest
+`run_unknown="1"` it already was — never a guessed default. New: `src/jsrunner.h`.
+
+`--test-gate` could also list a file's synthetic module-scope owner (`<file-scope>`, minted for a
+top-level call or an anonymous-callback body, #60) as an "untested" symbol — a row an agent could
+never discharge, since nothing in any language can call `<file-scope>` and no test can be written for
+it. `model.h::isUntestableOwner` now excludes it from every such obligation listing in one place:
+`--test-gate`'s untested rows and `--flags --flip`'s untested hosts, the two places a synthetic owner
+could reach a reader as an actionable item. It still counts toward the coarser `impacted=`/`hosts=`
+gauges, where it is a real caller in the blast radius — only the per-row obligation list changes.
+The excluded count is disclosed, not silent: `--test-gate` now carries `untested_modscope="N"` (XML
+and JSON) alongside `untested=`, so a change whose only reader is an untestable entrypoint reports why
+its `untested=` reads zero instead of reading like there was nothing to find.
+
+### Fixed — five defects in the TS/JS runner derivation above, found by independent review before merge
+
+- **A named shell/Python driver was losing to "unknown".** TS/JS test files now have their OWN evidence
+  path (`package.json`), and that path used to be preferred outright over a `test/*.sh` (or `.py`)
+  driver whose own text names the file — a real, previously-working signal. A TS/JS file with no
+  usable `package.json` evidence now falls through to that same driver search (shared by
+  `--test-gate`, `--affected`, and the MCP `affected` tool, which all read one `TestRunnerIndex`).
+- **A `scripts.test` that names no recognized runner was overridden by an unrelated dependency.** A
+  `mocha` project that happens to also list `vitest` in `devDependencies` (for its config types, say)
+  derived `npx vitest run …` — a command that would find no matching tests. `scripts.test`, once
+  present and not npm's own placeholder, is now authoritative: it decides the runner (or decides none),
+  and a same-named dependency never overrides it. Dependency evidence is consulted only when there is
+  no real `scripts.test` to read. Runner names are also matched as shell WORDS now, not substrings, so
+  a script naming an unrelated file that merely contains "jest" in its path no longer derives jest.
+- **Every `.ts`/`.js` file under a test directory was spelled as a vitest/jest target, including
+  non-tests.** A helper or setup file living beside real tests (or a `.d.ts` declaration file) matched
+  the extension check and got a `run=` command that would fail in CI ("no test files found") — vitest
+  and jest only collect files matching their own `.test.`/`.spec.` naming, or a `__tests__/` directory
+  segment. Only a file matching that shape is now spelled as a runnable target; a `.d.ts` file is never
+  one, regardless of evidence.
+- **The nearest `package.json` could end the search before it decided anything.** A bare module-type
+  marker (`{"type":"commonjs"}`, common in mixed-module repos) sits between a test file and its real
+  runner evidence in some layouts; the walk now keeps climbing past a manifest that names neither
+  `scripts.test` nor a recognized dependency, instead of stopping there and reporting unknown. A manifest
+  WITH a real `scripts.test` still ends the search immediately, whatever it names (even an unrecognized
+  runner): its own answer is final for that subtree and a workspace root's `vitest`/`jest` never
+  overrides a package that already answered "mocha" for itself — the same authority `scripts.test`
+  already has within one manifest, now honoured one level up a monorepo too.
+- **A `__tests__/`-only jest test file (no `.test.`/`.spec.` in its own name) was invisible to
+  `--test-gate` entirely** — not merely runner-unknown: its module scope read as an untestable owner, so
+  a change covered only through such a file exited 0 with nothing to run. `__tests__/` is now a
+  recognized test-path directory segment (`filter.h::isTestPath`, the ONE test-path convention every verb
+  shares — widened there, not duplicated), the same fix `looksLikeJsTestFile` already carried for it
+  unreachably. Checked empty of side effects on every other language: no `__tests__` directory exists
+  anywhere in this repo's own tree, so no existing fixture or pinned gate could have been counted as test
+  code by this convention before. jest's OTHER default pattern (a bare `test.js`/`spec.js` filename, no
+  leading dot or underscore) remains a narrower, separate, undocumented-no-longer gap — see below.
+- **`npm run <script>` / `yarn <script>` / `pnpm <script>` indirection inside `scripts.test` is honest-
+  unknown, not derived.** `scripts.test: "npm run test:unit"` with `scripts["test:unit"]: "vitest run"`
+  used to derive vitest via the (now-removed) dependency fallback; it is real, common indirection this
+  version does not follow. Stated as a floor below, not fixed — following it needs the same authoritative-
+  script rule one script-name hop deeper, which is a larger, separately-scoped change.
+
+### Documented — TS/JS test runners this cannot yet derive (`run_unknown="1"` stays honest, not a bug)
+
+A handful of real, common TS/JS test-runner spellings are not covered by the three named in #323 and
+correctly read `run_unknown="1"`: node's own test runner invoked through `tsx` (a common way to run it
+against `.ts` files), `bun`'s test runner, and node's test runner against a `.ts` file on a node
+version too old to strip TypeScript types natively. None of these is guessed at; see #323's own
+discussion for a user-declared runner template, which would be the way to name one of these explicitly
+once implemented. `pnpm`/`yarn`-prefixed `scripts.test` entries derive correctly today, spelled as
+`npx …`, since `npx` finds a locally installed binary first. A bare `test.js`/`spec.js` filename (no
+leading dot or underscore — jest's OTHER default `testMatch` shape, distinct from the now-recognized
+`__tests__/` directory convention above) is not yet a recognized test path either. `scripts.test`
+delegating through `npm run <script>` / `yarn <script>` / `pnpm <script>` to another entry in the same
+manifest (`"test": "npm run test:unit"`, `"test:unit": "vitest run"` — a common shape for a project
+with several test scripts) is read as this project's own authoritative-but-unrecognized answer and
+stays `run_unknown="1"` rather than being followed one level deeper into the target script's own
+value — a stated floor, not a guess. (A delegating script whose OWN name happens to literally contain
+`vitest`/`jest` as a word, e.g. `"npm run test:vitest"`, still derives correctly today — that is the
+existing word-match rule firing on the visible text, not indirection-following.)
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

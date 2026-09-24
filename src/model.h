@@ -91,6 +91,18 @@ inline const char* symTag( SymKind k ) noexcept
     return "other";   // a byte past the enum; a NEW SymKind is a -Werror=switch error above, never a silent "other"
 }
 
+// #324: a ModuleScope owner is SYNTHETIC (comment above the enum) — a CALLER minted after the tags.scm pass,
+// never something a test (or anything else) can name or invoke, so it can never be discharged as a test
+// obligation. It is legitimate wherever a CALLER is shown (--callers/--impact/--for already carry the
+// t="modscope" legend for exactly that row shape) — this predicate is for the narrower, different question
+// "is this symbol something a reader could write a test FOR", which a module scope answers no to unconditionally.
+// ONE predicate so every such obligation listing excludes it the same way (situ.h's --test-gate untested rows,
+// flipimpact.h's --flags --flip untested hosts) rather than two independently-maintained checks that could drift.
+inline bool isUntestableOwner( SymKind kind ) noexcept
+{
+    return kind == SymKind::ModuleScope;
+}
+
 // NOTE: Json sits AFTER Unknown deliberately. serialize.h pins `static_assert( int(Lang::Unknown)==12 )`
 // and sizes contentBytesByLang[13] on it (clamping any lang index >= 13 into the Unknown token-calib
 // bucket — its own designed headroom). Keeping Unknown at 12 lets JSON (a pure-data language with no

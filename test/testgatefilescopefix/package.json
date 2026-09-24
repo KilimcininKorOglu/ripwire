@@ -1,0 +1,6 @@
+{
+  "name": "testgatefilescopefix",
+  "private": true,
+  "scripts": { "test": "vitest run" },
+  "devDependencies": { "vitest": "^3.2.0" }
+}

@@ -33,10 +33,25 @@ inline bool hasDirSegment( std::string_view p, std::string_view seg ) noexcept
     return false;
 }
 
+// rv-test-gate-tsjs G2 (delta review, treated as a real defect, not advisory): jest's OWN default
+// `testMatch` collects every file under a `__tests__/` directory, named or not — a real, common JS/TS
+// convention this function did not recognize, so such a file was invisible to `--test-gate` (and every
+// other tested=/untested= partition) before this fix: `src/__tests__/lib.js` read as an untestable
+// module-scope owner even though jest runs it by default. Added HERE (not scoped to a JS/TS extension
+// check) because isTestPath is the ONE language-neutral test-path convention every verb shares
+// (this file's own banner) — a directory NAMING convention, unlike a file extension, is not inherently
+// tied to one language (Dart/Flutter's own test tooling uses the same directory name), and BRIEF_COMMON's
+// language-neutrality rule prefers one shared mechanism over a per-language special case when the
+// mechanism itself does not need to differ. Verified zero-risk to every OTHER language's existing
+// fixtures/goldens: no `__tests__` directory exists anywhere in this repo's tree today (a directory this
+// convention did not previously recognize cannot have been counted as test code by any committed fixture
+// or pinned gate), confirmed by a repo-wide `find -type d -name __tests__` returning nothing before this
+// change landed. jest's OTHER default pattern half — a bare `test.js`/`spec.js` filename with no leading
+// dot or underscore (`?(*.)+(spec|test).[tj]s?(x)`) — is a narrower, separate gap this fix does not close.
 inline bool isTestPath( std::string_view p ) noexcept
 {
-    // directory segment: test/ or tests/  (bounded by '/' or start)
-    for( std::string_view seg : { std::string_view( "test/" ), std::string_view( "tests/" ) } )
+    // directory segment: test/, tests/ or __tests__/  (bounded by '/' or start)
+    for( std::string_view seg : { std::string_view( "test/" ), std::string_view( "tests/" ), std::string_view( "__tests__/" ) } )
     {
         if( hasDirSegment( p, seg ) )
         {
