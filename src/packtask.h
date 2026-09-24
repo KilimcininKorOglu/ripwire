@@ -944,6 +944,7 @@ struct RankingSection
     std::size_t farTotal = 0, farKept = 0;
     std::string farXml;         // the raw <far>…</far> (or "" if omitted) — for the header's listStatus
     std::size_t droppedPositive = 0;   // A2 (survey card, 2026-09-03): rank>0 eligibleIds cut by the ladder's step F
+    rw::SigsCutReport sigsCut;         // cut-fix lane A: the <sigs> tag's cut readings — their clauses ride the ledger
 };
 // WHERE packBodies' OWN `<bodies …>` OPEN TAG STARTS AND ENDS — by structure, never by punctuation.
 // The document is `<!-- legend --><!-- legend --><bodies …>…</bodies>`: packBodies writes zero or more
@@ -1022,7 +1023,9 @@ inline RankingSection renderRankingWithFar( const IngestResult& ing, const Ranki
                         /*hasRelevanceFloor=*/false, // R2: eligibleIds is ALREADY the curated set (d0∪d1 depth mask),
                                                      //   not a floor-narrowed topN — droppedPositiveCount re-checks
                                                      //   rank>0 per symbol regardless, so this is unaffected either way
-                        &out.droppedPositive );      // A2: exact count, see droppedPositiveCount (serialize.h)
+                        &out.droppedPositive,        // A2: exact count, see droppedPositiveCount (serialize.h)
+                        /*shownIdsOut=*/nullptr, /*cappedOut=*/nullptr, /*topRowNext=*/{},
+                        &out.sigsCut );              // cut-fix lane A: docs_dropped= / shrunk readings (defined in the ledger)
     }, ri.in->renderFaults ).text;
     if( !ri.eligibleIds->empty() && out.sigsStr.empty() )
     {
@@ -1995,6 +1998,9 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     report += "notes: "   + listStatus( notesTotal,   notesStr,   notesKept )   + " | ";
     report += "tests: "   + listStatus( testsTotal, testsStr, testsKept );   // E1: test files, as the section's shown=/total= say
     report += " | far: "  + listStatus( farTotal,      rankOut.farXml, farKept );   // R2: d2plus name-only tier (nested in <sigs>)
+    // cut-fix lane A: the <sigs> tag's cut readings, the --for twin's clauses verbatim (serialize.h sigsCutLegendNotes),
+    // present only when the tag carries the case; absorbed by kPackTaskHeaderReserve like the ledger around them.
+    report += rw::sigsCutLegendNotes( rankOut.sigsCut.isCapped, rankOut.sigsCut.shown, rankOut.sigsCut.total, rankOut.sigsCut.docsDropped );
     // A2 (survey card, 2026-09-03) — the pack-task twin of --for's dropped_positive= root fact: how many
     // rank>0 eligibleIds the section-1 ladder cut. Emitted ONLY when nonzero (the pr_converged precedent,
     // src/prconverge.h) — its bytes are absorbed by kPackTaskHeaderReserve's generous fixed allowance (see

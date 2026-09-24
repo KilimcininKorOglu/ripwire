@@ -2098,6 +2098,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // never gets the attribute). Byte-for-byte the same content this call always produced.
     std::size_t mcpDroppedPositive = 0;
     bool        mcpSigsCapped      = false;   // did the H1 ladder trim <sigs>? — decides the budget_bytes= disclosure below
+    rw::SigsCutReport mcpSigsCut;             // cut-fix lane A: the <sigs> tag's cut readings, spliced below as the CLI twin does
     std::vector<rw::NodeId> mcpShownIds;   // lane 2: the sigs rows actually emitted — the tail excludes these files, not the whole surface
     std::string sigsStr = renderToString( [ & ]( std::FILE* m2 )
     {
@@ -2111,7 +2112,8 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                         &mcpDroppedPositive,                  // A2: exact count, see droppedPositiveCount (serialize.h)
                         &mcpShownIds,                         // lane 2: see verbs_for.h shownSigIds
                         &mcpSigsCapped,                       // the ladder's own verdict — see the budget_bytes= splice below
-                        mcpTopRowNext );                      // L-W: the widening page on a thin answer, else the body
+                        mcpTopRowNext,                        // L-W: the widening page on a thin answer, else the body
+                        &mcpSigsCut );                        // cut-fix lane A: docs_dropped= / shrunk readings
     } );
     // A2: same insert-before-"-->" splice as the CLI twin (verbs_for.h) — absent entirely on the (overwhelming)
     // no-drop path, so headerStr's bytes are unchanged there (byte-identical to the pre-A2 output). Bare
@@ -2147,6 +2149,17 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         if( closeAt != std::string::npos )
         {
             headerStr.insert( closeAt, rw::kForBudgetBytesNote );
+        }
+    }
+    // cut-fix lane A: the <sigs> tag's cut readings (docs_dropped=, shrunk-not-dropped) — the CLI twin's clauses, same
+    // text, same splice point, present only when the tag carries the case (serialize.h sigsCutLegendNotes).
+    if( const std::string cutNotes = rw::sigsCutLegendNotes( mcpSigsCut.isCapped, mcpSigsCut.shown, mcpSigsCut.total, mcpSigsCut.docsDropped );
+        !cutNotes.empty() )
+    {
+        const std::size_t closeAt = headerStr.rfind( " -->" );
+        if( closeAt != std::string::npos )
+        {
+            headerStr.insert( closeAt, cutNotes );
         }
     }
     // L3 follow-up (CodeRabbit 4053600616): same splice shape as dropped_positive=/budget_bytes= above — absent
