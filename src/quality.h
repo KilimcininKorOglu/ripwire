@@ -5673,6 +5673,9 @@ enum class AckProvenance : std::uint8_t
     None = 0,        // legacy row — no now=/was= on the line at all
     Measured,        // read off the live delta this row was accepted from
     Reconstructed,   // healed from the CURRENT tree by a backfill pass — see backfillCloneAckProvenance
+    Unknown,         // now=/was= present, but prov= names a spelling this binary never wrote — round-tripped
+                      // verbatim (AckRecord::provRaw) rather than promoted into either real claim; see
+                      // ackProvenanceFor for why guessing either direction is the honesty-contract violation.
 };
 
 // The token `prov=` carries in the ledger. Omitted entirely for Measured, the same OMIT-when-default rule
@@ -5749,6 +5752,12 @@ struct AckRecord
     std::uint32_t line          = 0;
     AckProvenance provenance    = AckProvenance::None;
     std::string   reason;
+    // The literal `prov=` token text when `provenance == Unknown` — a spelling neither this binary's
+    // canonical `recon` nor its "absent/live" Measured spelling, so there is nothing true to compute from
+    // it. Kept verbatim so a hand-written or future-binary value ROUND-TRIPS through a read+rewrite instead
+    // of being silently promoted into a false "reconstructed by us" claim or silently dropped. Empty for
+    // every other provenance. See ackProvenanceFor / ackProvenanceTokens.
+    std::string   provRaw;
 
     // "is there anything here to re-score at all" — the question every pre-existing call site asked of
     // the bool this replaces, kept as a predicate so adding the confidence axis changed no caller's
@@ -5818,9 +5827,13 @@ inline std::string ackMapKey( const std::string& kind, std::uint64_t key )
 // ledger's own blame is that anchor, and it is a separate lane — see AckRecord's doc comment for the
 // measured cost and for why the LAST write, not the first appearance, is the commit to re-diff.
 //
-// IDEMPOTENT AND DETERMINISTIC, both by construction rather than by care: a row that already carries
-// provenance is never rewritten (so a second run is a no-op, and a Measured row can never be downgraded to
-// Reconstructed), `acks` is a btree_map so the walk is (kind,key) sorted, and `facts` is sorted+deduped by
+// IDEMPOTENT AND DETERMINISTIC, both by construction rather than by care — but NOT because a row that
+// already carries provenance is left alone: a Measured row is the only row never rewritten (a measurement
+// outranks anything this pass could derive, so it can never be downgraded to Reconstructed); a Reconstructed
+// row IS rewritten on every run whose group is still found (`++out.refreshed`, not skipped), re-derived from
+// the same deterministic facts about the CURRENT tree. Idempotence therefore holds because that re-derivation
+// is a pure function of (member-set hash, current tree) and produces the same bytes every time — not because
+// the row is skipped. `acks` is a btree_map so the walk is (kind,key) sorted, and `facts` is sorted+deduped by
 // its producer so the lookup is a binary search over a stable sequence.
 struct AckBackfill
 {
@@ -5895,8 +5908,16 @@ inline AckBackfill backfillCloneAckProvenance( gtl::btree_map<std::string, AckRe
         rec.now        = rec.ackNow;
         rec.facet      = hit->idiom;
         rec.provenance = AckProvenance::Reconstructed;
+        rec.provRaw.clear();   // this run just derived a REAL reconstruction — any prior unrecognized spelling is superseded
         ++( wasReconstructed ? out.refreshed : out.resolved );
     }
+    // Every row this pass looked at landed in exactly one counter (`continue`d after incrementing it, or
+    // fell through to the resolved/refreshed increment above) — a plain size_t sum with no accessor behind
+    // it, so it costs nothing to state and nothing to check. This is the invariant a reader would otherwise
+    // verify by hand (the review that found this backfill had zero self-checks in +380 lines did exactly
+    // that, over two separate runs, before trusting the six numbers on stderr).
+    ENSURES( out.resolved + out.refreshed + out.unverified + out.unresolved + out.ineligible + out.measured == acks.size(),
+              "every ack row lands in exactly one backfill counter" );
     return out;
 }
 
@@ -6202,10 +6223,24 @@ inline void splitAckLocator( const std::string& token, std::string& pathOut, std
 // loop and nothing else. `hasPair` is "both now= and was= were present", because provenance is the PAIR:
 // without it there is nothing for a confidence to qualify, whatever prov= says.
 //
-// An UNRECOGNIZED value degrades to Reconstructed, never to Measured, and says so. Reading an unknown
-// confidence as the STRONGEST one would let a future spelling this binary does not know silently promote
-// itself into the audited-as-measured population — the exact direction the honesty contract forbids
-// guessing in. Same "degrade, do not fabricate" rule takeAckUintPrefix applies to an unparseable now=.
+// An UNRECOGNIZED value degrades to Unknown, never to Measured and never to Reconstructed. Reading it as
+// Measured would let a future spelling this binary does not know silently promote itself into the
+// audited-as-measured population — the exact direction the honesty contract forbids guessing in. Reading it
+// as Reconstructed (an earlier version of this function did) is the OTHER direction of the same mistake: it
+// claims backfillCloneAckProvenance verified this row from the current tree, which is false for any row that
+// pass does not own (every numeric/churn/presence kind — see AckBackfill::ineligible) and unproven for a
+// clone-kind row whose group this run cannot find either. `writeAckRecords` would then serialize a plain
+// hand-typed value as the ledger's own canonical `prov=recon` spelling — a claim of verified reconstruction
+// this binary never performed. AckRecord::provRaw carries the exact bytes instead: caller-side
+// (`takeAckProvenance`) stores `provToken` there when this function returns Unknown, and
+// `ackProvenanceTokens` writes `prov=<provRaw>` verbatim, so an unrecognized value ROUND-TRIPS through a
+// read+rewrite unchanged rather than being rewritten into either claim. A clone-kind row still gets one real
+// chance to become genuinely Reconstructed: backfillCloneAckProvenance runs on every row regardless of this
+// function's verdict, and treats Unknown the same as legacy (its member-set hash may still be found in the
+// CURRENT tree) — so it self-corrects into the real spelling when the tree can prove it, and round-trips
+// otherwise. It is never withdrawn: the same "absence is a floor, not a verdict" rule that keeps the backfill
+// from deleting an unverified reconstruction (see backfillCloneAckProvenance) applies here too — an
+// unrecognized token is unproven, not disproven, and this codebase's ratchet never destroys a row on a floor.
 inline AckProvenance ackProvenanceFor( bool hasPair, std::string_view provToken )
 {
     if( !hasPair )
@@ -6216,13 +6251,16 @@ inline AckProvenance ackProvenanceFor( bool hasPair, std::string_view provToken 
     {
         return AckProvenance::Measured;   // absent IS measured — that is what keeps a live-written ledger byte-identical
     }
-    // Anything else — a hand-edit, or a spelling some future binary writes — lands here. It is NOT a trace
-    // site: a one-argument DISCLOSE ships nothing (Diagnostics.h §4b), there is no sink in a pure token
-    // parser to pass, and answerUnchanged would be a false claim because this choice DOES change the row's
-    // confidence class. The remedy is better than a trace and is already wired: a Reconstructed row is
-    // re-derived by the next backfill pass, so an unrecognized value either self-corrects into a spelling
-    // this binary wrote or is withdrawn outright — and the counts of both land on stderr.
-    return AckProvenance::Reconstructed;
+    if( provToken == kAckProvReconToken )
+    {
+        return AckProvenance::Reconstructed;   // the one spelling this binary itself writes for a healed row
+    }
+    // Anything else — a hand-edit, or a spelling some future binary writes — is NOT ours to interpret. It is
+    // also not a trace site: a one-argument DISCLOSE ships nothing (Diagnostics.h §4b), there is no sink in a
+    // pure token parser to pass, and answerUnchanged would be a false claim because this choice DOES change
+    // the row's confidence class. The caller (takeAckProvenance) captures `provToken` verbatim into
+    // AckRecord::provRaw so it round-trips instead.
+    return AckProvenance::Unknown;
 }
 
 // ONE pass of the token loop: take whichever re-score token is at the front of `reason` right now, or
@@ -6255,6 +6293,10 @@ inline void takeAckProvenance( std::string& reason, AckRecord& rec )
         }
     }
     rec.provenance = ackProvenanceFor( gotNow && gotWas, prov );
+    if( rec.provenance == AckProvenance::Unknown )
+    {
+        rec.provRaw = prov;   // round-trip the exact bytes — see ackProvenanceFor for why this is not our call to relabel
+    }
 }
 
 // ─── THE READER-SIDE TWIN OF THE ACK REASON CLOBBER (2nd site, round 2026-08-30) ───────────────────────
@@ -6459,21 +6501,33 @@ struct SidecarWriteLock
 // legitimately 0 (dead-code and both clone kinds always are). The token's PRESENCE, not its value, is what a
 // later reader (rescoreAckRecord) uses to tell a provenance-bearing row from a legacy one.
 //
-// prov= is written only for the WEAKER confidence. Measured emits nothing, so a ledger whose rows were all
+// prov= is written only for the WEAKER confidences. Measured emits nothing, so a ledger whose rows were all
 // written from a live delta is byte-identical to one written before the confidence axis existed — the same
 // OMIT-when-default rule cid=/by= follow, and what keeps qackconcurrencycheck arm 7's round-trip over the
-// real 1,623-row ledger from moving a single byte until a backfill actually runs.
+// real 1,623-row ledger from moving a single byte until a backfill actually runs. Reconstructed writes the
+// canonical `recon` spelling; Unknown writes AckRecord::provRaw verbatim — never `recon` — so a hand-typed or
+// future-binary spelling this binary does not understand round-trips through a read+rewrite unchanged
+// instead of being relabelled as a reconstruction this binary never performed (see ackProvenanceFor).
 inline std::string ackProvenanceTokens( const AckRecord& r )
 {
     if( !r.hasProvenance() )
     {
         return {};
     }
+    EXPECTS( r.provenance != AckProvenance::Unknown || !r.provRaw.empty(),
+             "takeAckProvenance always pairs Unknown with the raw token it was read from" );
     std::ostringstream t;
     t << "now=" << r.now << " was=" << r.was << ' ';
     if( r.provenance == AckProvenance::Reconstructed )
     {
         t << "prov=" << kAckProvReconToken << ' ';
+    }
+    else if( r.provenance == AckProvenance::Unknown )
+    {
+        // Never scopeSpecIsSpellable-gated like facet=/p= below: provRaw was read back by takeAckNamedToken,
+        // which only ever takes a single whitespace-delimited token in the first place, so it cannot contain
+        // a space or newline to begin with — there is nothing here a spellability check could catch.
+        t << "prov=" << r.provRaw << ' ';   // round-trip verbatim — never our canonical spelling, never claimed as ours
     }
     // facet= and p= are single whitespace-delimited tokens, so a value that cannot be spelled as one is OMITTED,
     // the same closed-set rule by= uses (scopeSpecIsSpellable). A repository path may contain a space: written

@@ -1236,7 +1236,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             if( backfilled.resolved > 0 || backfilled.refreshed > 0 || backfilled.unverified > 0 || backfilled.unresolved > 0 )
             {
                 rw::emitTo( stderr, "ripwire: ack provenance backfill — {} clone row(s) reconstructed from the current tree, {} re-derived, {} left UNVERIFIED (their group was not found here — a floor, not proof it is gone), "
-                                      "{} left legacy (member set does not clone here), {} ineligible (no current-tree fact answers their kind), {} already measured (left alone). "
+                                      "{} left legacy (member set not found cloning here — a floor, not proof it is gone), {} ineligible (no current-tree fact answers their kind), {} already measured (left alone). "
                                       "prov=recon is what the idiom is NOW, as of the last run that could check it — not what was measured when the row was accepted.\n",
                               backfilled.resolved, backfilled.refreshed, backfilled.unverified, backfilled.unresolved, backfilled.ineligible, backfilled.measured );
             }
@@ -1297,6 +1297,24 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             }
             if( ackWritten == 0 && !cfg.qualityAckOnly.empty() )
             {
+                // M1 FOLLOW-UP (round train-18, rv-ack-provenance-backfill.md): this refusal used to discard
+                // the backfill above unconditionally — `backfillCloneAckProvenance` already mutated `acks` in
+                // memory, but returning here without ever calling writeAckRecords threw that healing away,
+                // so a rubber-stamp-guarded --ack-only that (correctly) refused to accept anything ALSO
+                // silently un-did an otherwise-independent repair to the ledger's provenance. Same
+                // canonical-bytes rule H10's ackNothingToAccept applies when there is nothing to accept at
+                // all: a ledger already equal to its own canonical bytes is left untouched (no spurious
+                // diff); a non-canonical one — including one this run's backfill just healed — is rewritten
+                // and the run says so. This never accepts a finding and the refusal's exit code is unchanged.
+                const bool nonCanonical = !acks.empty()
+                    && quality::renderAckRecords( acks ) != docparse::detail::readRegularFile( "the quality-acks ledger", acksFile ).value_or( std::string() );
+                if( nonCanonical && quality::writeAckRecords( acksFile, acks ) )
+                {
+                    rw::emitTo( stderr, "ripwire: --ack-only={} matched none of the {} finding(s) — nothing accepted, but {} was not in canonical form "
+                                          "(ack provenance backfill / legacy rows) and has been re-serialised\n",
+                                  std::string_view( cfg.qualityAckOnly.data(), cfg.qualityAckOnly.size() ), regs.size(), acksFile.c_str() );
+                    return 1;
+                }
                 rw::emitTo( stderr, "ripwire: --ack-only={} matched none of the {} finding(s) — nothing written\n", std::string_view( cfg.qualityAckOnly.data(), cfg.qualityAckOnly.size() ), regs.size() );
                 return 1;
             }

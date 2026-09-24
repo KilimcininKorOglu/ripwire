@@ -154,6 +154,16 @@ the proof. The `windows` CI job seeds the real cache directory (learned from `--
 blobs, forces a cache write, and asserts they are gone — loud on the pre-fix code — and `evictioncheck` pins
 in the source that every value `cacheDirLadder()` returns is the rebased spelling.
 
+### Fixed — `--quality-ack`: a refused `--ack-only` no longer discards the ledger's own healing
+
+`--ack-only=SUBSTR` that matches none of the current findings correctly refuses (exit 1, nothing accepted) —
+but it used to also throw away any legacy-row provenance healing (`backfillCloneAckProvenance`) this same run
+had already computed in memory for unrelated rows, because the refusal returned before the ledger was ever
+rewritten. A refused `--ack-only` now still writes that healing (only when it actually changes the ledger's
+canonical bytes — a canonical ledger is still left untouched), the same "heal even with nothing to accept"
+rule `--quality-ack` already applies when a run's report has zero findings at all. The refusal itself, and its
+exit code, are unchanged.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
