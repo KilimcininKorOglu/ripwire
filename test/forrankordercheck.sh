@@ -314,5 +314,96 @@ else
     printf '  SKIP  xmllint (not installed)\n'
 fi
 
+# ── (7) the row gate cuts RANK FIRST, and the cut is counted (cut-fix lane A, 2026-09-23) ─────────────────────
+# The --pack-budget-bytes gate ran inside the FILE-MAJOR collection walk (files by best rank, rows in source order), so
+# it cut in reading order: on this repo at 64 B the old binary served r=7 and r=20 (the rank-1 row's file's first rows in
+# SOURCE order) under a bare <sigs>, and at 2000 B r= 1 2 5 6 7 9 19 20 23 27 — interior gaps, no shown=/total=. RED on
+# origin/main 60b65f02 for every sub-arm below; the invariant is corpus-independent: the served rows are exactly r=1..S,
+# and the tag says shown="S" total="T" capped="1" with T the rows handed to the gate. Both dialects.
+gate_xml(){ python3 -c '
+import re, sys
+s = sys.stdin.read()
+m = re.search( r"<sigs([^>]*)>(.*?)</sigs>", s, re.S )
+if not m: print( "FAIL no <sigs>" ); sys.exit( 1 )
+seq = [ int( x ) for x in re.findall( r"<d [^>]*\br=\"([0-9]+)\"", m.group( 2 ) ) ]
+sh = re.search( r"shown=\"([0-9]+)\"", m.group( 1 ) ); tt = re.search( r"total=\"([0-9]+)\"", m.group( 1 ) )
+if seq != list( range( 1, len( seq ) + 1 ) ): print( "FAIL served r= is not the rank head 1..S: %s" % seq ); sys.exit( 1 )
+if not ( sh and tt and "capped=\"1\"" in m.group( 1 ) ): print( "FAIL the gate cut is undisclosed: <sigs%s>" % m.group( 1 ) ); sys.exit( 1 )
+if int( sh.group( 1 ) ) != len( seq ) or int( tt.group( 1 ) ) <= len( seq ): print( "FAIL shown=/total= do not count the cut: <sigs%s> with %d rows" % ( m.group( 1 ), len( seq ) ) ); sys.exit( 1 )
+print( "OK r=1..%d of total=%s" % ( len( seq ), tt.group( 1 ) ) )'; }
+gate_json(){ python3 -c '
+import json, sys
+d = json.load( sys.stdin )
+seq = [ r[ "r" ] for r in d[ "sigs" ] ]
+if seq != list( range( 1, len( seq ) + 1 ) ): print( "FAIL served r is not the rank head 1..S: %s" % seq ); sys.exit( 1 )
+if d.get( "capped" ) is not True or d.get( "sigs_shown" ) != len( seq ) or not d.get( "sigs_total", 0 ) > len( seq ):
+    print( "FAIL the gate cut is undisclosed: capped=%r sigs_shown=%r sigs_total=%r rows=%d" % ( d.get( "capped" ), d.get( "sigs_shown" ), d.get( "sigs_total" ), len( seq ) ) ); sys.exit( 1 )
+print( "OK r=1..%d of sigs_total=%d" % ( len( seq ), d[ "sigs_total" ] ) )'; }
+for pb in 64 2000; do
+    if v="$( "$BIN" src --for="rank graph teleport" --pack-budget-bytes=$pb --no-cache 2>/dev/null | gate_xml )"; then
+        ok "(7) --pack-budget-bytes=$pb XML: $v"
+    else
+        no "(7) --pack-budget-bytes=$pb XML: $v"
+    fi
+    if v="$( "$BIN" src --for="rank graph teleport" --pack-budget-bytes=$pb --json --no-cache 2>/dev/null | gate_json )"; then
+        ok "(7) --pack-budget-bytes=$pb JSON: $v"
+    else
+        no "(7) --pack-budget-bytes=$pb JSON: $v"
+    fi
+done
+
+# ── (8) docs_dropped= discloses the rank tier's doc removal; shrunk-not-dropped is named (cut-fix lane A) ─────────
+# The tier removes the doc of every row past r=24 ALWAYS (not budget-driven), and the ladder's steps B/D remove more on a
+# capped block; both used to leave no trace. Fixture: 40 matching C++ functions over two files, EVERY one with a doc
+# comment, small enough that the default bundle is uncapped — so exactly the 16 rows past r=24 print no <doc>. RED on
+# 60b65f02 (no docs_dropped=, no clause). Then the ladder's first capped state (shrink, no drop) is found by walking
+# --token-budget down, and must say shown == total with the shrunk clause. In every state, docs_dropped= must equal the
+# shown rows printing no <doc> (every fixture row has one), and the JSON twin must carry the same count.
+mkdir -p "$TMP/fxdocs"
+python3 - "$TMP/fxdocs" <<'PY'
+import sys
+for f in range( 2 ):
+    with open( "%s/part%d.cpp" % ( sys.argv[1], f ), "w" ) as o:
+        for i in range( 20 ):
+            n = f * 20 + i + 1
+            o.write( "// widget helper %d computes a widget\nint widgetHelper%d( int x ) { return x + %d; }\n\n" % ( n, n, n ) )
+PY
+docs_arm(){ python3 -c '
+import re, sys
+s = sys.stdin.read()
+m = re.search( r"<sigs([^>]*)>(.*?)</sigs>", s, re.S )
+if not m: print( "FAIL no <sigs>" ); sys.exit( 1 )
+rows = re.findall( r"<d [^>]*\br=\"([0-9]+)\"[^>]*>(.*?)</d>", m.group( 2 ), re.S )
+nodoc = [ int( r ) for r, inner in rows if "<doc>" not in inner ]
+dd = re.search( r"docs_dropped=\"([0-9]+)\"", m.group( 1 ) )
+got = int( dd.group( 1 ) ) if dd else 0
+if got != len( nodoc ) or got == 0: print( "FAIL docs_dropped=%d but %d shown rows print no <doc> (r=%s)" % ( got, len( nodoc ), nodoc ) ); sys.exit( 1 )
+if "[docs_dropped=N:" not in s[ : s.find( "<sigs" ) ]: print( "FAIL docs_dropped= rides with no legend clause ahead of <sigs>" ); sys.exit( 1 )
+sh = re.search( r"shown=\"([0-9]+)\"", m.group( 1 ) ); tt = re.search( r"total=\"([0-9]+)\"", m.group( 1 ) )
+shrunk = bool( sh and tt and sh.group( 1 ) == tt.group( 1 ) )
+if shrunk != ( "[sigs capped=1 with shown=total:" in s ): print( "FAIL the shrunk clause rides %s a shown==total cap" % ( "without" if shrunk else "beside no" ) ); sys.exit( 1 )
+print( "OK docs_dropped=%d rows=%d %s" % ( got, len( rows ), "<sigs%s>" % m.group( 1 ) ) )'; }
+if v="$( cd "$TMP" && "$BIN" fxdocs --for="widget helper" --no-cache 2>/dev/null | docs_arm )"; then
+    case "$v" in
+        *'docs_dropped=16 rows=40 <sigs docs_dropped="16">'*) ok "(8) uncapped: the r>24 tier is disclosed: $v" ;;
+        *) no "(8) uncapped fixture: want docs_dropped=16 of 40 on an uncapped tag, got: $v" ;;
+    esac
+else
+    no "(8) uncapped fixture: $v"
+fi
+jd="$( cd "$TMP" && "$BIN" fxdocs --for="widget helper" --json --no-cache 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("docs_dropped"), sum(1 for r in d["sigs"] if "doc" not in r))' )"
+if [ "$jd" = "16 16" ]; then ok "(8) JSON twin: docs_dropped=16 = the rows with no doc key"; else no "(8) JSON twin: docs_dropped/no-doc rows = '$jd' (want '16 16')"; fi
+first_capped=""
+for tb in 3400 3200 3000 2800 2600 2400 2200 2000; do
+    out="$( cd "$TMP" && "$BIN" fxdocs --for="widget helper" --no-cache --token-budget=$tb 2>/dev/null )"
+    v="$( printf '%s' "$out" | docs_arm )" || { no "(8) --token-budget=$tb: $v"; continue; }
+    if [ -z "$first_capped" ] && printf '%s' "$v" | grep -q 'capped="1"'; then first_capped="$tb $v"; fi
+done
+case "$first_capped" in
+    *'shown="40" total="40" capped="1"'*) ok "(8) the ladder's first capped state is shrunk-not-dropped and says so: --token-budget=$first_capped" ;;
+    "") no "(8) no --token-budget in 3400..2000 capped the fixture — the shrunk arm measured nothing" ;;
+    *) no "(8) first capped state is not shrunk-not-dropped: $first_capped" ;;
+esac
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

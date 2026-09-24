@@ -845,6 +845,37 @@ inline constexpr std::size_t kForDocExcerptRankCount = 24;
 inline constexpr std::size_t kForDocExcerptBytes     = 96;
 inline constexpr std::size_t kForTailSigBytes        = 160;
 
+// ── THE TWO <sigs> CUT READINGS (cut-fix lane A, 2026-09-23) — present-only legend clauses, one spelling for both dialects
+// and every surface that splices them (the CLI --for header, the MCP `for` twin), like kForBudgetBytesNote. Each rides
+// only on an answer whose <sigs> tag carries the case it defines (SigsCutReport), so a bundle nothing cut pays nothing.
+//   • docs_dropped=N: the tier above removes the doc of every row past kForDocExcerptRankCount, ALWAYS (not budget-
+//     driven), and the ladder's steps B/D remove more on a capped block. That used to leave no trace: a row without
+//     <doc> read as a symbol without a doc comment. The clause names both tiers' thresholds (the static_assert pins them).
+//   • capped="1" with shown == total: every row survived but was shrunk (ladder steps A..E); the reader-facing legends
+//     said only "capped=1 if cut", so a shrunk-not-dropped block could not be told from a dropped one.
+// No "--" in either: they ride inside an XML comment (G4).
+inline constexpr std::string_view kForDocsDroppedNote =
+    " [docs_dropped=N: N shown rows have a doc comment not printed (r>24 always, r5..24 if capped)]";
+inline constexpr std::string_view kForSigsShrunkNote =
+    " [sigs capped=1 with shown=total: rows shrunk, none dropped]";
+static_assert( kForDocExcerptRankCount == 24 && kForDocFullRankCount == 12,
+               "kForDocsDroppedNote spells the tier thresholds (r>24; the ladder's r5..24): re-word it with these constants" );
+
+// The clauses a <sigs> cut report owes, concatenated in a fixed order ("" when it owes none).
+inline std::string sigsCutLegendNotes( bool isCapped, std::size_t shown, std::size_t total, std::size_t docsDropped )
+{
+    std::string notes;
+    if( isCapped && shown == total )
+    {
+        notes += kForSigsShrunkNote;
+    }
+    if( docsDropped > 0 )
+    {
+        notes += kForDocsDroppedNote;
+    }
+    return notes;
+}
+
 // ── B0 round 2 (H1): GLOBAL deterministic payload budget for the ranked --for bundle ─────────────────
 // The rank tiers above cut only ~1% of the measured LocBench payload: the worst bundles are dominated by
 // the TOP-12 full entries with long doc comments (payload p50 12,776 B / p95 18,793 B), and the paired
@@ -3339,6 +3370,10 @@ inline std::string cleanSig( const char* data, std::size_t a, std::size_t b, Red
     {
         sig.pop_back();
     }
+    // NO COUNT ATTRIBUTE for this cut (cut-fix lane A, 2026-09-23, decided): the in-band U+2026 already marks
+    // EACH cut signature, on the row it cut, at 3 B — so a reader sees exactly which rows were shortened, which a
+    // block-level count could only restate for more bytes. The full signature is one deterministic call away on
+    // every row (--expand=p:n, the row's own p= and n=), so the cut is disclosed AND recoverable (METHODOLOGY §9 #3).
     // ONE truncator, the one the three OTHER signature cuts already call (kForTailSigBytes,
     // kForCapTailSigBytes, packtask.h's tail sig): UTF-8-safe prefix + a visible U+2026. A signature is
     // already a RENDERING rather than raw file bytes — the body is stripped, whitespace runs collapse — so
@@ -3958,7 +3993,9 @@ inline RelevanceFloorCut relevanceFloorCut( const std::vector<float>& rank, int 
 // Every candidate positive falls into exactly one of three buckets — content-skipped, budget-dropped (never
 // collected because the collection-phase byte gate broke first, or collected then step-F dropped), or
 // survived — so subtracting the first and third from the total leaves exactly the second, with no need to
-// track "never visited due to budget" as its own running counter.
+// track "never visited due to budget" as its own running counter. (Cut-fix lane A: the "never collected" half is now
+// "cut by the rank-first row gate" — gateSigRowsRankFirst removes those rows after collection, so they are not
+// survivors, and the arithmetic is unchanged.)
 //
 // BAND (docs/EVALS.md, A2 registration): this count must be EXACTLY correct on every one of the standing
 // --for-gate sweep's serving shapes — a floor label (`_floor`/`_capped`) is for a count that admits it might
@@ -4055,6 +4092,157 @@ inline void trimSigLadder( std::vector<EntryT>& entries, std::vector<FileT>& fil
     }
 }
 
+// ── THE ROW GATE (`budgetBytes`, --pack-budget-bytes), RANK FIRST (cut-fix lane A, 2026-09-23) ─────────────
+// The collection loop reads the kept head FILE-MAJOR (files by best rank, rows in source order inside each one) so each
+// file is read once. The gate used to run INSIDE that loop, so it cut in reading order: at --pack-budget-bytes=64 the one
+// row that shipped was the first row IN SOURCE ORDER of the rank-1 row's file (on this repo a rank-7 row), and a rank-2
+// row in a second file could be lost while a rank-30 row in the first survived. METHODOLOGY §9 #2: the ceiling bounds the
+// tail, never the head. So the loop now collects every row and this gate runs on the rows in their EMISSION order (rank
+// order on the lens path, where both callers sort before calling it): it keeps rows while the running cost is under the
+// budget (the row that crosses still ships, so the first row always does) and cuts the rest, which is therefore always
+// the rank TAIL. The cost is the streaming path's own accounting (doc + 12, sig + 16), unchanged.
+//
+// Cut rows are REMOVED (the ladder, the note totals and the A2 arithmetic then see exactly the set the old gate handed
+// them) and COUNTED: the return value is added to the block's total= so the cut is disclosed (§9 #3). A file whose every
+// collected row was cut renders nothing, so its notes are neither charged nor counted, as when the old gate never
+// reached it; a file that had no collected row BEFORE the gate (every row a content skip) is left exactly as it was.
+// Templated on the callers' own row structs, like trimSigLadder (duck-typed on doc/sig/fileSlot, liveCount/wrapBytes/notes).
+template<class EntryT, class FileT>
+inline std::size_t gateSigRowsRankFirst( std::vector<EntryT>& entries, std::vector<FileT>& files, std::size_t budgetBytes )
+{
+    std::vector<std::size_t> liveBefore( files.size(), 0 );
+    for( std::size_t i = 0; i < files.size(); ++i )
+    {
+        liveBefore[i] = files[i].liveCount;
+    }
+    std::size_t used = 0;
+    std::size_t kept = 0;
+    for( std::size_t k = 0; k < entries.size(); ++k )
+    {
+        EntryT& e = entries[k];
+        ASSUME( e.fileSlot < files.size() );   // every entry was collected under the file slot it names
+        if( used >= budgetBytes )
+        {
+            ASSUME( files[ e.fileSlot ].liveCount > 0 );   // this entry is one of the file's live rows
+            --files[ e.fileSlot ].liveCount;
+            continue;
+        }
+        used += ( e.doc.empty() ? 0u : e.doc.size() + 12 ) + e.sig.size() + 16;   // the streaming path's accounting
+        if( kept != k )
+        {
+            entries[ kept ] = std::move( e );
+        }
+        ++kept;
+    }
+    const std::size_t cut = entries.size() - kept;
+    entries.resize( kept );
+    for( std::size_t i = 0; i < files.size(); ++i )
+    {
+        if( liveBefore[i] > 0 && files[i].liveCount == 0 )
+        {
+            files[i].notes.clear();
+            files[i].wrapBytes = 0;
+            if constexpr( requires { files[i].noteCount; } )
+            {
+                files[i].noteCount = 0;
+            }
+        }
+    }
+    ENSURES( cut == 0 || used >= budgetBytes );   // a row is cut only once the budget is spent
+    return cut;
+}
+
+// What the <sigs> block cut, for the callers that splice its legend clauses (the block's own tag carries the numbers).
+// shown/total are the tag's shown=/total= (total = rows handed to the gate); docsDropped counts SHOWN rows whose doc
+// comment the rank tiers or the ladder removed (the tag's docs_dropped=). isCapped mirrors the tag's capped="1".
+struct SigsCutReport
+{
+    std::size_t shown       = 0;
+    std::size_t total       = 0;
+    std::size_t docsDropped = 0;
+    bool        isCapped    = false;
+};
+
+inline std::size_t sigsDecimalDigits( std::size_t n ) noexcept
+{
+    std::size_t d = 1;
+    for( ; n >= 10; n /= 10 )
+    {
+        ++d;
+    }
+    return d;
+}
+
+// ONE plan for the ladder and the tag's own bytes, shared by both dialects (the XML attributes and the JSON root keys
+// are the same facts, spelled `markerFixed` / `docsKeyFixed` bytes without their digits). The tag's disclosure costs
+// bytes, so it is budgeted INSIDE the block: shown=/total= at T's digit count (S <= T), docs_dropped= at its upper
+// bound — the rows with a doc comment outside the rank 1..4 floor (the tiers leave rank 1..12 whole and the ladder only
+// CAPS a floor row's doc, step C), charged only when such a row exists and over-reserved by at most its digits when
+// fewer lose theirs (the extent-reading precedent). The ladder runs when the block plus what the tag must carry
+// exceeds the budget; the block is capped when the ladder runs OR the row gate cut rows.
+struct SigsTrimPlan
+{
+    bool        ladderFires     = false;
+    bool        capped          = false;
+    std::size_t effectiveBudget = 0;   // the ladder's target: the budget minus the tag's reserved bytes
+    std::size_t docsDroppable   = 0;   // the docs_dropped= upper bound
+};
+template<class EntryT>
+inline SigsTrimPlan planSigsTrim( const std::vector<EntryT>& entries, std::size_t totalRows, std::size_t gateCut,
+                                  std::size_t blockBytes, std::size_t payloadBudgetBytes,
+                                  std::size_t markerFixed, std::size_t docsKeyFixed )
+{
+    SigsTrimPlan plan;
+    plan.docsDroppable = std::size_t( std::count_if( entries.begin(), entries.end(),
+                                                     []( const EntryT& e ) { return e.hadDoc && e.globalRank > 4; } ) );
+    const std::size_t markerBytes = markerFixed + 2 * sigsDecimalDigits( totalRows );
+    const std::size_t docsReserve = plan.docsDroppable > 0 ? docsKeyFixed + sigsDecimalDigits( plan.docsDroppable ) : 0u;
+    const std::size_t reserve     = markerBytes + docsReserve;
+    plan.ladderFires     = payloadBudgetBytes > 0   // 0 = no ladder (MCP's unbudgeted twin)
+                        && blockBytes + docsReserve + ( gateCut > 0 ? markerBytes : 0u ) > payloadBudgetBytes;
+    plan.capped          = plan.ladderFires || gateCut > 0;
+    plan.effectiveBudget = payloadBudgetBytes > reserve ? payloadBudgetBytes - reserve : 0u;
+    return plan;
+}
+
+// What the finished block shows, from its rows after the gate and the ladder: shown rows, and the shown rows whose doc
+// comment was removed (hadDoc, and no doc at emission) — the docs_dropped= value.
+template<class EntryT>
+inline SigsCutReport sigsCutReportOf( const std::vector<EntryT>& entries, std::size_t totalRows, const SigsTrimPlan& plan )
+{
+    SigsCutReport cut;
+    cut.total    = totalRows;
+    cut.isCapped = plan.capped;
+    for( const EntryT& e : entries )
+    {
+        cut.shown       += e.dropped ? 0u : 1u;
+        cut.docsDropped += ( !e.dropped && e.hadDoc && e.doc.empty() ) ? 1u : 0u;
+    }
+    ASSUME( cut.docsDropped <= plan.docsDroppable );   // the reservation is an upper bound (the floor keeps its doc)
+    ENSURES( cut.shown <= cut.total );
+    return cut;
+}
+
+// The <sigs> open tag: `<sigs>` untrimmed; ` shown= total= capped="1"` when rows were cut or shrunk; ` docs_dropped=`
+// when a shown row lost its doc comment. The bytes it adds are the ones planSigsTrim reserved.
+inline std::string sigsOpenTag( const SigsCutReport& cut )
+{
+    std::string tag = "<sigs";
+    char        nb[ 96 ];   // worst case ' shown="{}" total="{}" capped="1"' = 31 B + two 20-digit size_t = 71 B + NUL
+    if( cut.isCapped )
+    {
+        rw::formatTo( nb, sizeof( nb ), " shown=\"{}\" total=\"{}\" capped=\"1\"", cut.shown, cut.total );
+        tag += nb;
+    }
+    if( cut.docsDropped > 0 )
+    {
+        rw::formatTo( nb, sizeof( nb ), " docs_dropped=\"{}\"", cut.docsDropped );
+        tag += nb;
+    }
+    tag += ">";
+    return tag;
+}
+
 // §B10.1 — WHY `redact` KEEPS ITS DEFAULT HERE, and it is not an oversight. W3-N1's rule is "REQUIRED, no
 // default, so a new emitting clone cannot silently opt out", and packSource / packOutline / buildRecall have
 // now all taken it (their `redact` is the LAST parameter, so dropping the default costs nothing). Here it is
@@ -4128,10 +4316,17 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                                                              //   clause defining the budget_bytes= the capped open tag
                                                              //   carries — a clause that must cost nothing when the
                                                              //   ladder did not fire.
-                            std::string_view topRowNext = {} )   // L-W (forpage.h): the r=1 row's next= when the caller
+                            std::string_view topRowNext = {},    // L-W (forpage.h): the r=1 row's next= when the caller
                                                              //   judged the answer THIN (the widening page); "" ⇒ the
                                                              //   --expand body follow-up, byte-identical to before.
+                            SigsCutReport* cutOut = nullptr )   // cut-fix lane A: the tag's shown/total/docs_dropped/capped,
+                                                             //   for the caller's legend splices. Lens path only; zeroed
+                                                             //   (nothing cut) on every other path.
 {
+    if( cutOut )
+    {
+        *cutOut = SigsCutReport {};
+    }
     if( droppedPositiveOut )
     {
         *droppedPositiveOut = 0;   // default: unset until the ladder path (below) computes the real count
@@ -4238,6 +4433,8 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
             std::string   notes;            // W3-N2: this symbol's note children, PRE-RENDERED (the JSON sibling's shape)
             bool          dropped    = false;
             bool          positive   = false;   // A2: rank[id] > 0 at collection time (the disclosure's own definition of "positive")
+            bool          hadDoc     = false;   // the source HAS a doc comment here (before the rank tiers) — docs_dropped= counts
+                                                //   the shown rows where this is true and `doc` is empty at emission
         };
         std::vector<SigFile>  sigFiles;
         std::vector<SigEntry> entries;
@@ -4251,14 +4448,11 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         }
         std::size_t positivesContentSkipped = 0;   // A2: positives lost to a CONTENT reason, never the budget
 
-        // phase 1 — collect (mirrors the streaming loop byte-for-byte, including the budgetBytes gate)
+        // phase 1 — collect every kept row (same skip gates and rank tiers as the streaming loop). The budgetBytes gate is
+        // NOT applied here: this walk is file-major, so a gate inside it cut in reading order, not rank order. It runs on
+        // the rank-sorted rows below (gateSigRowsRankFirst).
         for( std::uint32_t f : fileOrder )
         {
-            if( used >= budgetBytes )
-            {
-                break;
-            }
-
             std::FILE* in = std::fopen( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
             if( !in )
             {
@@ -4290,10 +4484,6 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
             const std::size_t fileSlot = sigFiles.size();
             for( NodeId id : syms )
             {
-                if( used >= budgetBytes )
-                {
-                    break;
-                }
                 const Symbol&     s = ing.symbols[id];
                 const std::size_t a = s.sigStartByte, b = s.sigEndByte;
                 if( a >= src.size() || b > src.size() || a >= b )
@@ -4355,20 +4545,15 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
 
                 std::string doc = docCommentBefore( src, a );
                 redactInPlace( doc, redact );
+                const bool hadDoc = !doc.empty();
                 if( globalRank > kForDocExcerptRankCount )
                 {
-                    doc.clear();
+                    doc.clear();   // the rank tier — disclosed as docs_dropped= on the tag, never silent
                 }
                 else if( globalRank > kForDocFullRankCount )
                 {
                     truncateUtf8WithEllipsis( doc, kForDocExcerptBytes );
                 }
-
-                if( !doc.empty() )
-                {
-                    used += doc.size() + 12; // the same budgetBytes accounting as the streaming path
-                }
-                used += sig.size() + 16;
 
                 SigEntry e;
                 e.globalRank = globalRank;
@@ -4378,6 +4563,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                 e.sig        = std::move( sig );
                 e.notes      = renderNoteChildren( noteIndex, symbolNoteTarget( noteIndex, ing, s ), esc );   // L3/D5 key + W3-N2 pre-render
                 e.positive   = rank[id] > 0.0f;   // A2: this symbol's own score, at collection time
+                e.hadDoc     = hadDoc;
                 entries.push_back( std::move( e ) );
                 ++sf.liveCount;
             }
@@ -4386,6 +4572,9 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         // P7: rank order — the emission order AND the ladder's drop order (globalRank is unique per entry,
         // so the sort is a total order and the output stays deterministic)
         std::stable_sort( entries.begin(), entries.end(), []( const SigEntry& a, const SigEntry& b ) { return a.globalRank < b.globalRank; } );
+        // the budgetBytes gate, RANK FIRST: it cuts the rank tail, and the cut rows stay in total= (gateSigRowsRankFirst)
+        const std::size_t gateCut   = gateSigRowsRankFirst( entries, sigFiles, budgetBytes );
+        const std::size_t totalRows = entries.size() + gateCut;
 
         // exact emitted byte count of the block as collected
         const auto entryCost = [ & ]( const SigEntry& e ) -> std::size_t
@@ -4418,21 +4607,16 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
             total += entryCost( e );
         }
 
-        const bool capped = payloadBudgetBytes > 0 && total > payloadBudgetBytes;   // 0 = no ladder (MCP's unbudgeted twin)
-        if( capped )
+        // the tag's own attributes cost bytes — budget the trimmed state INCLUDING them (planSigsTrim; capture-audit
+        // 2026-09-04 for the shown=/total= marker, cut-fix lane A for docs_dropped=).
+        const SigsTrimPlan plan = planSigsTrim( entries, totalRows, gateCut, total, payloadBudgetBytes,
+                                                sizeof( " shown=\"\" total=\"\" capped=\"1\"" ) - 1, sizeof( " docs_dropped=\"\"" ) - 1 );
+        if( plan.ladderFires )
         {
-            // the marker itself costs bytes — budget the trimmed state INCLUDING it (guard tiny budgets).
-            // capture-audit 2026-09-04: the marker is now ` shown="S" total="T" capped="1"` — S ≤ T, so
-            // both numbers fit in T's digit count, and T (entries.size()) is known before the ladder runs.
-            std::size_t totalDigits = 1;
-            for( std::size_t t = entries.size(); t >= 10; t /= 10 ) { ++totalDigits; }
-            const std::size_t markerBytes     = ( sizeof( " shown=\"\" total=\"\" capped=\"1\"" ) - 1 ) + 2 * totalDigits;
-            const std::size_t effectiveBudget = payloadBudgetBytes > markerBytes ? payloadBudgetBytes - markerBytes : 0;
-
             // one ladder ACTION on one entry, tail-first; every action re-checks the budget so the ladder
             // stops at the first fitting state. Pure function of (global rank, the kFor* constants) — the
             // ladder itself is trimSigLadder() above, shared verbatim with the JSON sibling (§A4a).
-            trimSigLadder( entries, sigFiles, total, effectiveBudget, entryCost );
+            trimSigLadder( entries, sigFiles, total, plan.effectiveBudget, entryCost );
         }
 
         // A2: the exact count, computed AFTER the ladder has made its final drop decisions (droppedPositiveCount
@@ -4460,27 +4644,30 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         // <calls>, <bodies>) said how many it was handed. shown= = rows printed, total= = rows handed to the
         // ladder; capped="1" with shown == total means every row survived but was SHRUNK (doc excerpts /
         // signature tails cut). Absent = untrimmed. Gate: truncvocabcheck.sh arms (C) + (F).
+        // cut-fix lane A (2026-09-23): total= counts the rows the budgetBytes gate cut too (they used to vanish from it,
+        // disclosed only through dropped_positive=), and capped="1" rides a gate-only cut. docs_dropped="N": N SHOWN rows
+        // whose doc comment the rank tiers (past kForDocExcerptRankCount, always) or the ladder (steps B/D, when capped)
+        // removed — the tier used to do it with no trace, so a row without <doc> read as a symbol without a doc comment.
+        // cappedOut stays the LADDER's verdict: it decides the budget_bytes= splice naming the payload ceiling, and a
+        // gate-only cut was not made by that ceiling.
         if( cappedOut )
         {
-            *cappedOut = capped;
+            *cappedOut = plan.ladderFires;
         }
-        if( capped )
+        const SigsCutReport cut = sigsCutReportOf( entries, totalRows, plan );
+        if( cutOut )
         {
-            std::size_t shownRows = 0;
-            for( const SigEntry& e : entries ) { if( !e.dropped ) { ++shownRows; } }
+            *cutOut = cut;
+        }
+        {
             // NOTE for anyone adding an attribute here: this open tag is BYTE-PINNED by
             // forbudgetmonotoncheck, whose invariant is that the sig section renders byte-identically at
             // the default ceiling and at any explicit ceiling above it. An attribute whose VALUE depends on
             // the run (the operative byte budget, say) breaks that identity even when every served row is
             // the same. The --for lens names its ceiling on the <ctx> root instead, spliced after this
-            // render (verbs_for.h, budget_bytes=), which is why cappedOut above exists.
-            char open[ 80 ];
-            rw::formatTo( open, sizeof( open ), "<sigs shown=\"{}\" total=\"{}\" capped=\"1\">", shownRows, entries.size() );
-            w.write( open );
-        }
-        else
-        {
-            w.write( "<sigs>" );
+            // render (verbs_for.h, budget_bytes=), which is why cappedOut above exists. docs_dropped= is a
+            // function of the ladder's result, which that invariant already holds fixed.
+            w.write( sigsOpenTag( cut ) );
         }
         // extent honesty: the row reading, charged into `total` above, written only when a flagged row survived the ladder
         if( std::any_of( entries.begin(), entries.end(), [ & ]( const SigEntry& e ) { return !e.dropped && isFlaggedEntry( e ); } ) )
@@ -7256,15 +7443,15 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
 // output (escapeMcp): no <>& hardening (this is a CLI stdout stream, never re-embedded in HTML/markup),
 // UTF-8-validated with raw U+FFFD bytes on an invalid sequence — see jsonesc.h's posture rationale.
 //
-// Scope note (documented, not a silent gap): the --for/--pack-task JSON ranking section applies the
-// SAME rank-tier doc/sig trimming as the XML (kForDocFullRankCount/kForDocExcerptRankCount/kForTailSigBytes)
-// but does NOT run the XML's H1 global-budget LADDER (serialize.h kForPayloadBudgetBytes) — that ladder
-// exists to fit an XML-byte budget and re-deriving it against a second (JSON) byte model would be a
-// second source of truth for the same decision. In the ordinary case (result fits under budget without
-// the ladder engaging) the two are byte-for-byte the same SET of entries; only a bundle so large the XML
-// ladder had to trim further can diverge, and only in how AGGRESSIVELY the tail is cut, never in what the
-// top ranks show. --pack-task's callers/notes/tests sections reuse the XML path's OWN kept-count (the
-// packTaskListSection budget decision) so the two outputs report the same truncation, just re-shaped.
+// Scope note (cut-fix lane A, 2026-09-23 — this note used to say the JSON ranking skips the ladder, which §A4a made
+// false): the --for JSON ranking runs the SAME rank tiers, the SAME rank-first row gate (gateSigRowsRankFirst) and the
+// SAME trim ladder (trimSigLadder) as the XML, each against this dialect's own exact byte model (jsonSigEntryCost), and
+// discloses the same facts: `"capped"` is the XML tag's capped="1", `"sigs_shown"`/`"sigs_total"` its shown=/total=
+// (present when capped), `"docs_dropped"` its docs_dropped= (packSignaturesJson's SigsCutReport). The two dialects serve
+// the same ROW ORDER and the same cut rule; they can differ in how many tail rows fit, because a JSON row and an XML row
+// of the same symbol are not the same size. --pack-task's JSON ranking is unbudgeted (it passes no ladder budget) and
+// reports the XML section's verdict under its own ranking key; its callers/notes/tests sections reuse the XML path's OWN
+// kept-count (the packTaskListSection budget decision) so the two outputs report the same truncation, just re-shaped.
 
 // Reused JSON writer: XmlWriter is a generic 64 KB streaming byte buffer (no XML-specific behaviour
 // beyond flush-on-cap) — safe to reuse verbatim for a JSON stream.
@@ -8013,6 +8200,7 @@ struct JsonSigEntry
     std::size_t   noteCount = 0;    //         how many notes that array holds
     bool          dropped    = false;
     bool          positive   = false;   // A2: rank[id] > 0 at collection time — the XML sibling's own field
+    bool          hadDoc     = false;   // the source has a doc comment here (before the rank tiers) — the XML sibling's field
 };
 
 // §B1.3: how many notes this array-emitter matched, and how many survived the ladder — the caller pairs
@@ -8175,8 +8363,9 @@ inline std::size_t collectedJsonNoteTotal( const std::vector<JsonSigFile>& files
     return total;
 }
 
-// Phase 1 — derive every row exactly as the pre-§A4a streaming loop did (same skip gates, same rank tiers,
-// same budgetBytes accounting), into memory. Per-file emission is a variable-skip loop (an unreadable span
+// Phase 1 — derive every row exactly as the pre-§A4a streaming loop did (same skip gates, same rank tiers), into
+// memory, then apply the budgetBytes gate RANK FIRST on the sorted rows (gateSigRowsRankFirst — the XML twin's own
+// call; it returns how many rows it cut, which the caller adds to the array's total). Per-file emission is a variable-skip loop (an unreadable span
 // or an empty cleaned signature drops a symbol entirely), so whether a file contributes anything is only
 // known AFTER walking its symbols — collecting first is what lets phase 2 keep every comma unconditionally
 // correct AND gives the ladder an exact byte total to trim against.
@@ -8187,7 +8376,7 @@ inline std::size_t collectedJsonNoteTotal( const std::vector<JsonSigFile>& files
 // --json` shipped the raw credentials their XML siblings redact, on the surface most likely to be piped
 // into logs/CI/model context. A REQUIRED parameter turns the next twin's omission into a compile error
 // instead of a silent leak. Pass nullptr for --no-redact (the same convention redactInPlace already has).
-inline void collectJsonSigEntries( const IngestResult& ing, const std::vector<std::uint32_t>& fileOrder,
+inline std::size_t collectJsonSigEntries( const IngestResult& ing, const std::vector<std::uint32_t>& fileOrder,
                                    std::vector<std::vector<NodeId>>& buckets,
                                    const std::vector<std::uint32_t>& globalRankOf,
                                    const JsonSigLens& lens, RedactCounts* redact, std::size_t budgetBytes,
@@ -8203,14 +8392,8 @@ inline void collectJsonSigEntries( const IngestResult& ing, const std::vector<st
                                    std::size_t* positivesContentSkippedOut = nullptr ) // A2: accumulates alongside
                                                                                        //   `rank` (both null together)
 {
-    std::size_t used = 0;
     for( std::uint32_t f : fileOrder )
     {
-        if( used >= budgetBytes )
-        {
-            break;
-        }
-
         std::FILE* in = std::fopen( diskPath( ing, f ).c_str(), "rb" );
         if( !in )
         {
@@ -8246,10 +8429,6 @@ inline void collectJsonSigEntries( const IngestResult& ing, const std::vector<st
 
         for( NodeId id : syms )
         {
-            if( used >= budgetBytes )
-            {
-                break;
-            }
             const Symbol&     s = ing.symbols[id];
             const std::size_t a = s.sigStartByte, b = s.sigEndByte;
             if( a >= src.size() || b > src.size() || a >= b )
@@ -8273,6 +8452,7 @@ inline void collectJsonSigEntries( const IngestResult& ing, const std::vector<st
 
             std::string doc = docCommentBefore( src, a );
             redactInPlace( doc, redact );                   // §B0: same seam, same order as the XML sibling (:1586)
+            const bool hadDoc = !doc.empty();
             if( lens.rankAdaptivePayload )
             {
                 if( globalRank > kForDocExcerptRankCount )
@@ -8285,12 +8465,6 @@ inline void collectJsonSigEntries( const IngestResult& ing, const std::vector<st
                 }
             }
 
-            if( !doc.empty() )
-            {
-                used += doc.size() + 12; // the same budgetBytes accounting as the XML path
-            }
-            used += sig.size() + 16;
-
             JsonSigEntry e;
             e.globalRank = globalRank;
             e.fileSlot   = fileSlot;
@@ -8299,13 +8473,17 @@ inline void collectJsonSigEntries( const IngestResult& ing, const std::vector<st
             e.sig        = std::move( sig );
             e.noteCount  = appendJsonNoteArray( e.notes, lens.noteIndex, symbolNoteTarget( lens.noteIndex, ing, s ) );   // §B1.3
             e.positive   = rank && (*rank)[id] > 0.0f;   // A2: the XML sibling's own field, same definition
+            e.hadDoc     = hadDoc;
             outEntries.push_back( std::move( e ) );
             ++sf.liveCount;
         }
         outFiles.push_back( std::move( sf ) );
     }
-    // P7: rank order — the emission order AND the ladder's drop order (the XML twin's own sort)
+    // P7: rank order — the emission order AND the ladder's drop order (the XML twin's own sort). Without the rank-adaptive
+    // payload every globalRank is 0, the stable sort keeps the file-major order, and the gate below cuts in that order,
+    // exactly as the in-loop gate did.
     std::stable_sort( outEntries.begin(), outEntries.end(), []( const JsonSigEntry& a, const JsonSigEntry& b ) { return a.globalRank < b.globalRank; } );
+    return gateSigRowsRankFirst( outEntries, outFiles, budgetBytes );
 }
 
 // The --for/--pack-task JSON ranking sibling of packSignatures. Writes JUST the array value
@@ -8336,12 +8514,19 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
                                                                            //   two dialects cannot select differently.
                                 std::size_t* droppedPositiveOut = nullptr, // A2: the XML sibling's own out-param —
                                                                            //   see packSignatures for the full contract.
-                                std::vector<NodeId>* shownIdsOut = nullptr ) // lane 2: the emitted rows' ids — see packSignatures
+                                std::vector<NodeId>* shownIdsOut = nullptr, // lane 2: the emitted rows' ids — see packSignatures
+                                SigsCutReport* cutOut = nullptr )          // cut-fix lane A: the XML tag's shown/total/docs_dropped/
+                                                                           //   capped, for the caller's root keys (sigs_shown/
+                                                                           //   sigs_total/docs_dropped); see packSignatures
 {
     const bool rankAdaptivePayload = lens.rankAdaptivePayload;
     if( outCapped )
     {
         *outCapped = false;
+    }
+    if( cutOut )
+    {
+        *cutOut = SigsCutReport {};
     }
     if( droppedPositiveOut )
     {
@@ -8405,8 +8590,9 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
     // collected, then the ladder. Phase 2 splices a file wrapper only when that file still has a live entry.
     std::vector<JsonSigFile>  sigFiles;
     std::vector<JsonSigEntry> entries;
-    collectJsonSigEntries( ing, fileOrder, buckets, globalRankOf, lens, redact, budgetBytes, sigFiles, entries, rootArg,
-                           droppedPositiveOut ? &rank : nullptr, droppedPositiveOut ? &positivesContentSkipped : nullptr );
+    const std::size_t gateCut = collectJsonSigEntries( ing, fileOrder, buckets, globalRankOf, lens, redact, budgetBytes, sigFiles, entries, rootArg,
+                                                       droppedPositiveOut ? &rank : nullptr, droppedPositiveOut ? &positivesContentSkipped : nullptr );
+    const std::size_t totalRows = entries.size() + gateCut;
 
     std::size_t total = 2;                                                       // "[" + "]"
     for( const JsonSigFile& sf : sigFiles )
@@ -8418,14 +8604,24 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
         total += jsonSigEntryCost( e );
     }
 
-    const bool capped = payloadBudgetBytes > 0 && total > payloadBudgetBytes;
-    if( capped )
+    // cut-fix lane A: the XML twin's reservation, in this dialect's spelling. The caller writes the disclosure as root keys
+    // (`,"sigs_shown":S,"sigs_total":T` when cut, `,"docs_dropped":N` when a shown row lost its doc), so their bytes are
+    // reserved INSIDE this array's budget exactly as the XML tag's attributes are inside its block's — they used to be
+    // absent, and a JSON consumer could not tell 24 rows of 40 from 24 of 24.
+    // (Without the rank-adaptive payload every globalRank is 0: no row is droppable and no doc is ever removed.)
+    const SigsTrimPlan plan = planSigsTrim( entries, totalRows, gateCut, total, payloadBudgetBytes,
+                                            sizeof( ",\"sigs_shown\":,\"sigs_total\":" ) - 1, sizeof( ",\"docs_dropped\":" ) - 1 );
+    if( plan.ladderFires )
     {
-        trimSigLadder( entries, sigFiles, total, payloadBudgetBytes, jsonSigEntryCost );
+        trimSigLadder( entries, sigFiles, total, plan.effectiveBudget, jsonSigEntryCost );
     }
     if( outCapped )
     {
-        *outCapped = capped;
+        *outCapped = plan.ladderFires;   // the LADDER's verdict (the budget_bytes= stanza names its ceiling); cutOut carries capped
+    }
+    if( cutOut )
+    {
+        *cutOut = sigsCutReportOf( entries, totalRows, plan );
     }
     if( droppedPositiveOut )
     {

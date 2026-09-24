@@ -132,7 +132,7 @@ TABLE = {
     # unchanged; only the file is.
     ( "src/lexical.h", "attrBuf" ):  ( 1, "safe", "attrBuf[48]: ' confidence=\"%s\" margin_pct=\"%d\"' where %s is the two-value literal high|low and %d is a 0..100 percent — worst case ' confidence=\"high\" margin_pct=\"100\"' = 34 B against 47 usable + NUL, 13 B of margin. No user text can reach either interpoland." ),
     ( "src/packtask.h", "tag" ):       ( 2, "safe", "tag[112], two sites: '<bodies shown=\"0\" total=\"%zu\" capped=\"%d\"%s></bodies>' — %zu is a vector size (20 digits at absolute most), %d is 0|1, %s is the literal ' compress=\"1\"' or empty. Worst case 40 fixed + 20 + 1 + 13 = 74 B against 111 usable. The render-failed marker '<bodies shown=\"0\" total=\"%zu\" render_failed=\"1\"></bodies>' is 54 fixed + 20 = 74 B. Escaper irrelevant: no interpoland carries text." ),
-    ( "src/serialize.h", "open" ): ( 4, "safe", "open[112]: '<bodies shown=\"%zu\" total=\"%zu\" capped=\"%d\"%s>' — two sizes, a 0|1, and the same fixed compress literal. Worst case 33 fixed + 40 + 1 + 13 = 87 B against 111 usable. Same all-numeric/fixed-vocab class as its packtask.h sibling." ),
+    ( "src/serialize.h", "open" ): ( 3, "safe", "open[112]: '<bodies shown=\"%zu\" total=\"%zu\" capped=\"%d\"%s>' — two sizes, a 0|1, and the same fixed compress literal. Worst case 33 fixed + 40 + 1 + 13 = 87 B against 111 usable. Same all-numeric/fixed-vocab class as its packtask.h sibling." ),
     # ── src/arch.h ───────────────────────────────────────────────────────────────────────────────────────
     ( "src/arch.h", "hex" ):           ( 1, "not-markup", "hex[17] in archWriteBaseline: '{:016x}' of ONE uint64 violation hash and no string argument — exactly 16 lowercase digits + NUL = 17 B, so it cannot truncate. Appended to the .ripwire_arch_baseline sidecar's bytes, which go to that file through pathguard::writeAllAndClose; never emitted as a document." ),
     # ── src/cli.h ────────────────────────────────────────────────────────────────────────────────────────
@@ -271,7 +271,10 @@ NUMERIC_ONLY = {
                                       #   "{}" of one std::uint32_t, ten digits worst case against 15 usable + NUL, no %s and
                                       #   nothing escaped, so it does not join the string-interpolating population
     ( "src/serialize.h", "lineAttr" ): 1,
-    ( "src/serialize.h", "nb" ): 1,   # row 6 (2026-09-12): appendCalleeNameRow's `"\" l=\"{}\"/>"` buffer went with the merge
+    ( "src/serialize.h", "nb" ): 3,   # row 6 (2026-09-12): appendCalleeNameRow's `"\" l=\"{}\"/>"` buffer went with the merge.
+                                      #   cut-fix lane A (2026-09-23): +2, sigsOpenTag's nb[96] — ' shown="{}" total="{}" capped="1"'
+                                      #   (31 B literal + two size_t at 20 digits = 71 B worst case, against 95 usable + NUL) and
+                                      #   ' docs_dropped="{}"' (16 B + 20 digits = 36 B). Counts only, no %s, nothing escaped.
     ( "src/serialize.h", "precAttr" ): 1,
     ( "src/serialize.h", "rankAttr" ): 1,
     ( "src/serialize.h", "rc" ): 1,
@@ -567,7 +570,12 @@ if not bad:
 #            bodylessAttr[40], one std::size_t and no string interpoland, so it joins the row rather than
 #            opening one. Re-derived on the train-14 merge, not summed from the two lanes: the adaptive
 #            lane's +3/+3/+3/+1 and this +1/+1/+1/+0 are disjoint sites in different files.
-EXPECTED = { "mentions": 344, "calls": 234, "sites": 234, "rows": 103, "widthforms": 0 }
+#            2026-09-23 (cut-fix lane A, --for <sigs> cuts): +1 call/+1 mention/+1 site, rows UNCHANGED — re-derived
+#            from `git diff 60b65f02 -- src/`: packSignatures' `char open[80]` (the '<sigs shown= total= capped="1">'
+#            formatTo) is gone, the tag is now built by sigsOpenTag, whose TWO formatTo into `char nb[96]` join the
+#            EXISTING `src/serialize.h nb` row (1 -> 3); the `src/serialize.h open` row loses that site (4 -> 3).
+#            Net +1 of each. All three are counts-only (no caller text).
+EXPECTED = { "mentions": 345, "calls": 235, "sites": 235, "rows": 103, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,
