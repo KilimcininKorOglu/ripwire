@@ -256,7 +256,11 @@ print( "OK %d truncated body(ies), each exactly its whole lines%s" % ( len( cut 
 PY
 )"
 case "$B6" in OK*) ok "(B6) formaxtokens fixture: $B6" ;; *) no "(B6) formaxtokens fixture: $B6" ;; esac
-xmllint --noout "$TMP/fmx.xml" 2>/dev/null && ok "(B6) the document is well-formed" || no "(B6) the document is not well-formed"
+if xmllint --noout "$TMP/fmx.xml" 2>/dev/null; then
+    ok "(B6) the document is well-formed"
+else
+    no "(B6) the document is not well-formed"
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi
