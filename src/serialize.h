@@ -2110,7 +2110,7 @@ inline constexpr const char* kBodylessBodiesLegend =
 
 inline constexpr const char* kBodiesLegend =
     "<!-- a body's sibs=\"a,b,...\" sibs_total=N are the file's OTHER indexed symbols (this body's own name "
-    "excluded), source order, capped at 8 (sibs_capped=\"1\" when the cap fired); inc=\"x.h,...\" inc_total=N "
+    "excluded), source order, capped at 100 (sibs_capped=\"1\" when the cap fired); inc=\"x.h,...\" inc_total=N "
     "are the file's own #include/import targets, source order, capped at 24 (inc_capped=\"1\" when the cap "
     "fired) — both absent when the count is 0 (a documented zero, not a degrade). Each body's own calls "
     "child (1-hop callee signatures) carries total=/shown=/capped=\"1\" the usual way: capped=\"1\" only "
