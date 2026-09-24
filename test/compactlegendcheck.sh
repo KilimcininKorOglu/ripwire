@@ -268,8 +268,8 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 #   for each row below:  ( cd <the fixture repo> && <pre-L1 bin> . <args> ) > <pin>   (pinNorm masks at= on compare)
 # RE-ANCHORED BY HAND 2026-09-23 (cut-fix C, lane/cutfix-navlists), two sentences and nothing else, because a pre-L1 binary
 # cannot print a legend written after it: callers.xml's ordering sentence ("by path within a tier" -> "within a tier the
-# most-called first, then by path", +19 B) and impact.xml's import-tier clause ("limit=/offset= window the symbol rows only"
-# -> "most-imported first within a tier, and limit= sizes it too (offset= windows the symbol rows only)", +51 B). Both
+# most-called first, then by path", +28 B) and impact.xml's import-tier clause ("limit=/offset= window the symbol rows only"
+# -> "most-imported first within a tier, and limit= sizes it too (offset= windows the symbol rows only)", +55 B). Both
 # restate the rows' new order and the tier's new --limit reach; the rows of both pins are unchanged on this fixture.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
