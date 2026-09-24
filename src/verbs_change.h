@@ -950,7 +950,9 @@ std::string renderRunTraceLines( const std::vector<std::string_view>& lines, boo
     }
     out += "\" total=\"";  out += std::to_string( lines.size() );
     out += "\"";
-    if( isCapped )
+    // cut-fix E: the tail view is a cut too whenever it kept fewer lines than the capture holds, and it said so only
+    // through shown= < total=. capped="1" rides it then, as on the relevant view (an uncut view stays byte-identical).
+    if( isCapped || ( !isRelevantView && picked.size() < lines.size() ) )
     {
         out += " capped=\"1\"";
     }
@@ -1009,7 +1011,7 @@ std::string runTraceLegendComment( std::string_view cmd, RunTraceDocKind kind )
          "capture; dropped_bytes= middle bytes the capture cap dropped (head+tail kept). duration_ms and the "
          "captured output are MEASURED, not deterministic "
          "(and not claimed to be); every byte derived FROM the captured text - the <lines> cut and any mapping - is a "
-         "deterministic function of it. <lines view=\"tail\"> = the last shown= of total= output lines; "
+         "deterministic function of it. <lines view=\"tail\"> = the last shown= of total= output lines (capped=\"1\" when shown= < total=); "
          "view=\"relevant\" = shown= of the relevant= error-marked / frame-shaped lines out of total= (capped=\"1\" = "
          "first+last halves kept, the omitted middle disclosed inline). ";
     switch( kind )

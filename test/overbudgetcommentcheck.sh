@@ -265,5 +265,21 @@ else
     no "(B6) the document is not well-formed"
 fi
 
+# ── (B7) lane B review N5 (cut-fix E): a multi-line body exactly budget+1 bytes whose last byte is its closing newline
+# fits once that terminator goes, so it is served whole and inside the budget, with no over_ceiling="1" (whose reading
+# is "its first line alone exceeds the budget", false here: the first line is `## Alpha`). RED on 9936ba4e.
+N5="$TMP/n5"; mkdir -p "$N5"
+python3 - "$N5" <<'PY'
+import os, sys
+lines = [ "## Alpha" ] + [ "line %02d of the alpha section text" % i for i in range( 1, 33 ) ]
+open( os.path.join( sys.argv[1], "doc.md" ), "w" ).write( "\n".join( lines ) + "\n" )
+PY
+N5SZ="$( wc -c <"$N5/doc.md" | tr -d ' ' )"
+N5B="$( "$BIN" "$N5" --expand=Alpha --top-k=0 --pack-budget-bytes=$(( N5SZ - 1 )) --no-cache 2>/dev/null | grep -o '<b t="sec"[^>]*>' )"
+case "$N5B" in
+    *over_ceiling*|*truncated*|'') no "(B7) a $N5SZ-byte section at budget $(( N5SZ - 1 )) reads over_ceiling/truncated: $N5B" ;;
+    *) ok "(B7) a $N5SZ-byte section ending in its newline at budget $(( N5SZ - 1 )) is served whole, no over_ceiling=" ;;
+esac
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

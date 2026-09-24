@@ -996,8 +996,14 @@ inline int writeNonLocalStateReport( const IngestResult& ing, const Graph& g, in
     const PageWindow  page  = pageWindow( total, effectiveRowCap( pageLimit, int( kRowCap ) ), pageOffset );
     const std::size_t shown = page.end > page.begin ? page.end - page.begin : 0;
 
+    // cut-fix E (THE TRUNCATION VOCABULARY rule 4): cells_capped=/decls_capped= are COLLECTION cuts — rows exist that
+    // no page holds, and every writes=/reads= is a floor — so the paging half must not read as complete. They feed
+    // pageDisclosure's collectionCapped (capped="1" forced, counts_floor="1" rides it); on that run the graph floor
+    // below contributes its gauge alone, since counts_floor= is already on the root and an attribute appears once.
+    const bool collectionCut = scan.cellsCapped || scan.declsCapped;
     char disclosure[kPageDisclosureCap];
-    pageDisclosure( disclosure, sizeof disclosure, shown, total, page.end, pageLimit, pageOffset, true );
+    pageDisclosure( disclosure, sizeof disclosure, shown, total, page.end, pageLimit, pageOffset, true, kXmlPageSyntax,
+                    /*collectionCapped=*/collectionCut );
 
     const auto pathRel = [ & ]( std::uint32_t fileId ) -> std::string_view
     {
@@ -1010,7 +1016,8 @@ inline int writeNonLocalStateReport( const IngestResult& ing, const Graph& g, in
     // the emitter's own condition (graphlegend.h graphUnindexedLegendComment), never a re-derivation of it.
     rw::emitTo( stdout, "{}", rw::graphUnindexedLegendComment( g.unindexedFiles > 0 ).c_str() );
     rw::emitTo( stdout, "<nonlocal_state cells=\"{}\" functions=\"{}\"{}{}", scan.cells.size(), total, rw::cstr( disclosure ),
-                 rw::graphCountFloorAttrXml( g ).c_str()  );   // M15: gauge + marker
+                 ( collectionCut ? rw::graphGaugeAttrXml( g.ambOut, g.unresolvedOut, g.unindexedFiles )
+                                 : rw::graphCountFloorAttrXml( g ) ).c_str()  );   // M15: gauge + marker
     if( !scan.unanalyzedLangs.empty() )
     {
         rw::emitTo( stdout, " unanalyzed_langs=\"{}\" unanalyzed_files=\"{}\"", scan.unanalyzedLangs.c_str(), scan.unanalyzedFileCount );

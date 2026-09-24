@@ -153,6 +153,49 @@ run --pr-context="$SRCBASE" >"$TMP/p4"
 [ "$( rootattr "$TMP/p4" pr-context budget_default )" = 1 ] && ok "(5) --pr-context=$SRCBASE (parent of the last src/ commit) carries budget_default=\"1\" ($( bytes "$TMP/p4" ) B, est_tokens=\"$( rootattr "$TMP/p4" pr-context est_tokens )\")" \
                                                           || no "(5) --pr-context=$SRCBASE lacks budget_default= (the diff holds an indexed change, so the default budget must ride the root)"
 
+echo "=== (7) cut-fix E: next= keeps the caller's --limit; --tree symbol lists and --zoom bridges disclose their cuts ==="
+# RED on 9936ba4e: next= dropped --limit (a --limit=5 page pointed at an 80/40/100-row page), --tree's 3-symbol cut
+# said nothing past symbols=, --zoom's 12-bridge cut had no total and no flag, and the --mermaid caps were silent.
+run --tree --limit=5 >"$TMP/t5"; run --tree --limit=10 >"$TMP/t10"
+if nt5="$( nextof "$TMP/t5" tree )"; [ "$nt5" = "--tree --limit=5 --offset=5" ]; then ok "(7) --tree --limit=5 next=\"$nt5\""; else no "(7) --tree --limit=5 next='$nt5' (want --tree --limit=5 --offset=5)"; fi
+python3 -c 'import shlex, sys; print( "\0".join( shlex.split( sys.argv[1] ) ), end = "" )' "$nt5" > "$TMP/argv.bin"
+( cd "$ROOT" && xargs -0 "$BIN" . < "$TMP/argv.bin" >"$TMP/t5b" 2>/dev/null )
+grep -o '<file p="[^"]*"' "$TMP/t10" | tail -5 >"$TMP/t10.tail"; grep -o '<file p="[^"]*"' "$TMP/t5b" >"$TMP/t5b.rows"
+if [ -s "$TMP/t5b.rows" ] && cmp -s "$TMP/t10.tail" "$TMP/t5b.rows"; then ok "(7) pasting it serves rows 6-10 of the --limit=10 page, no more"; else no "(7) the pasted next= page is not rows 6-10 ($( wc -l <"$TMP/t5b.rows" | tr -d ' ' ) rows)"; fi
+ss="$( rootattr "$TMP/t5" tree shown_symbols )"; srows="$( grep -o '<s t="' "$TMP/t5" | wc -l | tr -d ' ' )"
+if [ -n "$ss" ] && [ "$ss" = "$srows" ] && [ "$( rootattr "$TMP/t5" tree symbols_capped )" = 1 ]; then ok "(7) --tree root shown_symbols=\"$ss\" symbols_capped=\"1\" (= the <s> rows)"; else no "(7) --tree symbol cut undisclosed: shown_symbols='$ss' for $srows <s> rows"; fi
+run --zoom --limit=3 >"$TMP/z3"
+if nz3="$( nextof "$TMP/z3" zoom )"; [ "$nz3" = "--zoom --limit=3 --offset=3" ]; then ok "(7) --zoom --limit=3 next=\"$nz3\""; else no "(7) --zoom --limit=3 next='$nz3'"; fi
+run --zoom=2 --zoom-levels=1 --limit=3 >"$TMP/z23"
+if nz23="$( nextof "$TMP/z23" zoom )"; [ "$nz23" = "--zoom=2 --zoom-levels=1 --limit=3 --offset=3" ]; then ok "(7) the depth flags ride too: next=\"$nz23\""; else no "(7) --zoom=2 --zoom-levels=1 --limit=3 next='$nz23'"; fi
+if rc="$( runs "$nz23" )"; { [ "$rc" = 0 ] || [ "$rc" = 4 ]; }; then ok "(7) that next= runs (exit $rc)"; else no "(7) that next= exits $rc"; fi
+run --external-surface --limit=7 >"$TMP/x7"
+if nx7="$( nextof "$TMP/x7" external-surface )"; [ "$nx7" = "--external-surface --limit=7 --offset=7" ]; then ok "(7) --external-surface --limit=7 next=\"$nx7\""; else no "(7) --external-surface --limit=7 next='$nx7'"; fi
+# --zoom bridges: 40 files, each a 6-function cycle whose head calls three other files — 20 top modules, 100 pairs
+ZB="$TMP/zb"; mkdir -p "$ZB"
+python3 - "$ZB" <<'PY'
+import os, sys
+for i in range( 40 ):
+    with open( os.path.join( sys.argv[1], "m%02d.c" % i ), "w" ) as f:
+        for j in range( 6 ):
+            body = " ".join( "c%d_%d();" % ( i, ( j + d ) % 6 ) for d in ( 1, 2, 3 ) )
+            if j == 0:
+                body += " " + " ".join( "c%d_0();" % ( ( i + d ) % 40 ) for d in ( 1, 7, 13 ) )
+            f.write( "void c%d_%d(void) { %s }\n" % ( i, j, body ) )
+PY
+zb(){ ( cd "$ZB" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
+zb --zoom=1 >"$TMP/zb1"
+brows="$( grep -o '<bridge a="' "$TMP/zb1" | wc -l | tr -d ' ' )"; bt="$( rootattr "$TMP/zb1" zoom bridges )"
+if [ "$( rootattr "$TMP/zb1" zoom shown_bridges )" = "$brows" ] && [ "$brows" = 12 ] && [ "$( rootattr "$TMP/zb1" zoom bridges_capped )" = 1 ] && [ "${bt:-0}" -gt 12 ]; then
+    ok "(7) --zoom bridge cut disclosed: shown_bridges=\"12\" bridges_capped=\"1\" bridges=\"$bt\""
+else no "(7) --zoom bridge cut: $brows rows, shown_bridges='$( rootattr "$TMP/zb1" zoom shown_bridges )' bridges='$bt'"; fi
+zb --zoom >"$TMP/zb0"
+if [ -z "$( rootattr "$TMP/zb0" zoom shown_bridges )" ] && [ "$( grep -o '<bridge a="' "$TMP/zb0" | wc -l | tr -d ' ' )" -le 12 ]; then ok "(7) an uncut bridge list adds no bytes (no shown_bridges=)"; else no "(7) an uncut bridge list carries shown_bridges="; fi
+zb --zoom=1 --mermaid >"$TMP/zbm"
+if grep -qx '%% top modules shown=10 total=20 capped=1' "$TMP/zbm"; then ok "(7) --zoom --mermaid names its top-module cut"; else no "(7) --zoom --mermaid top-module cut is silent"; fi
+zb --zoom --mermaid >"$TMP/zbm0"
+if grep -qx '    %% child modules shown=8 total=10 capped=1' "$TMP/zbm0"; then ok "(7) --zoom --mermaid names a child-module cut inside its subgraph"; else no "(7) --zoom --mermaid child-module cut is silent"; fi
+
 echo "=== (6) well-formed + deterministic ==="
 if command -v xmllint >/dev/null 2>&1; then
     for f in ar1 z1 t1 x1 x2 p1 p2; do xmllint --noout "$TMP/$f" >/dev/null 2>&1 || no "(6) $f is malformed XML"; done
