@@ -40,9 +40,10 @@ disclosed floor — its written qualifier never names `std` at all, so it is una
 today's ladder. An out-of-line std-rooted definition (`std::detail::f(){}`, `std::hash<Foo>::mix(...){}`) and
 a partially-qualified one written inside `namespace std { … }` (`namespace std { int detail::f(){} }`) are
 recognised too, and a std-rooted VARIABLE (a niebloid: `namespace std::ranges { inline constexpr sort_fn
-niebloid{}; }`) is never refused for having no function body. `kParserVer` moves 119 → 121 (two new
-per-record extraction facts, then a same-day correctness fix to how one of them is computed) and
-`kCacheVersion` moves 24 → 25, so any cache written by an earlier binary is refused and reparsed.
+niebloid{}; }`) is never refused for having no function body. `kParserVer` moves 119 → 120 (two new
+per-record extraction facts, folded together with a same-day correctness fix to how one of them is
+computed) and `kCacheVersion` moves 24 → 25, so any cache written by an earlier binary is refused and
+reparsed.
 
 The same "a qualified call binds by its immediate segment alone" shape was checked in Rust, C#, Python,
 Java/Kotlin and Go: Rust's `std::`/`core::` guard has the identical gap — confirmed on both binaries
