@@ -473,6 +473,12 @@ probeFor()
 # probe). The shown_importers= reading gained "(limit= sizes them)" (+20 B): --limit now sizes the import tier, and a cut tier
 # with no reading of the one call that fetches the rest is the silent-cut shape METHODOLOGY §9 principle 3 rules out. The
 # old 770 had drifted to 777 before this lane (measured on the base binary, 60b65f02). No other schema moved.
+# RE-PINNED 2026-09-24 (cut-fix E, lane/cutfix-silent-e): ripwire.tree/v1 250 -> 310 (measured 300, the --tree probe). A
+# --tree page whose per-file symbol lists were cut at 3 said so only through each row's symbols=; the root now carries
+# shown_symbols=/symbols_capped= on that cut (METHODOLOGY §9 principle 3), and the compact legend reads both: the
+# shared sub-cap clause (+27 B), the present-only shown_symbols= row (+34 B) and "top 3" in the purpose line (+2 B). The
+# fixture has files with more than 3 symbols, so the probe is a cut page. No other schema moved (the --zoom bridge and
+# --impact importers_next= readings are present-only and ride neither probe).
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -494,7 +500,7 @@ ripwire.comment-coherence/v1      460   445
 ripwire.cochange/v1               540   521
 ripwire.communities/v1           820   807
 ripwire.zoom/v1                  410   394
-ripwire.tree/v1                  250   238
+ripwire.tree/v1                  310   300
 ripwire.seams/v1                  720   703
 ripwire.handoff/v1                600   589
 ripwire.test-gate/v1             1250  1239
