@@ -243,7 +243,9 @@ struct Lane
     std::size_t              blastFileTotal = 0;
     bool                     blastCapped    = false;
     std::vector<char>        blastMask;     // per-node: in this lane's blast radius (the contract_touch join)
-    std::vector<std::string> tests;         // path-sorted, capped at kMaxTestRows
+    std::vector<std::string> tests;         // evidence order (computeTestGateForSymbols' rankTestRows), capped at kMaxTestRows
+    std::size_t              briefRanked    = 0;    // cut-fix E: brief mode — positive-scored symbols the lane's ranking held
+    bool                     briefCapped    = false;//   and whether the kBriefClaimsPerLane head cut them (both emitted only then)
     std::size_t              testTotal      = 0;
     bool                     testsCapped    = false;
     std::size_t              untested       = 0;
@@ -1062,18 +1064,26 @@ inline void briefLanes( const LanesInputs& in, const ClaimLens& lens, PlanLanesR
         sortutil::radixSortByScoreDescId( order, rank );
 
         std::vector<NodeId> head;
+        std::size_t         ranked = 0;   // cut-fix E: the head's denominator — every positive score, head or not
         for( NodeId n : order )
         {
-            if( head.size() >= kBriefClaimsPerLane || rank[n] <= 0.0f )
+            if( rank[n] <= 0.0f )
             {
-                break;
+                break;   // `order` is score-descending, so no positive score follows
             }
-            head.push_back( n );
+            ++ranked;
+            if( head.size() < kBriefClaimsPerLane )
+            {
+                head.push_back( n );
+            }
         }
 
         Lane lane;
-        lane.id   = "lane-" + std::to_string( i );
-        lane.task = in.laneTasks[i];
+        lane.id          = "lane-" + std::to_string( i );
+        lane.task        = in.laneTasks[i];
+        lane.briefRanked = ranked;
+        lane.briefCapped = ranked > head.size();
+        ENSURES( head.size() <= kBriefClaimsPerLane && head.size() <= ranked, "the claim head is a prefix of the positive ranking" );
         buildClaims( ing, g, lens, head, lane );
         result.lanes.push_back( std::move( lane ) );
     }
@@ -1277,7 +1287,17 @@ inline void writeLane( std::FILE* out, const Lane& lane )
         }
         writeLaneFileRow( out, lane.files[i] );
     }
-    rw::emitTo( out, "]}},\"blast_radius\":{{\"reaches\":{},\"files_total\":{},\"capped\":{},\"files\":",
+    // cut-fix E: a brief lane claims the top kBriefClaimsPerLane of its ranking, and the cut was silent. Present only on
+    // a cut (an uncut lane is byte-identical): ranked= is every positive-scored symbol, ranked_capped the flag.
+    if( lane.briefCapped )
+    {
+        rw::emitTo( out, "],\"ranked\":{},\"ranked_capped\":true", lane.briefRanked );
+    }
+    else
+    {
+        rw::emitRaw( out, "]" );
+    }
+    rw::emitTo( out, "}},\"blast_radius\":{{\"reaches\":{},\"files_total\":{},\"capped\":{},\"files\":",
                   lane.blastReaches, lane.blastFileTotal, lane.blastCapped ? "true" : "false" );
     writePathArray( out, lane.blastFiles );
     rw::emitRaw( out, "},\"tests_to_run\":" );

@@ -742,7 +742,9 @@ inline std::string formatRecallCappedNote( const RecallShape& shape, std::size_t
     std::string        why;
     if( topKOmitted > 0 )
     {
-        why += "raise --top-k (default 8) for " + std::to_string( topKOmitted ) + " more";
+        // cut-fix E: the note is ONE byte string on both doors (recallparitycheck), so it names both spellings of
+        // each knob — the CLI flag and the MCP memory_recall argument — rather than handing an MCP caller a flag.
+        why += "raise --top-k/top_k (default 8) for " + std::to_string( topKOmitted ) + " more";
     }
     if( budgetOmitted > 0 )
     {
@@ -750,11 +752,11 @@ inline std::string formatRecallCappedNote( const RecallShape& shape, std::size_t
         {
             why += "; ";
         }
-        why += maxBytes ? ( "raise --max-tokens or narrow the query for " + std::to_string( budgetOmitted ) + " more (~" + std::to_string( maxBytes ) + "-byte budget)" )
+        why += maxBytes ? ( "raise --max-tokens/budget_tokens or narrow the query for " + std::to_string( budgetOmitted ) + " more (~" + std::to_string( maxBytes ) + "-byte budget)" )
                         : ( std::to_string( budgetOmitted ) + " unreadable on disk" );
     }
-    // CA4 H1 sibling sweep: bounded, but the TIGHTEST of the four — 254 bytes worst case in a 320-byte buffer,
-    // and 161 of those 254 are `why`, a std::string of prose composed just above. One more attribution clause,
+    // CA4 H1 sibling sweep: bounded, but the TIGHTEST of the four — 254 bytes worst case in a 320-byte buffer
+    // (276 since cut-fix E named the MCP arguments), and 161 of those 254 are `why`, a std::string of prose composed just above. One more attribution clause,
     // or one longer sentence, and the same return-as-length shape becomes the same overflow. `why` is already a
     // std::string; the buffer added nothing but the hazard. Byte-identical to the format string it replaces.
     return "\n(capped: " + std::to_string( shape.matchedCount - shape.shownCount ) + " of "

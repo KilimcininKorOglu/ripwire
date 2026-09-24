@@ -320,5 +320,27 @@ if command -v xmllint >/dev/null 2>&1; then
     fi
 fi
 
+# ── (K) cut-fix E: the 2048-cell ceiling is a COLLECTION cut (pageview.h rule 4) ─────────────────────────────
+# 2100 module globals written by one function: the cell universe saturates, so writes=/reads= are floors and rows
+# may exist that no page holds. RED on 9936ba4e: cells_capped="1" beside capped="0" (the complete-page reading).
+NL="$TMP/nlcap"; mkdir -p "$NL"
+python3 - "$NL" <<'PY'
+import os, sys
+n = 2100
+with open( os.path.join( sys.argv[1], "g.py" ), "w" ) as f:
+    f.write( "".join( "g%d = 0\n" % i for i in range( n ) ) )
+    f.write( "def setall():\n    global " + ", ".join( "g%d" % i for i in range( n ) ) + "\n" + "".join( "    g%d = %d\n" % ( i, i ) for i in range( n ) ) )
+PY
+NLR="$( cd "$NL" && "$BIN" . --nonlocal-state --no-cache 2>/dev/null | grep -o '<nonlocal_state [^>]*>' | head -1 )"
+case "$NLR" in
+    *'cells_capped="1"'*) ok "(K) presence guard: 2100 globals saturate the cell universe (cells_capped=\"1\")" ;;
+    *) no "(K) presence guard: the fixture did not saturate the cells: $NLR" ;;
+esac
+case "$NLR" in
+    *' capped="1"'*' counts_floor="1"'*) ok "(K) the collection cut forces capped=\"1\" and counts_floor=\"1\" on the root" ;;
+    *) no "(K) cells_capped=\"1\" rides a root that reads complete: $NLR" ;;
+esac
+[ "$( printf '%s' "$NLR" | grep -o ' counts_floor="' | wc -l | tr -d ' ' )" = 1 ] && ok "(K) counts_floor= appears once" || no "(K) counts_floor= is repeated: $NLR"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "nonlocalstatecheck: FAILURES ABOVE"
 exit "$fail"

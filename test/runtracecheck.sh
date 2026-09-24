@@ -130,6 +130,15 @@ grep -q '<lines view="tail"' "$WORK/out/pass.xml" && grep -q 'beta' "$WORK/out/p
     && ok "(C) the disclosed tail carries the output's last lines" \
     || no "(C) <lines view=\"tail\"> with the last output lines missing"
 
+# cut-fix E: the success tail keeps the last 10 lines; a longer capture is a cut, so capped="1" rides <lines> beside
+# shown= < total=, and a short one stays uncapped. RED on 9936ba4e (shown="10" total="15" and no capped=).
+grep -q '<lines view="tail" shown="2" total="2">' "$WORK/out/pass.xml" \
+    && ok "(C) an uncut tail carries no capped=" || no "(C) the 2-line tail is not <lines view=\"tail\" shown=\"2\" total=\"2\">"
+"$BIN" "$WORK" --run-trace="seq 1 15" >"$WORK/out/pass15.xml" 2>/dev/null
+grep -q '<lines view="tail" shown="10" total="15" capped="1">' "$WORK/out/pass15.xml" \
+    && ok "(C) a cut tail (10 of 15 lines) carries capped=\"1\"" \
+    || no "(C) the cut tail is silent: $( grep -o '<lines [^>]*>' "$WORK/out/pass15.xml" )"
+
 # ── (D) timeout: a tiny cap, a long sleep — TIMEOUT reported honestly ──────────────────────────────────
 "$BIN" "$WORK" --run-trace="sleep 30" --run-timeout=1 >"$WORK/out/tmo.xml" 2>"$WORK/out/tmo.err"
 rcD=$?

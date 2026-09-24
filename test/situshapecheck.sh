@@ -616,5 +616,38 @@ else
 fi
 
 echo
+# ── cut-fix E: [3] probes only the first 20 changed files for co-change partners, so on a larger diff its partner
+# count is a FLOOR. RED on 9936ba4e (a 25-file diff printed the count as a total); GREEN: partners_capped="1"
+# probed="20" changed_files="25" on the [3] header, and a small diff's header is unchanged.
+SP="$TMP/situprobe"; mkdir -p "$SP"
+( cd "$SP" && git init -q && git config user.email t@example.com && git config user.name t
+  for i in $( seq -w 1 25 ); do echo "int s$i(int x){return x;}" > "f$i.c"; done
+  git add -A && git commit -qm one
+  for i in $( seq -w 1 25 ); do echo "int t$i(int x){return s$i(x);}" >> "f$i.c"; done )
+H3="$( cd "$SP" && "$BIN" . --situ --no-cache 2>/dev/null | grep '\[3\] co-change' )"
+case "$H3" in
+    *' partners_capped="1" probed="20" changed_files="25"'*) ok "cut-fix E: [3] discloses its 20-file co-change probe as a floor (partners_capped=1 probed=20 of changed_files=25)" ;;
+    *) no "cut-fix E: [3] probe cut is silent: $H3" ;;
+esac
+( cd "$SP" && git checkout -q -- f0[2-9].c f1*.c f2*.c )
+H3S="$( cd "$SP" && "$BIN" . --situ --no-cache 2>/dev/null | grep '\[3\] co-change' )"
+case "$H3S" in
+    *partners_capped*) no "cut-fix E: a 1-file diff's [3] header gained partners_capped=: $H3S" ;;
+    '') no "cut-fix E: the 1-file diff printed no [3] header" ;;
+    *) ok "cut-fix E: an uncut probe adds no bytes to [3]" ;;
+esac
+
+# ── cut-fix E: the decl/def partner rows (4) were a dead-end cut — the note had no next: and --limit could not raise
+# it. RED on 9936ba4e; GREEN: the note ends `next: --situ=api.h --limit=6`, and pasting it lists all six.
+DD="$TMP/ddcut"; mkdir -p "$DD"
+for i in 1 2 3 4 5 6; do echo "int dd$i(int x);" >>"$DD/api.h"; printf '#include "api.h"\nint dd%s(int x) { return x + %s; }\n' "$i" "$i" >"$DD/impl$i.c"; done
+DDH="$( cd "$DD" && "$BIN" . --situ=api.h --no-cache 2>/dev/null | grep 'decl/def partners' )"
+case "$DDH" in
+    *'shown=4 total=6 capped=1; next: --situ=api.h --limit=6)'*) ok "cut-fix E: the cut decl/def partner list names its next: --situ=api.h --limit=6" ;;
+    *) no "cut-fix E: the cut decl/def partner list has no next:: $DDH" ;;
+esac
+DDN="$( cd "$DD" && "$BIN" . --situ=api.h --limit=6 --no-cache 2>/dev/null | grep -c '^        impl[0-9]\.c  (' )"
+[ "$DDN" = 6 ] && ok "cut-fix E: --limit=6 lists all six decl/def partners" || no "cut-fix E: --limit=6 listed $DDN decl/def partners (want 6)"
+
 if [ "$fail" -eq 0 ]; then echo "situshapecheck: ALL PASS"; else echo "situshapecheck: SOME FAILED"; fi
 exit "$fail"
