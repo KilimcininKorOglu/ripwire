@@ -38,8 +38,8 @@ Each of these cut an answer without saying so. An answer that was not cut is byt
 - `--run-trace`: a success tail that kept fewer lines than the capture holds carries `capped="1"`.
 - `--nonlocal-state`: the 2048-cell ceiling (`cells_capped=`/`decls_capped=`) is a collection cut, so the
   root now also says `capped="1"` and `counts_floor="1"` instead of reading as a complete page.
-- `--plan-lanes --brief`: a lane whose ranking held more than its 12 claims carries `"ranked":N` and
-  `"ranked_capped":true`.
+- `--plan-lanes --brief`: a lane whose ranking held more than its 12 claims carries `"symbols_total":N` and
+  `"symbols_capped":true`.
 - `--from-trace` `<test_hop>`: the dropped-row count is `dropped=`. It was `capped=`, which is a 0|1 flag
   everywhere else.
 - The `--recall`/`memory_recall` capped note names both spellings of each setting

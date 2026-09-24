@@ -494,7 +494,7 @@ Discloses: **none**
 
 ### `src/lanes.h`
 
-Discloses: `blast_capped`, `ranked_capped`, `tests_capped`
+Discloses: `blast_capped`, `symbols_capped`, `tests_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |

@@ -1288,10 +1288,11 @@ inline void writeLane( std::FILE* out, const Lane& lane )
         writeLaneFileRow( out, lane.files[i] );
     }
     // cut-fix E: a brief lane claims the top kBriefClaimsPerLane of its ranking, and the cut was silent. Present only on
-    // a cut (an uncut lane is byte-identical): ranked= is every positive-scored symbol, ranked_capped the flag.
+    // a cut (an uncut lane is byte-identical): symbols_total= is every positive-scored symbol (the claims.symbols
+    // cut's total, matching the neighbouring tests_total=/tests_capped=), symbols_capped= the flag.
     if( lane.briefCapped )
     {
-        rw::emitTo( out, "],\"ranked\":{},\"ranked_capped\":true", lane.briefRanked );
+        rw::emitTo( out, "],\"symbols_total\":{},\"symbols_capped\":true", lane.briefRanked );
     }
     else
     {

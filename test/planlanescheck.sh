@@ -573,7 +573,7 @@ fi
 
 # ── G-K cut-fix E: a brief lane's claim head (kBriefClaimsPerLane = 12) discloses its cut ──────────────────
 # 20 functions match the first brief line and 3 the second: lane-0 claims 12 of 20, lane-1 all 3. RED on 9936ba4e
-# (lane-0 said nothing about the other 8). ranked=/ranked_capped are present only on the cut lane.
+# (lane-0 said nothing about the other 8). symbols_total=/symbols_capped are present only on the cut lane.
 KB="$TMP/briefcut"; mkdir -p "$KB"
 python3 - "$KB" <<'PY'
 import os, sys
@@ -587,11 +587,11 @@ if python3 - "$TMP/briefcut.json" <<'PY'
 import json, sys
 L = json.load( open( sys.argv[1] ) )[ "lanes" ]
 c0, c1 = L[0][ "claims" ], L[1][ "claims" ]
-ok = len( c0[ "symbols" ] ) == 12 and c0.get( "ranked" ) == 20 and c0.get( "ranked_capped" ) is True \
-     and len( c1[ "symbols" ] ) == 3 and "ranked" not in c1 and "ranked_capped" not in c1
+ok = len( c0[ "symbols" ] ) == 12 and c0.get( "symbols_total" ) == 20 and c0.get( "symbols_capped" ) is True \
+     and len( c1[ "symbols" ] ) == 3 and "symbols_total" not in c1 and "symbols_capped" not in c1
 sys.exit( 0 if ok else 1 )
 PY
-then ok "G-K brief claim cut disclosed: lane-0 ranked=20 ranked_capped=true beside its 12 claims; the uncut lane-1 adds no keys"
+then ok "G-K brief claim cut disclosed: lane-0 symbols_total=20 symbols_capped=true beside its 12 claims; the uncut lane-1 adds no keys"
 else no "G-K brief claim cut is silent or wrong: $( python3 -c 'import json,sys; print([ { k: v for k, v in l["claims"].items() if k != "symbols" and k != "files" } for l in json.load(open(sys.argv[1]))["lanes"] ])' "$TMP/briefcut.json" )"
 fi
 
