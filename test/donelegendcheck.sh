@@ -189,7 +189,7 @@ run_budget sd_none        3800  4112  "$FX"  --safe-delete=tangle
 # tg_empty 1510 -> 1590 (2026-09-24, CodeRabbit on #331): the root has carried untested_modscope="0" since the
 # TS/JS runner round, with its defining clause gated on N>0, so this zero-row document printed an attribute it never
 # defined (a gap that had been ADDED to legendcoverage_baseline.txt). The shortest honest definition at N=0 is 75 B.
-# Measured 1500 -> 1575 B on this fixture; the ceiling moves by that growth plus 15 B, a ratchet, not an allowance.
+# Measured 1500 -> 1575 B on this fixture; the ceiling becomes that measured total plus 15 B (a move of 80, not 90), a ratchet, not an allowance.
 run_budget tg_empty       1590  1332  "$FXC" --test-gate
 # The ref-pair form — the only shape that lights the ref-pair marker, omits at= and reports churn as
 # unavailable. Measured on the FIXTURE, with the same edit committed as a second commit, NOT on this repo's
