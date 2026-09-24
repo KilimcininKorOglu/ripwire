@@ -783,7 +783,8 @@ case "$OWROOT" in
     *) no "owners: the 40-row cut is silent: $OWROOT" ;;
 esac
 OW2="$( cut_text owners '{"path":"'"$CR"'","offset":40}' )"
-[ "$( printf '%s' "$OW2" | grep -o '<f p="' | wc -l | tr -d ' ' )" = 5 ] && ok "owners: offset=40 serves the other 5 rows" || no "owners: offset=40 served $( printf '%s' "$OW2" | grep -o '<f p="' | wc -l | tr -d ' ' ) rows (want 5)"
+OW2N="$( printf '%s' "$OW2" | grep -o '<f p="' | wc -l | tr -d ' ' )"
+if [ "$OW2N" = 5 ]; then ok "owners: offset=40 serves the other 5 rows"; else no "owners: offset=40 served $OW2N rows (want 5)"; fi
 OW3="$( cut_text owners '{"path":"'"$CR"'","symbol":"cutfn01"}' )"
 printf '%s' "$OW3" | grep -o '<owners [^>]*>' | head -1 | grep -q ' shown=' && no "owners: an uncut answer gained shown=" || ok "owners: an uncut answer is unchanged (no shown=)"
 MN="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn01"}' )"
@@ -794,8 +795,11 @@ ok = d.get( "shown" ) == 100 and d.get( "capped" ) is True and d.get( "total" ) 
 sys.exit( 0 if ok else 1 )' && ok "mentions: the 100-file cut discloses shown=100 capped=true total=105 next_offset=100" \
     || no "mentions: the 100-file cut is silent: $( printf '%s' "$MN" | head -c 200 )"
 MN2="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn01","offset":100}' )"
-printf '%s' "$MN2" | python3 -c 'import sys, json; sys.exit( 0 if len( json.loads( sys.stdin.read() )[ "files" ] ) == 5 else 1 )' \
-    && ok "mentions: offset=100 serves the other 5 files" || no "mentions: offset=100 did not serve the other 5 files"
+if printf '%s' "$MN2" | python3 -c 'import sys, json; sys.exit( 0 if len( json.loads( sys.stdin.read() )[ "files" ] ) == 5 else 1 )'; then
+    ok "mentions: offset=100 serves the other 5 files"
+else
+    no "mentions: offset=100 did not serve the other 5 files"
+fi
 MN3="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn02"}' )"
 printf '%s' "$MN3" | grep -q '"shown"' && no "mentions: an uncut answer gained \"shown\"" || ok "mentions: an uncut answer is unchanged (no shown)"
 

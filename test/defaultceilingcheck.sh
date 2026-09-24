@@ -192,9 +192,9 @@ else no "(7) --zoom bridge cut: $brows rows, shown_bridges='$( rootattr "$TMP/zb
 zb --zoom >"$TMP/zb0"
 if [ -z "$( rootattr "$TMP/zb0" zoom shown_bridges )" ] && [ "$( grep -o '<bridge a="' "$TMP/zb0" | wc -l | tr -d ' ' )" -le 12 ]; then ok "(7) an uncut bridge list adds no bytes (no shown_bridges=)"; else no "(7) an uncut bridge list carries shown_bridges="; fi
 zb --zoom=1 --mermaid >"$TMP/zbm"
-grep -qx '%% top modules shown=10 total=20 capped=1' "$TMP/zbm" && ok "(7) --zoom --mermaid names its top-module cut" || no "(7) --zoom --mermaid top-module cut is silent"
+if grep -qx '%% top modules shown=10 total=20 capped=1' "$TMP/zbm"; then ok "(7) --zoom --mermaid names its top-module cut"; else no "(7) --zoom --mermaid top-module cut is silent"; fi
 zb --zoom --mermaid >"$TMP/zbm0"
-grep -qx '    %% child modules shown=8 total=10 capped=1' "$TMP/zbm0" && ok "(7) --zoom --mermaid names a child-module cut inside its subgraph" || no "(7) --zoom --mermaid child-module cut is silent"
+if grep -qx '    %% child modules shown=8 total=10 capped=1' "$TMP/zbm0"; then ok "(7) --zoom --mermaid names a child-module cut inside its subgraph"; else no "(7) --zoom --mermaid child-module cut is silent"; fi
 
 echo "=== (6) well-formed + deterministic ==="
 if command -v xmllint >/dev/null 2>&1; then

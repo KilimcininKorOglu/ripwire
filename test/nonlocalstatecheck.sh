@@ -340,7 +340,7 @@ case "$NLR" in
     *' capped="1"'*' counts_floor="1"'*) ok "(K) the collection cut forces capped=\"1\" and counts_floor=\"1\" on the root" ;;
     *) no "(K) cells_capped=\"1\" rides a root that reads complete: $NLR" ;;
 esac
-[ "$( printf '%s' "$NLR" | grep -o ' counts_floor="' | wc -l | tr -d ' ' )" = 1 ] && ok "(K) counts_floor= appears once" || no "(K) counts_floor= is repeated: $NLR"
+if [ "$( printf '%s' "$NLR" | grep -o ' counts_floor="' | wc -l | tr -d ' ' )" = 1 ]; then ok "(K) counts_floor= appears once"; else no "(K) counts_floor= is repeated: $NLR"; fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "nonlocalstatecheck: FAILURES ABOVE"
 exit "$fail"
