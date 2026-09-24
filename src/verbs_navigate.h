@@ -2348,7 +2348,8 @@ std::optional<int> runImpact( const MainDispatch& d )
         // surfaces cannot drift. The two reaches stay separate all the way to the bytes: a separate count
         // (importers=), a separate truncation pair (shown_importers=/importers_capped=, pageview.h rule 6)
         // and a separate row tag.
-        const rw::ImportTier imports        = rw::impactImportTier( ing, seeds, cfg.pageLimit );   // cut-fix C: --limit reaches the tier too
+        rw::ImportTier       imports        = rw::impactImportTier( ing, seeds );
+        rw::sizeImportTier( imports, cfg.pageLimit );   // cut-fix C: --limit sizes the tier too (offset= does not move it)
         const auto           importPage     = std::span<const std::uint32_t>( imports.files ).first( imports.shown );
         const auto           importLazyPage = std::span<const char>( imports.lazy ).first( imports.shown );
 
