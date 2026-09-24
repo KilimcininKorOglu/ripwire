@@ -1283,7 +1283,7 @@ inline constexpr const char* kUntestedModscopeLegend =
     "— still in impacted=, a real caller. tests= counts FILES not symbols, so impacted != "
     "tests+untested+untested_modscope in general; read this as the excluded count alone, not a sum term. ";
 inline constexpr const char* kUntestedModscopeZeroLegend =
-    "untested_modscope=0: no <file-scope> owner (#324: uncallable) was left out of untested=. ";
+    "untested_modscope=0: no <file-scope> owner excluded from untested= (#324). ";
 inline const char* untestedModscopeLegend( bool on ) noexcept { return on ? kUntestedModscopeLegend : kUntestedModscopeZeroLegend; }
 
 inline constexpr const char* kTestGateLegend =

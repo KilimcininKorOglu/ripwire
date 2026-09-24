@@ -271,6 +271,11 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # most-called first, then by path", +28 B) and impact.xml's import-tier clause ("limit=/offset= window the symbol rows only"
 # -> "most-imported first; limit= sizes it, offset= windows the symbol rows only", +32 B). Both
 # restate the rows' new order and the tier's new --limit reach; the rows of both pins are unchanged on this fixture.
+# RE-ANCHORED BY HAND 2026-09-24 (CodeRabbit on #331), one sentence: test-gate.xml's legend gains the N=0 definition of
+# untested_modscope= ("untested_modscope=0: no <file-scope> owner excluded from untested= (#324). ", +75 B) before its
+# closing "-->". The root already printed untested_modscope="0"; the full legend now defines it. Checked: the pin equals
+# the previous head's --legend=full output byte for byte (at= masked), and the new output differs from it by exactly
+# that insertion.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
