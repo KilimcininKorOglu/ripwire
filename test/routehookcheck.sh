@@ -678,9 +678,71 @@ o9 0 "grep -r 'ripwire;' src/"
 o9 0 'echo "a; ripwire b"'
 o9 0 '# ripwire .'
 o9 0 'echo hi > ripwire'
+# KNOWN LIMIT of the substring guard (issue #327), pinned so it cannot widen unnoticed. The guard tests the
+# raw line for the literal `ripwire`, before quote removal, so a command word the shell ASSEMBLES from quoted
+# or escaped fragments reads as no call. The lexer alone read each of these four as a call; they are missed
+# calls, never false ones. Quote removal still applies when the word appears whole, which the last two hold.
+o9 0 "'rip''wire' ."
+o9 0 'rip\wire .'
+o9 0 '"rip""wire" .'
+o9 0 'rip"wire" .'
+o9 1 '"ripwire" .'
+o9 1 "'ripwire' ."
 [ "$o9_bad" -eq 0 ] \
-    && ok "O9 command-word rule: $o9_n shapes read correctly (19 wrapped/sequenced/operator-attached calls, 9 appearances that run nothing)" \
+    && ok "O9 command-word rule: $o9_n shapes read correctly (21 wrapped/sequenced/operator-attached/quoted calls, 9 appearances that run nothing, 4 assembled words the guard misses by design)" \
     || no "O9 command-word rule: $o9_bad of $o9_n shapes read WRONG (listed above)"
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# O10 — the rule's cost does not grow with the command line (issue #327)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# The lexer rebuilds the rest of the line for every character it reads, so one long command cost
+# 2.9 s at 2,000 characters, 20.6 s at 4,000 and 155 s at 8,000 under macOS bash 3.2 — inside the
+# PreToolUse hook, in front of the Bash call it was only meant to count. RED on the pre-fix block,
+# measured while writing this: each line below took about 20 s. The answers are asserted too: a line
+# with no `ripwire` in it holds no call, and a line past the cap reads as none — a missed call,
+# never a false one, the same direction as the `2>&1` limit the block already discloses.
+echo
+echo "=== O10: a long command line costs the rule nothing ==="
+o10_long="$( head -c 4000 /dev/zero | tr '\0' 'a' | fold -w 60 | tr '\n' ' ' )"
+for o10_line in "$o10_long" "echo $o10_long; ripwire ."
+do
+    o10_t0="$( date +%s )"
+    o10_got="$( sh "$TMP/rule.sh" "$o10_line" 2>/dev/null )"
+    o10_dt=$(( $( date +%s ) - o10_t0 ))
+    case "$o10_line" in *ripwire*) o10_what="holding a call past the cap" ;; *) o10_what="without ripwire" ;; esac
+    if [ "$o10_dt" -le 2 ] && [ "$o10_got" = "0" ]; then
+        ok "O10 a ${#o10_line}-character line $o10_what answers 0 in ${o10_dt} s"
+    else
+        no "O10 a ${#o10_line}-character line $o10_what took ${o10_dt} s and answered [$o10_got] (want 0 within 2 s)"
+    fi
+done
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# O11 — the prompt router does not classify outside a git work tree (issue #327)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# Outside a git work tree `--help-task` has no file list from git and walks the whole tree under cwd.
+# A session started in $HOME measured over 30 s for one prompt, past the 8 s hook timeout, on every
+# prompt. A stub ripwire records each call, so the arm measures whether the hook CALLS the classifier,
+# not how fast one machine's tree happens to walk. RED on the pre-fix hook: the non-repo prompt
+# reached the stub. The repo prompt is the positive control: the stub is reachable, so an empty call
+# log for the non-repo prompt is not a stub that never runs.
+echo
+echo "=== O11: no classifier call outside a git work tree ==="
+O11BIN="$TMP/o11bin"; mkdir -p "$O11BIN"
+O11LOG="$TMP/o11.calls"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s"\n' "$O11LOG" >"$O11BIN/ripwire"
+chmod +x "$O11BIN/ripwire"
+H11="$TMP/h11"; mkdir -p "$H11"
+: >"$O11LOG"
+route_run "$H11" "$O11BIN:$PATH" "$( promptjson o11a "$NONREPO" "$RECPROMPT" )" >/dev/null 2>&1
+[ -s "$O11LOG" ] \
+    && no "O11 route: a prompt in a non-git cwd called ripwire: [$( tr '\n' ' ' <"$O11LOG" )]" \
+    || ok "O11 route: a prompt in a non-git cwd never calls ripwire"
+: >"$O11LOG"
+route_run "$H11" "$O11BIN:$PATH" "$( promptjson o11b "$REPO" "$RECPROMPT" )" >/dev/null 2>&1
+[ -s "$O11LOG" ] \
+    && ok "O11 route: a prompt in a git work tree still calls ripwire (O11's positive control)" \
+    || no "O11 route: a prompt in a git work tree never reached the stub, so O11 proved nothing"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

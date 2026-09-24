@@ -18,7 +18,9 @@ command -v jq >/dev/null 2>&1 || { echo "jq required"; exit 2; }
 "$BIN" --help=all 2>&1 | grep -q -- '--help-task=' \
     || { echo "codexpromptroutecheck: supplied binary does not expose --help-task"; exit 1; }
 
-mkdir -p "$TMP/bin" "$TMP/repo/.git" "$TMP/home"
+mkdir -p "$TMP/bin" "$TMP/repo" "$TMP/home"
+# A real work tree, not an empty .git directory: the router routes only where `git rev-parse` answers.
+git -C "$TMP/repo" init -q
 cat >"$TMP/bin/ripwire" <<'SH'
 #!/bin/sh
 case "$*" in
