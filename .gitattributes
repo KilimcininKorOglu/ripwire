@@ -23,7 +23,7 @@ test/*.sh linguist-detectable=false
 # CRLF option (runner-images Install-Git.ps1 passes no CRLFOption), which leaves the installer default,
 # core.autocrlf=true, so a script with no eol rule is checked out CRLF and Git Bash's `bash script` fails
 # loudly (rc=2 or rc=255: `\r` glued onto the last argument on each line, "invalid option", "not a valid
-# identifier") on otherwise-correct code (rv-326-evict-stack.md B1). test/*.sh does not need this: nothing
+# identifier") on otherwise-correct code. test/*.sh does not need this: nothing
 # in the windows job's steps runs a checked-out test/*.sh script directly, only inline `run:` bodies and
 # the two scripts/*.sh helpers above.
 scripts/*.sh text eol=lf

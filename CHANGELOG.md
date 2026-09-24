@@ -62,6 +62,14 @@ an `docs/EVALS.md` pre-registration and result for the ordering, fixes a well-fo
 inside a full-tier XML comment), and adds a new slicecheck arm (train 16, PR #322, merged 2026-09-22;
 ships in the next release).
 
+### Changed — `--slice=SYM:VAR`'s legend and `--help` say what `order="defuse"` does not claim
+
+A pre-registered attempt to rank `--slice=SYM:VAR` rows by relevance over the WHOLE function span did not
+beat a random-shuffle control (R3@1 0.0344 vs 0.0423, bootstrap 95% CI [−0.0310, 0.0189]). `order="defuse"`
+stays the default: among the rows `--slice` already narrows to it still beats random (MRR 0.628 vs 0.602 on
+478 pairs). The compact and full legends and `--help=slice` now say the order ranks those rows only and is
+not a whole-function relevance ranking. No row, attribute or default changed. Derivation: `docs/EVALS.md`.
+
 ### Fixed — a file refused for pathological nesting no longer disappears silently
 
 JSON, YAML and Markdown-family files that fail the pre-parse nesting guard (memory-safety load-bearing for
@@ -76,7 +84,10 @@ the same run whose ingest had just refused it, so the guard protected the map bu
 - The default map's header gains `nest_refused=N` (absent when zero; `--json` twin `"nest_refused"`), so a
   reader of the map itself — not only `--skipped` — can tell a file was excluded and why.
 - `--match` and `--pattern` no longer parse a file ingest refused: they apply the same refusal, exclude the
-  file from `eligible_files=`, and disclose `nest_refused=N` on their own answer (absent when zero).
+  file from `eligible_files=`, and disclose `nest_refused=N` on their own answer (absent when zero). `--lint`
+  applies the same refusal and its root carries the same `nest_refused=N`, so a refused `.kt` file no longer
+  leaves every rule's `count=` short with no trace. The default (compact) legend defines `nest_refused=` on
+  all three roots.
 - An index cache written before this change is invalidated on load (`kCacheVersion` 24 → 25) so a refused
   file already hidden in an old cache is re-scanned and rowed once, rather than staying hidden until the
   file's content next changes.
@@ -108,7 +119,9 @@ disclosed floor — its written qualifier never names `std` at all, so it is una
 today's ladder. An out-of-line std-rooted definition (`std::detail::f(){}`, `std::hash<Foo>::mix(...){}`) and
 a partially-qualified one written inside `namespace std { … }` (`namespace std { int detail::f(){} }`) are
 recognised too, and a std-rooted VARIABLE (a niebloid: `namespace std::ranges { inline constexpr sort_fn
-niebloid{}; }`) is never refused for having no function body. `kParserVer` moves 119 → 120 (two new
+niebloid{}; }`) is never refused for having no function body. A qualified def written inside another named
+namespace (`namespace vendor { int std::ranges::f(int){…} }`, which defines `vendor::std::ranges::f`) is not
+std-rooted, so a call to the real `::std::ranges::f` no longer binds it. `kParserVer` moves 119 → 120 (two new
 per-record extraction facts, folded together with a same-day correctness fix to how one of them is
 computed) and `kCacheVersion` moves 24 → 25, so any cache written by an earlier binary is refused and
 reparsed.
@@ -187,7 +200,10 @@ could reach a reader as an actionable item. It still counts toward the coarser `
 gauges, where it is a real caller in the blast radius — only the per-row obligation list changes.
 The excluded count is disclosed, not silent: `--test-gate` now carries `untested_modscope="N"` (XML
 and JSON) alongside `untested=`, so a change whose only reader is an untestable entrypoint reports why
-its `untested=` reads zero instead of reading like there was nothing to find.
+its `untested=` reads zero instead of reading like there was nothing to find. `--flags --flip` counts the
+same exclusion as `untested_modscope="N"` on its root (present only when N > 0), where the host row itself
+still lists the `<file-scope>` owner with `tested="0"`. The full `--test-gate` legend defines
+`untested_modscope=` at zero too.
 
 ### Fixed — five defects in the TS/JS runner derivation above, found by independent review before merge
 
@@ -231,6 +247,18 @@ its `untested=` reads zero instead of reading like there was nothing to find.
   used to derive vitest via the (now-removed) dependency fallback; it is real, common indirection this
   version does not follow. Stated as a floor below, not fixed — following it needs the same authoritative-
   script rule one script-name hop deeper, which is a larger, separately-scoped change.
+
+### Fixed — two more TS/JS runner-derivation defects, found in PR review
+
+- **The test-name check read the absolute path.** The `__tests__/` segment test ran over the file's path on
+  disk, so it also matched directories ABOVE the crawl root: in a checkout under `…/__tests__/repo/`, a
+  helper such as `test/setup.ts` was spelled `run="npx vitest run test/setup.ts"`, and in any other checkout
+  `run_unknown="1"`. It now reads the root-relative path, so the answer no longer depends on where the repo
+  sits.
+- **A TS/JS test file could become another row's runner.** The driver search that lets a TS/JS file fall
+  back to a shell or Python driver naming it also searched the TS/JS test files themselves, so a jest test
+  that merely `require`s `./util.js` gave the `util.js` row `run="npx jest test/util.test.js"`, and a miss
+  read every TS/JS test file to find out. The search now covers `.sh`/`.py` drivers only, as documented.
 
 ### Documented — TS/JS test runners this cannot yet derive (`run_unknown="1"` stays honest, not a bug)
 
@@ -406,6 +434,41 @@ outside this instrument's own assumption**: a forward-in-time gold (the lists ra
 `--limit=10` recall 0.490 → 0.673 (n=27, [+0.013, +0.356]). The **callers gain is the weakest of the three**:
 on LocBench it is indistinguishable from, or below, random order (`--limit=20` recall is BELOW random order,
 n=9). Nowhere does any of the three ranked lists score significantly below its pre-change baseline.
+
+### Fixed — `--for`'s `<sigs>` byte budget cuts the rank tail, and every signature cut is named
+
+- **The byte gate ran before the rank sort.** With `--pack-budget-bytes` (and on `--pack-task`/`--from-trace`,
+  which share the path) the `<sigs>` byte gate spent its budget in file order, so a tight budget could ship
+  r=7 and r=20, drop r=1, and still print a bare `<sigs>`. It now runs on the rank-sorted rows and cuts only the
+  tail: on this repository `--for="rank graph teleport" --pack-budget-bytes=2000` ships r=1..8 under
+  `<sigs shown="8" total="40" capped="1">`, where it used to ship ten scattered rows with nothing disclosed.
+  `total=` counts the rows handed to the budget. The `--json` root gains `sigs_shown`/`sigs_total` when the
+  array was cut.
+- **Dropped doc comments are counted.** A shown row past r=24 (or cut by the trim ladder) prints no doc
+  comment; `<sigs docs_dropped="N">` (JSON `docs_dropped`) now counts those rows, present only when N > 0.
+- **A capped block that only shrank rows says so**: its legend clause reads rows shrunk, none dropped, when
+  `shown=` equals `total=`.
+- A default `--for` cannot reach the byte gate (a 40-row head is at most about 19 KB of 64 KB). On the 92
+  held-out LocBench issues no grain moved, and bundles grew 4.5 bytes on average.
+
+### Fixed — `--field-affinity` pair names, `--clones` paging, `--verify`'s page tail and the Type-3 cap disclosure
+
+- **`--field-affinity` named the wrong fields in a `<pair>`.** A pair's `a=`/`b=` indexed the struct's fields
+  in declaration order, but the fields were re-sorted for display first, so a struct whose display order
+  differs printed the wrong names; a pair on a field past the 32-row display cap read a destroyed element
+  (a libc++-hardened build traps there). Pairs are now remapped through the display order, and the cap
+  bounds only the printed `<f>` rows. No pair is dropped.
+- **`--clones` pages served some groups twice and others never.** The bare run served the first 40 Type-1/2
+  groups plus the first 40 Type-3 groups, but `--offset` indexed one flat Type-1/2-then-Type-3 stream: on a
+  448-group fixture the bare run plus its `next_offset=` walk returned 448 rows, 443 distinct. The row stream
+  is now ordered so the bare run is its prefix, and every group is served exactly once. The bare output is
+  unchanged.
+- **`--verify` advertised a page it refused.** A capped evidence sample carried `total= has_more=
+  next_offset=`, and `--offset` was then refused. It now carries `shown=`/`capped=` only; the answer's own
+  count attribute (`count=`, `hits=`, `defs=`, `occurrences=`) already gives the total.
+- **`--clones` printed `counts_floor="1"` on every run.** The Type-3 pair cap was never disclosed in a release
+  build, and the floor marker was hard-coded. `counts_floor="1" type3_capped="1"` now appear only on a run
+  where the cap fired.
 
 ## [0.6.2] — 2026-09-21
 
