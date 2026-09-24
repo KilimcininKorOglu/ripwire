@@ -16,10 +16,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 222 | 89 | 123 | **99** |
+| 224 | 89 | 125 | **99** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 222 + 7 is the 229 constants this generator parses out of `src/`.
+are not counted as caps, and 224 + 7 is the 231 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -37,8 +37,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **123 of 222 caps are classified
-(40 INDEXING, 41 OUTPUT, 42 BOUNDARY); the remaining 99 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **123 of 224 caps are classified
+(40 INDEXING, 41 OUTPUT, 42 BOUNDARY); the remaining 101 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -88,7 +88,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 89 files that declare a cap — the 222 caps counted above, and no parameter.
+One table for each of the 89 files that declare a cap — the 224 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -494,7 +494,7 @@ Discloses: **none**
 
 ### `src/lanes.h`
 
-Discloses: `blast_capped`, `tests_capped`
+Discloses: `blast_capped`, `ranked_capped`, `tests_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -664,7 +664,7 @@ Discloses: `mention_syms_capped`, `ranking_capped`
 
 ### `src/pageview.h`
 
-Discloses: `count_capped`, `findings_capped`, `hits_capped`, `importers_capped`, `modules_capped`
+Discloses: `count_capped`, `findings_capped`, `hits_capped`, `importers_capped`, `modules_capped`, `symbols_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -674,8 +674,10 @@ Discloses: `count_capped`, `findings_capped`, `hits_capped`, `importers_capped`,
 | `kImportReachRowCap` | `40` | — | — |
 | `kPageDisclosureCap` | `224` | — | — |
 | `kTreeRowCap` | `80` | — | files, by best symbol's rank: 80 rows ≈ 11.5 KB on this repo (100 = 14.3 KB) |
+| `kTreeSymbolsPerFile` | `3` | — | cut-fix E: --tree's <s> rows per <file>, disclosed by the root's shown_symbols=/symbols_capped= |
 | `kUseSiteRowCap` | `100` | — | — |
-| `kZoomTopModuleCap` | `40` | — | top-level modules, size desc (their children ride along: levels_shown=2) |
+| `kZoomBridgeCap` | `12` | — | cut-fix E: --zoom's <bridge> rows (traffic desc), a secondary listing disclosed by secondaryCutAttrs |
+| `kZoomTopModuleCap` | `40` | — | top-level modules, rank-mass desc then size desc then id (massSizeIdLess; their children ride along: levels_shown=2) |
 
 ### `src/partition.h`
 
@@ -836,7 +838,7 @@ Discloses: **none**
 
 ### `src/situ.h`
 
-Discloses: `tests_capped`, `untested_capped`
+Discloses: `partners_capped`, `tests_capped`, `untested_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
