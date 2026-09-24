@@ -59,7 +59,7 @@ have a caller: on vue-core, 72.83% of call sites that `--callers`, `--impact` an
 Answers got smaller where it counts: the compact legend is the default (`--legend=full` restores the old bytes
 byte-for-byte), and over MCP each definition is sent once per session instead of in every answer.
 `--quality-delta` is trustworthy on a clean tree again. Native Windows x64 now builds and gates with **both**
-clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the 647-gate suite doesn't run on
+clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the 648-gate suite doesn't run on
 Windows yet, and ASan compiles there but never executes.
 
 **ripwire 0.6.1 — the answers an agent reads got smaller.** A compact answer is 46–66% smaller per call, and on
@@ -1362,9 +1362,12 @@ with several definitions and the resolver guessed. Read the source when which-ta
 
 **The test gate** — `--test-gate` names the obligations and exits 4 while any remain. Captured with an
 uncommitted change in the tree: `changed="1"` and the rows below appear only because something was
-actually pending. A clean clone exits 0 with every changed/impacted/test count at zero — except
-`script_gates_unmodelled=`, which is structural (it counts script-to-binary test runners the call
-graph cannot see, not git status) and stays nonzero even then:
+actually pending. A clean clone exits 0 with every changed/impacted/test count at zero. The structural
+counts describe the tree, not git status, so they stay nonzero even then: `script_gates_unmodelled=`
+(script-to-binary test runners the call graph cannot see), `script_gates_registered=`,
+`script_gates_mapped=` and `script_gates_unresolved_dynamic=` (the suite's registered shell gates, and how
+many of them map to their dependencies), and the resolver gauges `graph_ambiguous=`, `graph_unresolved=`
+and `graph_unindexed=`. The capture below predates the `script_gates_*` registry counts and those gauges:
 
 ```
 $ ripwire . --test-gate          # exit code: 4

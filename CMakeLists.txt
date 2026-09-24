@@ -1167,6 +1167,12 @@ endif()
 #                        uninitialized keeps it exactly as off as it was before this block.
 #   format format-security  printf-family argument/format mismatch, and a non-literal format (C4477/C4473 on
 #                        cl.exe; the non-literal half is C4774, a level-4 warning never measured on this tree: not held).
+#                        On GCC, -Werror=format also makes -Wformat-overflow=1 and -Wformat-truncation=1 errors (a
+#                        planted sprintf/snprintf overflow is a hard error on g++ 13/14/16 at -O0 and -O2). Both are
+#                        middle-end passes that read value ranges, like the ones ruled out here, but level 1 fires only
+#                        on a certain or likely overflow, the snprintf-truncation class this repo has shipped as a bug,
+#                        and both are 0 on this tree: kept. If one proves optimizer-noisy on a CI GCC, drop it on GCC
+#                        with -Wno-error=format-truncation / -Wno-error=format-overflow and write it down here.
 #   return-stack-address (GCC: return-local-addr) the address of a local or a temporary returned (C4172).
 #   dangling             Clang only: the -Wdangling group (a view or pointer that outlives the object it names —
 #                        string_view of a temporary, a dangling member, a gsl::Pointer from a dead owner). cl.exe has

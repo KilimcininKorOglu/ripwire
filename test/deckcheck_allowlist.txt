@@ -123,3 +123,4 @@
 --assume-unchanged	git's own update-index option, the sibling of --skip-worktree above and named in the same #228 CHANGELOG paragraph: both index bits hide a tracked path's bytes from git, so both refuse the identity basis — a foreign tool flag, not a ripwire flag
 --ref	bench/slice/run_slicerecall.py's own flag (argparse "--ref", default v0.6.2: the git ref the slice-recall mine walks history from) quoted in docs/EVALS.md's --slice-guards pre-registration corpus note — not a ripwire flag
 --warnings-as-errors	clang-tidy's own option, quoted in CONTRIBUTING.md where it describes scripts/tidycheck.sh's gating subset — not a ripwire flag
+--fresh	CMake's own configure flag ("cmake --fresh -S . -B asan …"), quoted in CONTRIBUTING.md's LLVM 22 sanitizer recipe so a tree first configured with AppleClang is rebuilt from a clean cache — not a ripwire flag

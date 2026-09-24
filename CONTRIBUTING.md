@@ -45,7 +45,7 @@ Homebrew LLVM 22 instead, linking its own libc++ so the headers and the dylib ar
 ```bash
 brew install llvm@22     # keg-only; nothing goes on PATH and /usr/bin/clang stays AppleClang
 L=$(brew --prefix llvm@22)
-cmake -S . -B asan -DRIPWIRE_ASAN=ON \
+cmake --fresh -S . -B asan -DRIPWIRE_ASAN=ON \
   -DCMAKE_C_COMPILER="$L/bin/clang" -DCMAKE_CXX_COMPILER="$L/bin/clang++" \
   -DCMAKE_EXE_LINKER_FLAGS="-L$L/lib/c++ -L$L/lib/unwind -lunwind -Wl,-rpath,$L/lib/c++ -Wl,-rpath,$L/lib/unwind"
 cmake --build asan -j
@@ -53,9 +53,14 @@ otool -L asan/ripwire    # expect llvm@22's libc++, libunwind and libclang_rt.as
 ```
 
 Name `llvm@22`, not `llvm`: the unversioned keg moves to a new major on `brew upgrade`, and an older
-one may still be installed. Gates that compile their own sanitizer harness take the compiler from
-`CXX` (strkerncheck's CMake leg also reads `CC` and `LDFLAGS`), so export
+one may still be installed. `--fresh` makes the switch explicit when `asan/` was first configured with
+AppleClang; without it CMake sees the compiler change, warns, and discards the old cache on its own. The
+directory stays `asan/`, because the gates and `test/regression.sh` look for `asan/ripwire`. Gates that
+compile their own sanitizer harness take the compiler from `CXX` (strkerncheck's CMake leg also reads `CC`
+and `LDFLAGS`), so export
 `CC="$L/bin/clang" CXX="$L/bin/clang++" LDFLAGS="<the linker flags above>"` before running them.
+Keep that environment to the ASan gates: a gate that checks `$CXX` against the compiler that built
+`build/ripwire` (noaliascheck) goes red under it, so run the plain gates from a shell without it.
 With libc++ 22, oswin32logiccheck arm (B) stops on an `-fsanitize=integer` report inside libc++'s own
 `<string>` (`__grow_by` stores `-1` into `size_type` on purpose). That is the toolchain, not ripwire.
 
@@ -252,7 +257,8 @@ output as a to-triage list, never as a queue of defects.
 
 The exception is `scripts/tidycheck.sh`, a separate CI step with `--warnings-as-errors='*'`. It runs
 only checks whose every finding is a silently wrong answer and that sat at **zero rows** on the five CI
-TUs when admitted (0.6.3, clang-tidy 22): `bugprone-use-after-move`, `bugprone-dangling-handle`,
+TUs when admitted (0.6.3, clang-tidy 22; `bugprone-use-after-move` had one row, brought to zero by a
+behaviour-neutral fix that `.clang-tidy` describes): `bugprone-use-after-move`, `bugprone-dangling-handle`,
 `bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop`,
 `modernize-use-override` and `clang-analyzer-core.*`. It is a ratchet, not a style gate: a new row is a
 bug to fix, never a `NOLINT`, and a gated check that proves noisy leaves the list with its count, the way
