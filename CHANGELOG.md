@@ -251,6 +251,43 @@ value — a stated floor, not a guess. (A delegating script whose OWN name happe
 `vitest`/`jest` as a word, e.g. `"npm run test:vitest"`, still derives correctly today — that is the
 existing word-match rule firing on the visible text, not indirection-following.)
 
+### Fixed — a `--regex` spelling one byte by number dropped every file that matched it, at `capped="0"`
+
+`--regex` opens only the files a sound regex→trigram query admits (`src/search.h`'s `RegexAnalyzer`, the Cox
+prefilter; the full-scan switch the gates use is its oracle). That reader knew `\n`, `\t`, `\w`, `\b` and an escaped
+metacharacter, and took every other escape for its letter: `\x66s::exists` became the literal run `x66s::exists`,
+whose trigram `x66` no source file holds, so the ten files with `fs::exists` were never opened — and the answer
+still said `files="0" hits="0" capped="0"`. In an alternation the escaped branch went missing on its own:
+`fs::exists|\x66s::remove` answered 11 files where the full scan and ripgrep answer 14. The same reading inside a
+class (`[\x66]s::exists` enumerated `{x,6,6}`) dropped the same ten. `\uHHHH`, `\cX` and a backreference `\1` had
+the same shape; the screen in `src/regexguard.h` lists all four as portable escapes, so they were accepted and then
+misread. The analyser now steps over exactly the characters the engine reads as the escape: `\xHH` and `\u00HH`
+with every digit present and an ASCII value are that one byte, and the rest are one byte it does not vouch for
+(ALL — sound, as `.` is). Only the CLI `--regex` evaluates that query; the MCP `grep` verb is a literal-only
+scan (`src/mcpverbs.h`'s `grepHitsJson` calls `grepCollect(..., /*regex=*/false, ...)`) and never reached this
+code, and neither did the literal `--grep`, the unindexed scan or the line-level literal paths.
+
+Two more soundness gaps in the same analyser, found in review before this landed: a class range ending at
+`\x7f`/`\u007f` (both portable, accepted escapes) looped forever — `for( char ch = lo; ch <= hi; ++ch )` never
+terminates once `hi == CHAR_MAX`, and RSS grew without bound within seconds; the loop now counts with `int`.
+And a non-capturing group `(?:...)` was read as a zero-width assertion (ε), the same as a lookaround, so its
+content never entered the trigram query: a pattern such as `std::(?:string)&` required the seam trigram `::&`
+of every file, and every real `std::string&` occurrence dropped at `capped="0"`. `(?:...)` is now parsed as an
+ordinary group that consumes its content, and a lookaround whose skip loop passes an unescaped `[` (a class may
+itself hold `(` or `)`, which desyncs that loop's depth count) now falls back to ALL rather than trust it.
+
+Gate: `test/regexcheck.sh` — four escape patterns join the prefiltered-versus-full-scan battery (S), which now
+refuses to compare two empty answers; (E) pins the alternation shape (`zylophoneXyzzy|\x63ompute`: the escaped
+branch is the only match in two fixture files, and both must be listed with the file count equal to full-scan's
+and above the first branch's alone); (O2) checks the escape patterns against ripgrep, which spells `\xHH` where
+`grep -E` cannot; (F1) runs `[\x7e-\x7f]` under a short alarm and fails on a hang; (F2) runs `std::(?:string)&`
+against this repo's own `src/` and requires prefiltered == full-scan. Red on the previous binary: (S) 4 of 17,
+(E), and (O2) 3 of 3; (F1) hangs (rc=142); (F2) diverges from full-scan. A seeded differential fuzz (fixed
+seed, 260 patterns mutated from this dialect: `\xHH`/`\u00HH`, `[c]`/`[cC]`, `(c)`/`(?:c)`, `(?=c)`/`(?!c)`,
+`? + * {1} {1,2} {0,1} {1,}`, `\w \d \s`, `.`, backrefs, alternation, `^.*`) now compares `--regex` against
+`--no-prefilter` on every run, so a future soundness regression in this analyser is a gate failure, not
+another review finding.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

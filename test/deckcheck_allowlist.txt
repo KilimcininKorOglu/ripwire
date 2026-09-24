@@ -21,6 +21,7 @@
 --most-important-last	real flag (src/cli.h:895, deprecatedOrderFlag) — deprecated alias for --order=important-last, still functional; superseded by --order= in --help's own text
 --readability	real flag (src/cli.h:5118, deprecatedReadabilityFlag) — deprecated alias for --biggest-first, still functional; --help documents --biggest-first instead and the alias is intentionally left out of the catalog (lane/flag-biggest-first, 2026-09-23)
 --all	real flag of the `wrap` subcommand (src/wrap.h:254, "ripwire wrap --all" auto-detects every installed agent) — wrap's own flags are not enumerated in the top-level --help catalog
+--no-prefilter	real flag (src/cli.h:120, 2997) — modifies --grep=STR/--regex=PAT to force a full scan instead of the trigram prefilter; the (debug) soundness oracle test/regexcheck.sh compares --regex against, deliberately left out of --help's public catalog
 --noout	xmllint's own flag ("xmllint --noout -") quoted in the G4 well-formedness example, not a ripwire flag
 --read	aider's own flag ("aider --read FILE") quoted in the wrap-aider recipe, not a ripwire flag
 --short	git's own flag ("git rev-parse --short HEAD") quoted where a skill tells you to record the commit you measured at, not a ripwire flag
