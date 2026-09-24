@@ -366,7 +366,7 @@ verbs_change.h	readBriefFile	fopen	1	closes	continue-only loop; fclose before th
 verbs_change.h	readTraceText	fopen	1	closes	returns only on a failed open; fclose after the read loop
 verbs_change.h	runChangeViews	fopen	1	closes	returns only on a failed open; fclose after the write
 verbs_doctor.h	doctorSameFileBytes	fopen	2	closes	break-only loop; each stream is fclosed on every path
-verbs_doctor.h	runDoctor	fopen	1	closes	if-scoped fputs then fclose
+verbs_doctor.h	runDoctor	open	1	closes	if-scoped rw::os::open (#326: the rebased cache dir); write, then rw::os::close before the unlink
 verbs_lint.h	lintSymbolLevelChecks	fopen	1	closes	if-scoped; fclose after the sized read
 verbs_lint.h	parseProfTsv	fopen	1	closes	returns only on a failed open; fclose after the read loop
 verbs_navigate.h	runSafeDelete	fopen	1	closes	if-scoped; fclose after the sized read
