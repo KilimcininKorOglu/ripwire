@@ -908,7 +908,8 @@ inline std::string grepTierKeys( const GrepTierReport& tier, bool floorAlreadyEm
     keys += ",\"tier_unclassified\":" + std::to_string( tier.unclassifiedHits );
     if( tier.budgetHit != nullptr )
     {
-        keys += std::string( ",\"tier_budget\":\"" ) + tier.budgetHit + "\"" + ( floorAlreadyEmitted ? "" : rw::kGraphCountFloorAttrJson );   // N2: the CLI twin's floor
+        keys += std::string( ",\"tier_budget\":\"" ) + tier.budgetHit + "\",\"tier_files\":" + std::to_string( tier.hitFileCount )
+              + ( floorAlreadyEmitted ? "" : rw::kGraphCountFloorAttrJson );   // N2: the CLI twin's floor; tier_files: the CLI twin's total
     }
     return keys;
 }

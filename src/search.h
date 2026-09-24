@@ -1284,8 +1284,9 @@ inline std::optional<std::string> regexCompileError( const std::string& pat )
 //
 // DETERMINISM (a hard law, and this is a parallel path): the workers write into per-file slots they alone
 // own, and NOTHING downstream depends on the order in which files finished. The budget is applied AFTER
-// the fan-out, in ascending fileId order — exactly the order the old serial candidate loop consumed —
-// so which hits survive a truncation is a pure function of the corpus, never of thread scheduling.
+// the fan-out, in the canonical tier-then-path order below (it used to be ascending fileId, which let the
+// ceiling keep an early doc file's hits and drop a later source file's) — so which hits survive a
+// truncation is a pure function of the corpus, never of thread scheduling, and always the order's tail.
 //
 // §P11.1 — the returned ORDER is TIER-then-path, not path alone. Plain path-alphabetical order plus the
 // caller's fixed row cap is a systematic bias against code on any doc-bearing repo: on ripwire's own tree
@@ -1492,51 +1493,50 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
         }
     }
 
-    // ── pass 2: apply the budget in ascending fileId order (thread-order-independent) ──────────────────
-    std::vector<GrepRawHit> raw;
-    for( std::uint32_t f = 0; f < fileCount && raw.size() < budgetCount; ++f )
+    // ── pass 2: RANK the hit files, THEN spend the budget in that order (thread-order-independent) ────────
+    // §P11.1: the canonical order is TIER-then-path (see this function's header comment), keyed once per FILE
+    // through filter.h's shared pathTierIndexOver/compareTierThenPath (the LB-G key every tier-sorted verb
+    // uses), never inside a per-hit comparator: pathTierOf() lowercases an extension into a fresh std::string.
+    // RANK BEFORE CUT: the budget used to run in ascending fileId order BEFORE this sort, so when it fired the
+    // survivors were whatever files the crawl listed first. On a fixture of two hit-dense docs/*.md files and
+    // one src/ file the answer read files="2" hits="4000000" hits_capped="1" and held no source hit at all —
+    // the head of the tier order lost to its tail. Ranked first, the ceiling only ever drops the TAIL of the
+    // canonical order (the least relevant tier's last files), so the collected list is a PREFIX of the uncapped
+    // one. The fileId tiebreak makes the order total (two roots may spell one path).
+    std::vector<std::uint32_t> hitFileIds;
+    hitFileIds.reserve( fileCount );
+    for( std::uint32_t f = 0; f < fileCount; ++f )
     {
+        if( !perFileSites[f].empty() )
+        {
+            hitFileIds.push_back( f );
+        }
+    }
+    {
+        const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, hitFileIds, []( std::uint32_t f ) { return f; } );
+        std::sort( hitFileIds.begin(), hitFileIds.end(), [ & ]( std::uint32_t a, std::uint32_t b )
+                   {
+                       const int c = compareTierThenPath( ing, tierOfFile, a, b );
+                       return c != 0 ? c < 0 : a < b;
+                   } );
+    }
+    std::vector<GrepRawHit> raw;
+    for( std::size_t rankIndex = 0; rankIndex < hitFileIds.size() && raw.size() < budgetCount; ++rankIndex )
+    {
+        const std::uint32_t f = hitFileIds[rankIndex];
         for( const GrepMatchSite& site : perFileSites[f] )
         {
             raw.push_back( { f, site.line, site.byteOffset } );
             if( raw.size() >= budgetCount )
             {
-                break;
+                break;   // a file the ceiling cuts part-way keeps its FIRST sites; every later-ranked file is dropped whole
             }
         }
     }
+    ASSUME( raw.size() <= budgetCount, "pass 2 stops at the ceiling" );
 
-    // §P11.1: the canonical order is TIER-then-path (see this function's header comment). The key is
-    // materialized ONCE PER FILE, not evaluated inside the comparator: pathTierOf() lowercases an extension
-    // into a fresh std::string, and with the §A1 ceiling this list is ~10^6 rows — O(n log n) calls to it
-    // would allocate millions of times. fileRank is a dense position in the tier-then-path order, so the
-    // comparator below is pure integer work and a file's hits stay contiguous (pass 4's one-read-per-file
-    // caching depends on that).
-    std::vector<std::uint32_t> hitFileIds;
-    hitFileIds.reserve( fileCount );
-    {
-        std::vector<char> fileHasHitsForRank( fileCount, 0 );
-        for( const GrepRawHit& h : raw )
-        {
-            fileHasHitsForRank[h.fileId] = 1;
-        }
-        for( std::uint32_t f = 0; f < fileCount; ++f )
-        {
-            if( fileHasHitsForRank[f] )
-            {
-                hitFileIds.push_back( f );
-            }
-        }
-    }
-    std::sort( hitFileIds.begin(), hitFileIds.end(), [ & ]( std::uint32_t a, std::uint32_t b )
-               {
-                   const PathTier ta = pathTierOf( rootRelPath( ing, a ) ), tb = pathTierOf( rootRelPath( ing, b ) );
-                   if( ta != tb )
-                   {
-                       return ta < tb;
-                   }
-                   return ing.files[a] < ing.files[b];
-               } );
+    // fileRank is a dense position in the tier-then-path order, so the comparator below is pure integer work and
+    // a file's hits stay contiguous (pass 4's one-read-per-file caching depends on that).
     std::vector<std::uint32_t> fileRank( fileCount, UINT32_MAX );
     for( std::uint32_t rankIndex = 0; rankIndex < std::uint32_t( hitFileIds.size() ); ++rankIndex )
     {
@@ -2089,6 +2089,8 @@ struct GrepTierReport
     std::uint32_t suppressedComment = 0;   // classified hits held back because a tighter tier was non-empty
     std::uint32_t suppressedString  = 0;
     std::uint32_t tieredFileCount   = 0;   // hit files actually parsed (≤ the budgets)
+    std::uint32_t hitFileCount      = 0;   // hit files the classification had to cover: tier_files=, the TOTAL beside
+                                           // tier_parsed= once a budget stops it (the cut says how much it left)
     std::uint32_t unclassifiedHits  = 0;   // hits in files past the budget, or with no grammar — NEVER suppressed
     const char*   emittedTier       = "code";        // "code" | "comment" | "string" | "comment+string" — §F4's served tier
     const char*   budgetHit         = nullptr;       // nullptr | "files" | "bytes" — E5's disclosed bail-out
@@ -2132,7 +2134,10 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
             hitFileIds.push_back( r.fileId );
         }
     }
+    report.hitFileCount = std::uint32_t( hitFileIds.size() );
     // ── the bounded prefix: files are admitted in order until either budget would be exceeded ──────────
+    // The order is the collection's tier-then-path rank, so the budget classifies source files first and leaves
+    // the least relevant tier's tail unclassified (never suppressed: an unclassified hit is always served).
     std::uint64_t plannedBytes = 0;
     std::size_t   plannedFiles = 0;
     for( const std::uint32_t fileId : hitFileIds )
@@ -2157,6 +2162,8 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
 
     const SpanTierBatch batch = spanTiersOfFiles( std::span<const std::string>( tierPaths ), useMemo );
     report.tieredFileCount    = std::uint32_t( tierPaths.size() );
+    ASSUME( report.tieredFileCount <= report.hitFileCount, "the budget admits a prefix of the hit files" );
+    ASSUME( ( report.budgetHit == nullptr ) == ( report.tieredFileCount == report.hitFileCount ), "a budget fires exactly when it leaves a hit file unclassified" );
 
     // fileId → index into the parsed batch; UINT32_MAX ⇒ past the budget, i.e. UNCLASSIFIED
     std::vector<std::uint32_t> batchIndexOf( ing.files.size(), UINT32_MAX );
