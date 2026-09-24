@@ -194,10 +194,18 @@ else
     p2no "arm I: clone-free corpus reported dup_loc=${ndl:-absent} dup_pct=${ndp:-absent} clone_groups=${ncg:-absent}"
 fi
 
-# ── arm J: honesty — the derived counts are FLOORS (the pair list is capped upstream) ────────────────
-printf '%s' "$G" | grep -q 'counts_floor="1"' \
-    && p2ok "arm J1: the root discloses counts_floor=\"1\" (the pair list the groups derive from is capped)" \
-    || p2no "arm J1: no counts_floor=\"1\" on the clones root — a capped-derived count must be labelled a floor"
+# ── arm J: honesty — the derived counts are FLOORS exactly when the pair cap FIRED ───────────────────
+# 2026-09-24 (cut-fix correctness): J1 used to require counts_floor="1" on EVERY run, which pinned a false claim —
+# the attribute printed whether or not kType3MaxPairs fired, and the cap itself disclosed only through a trace that
+# compiles out under NDEBUG, so a firing cap and a non-firing one looked identical. The cap now fires a DISCLOSE
+# sink (Type3Stats::pairCapHit), and the root carries counts_floor="1" type3_capped="1" on that run only. This
+# fixture's 3 pairs are nowhere near the 200000 cap, so both must be ABSENT; the cap-hitting fixture above (C=2/C=3)
+# proves the sink fires.
+if printf '%s' "$G" | grep -qE '<clones [^>]*(counts_floor|type3_capped)='; then
+    p2no "arm J1: counts_floor=/type3_capped= on a run whose Type-3 pair cap did NOT fire — a floor claim with nothing dropped"
+else
+    p2ok "arm J1: no counts_floor=/type3_capped= when the pair cap did not fire (the counts are not floors on this run)"
+fi
 printf '%s' "$G" | grep -q 'dup_pct=duplicated-LOC' \
     && p2ok "arm J2: the legend DEFINES dup_pct (numerator, denominator and the per-group counting rule)" \
     || p2no "arm J2: the legend does not define dup_pct"

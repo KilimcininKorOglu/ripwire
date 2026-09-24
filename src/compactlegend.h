@@ -592,7 +592,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "groups", "groups=/type3=: Type-2 and Type-3 group totals over all groups; total= is their sum", false, "clones", MapHeaderRead::No, {}, "clones" },   // also defines type3=
     { "exempt_groups", "exempt_groups=N: groups whose members all sit on fixture/shell-runner paths quality-delta duplication ignores", false, "clones", MapHeaderRead::No, {}, "clones" },
     { "idiom_groups", "idiom_groups=/demoted_groups=: groups of one recognized idiom / those quality-delta demotes to minor; floors", false, "clones", MapHeaderRead::No, {}, "clones" },   // also defines demoted_groups=
-    { "clone_groups", "clone_groups=N: clusters after merging pairs (rows sharing gid=); a floor, Type-3 pairs are capped upstream", false, "clones", MapHeaderRead::No, {}, "clones" },
+    { "clone_groups", "clone_groups=N: clusters after merging pairs (rows sharing gid=); a floor under type3_capped=1", false, "clones", MapHeaderRead::No, {}, "clones" },
+    { "type3_capped", "type3_capped=1: the Type-3 pair cap fired; later pairs went uncompared, so clone_groups=/dup_loc=/dup_pct= are floors", false, "clones", MapHeaderRead::No, {}, "clones" },
     { "total_loc", "total_loc=N: lines of every function body the detector considered; dup_pct= is dup_loc= over it", false, "clones", MapHeaderRead::No, {}, "clones" },
     // connect: src/mcpverbs.h packConnect (radius from src/graph.h connectSubgraph, clamped 1..12)
     { "nodes", "nodes=N: symbols printed, terminals plus joins (a floor)", false, "connect", MapHeaderRead::No, {}, "connect" },

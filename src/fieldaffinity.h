@@ -187,7 +187,9 @@ struct AffField
 // An edge of the field affinity graph (Chilimbi PLDI 1999), scored with his separation weight.
 struct AffPair
 {
-    std::uint32_t a = 0, b = 0;       // indices into AffStruct::fields, a < b
+    std::uint32_t a = 0, b = 0;       // indices into AffStruct::fields (a < b in declaration order; after
+                                      // applyDisplayOrder they index the DISPLAY order, and either may be
+                                      // >= fieldsShown — a shown pair on a field in the cut <f> tail)
     std::uint32_t fns = 0;            // FLOOR: distinct functions co-accessing the pair
     std::uint64_t weight = 0;         // sum over those functions of ( 1 + fan-in ) — the static hotness PROXY
     std::uint32_t dist = 0;           // |off_a - off_b| in bytes; meaningful only when both are placed
@@ -239,6 +241,7 @@ struct AffStruct
     std::vector<AffFinding> findings;
     std::vector<std::string> scopes;   // distinct PROFILE_SCOPE descriptions across `fns`, sorted
     std::size_t   pairsTotal = 0, fnsTotal = 0, fieldsTotal = 0;
+    std::size_t   fieldsShown = 0;     // <f> rows printed: min( fields.size(), kMaxFieldsShown ), set by applyDisplayOrder
 };
 
 struct AffResult
@@ -597,6 +600,50 @@ inline void accumulateFunction( layout::ModelCtx& ctx, const Symbol& s, const st
     }
 }
 
+// applyDisplayOrder's <f> step: the display order (placed first, then offset, then name), applied through a permutation.
+inline void orderFieldsForDisplay( AffStruct& row )
+{
+    // The fields are re-ordered for display, and AffPair::a/b index them — so the sort goes through a
+    // PERMUTATION and every pair is remapped through it. Sorting row.fields in place (as applyDisplayOrder did until
+    // 2026-09-24) left a/b pointing at the declaration-order slots: a pair then printed the names of whichever
+    // fields the sort moved there (a base-class struct sorts by name, so `zz,yy` read `xx,yy`), and past the
+    // 32-row cut it read a destroyed element. The vector is NOT resized: kMaxFieldsShown bounds the <f> rows
+    // the writer prints (fieldsShown), while a shown pair whose endpoint sits in the cut tail still names it
+    // correctly — the pair list is the ranked head, and a display cap on the offset-ordered <f> list must not
+    // drop a head pair (METHODOLOGY §9: the ceiling bounds the tail, never the head).
+    std::vector<std::uint32_t> order( row.fields.size() );
+    for( std::size_t i = 0; i < order.size(); ++i )
+    {
+        order[ i ] = std::uint32_t( i );
+    }
+    std::sort( order.begin(), order.end(),
+               [ &row ]( std::uint32_t xi, std::uint32_t yi ) noexcept
+               {
+                   const AffField& x = row.fields[ xi ];
+                   const AffField& y = row.fields[ yi ];
+                   if( x.placed != y.placed ) { return x.placed; }
+                   if( x.offset != y.offset ) { return x.offset < y.offset; }
+                   if( x.name != y.name )     { return x.name < y.name; }
+                   return xi < yi;   // total: two same-named fields (a malformed body) still order by declaration
+               } );
+    std::vector<std::uint32_t> newAt( row.fields.size() );
+    std::vector<AffField>      sorted;
+    sorted.reserve( row.fields.size() );
+    for( std::size_t k = 0; k < order.size(); ++k )
+    {
+        newAt[ order[ k ] ] = std::uint32_t( k );
+        sorted.push_back( std::move( row.fields[ order[ k ] ] ) );
+    }
+    row.fields = std::move( sorted );
+    for( AffPair& p : row.pairs )
+    {
+        ASSUME( p.a < newAt.size() && p.b < newAt.size() );   // buildStructRow only ever stores declToRow[] slots
+        p.a = newAt[ p.a ];
+        p.b = newAt[ p.b ];
+    }
+    row.fieldsShown = std::min( row.fields.size(), kMaxFieldsShown );
+}
+
 // Display ordering + caps for ONE row, applied AFTER the ranking so the head is chosen on the full graph.
 // Every comparator ends in an index or a name, so the order is total and two runs cannot differ.
 inline void applyDisplayOrder( AffStruct& row )
@@ -625,17 +672,7 @@ inline void applyDisplayOrder( AffStruct& row )
     {
         row.fns.resize( kMaxFnsShown );
     }
-    std::sort( row.fields.begin(), row.fields.end(),
-               []( const AffField& x, const AffField& y ) noexcept
-               {
-                   if( x.placed != y.placed ) { return x.placed; }
-                   if( x.offset != y.offset ) { return x.offset < y.offset; }
-                   return x.name < y.name;
-               } );
-    if( row.fields.size() > kMaxFieldsShown )
-    {
-        row.fields.resize( kMaxFieldsShown );
-    }
+    orderFieldsForDisplay( row );
     std::sort( row.findings.begin(), row.findings.end(),
                []( const AffFinding& x, const AffFinding& y ) noexcept
                {
@@ -1116,8 +1153,10 @@ inline void writeFieldAffinity( std::FILE* out, const AffResult& res, std::strin
         }
         rw::emitRaw( out, ">" );
 
-        for( const AffField& f : s.fields )
+        ASSUME( s.fieldsShown <= s.fields.size() );
+        for( std::size_t fi = 0; fi < s.fieldsShown; ++fi )
         {
+            const AffField& f = s.fields[ fi ];
             rw::emitTo( out, "<f n=\"{}\" acc=\"{}\" fns=\"{}\"", ex( f.name ).c_str(), f.accesses, f.fns );
             if( f.sized )
             {
@@ -1143,6 +1182,7 @@ inline void writeFieldAffinity( std::FILE* out, const AffResult& res, std::strin
         }
         for( const AffPair& p : s.pairs )
         {
+            ASSUME( p.a < s.fields.size() && p.b < s.fields.size() );   // applyDisplayOrder remaps, never cuts, the fields a pair names
             rw::emitTo( out, "<pair a=\"{}\" b=\"{}\" fns=\"{}\" w=\"{}\"",
                           ex( s.fields[ p.a ].name ).c_str(), ex( s.fields[ p.b ].name ).c_str(),
                           p.fns, static_cast<unsigned long long>( p.weight ) );
