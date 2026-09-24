@@ -15,6 +15,35 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [0.6.2] — 2026-09-21
 
+### Fixed — body packing, `--outline` and `--pack-signatures` rank before they cut, and every cut is named
+
+- **Bodies were cut in file order.** `packBodies` (the `<bodies>` of `--expand`, `--for` auto-bodies and `--detail`,
+  `--pack-task`, `--from-trace`) grouped its requests by file before the byte budget ran, so a low-ranked body sharing
+  the top body's file was admitted ahead of the second-ranked body in the next file. The budget now walks the caller's
+  own order and only the survivors are grouped by file (the emitted shape is unchanged). On a three-body fixture,
+  `--expand=alpha_head,gamma_mid,beta_tail --pack-budget-bytes=500` shipped `beta_tail` and dropped `gamma_mid`; it
+  now ships `gamma_mid`. On the 92 held-out LocBench issues, `--for --detail=6` selects a different body set on 1/92
+  (gold-body-served 52/92 before and after); the default `--for` route serves no bodies there and is byte-identical.
+- **Every dropped body is named.** Bodies met after the budget was spent used to be dropped with no name at all; they
+  are now listed, in rank order, in ONE `<!-- bodies omitted (budget spent): a, b -->` comment (one list rather than a
+  marker each, so a long tail's disclosure stays small: 29 dropped `--detail` bodies cost 607 B, not 1.7 KB). A body
+  skipped because it did not fit while budget remained keeps its `<!-- body omitted (over budget): NAME -->`. The
+  names equal `total - shown`, and the JSON `bodies_omitted` lists the same set.
+- **A truncated body says so outside its CDATA.** An oversized first body used to carry `<!-- truncated -->` inside
+  its CDATA while `<bodies>` said `capped="0"`. It is now `<bodies … capped="1">` and
+  `<b … lines="1-17/377" truncated="1" next="--expand=P:L:N:18-377">`; following `next=` at the same budget
+  reassembles the body byte for byte. The JSON twin carries the same `lines`/`truncated`/`next`.
+- **`--expand`'s cut `<calls>` listing** (16 rows) kept the lowest node ids. It now keeps the callees whose names have
+  the fewest definitions in the index first. PageRank was measured first and rejected: on 60 cut listings each of this
+  repo and three held-out corpora it lowered the share of kept callees defined in the body's own file (11.4% to 6.4%
+  here, simulated); the specificity order raised or held it on all four (on this repo's real output, 11.5% to 16.2%).
+- **`--outline` and the map's `--pack-signatures`** walked their byte budget file-major and closed a cut with a bare
+  element. Both now walk rank-first, emit the survivors in the same grouped shape, and disclose a cut with
+  `shown= total= capped="1"` (`<!-- outlines omitted (budget spent): a, b -->` names the dropped skeletons). An uncut
+  answer is byte-identical, except that `--pack-signatures` rows sharing one start byte in a file now tie-break by id. The `--pack-signatures` `total=` counts every ranked symbol, so its top-N window
+  (`--pack-top-n`, default 50) is disclosed too.
+- The full `--expand` legend said `sibs=` is "capped at 8"; the cap has been 100 since 2026-09-10.
+
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
 
 The native Windows port (#44) built with clang-cl only; `cl.exe` stopped at the GCC/Clang language extensions

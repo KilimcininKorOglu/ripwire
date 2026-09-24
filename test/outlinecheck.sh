@@ -104,5 +104,40 @@ else
     printf '  SKIP  xml well-formed (no xmllint)\n'
 fi
 
+# ── 8) the budget: rank first, then grouped, never silent (lane/cutfix-bodies, 2026-09-23) ──────────────────
+# packOutline walked its budget FILE-MAJOR and closed a cut with a bare <outline>. Generated fixture: alpha and
+# beta share a_first.cpp, gamma is alone in b_second.cpp; asked for alpha, gamma, beta at 100 B. The old walk
+# admitted alpha then beta (same file) and dropped gamma — the second thing asked for — saying nothing.
+# RED on 60b65f02, GREEN after.
+OFX="$TMP/ofx"; mkdir -p "$OFX/src"
+{
+    echo 'int alpha_head( int v )'; echo '{'; echo '    return v + 1;'; echo '}'
+    echo 'int beta_tail( int v )'; echo '{'; echo '    int t = 0;'
+    for r in 1 2 3 4; do printf '    t += v * %s1; t += v * %s2; t += v * %s3; t += v * %s4; t += v * %s5;\n' $r $r $r $r $r; done
+    echo '    return t;'; echo '}'
+} > "$OFX/src/a_first.cpp"
+{
+    echo 'int gamma_mid( int v )'; echo '{'; echo '    int t = 0;'
+    for r in 1 2 3 4; do printf '    t -= v * %s1; t -= v * %s2; t -= v * %s3; t -= v * %s4; t -= v * %s5;\n' $r $r $r $r $r; done
+    echo '    return t;'; echo '}'
+} > "$OFX/src/b_second.cpp"
+orun(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$OFX" --no-cache --top-k=0 --legend=full "$@" 2>/dev/null; }
+O8="$( orun --outline=alpha_head,gamma_mid,beta_tail --pack-budget-bytes=100 )"
+O8ROWS="$( printf '%s' "$O8" | grep -o '<o [^>]*n="[^"]*"' | sed 's/.*n="//;s/"$//' | tr '\n' ' ' )"
+O8TAG="$( printf '%s' "$O8" | grep -o '<outline[^>]*>' | tail -1 )"
+[ "$( orun --outline=alpha_head,gamma_mid,beta_tail --pack-budget-bytes=60000 | grep -o '<o ' | wc -l | tr -d ' ' )" = 3 ] \
+    && ok "8) guard: all three skeletons ship when the budget holds them" \
+    || no "8) guard: the fixture's three skeletons do not all ship at 60000 B — arm 8 would measure a resolve miss"
+[ "$O8ROWS" = "alpha_head gamma_mid " ] \
+    && ok "8) rank first: the 100 B budget kept alpha and gamma (the order asked), not beta" \
+    || no "8) the outline budget did not follow the order asked (want alpha_head gamma_mid): $O8ROWS"
+[ "$O8TAG" = '<outline shown="2" total="3" capped="1">' ] \
+    && ok "8) the cut <outline> discloses it: $O8TAG" \
+    || no "8) the cut <outline> is silent or wrong: ${O8TAG:-none}"
+printf '%s' "$O8" | grep -qF '<!-- outlines omitted (budget spent): beta_tail -->' \
+    && ok "8) the dropped skeleton is named" || no "8) the dropped skeleton is not named"
+orun --outline=alpha_head --pack-budget-bytes=60000 | grep -q '<outline>' \
+    && ok "8) silence: an uncut <outline> stays bare" || no "8) an uncut <outline> is not bare"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

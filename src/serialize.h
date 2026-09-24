@@ -4515,54 +4515,76 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
     // ── the NON-lens serving (--pack-signatures on the map): file-grouped <f p=> wrappers, source order inside,
     // no r= — P7 left this shape alone (nothing here carries a rank to order by); every rank-adaptive caller
     // returned from the flat path above, so the tiers this loop used to apply under rankAdaptivePayload are gone.
-    w.write( "<sigs>" );
-    // extent honesty: this streaming path writes rows as it reads them, so the reading rides whenever the corpus holds
-    // a flagged definition — a superset of what these rows can carry (defining an absent attribute costs bytes, never truth).
-    if( std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& sym ) { return sym.extentSuspect != 0; } ) )
+    //
+    // RANK FIRST, THEN GROUPED, NEVER SILENT (lane/cutfix-bodies, 2026-09-23). The byte budget used to be walked
+    // FILE-MAJOR — every row of the best file, in source order, before any row of the next — so a budget that
+    // ran out dropped the higher-ranked rows of later files while lower-ranked rows of earlier files shipped,
+    // and the element said nothing: a bare <sigs> over a cut. The budget now walks the kept head in RANK order
+    // (the same (score desc, id asc) `order` the head was chosen by) and stops at the rank tail; the rows it
+    // admits are then emitted in the shape this path always had — files in first-seen-rank order, rows in
+    // source order inside each — so an uncut answer is byte-identical. The cut is disclosed with the pageview.h
+    // triple on the element: <sigs shown= total= capped="1">, total= being every symbol the ranking ordered
+    // (the --pack-top-n window, default 50, is a cut too, and it used to be as silent as the budget's).
+    struct SigRowText
     {
-        w.write( kExtentSuspectRowLegend );
-    }
-    for( std::uint32_t f : fileOrder )
+        std::uint32_t sigStart = 0;   // the emitted (source) order inside a file; id breaks a tie
+        NodeId        id       = 0;
+        std::string   xml;            // "<d …>…</d>"
+    };
+    struct SigFileBlock
+    {
+        std::string             head;   // "<f p= [layer=]>" + the file's notes
+        std::vector<SigRowText> rows;
+    };
+    std::vector<SigFileBlock>                 fileBlocks;   // first-visit (rank) order — the old fileOrder, by construction
+    HashMap<std::uint32_t, std::uint32_t>     blockOf;      // fileId → index in fileBlocks
+    HashMap<std::uint32_t, std::string>       srcOf;        // each file read once; "" ⇒ unreadable (its rows are skipped)
+    blockOf.reserve( keep );
+    srcOf.reserve( keep );
+    std::size_t shownRows = 0, visitedRows = 0;
+    for( std::size_t k = 0; k < keep; ++k )
     {
         if( used >= budgetBytes )
         {
-            break;
+            break;   // the budget is spent: rows k.. are the rank TAIL — not shown, and counted in total= below
         }
-
-        std::FILE* in = std::fopen( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
-        if( !in )
+        ++visitedRows;
+        const NodeId        id = order[k];
+        const Symbol&       s  = ing.symbols[id];
+        const std::uint32_t f  = s.fileId;
+        auto srcIt = srcOf.find( f );
+        if( srcIt == srcOf.end() )
+        {
+            std::string text;
+            if( std::FILE* in = std::fopen( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" ) )
+            {
+                char        buf[ 4096 ];
+                std::size_t n;
+                while( ( n = std::fread( buf, 1, sizeof( buf ), in ) ) > 0 )
+                {
+                    text.append( buf, n );
+                }
+                std::fclose( in );
+                // the file's wrapper opens at its first visit, as it did when it led its own file-major block
+                SigFileBlock blk;
+                blk.head = "<f p=\"";  blk.head += escapeXml( pathRel( f ), esc );  blk.head += "\"";
+                if( const char* fl = builtinLayer( rootRelPath( ing, f ) ); *fl ) { blk.head += " layer=\"";  blk.head += fl;  blk.head += "\""; }   // P3
+                blk.head += ">";
+                const std::string fileNotes = renderNoteChildren( noteIndex, fileNoteTarget( noteIndex, ing.files[f] ), esc );   // L3/D5
+                blk.head += fileNotes;
+                used += fileNotes.size();                                                                   // W3-N2: charged like the JSON wrapBytes
+                blockOf.emplace( f, std::uint32_t( fileBlocks.size() ) );
+                fileBlocks.push_back( std::move( blk ) );
+            }
+            srcIt = srcOf.emplace( f, std::move( text ) ).first;   // an unopenable file stays "" and gets no wrapper (graceful: file gone)
+        }
+        const std::string& src = srcIt->second;
+        const auto         blk = blockOf.find( f );
+        if( blk == blockOf.end() )
         {
             continue; // graceful: file gone
         }
-        std::string src;
-        char        buf[ 4096 ];
-        std::size_t n;
-        while( ( n = std::fread( buf, 1, sizeof( buf ), in ) ) > 0 )
         {
-            src.append( buf, n );
-        }
-        std::fclose( in );
-
-        // signatures in source order for readability
-        std::vector<NodeId>& syms = buckets[f];
-        std::sort( syms.begin(), syms.end(), [ & ]( NodeId a, NodeId b )
-        { return ing.symbols[a].sigStartByte < ing.symbols[b].sigStartByte; } );
-
-        w.write( "<f p=\"" );  w.write( escapeXml( pathRel( f ), esc ) );  w.write( "\"" );
-        if( const char* fl = builtinLayer( rootRelPath( ing, f ) ); *fl ) { w.write( " layer=\"" );  w.write( fl );  w.write( "\"" ); }   // P3
-        w.write( ">" );
-        {
-            const std::string fileNotes = renderNoteChildren( noteIndex, fileNoteTarget( noteIndex, ing.files[f] ), esc );   // L3/D5
-            w.write( fileNotes );
-            used += fileNotes.size();                                                                   // W3-N2: charged like the JSON wrapBytes
-        }
-        for( NodeId id : syms )
-        {
-            if( used >= budgetBytes )
-            {
-                break;
-            }
-            const Symbol&     s = ing.symbols[id];
             const std::size_t a = s.sigStartByte, b = s.sigEndByte;
             if( a >= src.size() || b > src.size() || a >= b )
             {
@@ -4640,15 +4662,51 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
 
             // identity (n=/id=) + descriptive facts (cx=complexity, ccx=cognitive, in=reuse-count, Q3 lens, pure)
             // d1: rank 0 = non-lens serving — r= (and P7's p=) absent by contract.
-            w.write( sigRowHead( ing, id, SigRowFacts{ metrics, fanIn, qbuf, pure, /*rank=*/0u }, esc, rootArg ) );
+            std::string row = sigRowHead( ing, id, SigRowFacts{ metrics, fanIn, qbuf, pure, /*rank=*/0u }, esc, rootArg );
             std::string doc = docCommentBefore( src, a );   // L2: the human-written intent, if any
             redactInPlace( doc, redact );                    // a doc-comment body can hold a pasted secret
-            if( !doc.empty() ) { w.write( "<doc>" );  w.write( escapeXml( doc, esc ) );  w.write( "</doc>" );  used += doc.size() + 12; }
-            w.write( escapeXml( sig, esc ) );
+            if( !doc.empty() ) { row += "<doc>";  row += escapeXml( doc, esc );  row += "</doc>";  used += doc.size() + 12; }
+            row += escapeXml( sig, esc );
             const std::string symNotes = renderNoteChildren( noteIndex, symbolNoteTarget( noteIndex, ing, s ), esc );   // L3/D5
-            w.write( symNotes );
-            w.write( "</d>" );
+            row += symNotes;
+            row += "</d>";
             used += sig.size() + 16 + symNotes.size();                                                  // W3-N2: notes are charged, never trimmed
+            fileBlocks[ blk->second ].rows.push_back( SigRowText{ s.sigStartByte, id, std::move( row ) } );
+            ++shownRows;
+        }
+    }
+
+    // pageview.h THE TRUNCATION VOCABULARY: the triple rides only a cut listing, so an uncut <sigs> stays bare.
+    // total= = the rows this listing could have printed: every ranked symbol, less the visited ones that have no
+    // signature to print (an unreadable span or an empty declaration is nothing cut, the packBodies bodyless rule).
+    // So capped="1" ⇔ the budget or the --pack-top-n window left ranked rows unvisited.
+    ASSUME( shownRows <= visitedRows && visitedRows <= order.size() );
+    const std::size_t totalRows = order.size() - ( visitedRows - shownRows );
+    if( shownRows < totalRows )
+    {
+        char open[ 96 ];
+        rw::formatTo( open, sizeof( open ), "<sigs shown=\"{}\" total=\"{}\" capped=\"1\">", shownRows, totalRows );
+        w.write( open );
+    }
+    else
+    {
+        w.write( "<sigs>" );
+    }
+    // extent honesty: the reading rides whenever the corpus holds a flagged definition — a superset of what these
+    // rows can carry (defining an absent attribute costs bytes, never truth).
+    if( std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& sym ) { return sym.extentSuspect != 0; } ) )
+    {
+        w.write( kExtentSuspectRowLegend );
+    }
+    for( SigFileBlock& blk : fileBlocks )
+    {
+        // signatures in source order for readability (id breaks a tie, so the order is total)
+        std::sort( blk.rows.begin(), blk.rows.end(), []( const SigRowText& x, const SigRowText& y )
+        { return x.sigStart != y.sigStart ? x.sigStart < y.sigStart : x.id < y.id; } );
+        w.write( blk.head );
+        for( const SigRowText& r : blk.rows )
+        {
+            w.write( r.xml );
         }
         w.write( "</f>" );
     }
@@ -6349,8 +6407,85 @@ inline std::size_t estimateExpandBodyTokens( const IngestResult& ing, const std:
 // "...". Between a signature (L1) and the full body (L4): you see the logic structure, not the leaf
 // code. Depth-based (no AST needed); brace-in-string is a rare, accepted imprecision for a sketch.
 // compress=true → strip comments and collapse blank runs (P2-B) before CDATA encoding.
+// Returns the redacted skeleton of [sigStartByte, endByte) in `src`, or "" when there is nothing to show.
+inline std::string outlineSkeleton( const std::string& src, const Symbol& s, bool compress, RedactCounts* redact )
+{
+    const std::size_t a = s.sigStartByte, b = s.endByte;
+    if( a >= b || b > src.size() )
+    {
+        return {};
+    }
+    std::string sk;                                            // build the depth-collapsed skeleton
+    int         depth     = 0;
+    bool        collapsed = false;
+    std::size_t i = a;
+    while( i < b )
+    {
+        std::size_t eol = src.find( '\n', i );
+        if( eol == std::string::npos || eol > b )
+        {
+            eol = b;
+        }
+        const int startD = depth;
+        for( std::size_t k = i; k < eol; ++k )
+        {
+            const char c = src[k];
+            if( c == '{' ) { ++depth; }
+            else if( c == '}' )
+            {
+                --depth;
+            }
+        }
+        if( std::min( startD, depth ) <= 1 ) { sk.append( src, i, eol - i ); sk.push_back( '\n' ); collapsed = false; }
+        else if( !collapsed ) { sk += "  ...\n"; collapsed = true; }
+        i = ( eol < b ) ? eol + 1 : b;
+    }
+    if( sk.empty() )
+    {
+        return {};
+    }
+
+    // --compress (P2-B): strip comments + collapse blank runs from the skeleton text.
+    if( compress )
+    {
+        sk = compressBody( sk );
+    }
+    if( sk.empty() )
+    {
+        return {};
+    }
+
+    // anti-growth guard (octocode's rule, Wave 4 #3): the whole POINT of an outline is fewer
+    // bytes than the real definition — a "..."-collapse can occasionally cost MORE than the few
+    // short lines it replaces (e.g. a 4-byte "  ;\n" collapsed to a 6-byte "  ...\n"). Compare
+    // the PAYLOAD only (skeleton text vs the original [a,b) def span), never the wrapper tags —
+    // if the reduced form is not strictly smaller, emit the original bytes instead. Deterministic,
+    // pure size comparison: compression must never cost tokens.
+    if( sk.size() >= ( b - a ) )
+    {
+        sk.assign( src, a, b - a );
+    }
+
+    // Redact credential shapes from the control-flow skeleton (a body-emission seam — the
+    // skeleton keeps depth≤1 source lines verbatim, which can include a secret literal). --no-redact = no-op.
+    redactInPlace( sk, redact );
+    return sk;
+}
+
 // §B10.1: `redact` is REQUIRED — no default (see packSource). `compress` loses its default with it, because
 // C++ defaults must be trailing; both call sites already spell both.
+//
+// RANK FIRST, THEN GROUPED, NEVER SILENT (lane/cutfix-bodies, 2026-09-23) — packBodies' own rule (THE
+// SELECTION ORDER there). `nodes` arrives in the caller's priority order (the --outline tokens as typed, each
+// token's matches in the resolver's order); the byte budget is walked in that order and each skeleton is admitted
+// while budget remains, the survivors are then emitted grouped by file (first-appearance order, walk order
+// inside a file) — the shape this element always had. It used to walk file-major and stop at the budget with
+// a bare <outline>, so a later file's higher-ranked skeleton could be dropped for an earlier file's lesser
+// one, and nothing said so. Now every skeleton the budget drops is named, in one
+// `<!-- outlines omitted (budget spent): a, b -->` comment (spentTailComment), and a cut wrapper says
+// <outline shown= total= capped="1"> (pageview.h THE TRUNCATION VOCABULARY; a complete one stays a bare
+// <outline>, byte-identical). total= counts the valid requests with a body to outline (a module scope has
+// none, the packBodies bodyless rule); a skeleton whose span is unreadable is not shown and so also cuts.
 inline void packOutline( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& nodes, std::size_t budgetBytes, bool compress, RedactCounts* redact,
                          std::string_view rootArg = {} )   // R-E (2026-08-17): same single-root-only root
                                                            // argument serialize() takes — see its comment.
@@ -6364,122 +6499,79 @@ inline void packOutline( std::FILE* out, const IngestResult& ing, const std::vec
         return rootArg.empty() ? std::string_view( ing.files[ fileId ] ) : rw::sarif::rootRelativeUri( ing.files[ fileId ], rootPrefix );
     };
 
-    HashMap<std::uint32_t, std::vector<NodeId>> byFile;
-    std::vector<std::uint32_t>                  fileOrder;
+    // each file read once, on first use (the walk is in rank order, so a file can be met more than once)
+    HashMap<std::uint32_t, std::string> contents;
+    HashMap<std::uint32_t, std::uint32_t> fileSlotOf;
+    contents.reserve( nodes.size() );
+    fileSlotOf.reserve( nodes.size() );
+
+    std::vector<PackedBodyPiece> pieces;   // packBodies' piece type: one <o>, before the grouping
+    std::vector<NodeId>          spentTail;   // met after the budget was spent: named once, last (spentTailComment)
+    std::size_t                  requestedCount = 0, shownCount = 0;
     for( NodeId id : nodes )
     {
-        if( id >= ing.symbols.size() )
+        if( id >= ing.symbols.size() || ing.symbols[id].kind == SymKind::ModuleScope )
         {
-            continue;
+            continue;   // no request (an invalid id), or no body to outline by construction (#60)
         }
-        const std::uint32_t f = ing.symbols[id].fileId;
-        if( byFile.find( f ) == byFile.end() )
-        {
-            fileOrder.push_back( f );
-        }
-        byFile[f].push_back( id );
-    }
-
-    w.write( "<outline>" );
-    for( std::uint32_t f : fileOrder )
-    {
+        ++requestedCount;
+        const Symbol&       s    = ing.symbols[id];
+        const std::uint32_t f    = s.fileId;
+        const std::uint32_t slot = fileSlotOf.emplace( f, std::uint32_t( fileSlotOf.size() ) ).first->second;
         if( used >= budgetBytes )
         {
-            break;
-        }
-        std::FILE* in = std::fopen( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
-        if( !in )
-        {
+            spentTail.push_back( id );   // the budget is spent: the rest of the rank order is the tail, named below
             continue;
         }
-        std::string src;  char buf[ 4096 ];  std::size_t n;
-        while( ( n = std::fread( buf, 1, sizeof( buf ), in ) ) > 0 )
+        auto it = contents.find( f );
+        if( it == contents.end() )
         {
-            src.append( buf, n );
+            std::string src;
+            if( std::FILE* in = std::fopen( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" ) )
+            {
+                char buf[ 4096 ];  std::size_t n;
+                while( ( n = std::fread( buf, 1, sizeof( buf ), in ) ) > 0 )
+                {
+                    src.append( buf, n );
+                }
+                std::fclose( in );
+            }
+            it = contents.emplace( f, std::move( src ) ).first;
         }
-        std::fclose( in );
-
-        for( NodeId id : byFile[f] )
+        const std::string sk = outlineSkeleton( it->second, s, compress, redact );
+        if( sk.empty() )
         {
-            if( used >= budgetBytes )
-            {
-                break;
-            }
-            const Symbol&     s = ing.symbols[id];
-            const std::size_t a = s.sigStartByte, b = s.endByte;
-            if( a >= b || b > src.size() )
-            {
-                continue;
-            }
-
-            std::string sk;                                            // build the depth-collapsed skeleton
-            int         depth     = 0;
-            bool        collapsed = false;
-            std::size_t i = a;
-            while( i < b )
-            {
-                std::size_t eol = src.find( '\n', i );
-                if( eol == std::string::npos || eol > b )
-                {
-                    eol = b;
-                }
-                const int startD = depth;
-                for( std::size_t k = i; k < eol; ++k )
-                {
-                    const char c = src[k];
-                    if( c == '{' ) { ++depth; }
-                    else if( c == '}' )
-                    {
-                        --depth;
-                    }
-                }
-                if( std::min( startD, depth ) <= 1 ) { sk.append( src, i, eol - i ); sk.push_back( '\n' ); collapsed = false; }
-                else if( !collapsed ) { sk += "  ...\n"; collapsed = true; }
-                i = ( eol < b ) ? eol + 1 : b;
-            }
-            if( sk.empty() )
-            {
-                continue;
-            }
-
-            // --compress (P2-B): strip comments + collapse blank runs from the skeleton text.
-            if( compress )
-            {
-                sk = compressBody( sk );
-            }
-            if( sk.empty() )
-            {
-                continue;
-            }
-
-            // anti-growth guard (octocode's rule, Wave 4 #3): the whole POINT of an outline is fewer
-            // bytes than the real definition — a "..."-collapse can occasionally cost MORE than the few
-            // short lines it replaces (e.g. a 4-byte "  ;\n" collapsed to a 6-byte "  ...\n"). Compare
-            // the PAYLOAD only (skeleton text vs the original [a,b) def span), never the wrapper tags —
-            // if the reduced form is not strictly smaller, emit the original bytes instead. Deterministic,
-            // pure size comparison: compression must never cost tokens.
-            if( sk.size() >= ( b - a ) )
-            {
-                sk.assign( src, a, b - a );
-            }
-
-            // Redact credential shapes from the control-flow skeleton (a body-emission seam — the
-            // skeleton keeps depth≤1 source lines verbatim, which can include a secret literal). --no-redact = no-op.
-            redactInPlace( sk, redact );
-            if( sk.empty() )
-            {
-                continue;
-            }
-
-            std::string safe;  safe.reserve( sk.size() );              // split ]]>; scrub C0 controls (G4) + invalid UTF-8 (A4-F20)
-            appendCdataSafe( sk, safe );
-            char hdr[ 64 ];  rw::formatTo( hdr, sizeof( hdr ), "<o t=\"{}\" l=\"{}\" p=\"", symTag( s.kind ), s.line );
-            w.write( hdr );  w.write( escapeXml( pathRel( f ), esc ) );
-            w.write( "\" n=\"" );  w.write( escapeXml( s.name, esc ) );  w.write( "\"><![CDATA[" );
-            w.write( safe );  w.write( "]]></o>" );
-            used += safe.size();
+            continue;   // graceful: file gone, unreadable span, or nothing left — shown < total says so
         }
+
+        std::string safe;  safe.reserve( sk.size() );              // split ]]>; scrub C0 controls (G4) + invalid UTF-8 (A4-F20)
+        appendCdataSafe( sk, safe );
+        std::string piece;
+        char hdr[ 64 ];  rw::formatTo( hdr, sizeof( hdr ), "<o t=\"{}\" l=\"{}\" p=\"", symTag( s.kind ), s.line );
+        piece += hdr;  piece += escapeXml( pathRel( f ), esc );
+        piece += "\" n=\"";  piece += escapeXml( s.name, esc );  piece += "\"><![CDATA[";
+        piece += safe;  piece += "]]></o>";
+        used += safe.size();
+        ++shownCount;
+        pieces.push_back( PackedBodyPiece{ slot, id, SIZE_MAX, false, std::move( piece ) } );
     }
+    std::stable_sort( pieces.begin(), pieces.end(), []( const PackedBodyPiece& x, const PackedBodyPiece& y ) { return x.fileSlot < y.fileSlot; } );
+
+    if( shownCount < requestedCount )
+    {
+        char open[ 96 ];
+        rw::formatTo( open, sizeof( open ), "<outline shown=\"{}\" total=\"{}\" capped=\"1\">", shownCount, requestedCount );
+        w.write( open );
+    }
+    else
+    {
+        w.write( "<outline>" );
+    }
+    for( const PackedBodyPiece& p : pieces )
+    {
+        w.write( p.xml );
+    }
+    w.write( spentTailComment( ing, spentTail, esc, "outlines" ) );
     w.write( "</outline>" );
     w.flush();
 }
