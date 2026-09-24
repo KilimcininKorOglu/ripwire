@@ -57,6 +57,11 @@ PATS=(
   '[\x6f]pen'              # \xHH inside a char class (\x6f = o)
   'comp\u0075te'           # \uHHHH (\u0075 = u): four digits, same tail rule
   'zylophoneXyzzy|\x63ompute'   # the escaped branch is the only match in two fixture files
+  # 2026-09-23 (F2): a non-capturing group CONSUMES its content -- it is an ordinary group, not a
+  # zero-width assertion. Reading (?:...) as epsilon let a seam trigram span across it, so a pattern
+  # whose only occurrence of a byte is inside the group dropped every file. beta.py's def open(self):
+  # is this arm's only match, mid-literal so the seam actually forms (unlike a group at branch end).
+  'op(?:e)n\('             # (?:...) mid-literal: must consume 'e', not vanish
 )
 
 # ── (S) soundness + (D) determinism, per pattern ──────────────────────────────────────────────
@@ -139,6 +144,47 @@ if command -v rg >/dev/null 2>&1; then
     done
 else
     no "(O2) ripgrep is not on PATH — the escape-aware oracle cannot run (CONTRIBUTING lists rg as a suite prerequisite)"
+fi
+
+# ── (F1) [\x7e-\x7f] class range must not HANG — regression gate for the range-loop overflow ──────
+# parseClass enumerated a range with `for( char ch = lo; ch <= hi; ++ch )`. AppleClang/Apple's arm64 and
+# x86_64 ABIs both make plain `char` signed, so CHAR_MAX == 0x7f; when `hi == 0x7f`, `ch <= hi` is always
+# true and the loop never terminates (RSS grows without bound). `\x7f`/`\u007f` are portable escapes
+# (regexguard.h vouches for them), so an ordinary shell pattern reaches this. Alarm-guarded: a process
+# still running past a short alarm is a HANG, which is a FAIL here, never a slow PASS.
+f1pat='[\x7e-\x7f]'
+perl -e 'alarm 20; exec @ARGV' "$BIN" "$CORPUS" --regex="$f1pat" --grep-in=any --no-cache \
+    >"$TMP/f1.pf" 2>"$TMP/f1.pf.err"; f1rc=$?
+perl -e 'alarm 20; exec @ARGV' "$BIN" "$CORPUS" --regex="$f1pat" --grep-in=any --no-prefilter --no-cache \
+    >"$TMP/f1.fs" 2>"$TMP/f1.fs.err"; f1fsrc=$?
+if [ "$f1rc" -eq 142 ] || [ "$f1fsrc" -eq 142 ]; then
+    no "(F1) /$f1pat/ hung past a 20s alarm (pf rc=$f1rc, fs rc=$f1fsrc) — parseClass range-loop overflow"
+elif [ "$f1rc" -ne 0 ] || [ "$f1fsrc" -ne 0 ]; then
+    no "(F1) /$f1pat/ non-zero exit (pf rc=$f1rc, fs rc=$f1fsrc) — expected both to search cleanly"
+elif ! diff -q "$TMP/f1.pf" "$TMP/f1.fs" >/dev/null; then
+    no "(F1) /$f1pat/ prefiltered != full-scan (DROPPED A MATCH)"
+else
+    ok "(F1) /$f1pat/ no hang, prefiltered==full-scan  $(grep -o 'files="[0-9]*" hits="[0-9]*"' "$TMP/f1.pf")"
+fi
+
+# ── (F2) (?:...) against the real repo — a group that actually has files to drop ───────────────────
+# `std::(?:string)&` is the reviewer's own reproduction: a non-capturing group read as epsilon required
+# the seam trigram "::&" of every file, so every real `std::string&` occurrence in this repo's own
+# sources (files="138" against a full scan) vanished from the answer at capped="0". Run against src/
+# itself (an established pattern here — see regexrefusecheck.sh, grepanchorcheck.sh) so this arm cannot
+# pass by having nothing to compare.
+f2pat='std::(?:string)&'
+"$BIN" "$ROOT/src" --regex="$f2pat" --grep-in=any --no-cache --limit=100000 >"$TMP/f2.pf" 2>/dev/null
+"$BIN" "$ROOT/src" --regex="$f2pat" --grep-in=any --no-prefilter --no-cache --limit=100000 >"$TMP/f2.fs" 2>/dev/null
+f2pfSet="$( fileSetOf <"$TMP/f2.pf" )"
+f2fsSet="$( fileSetOf <"$TMP/f2.fs" )"
+f2fsF="$( grep -o ' files="[0-9]*"' "$TMP/f2.fs" | head -1 | grep -o '[0-9]*' )"
+if [ -z "$f2fsF" ] || [ "$f2fsF" -eq 0 ]; then
+    no "(F2) /$f2pat/ full-scan oracle found 0 files under src/ — nothing to compare (repo drift?)"
+elif [ "$f2pfSet" = "$f2fsSet" ]; then
+    ok "(F2) /$f2pat/ prefiltered==full-scan under src/ (files=$f2fsF) — (?:...) is no longer read as epsilon"
+else
+    no "(F2) /$f2pat/ prefiltered != full-scan under src/ (DROPPED A MATCH) — (?:...) still invents a seam"
 fi
 
 # ── (O) independent grep oracle: ripwire's matched-FILE set must be a SUPERSET of grep -lE's ──

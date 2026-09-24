@@ -595,10 +595,13 @@ public:
     // Parse the whole pattern → the sound trigram query. On any parse shortfall we are conservative (ALL).
     TriQuery analyze()
     {
-        pos_ = 0;
+        pos_           = 0;
+        skippedClass_  = false;
         RegexInfo r = parseAlt();
         // trailing unparsed input (shouldn't happen for valid regex) ⇒ be safe
-        if( pos_ != s_.size() )
+        // skippedClass_: a lookaround's skip-to-matching-')' loop passed an unescaped '[' — a class may
+        // hold '(' or ')', so the depth count past it is not trustworthy (see the skip loop below).
+        if( pos_ != s_.size() || skippedClass_ )
         {
             return TriQuery::all();
         }
@@ -608,6 +611,7 @@ public:
 private:
     const std::string& s_;
     std::size_t        pos_ = 0;
+    bool                skippedClass_ = false;   // set by the lookaround skipper; see analyze()
 
     bool   eof()  const { return pos_ >= s_.size(); }
     char   peek() const { return s_[ pos_ ]; }
@@ -693,16 +697,34 @@ private:
         if( c == '(' )
         {
             next();                                      // consume '('
-            // skip a non-capturing / lookaround prefix "(?...":   (?:  (?=  (?!  (?<=  (?<!
+            // "(?:...)" is an ORDINARY group: it CONSUMES its content when matching, unlike a lookaround.
+            // Reading it as ε (the old code below did, for every "(?..." prefix) let a seam trigram span
+            // across it — `std::(?:string)&` required the seam "::&" of every file, because "string" was
+            // never in the query, and every real `std::string&` occurrence dropped at capped="0".
+            if( pos_ + 1 < s_.size() && peek() == '?' && s_[ pos_ + 1 ] == ':' )
+            {
+                pos_ += 2;                                // consume '?:'
+                RegexInfo inner = parseAlt();
+                if( !eof() && peek() == ')' )
+                {
+                    next();                                // consume ')'
+                }
+                return inner;
+            }
+            // skip a lookaround prefix "(?...":   (?=  (?!  (?<=  (?<!
             if( !eof() && peek() == '?' )
             {
                 // lookarounds are zero-width assertions for matching; for INDEXING treat the whole group as
                 // ε (anchor-like) — sound, since we can't rely on its content appearing literally.
-                // Consume to the matching ')'.
+                // Consume to the matching ')'. A class inside the lookaround may hold '(' or ')' of its
+                // own (`(?=[(])`), which this depth count can't tell from real parens — set skippedClass_
+                // so analyze() falls back to ALL instead of trusting a depth that may have closed early
+                // or late.
                 int depth = 1; next();                   // consume '?'
                 while( !eof() && depth > 0 )
                 {
                     char d = next();
+                    if( d == '[' ) { skippedClass_ = true; }
                     if( d == '(' ) { ++depth; }
                     else if( d == ')' ) { --depth; }
                     else if( d == '\\' && !eof() )
@@ -805,9 +827,15 @@ private:
                 }
                 else
                 {
-                    for( char ch = lo; ch <= hi; ++ch )
+                    // int, not char: `char` is signed on every ABI this builds for (arm64 and x86_64
+                    // alike), so CHAR_MAX == 0x7f. When hi == 0x7f (a portable, accepted `\x7f`/`\u007f`
+                    // escape), a `char` loop counter can never exceed it and `ch <= hi` never goes false —
+                    // an infinite loop, unbounded memory growth. An int counter keeps today's signed-char
+                    // range ordering (a raw byte >= 0x80 in `hi` is still negative as char, so `hi < lo`
+                    // above still degrades that case to ALL) while actually terminating at hi.
+                    for( int ch = lo; ch <= hi; ++ch )
                     {
-                        chars.push_back( std::string( 1, ch ) );
+                        chars.push_back( std::string( 1, char( ch ) ) );
                     }
                 }
             }

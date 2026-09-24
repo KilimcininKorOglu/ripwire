@@ -27,14 +27,26 @@ class (`[\x66]s::exists` enumerated `{x,6,6}`) dropped the same ten. `\uHHHH`, `
 the same shape; the screen in `src/regexguard.h` lists all four as portable escapes, so they were accepted and then
 misread. The analyser now steps over exactly the characters the engine reads as the escape: `\xHH` and `\u00HH`
 with every digit present and an ASCII value are that one byte, and the rest are one byte it does not vouch for
-(ALL — sound, as `.` is). Only `--regex` (CLI and the MCP `grep` verb, which share `grepCollect`) evaluates that
-query; the literal `--grep`, the unindexed scan and the line-level literal paths never did.
+(ALL — sound, as `.` is). Only the CLI `--regex` evaluates that query; the MCP `grep` verb is a literal-only
+scan (`src/mcpverbs.h`'s `grepHitsJson` calls `grepCollect(..., /*regex=*/false, ...)`) and never reached this
+code, and neither did the literal `--grep`, the unindexed scan or the line-level literal paths.
+
+Two more soundness gaps in the same analyser, found in review before this landed: a class range ending at
+`\x7f`/`\u007f` (both portable, accepted escapes) looped forever — `for( char ch = lo; ch <= hi; ++ch )` never
+terminates once `hi == CHAR_MAX`, and RSS grew without bound within seconds; the loop now counts with `int`.
+And a non-capturing group `(?:...)` was read as a zero-width assertion (ε), the same as a lookaround, so its
+content never entered the trigram query: a pattern such as `std::(?:string)&` required the seam trigram `::&`
+of every file, and every real `std::string&` occurrence dropped at `capped="0"`. `(?:...)` is now parsed as an
+ordinary group that consumes its content, and a lookaround whose skip loop passes an unescaped `[` (a class may
+itself hold `(` or `)`, which desyncs that loop's depth count) now falls back to ALL rather than trust it.
 
 Gate: `test/regexcheck.sh` — four escape patterns join the prefiltered-versus-full-scan battery (S), which now
 refuses to compare two empty answers; (E) pins the alternation shape (`zylophoneXyzzy|\x63ompute`: the escaped
 branch is the only match in two fixture files, and both must be listed with the file count equal to full-scan's
 and above the first branch's alone); (O2) checks the escape patterns against ripgrep, which spells `\xHH` where
-`grep -E` cannot. Red on the previous binary: (S) 4 of 17, (E), and (O2) 3 of 3.
+`grep -E` cannot; (F1) runs `[\x7e-\x7f]` under a short alarm and fails on a hang; (F2) runs `std::(?:string)&`
+against this repo's own `src/` and requires prefiltered == full-scan. Red on the previous binary: (S) 4 of 17,
+(E), and (O2) 3 of 3; (F1) hangs (rc=142); (F2) diverges from full-scan.
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
 
