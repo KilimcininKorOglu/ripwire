@@ -1124,7 +1124,7 @@ if(RIPWIRE_ASAN)
     COMMENT "Run the G1 fixture with the platform leak-detection policy")
 endif()
 
-# ---- compile-time fences: two warnings that are errors on OUR C++ targets, every compiler, every flavour ----
+# ---- compile-time fences: warnings that are errors on OUR C++ targets, every compiler, every flavour ----
 # The tree passes no warning set (no -Wall), so until this block a check only a warning could make was a check nobody
 # read, and on GCC -Wswitch did not run at all: GCC enables it only under -Wall, Clang by default.
 #   -Werror=switch                  a switch over an enum with no `default:` must name every enumerator, so appending
@@ -1148,10 +1148,46 @@ endif()
 # C26819 — so on cl.exe that half of the fence is NOT held, and the [[fallthrough]] rule is enforced by every other
 # leg instead. This is the only clang-dialect flag set in this file that is not already chosen per compiler
 # (cmake/PortableFlags.cmake branches on the same two conditions; the -mllvm option below is probed before use).
+#
+# UB-CLASS FENCES (0.6.3): diagnostics whose every hit is a program that computes a silently wrong answer — a value
+# read before it was written, a function that falls off its end, a pointer to a dead frame, a printf whose arguments
+# do not match its format, an index past a fixed array. NOT a style set: nothing here is -Wall, -Wextra or -Wshadow.
+# Measured 2026-09-24 on 60b65f02 over all 11 owned TUs (ripwire, ripwire_probe, the five RIPWIRE_TESTS verifiers),
+# each flag as a plain -W first: AppleClang 17 and Homebrew clang 22 (-fsyntax-only, debug and -DNDEBUG), GCC 13.4,
+# 14.4 and 16.2 (a real compile, -O0 and -O3 -DNDEBUG): 0 hits for every flag kept below, on every one of them. A
+# planted instance of each fires, so the zero is not a flag that never ran. cl.exe: 0 of the mapped C-numbers in the
+# last full-matrix Windows log (the default /W1, where each one below is on). Windows-only code (src/infra/os_win32.cpp)
+# compiles only there, so the two Windows legs are the first run of these errors on it, as they were for the two above.
+#   return-type          a non-void function that can reach its closing brace (C4715 on cl.exe).
+#   uninitialized        a read of a local that no path wrote (C4700). Clang adds sometimes-uninitialized (one branch
+#                        skips the write) and conditional-uninitialized (a loop may skip it): both front-end CFG
+#                        passes, identical at every -O. GCC's -Werror=uninitialized ALSO promotes -Wmaybe-uninitialized
+#                        (verified on gcc 16: a loop-conditional write is a hard error with the one flag), and that
+#                        one is the optimizer's guess — it moves with -O level and GCC release — so -Wno-maybe-
+#                        uninitialized keeps it exactly as off as it was before this block.
+#   format format-security  printf-family argument/format mismatch, and a non-literal format (C4477/C4473 on
+#                        cl.exe; the non-literal half is C4774, a level-4 warning never measured on this tree: not held).
+#   return-stack-address (GCC: return-local-addr) the address of a local or a temporary returned (C4172).
+#   dangling             Clang only: the -Wdangling group (a view or pointer that outlives the object it names —
+#                        string_view of a temporary, a dangling member, a gsl::Pointer from a dead owner). cl.exe has
+#                        only the /analyze-only C26815/C26816: not held there.
+#   array-bounds         Clang only: a constant index past a fixed-size array, decided in Sema. GCC's -Warray-bounds is a
+#                        different pass: it needs -O2 and reads the optimizer's value ranges, so its answer moves with
+#                        -O level, inlining and GCC release — the property that rules out maybe-uninitialized. It is 0
+#                        here on GCC 13/14/16 at -O3 too, and still OFF on GCC for that reason. cl.exe's C4789 is a
+#                        backend warning of optimised builds, which the plain Windows legs never run: not held.
+# A flag that is noise on one compiler is dropped on that compiler and written down here, never silenced by a pragma.
 if(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS /we4062)
+  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS /we4062
+    /we4715 /we4700 /we4477 /we4473 /we4172)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough
+    -Werror=return-type -Werror=uninitialized -Werror=sometimes-uninitialized -Werror=conditional-uninitialized
+    -Werror=format -Werror=format-security -Werror=return-stack-address -Werror=dangling -Werror=array-bounds)
 else()
-  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough)
+  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough
+    -Werror=return-type -Werror=uninitialized -Wno-maybe-uninitialized
+    -Werror=format -Werror=format-security -Werror=return-local-addr)
 endif()
 foreach(_t IN LISTS RIPWIRE_OWNED_CXX_TARGETS)
   target_compile_options(${_t} PRIVATE ${RIPWIRE_COMPILE_TIME_FENCE_FLAGS})
