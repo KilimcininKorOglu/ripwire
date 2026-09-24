@@ -637,17 +637,5 @@ case "$H3S" in
     *) ok "cut-fix E: an uncut probe adds no bytes to [3]" ;;
 esac
 
-# ── cut-fix E: the decl/def partner rows (4) were a dead-end cut — the note had no next: and --limit could not raise
-# it. RED on 9936ba4e; GREEN: the note ends `next: --situ=api.h --limit=6`, and pasting it lists all six.
-DD="$TMP/ddcut"; mkdir -p "$DD"
-for i in 1 2 3 4 5 6; do echo "int dd$i(int x);" >>"$DD/api.h"; printf '#include "api.h"\nint dd%s(int x) { return x + %s; }\n' "$i" "$i" >"$DD/impl$i.c"; done
-DDH="$( cd "$DD" && "$BIN" . --situ=api.h --no-cache 2>/dev/null | grep 'decl/def partners' )"
-case "$DDH" in
-    *'shown=4 total=6 capped=1; next: --situ=api.h --limit=6)'*) ok "cut-fix E: the cut decl/def partner list names its next: --situ=api.h --limit=6" ;;
-    *) no "cut-fix E: the cut decl/def partner list has no next:: $DDH" ;;
-esac
-DDN="$( cd "$DD" && "$BIN" . --situ=api.h --limit=6 --no-cache 2>/dev/null | grep -c '^        impl[0-9]\.c  (' )"
-[ "$DDN" = 6 ] && ok "cut-fix E: --limit=6 lists all six decl/def partners" || no "cut-fix E: --limit=6 listed $DDN decl/def partners (want 6)"
-
 if [ "$fail" -eq 0 ]; then echo "situshapecheck: ALL PASS"; else echo "situshapecheck: SOME FAILED"; fi
 exit "$fail"

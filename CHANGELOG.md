@@ -34,8 +34,7 @@ Each of these cut an answer without saying so. An answer that was not cut is byt
   --limit=N"` (a `"importers_next"` key in `--json`). Before, the cut was counted but gave no way to get
   the rest.
 - `--situ`: the co-change section probes the first 20 changed files, so on a larger diff it adds
-  `partners_capped="1" probed= changed_files=`, because its partner count is then a floor. The decl/def
-  partner list (4 rows) is raised by `--limit`, and its note ends in `next: --situ=… --limit=N`.
+  `partners_capped="1" probed= changed_files=`, because its partner count is then a floor.
 - `--run-trace`: a success tail that kept fewer lines than the capture holds carries `capped="1"`.
 - `--nonlocal-state`: the 2048-cell ceiling (`cells_capped=`/`decls_capped=`) is a collection cut, so the
   root now also says `capped="1"` and `counts_floor="1"` instead of reading as a complete page.
