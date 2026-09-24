@@ -640,9 +640,9 @@ inline std::string rebaseMsysTmp( std::string_view path, std::string_view native
 // result as "no rebase, use `path` verbatim" and os::rebased_path does the same.
 //
 // #326: this is the seam --doctor's cache-dir check was missing — its writability probe called bare std::fopen and
-// its blob scan called std::filesystem::directory_iterator directly on cacheDirLadder()'s un-rebased "/tmp/ripwire-
+// its blob scan called std::filesystem::directory_iterator directly on cacheDirLadder()'s un-rebased "/tmp/<cache-dir>-
 // <uid>" spelling, neither of which passes through NativePath, so on Windows both silently measured a directory
-// (the CURRENT DRIVE's "\tmp\ripwire-<uid>") that the cache never actually uses (rw::os::mkdir DID rebase, via this
+// (the CURRENT DRIVE's "\tmp\<cache-dir>-<uid>") that the cache never actually uses (rw::os::mkdir DID rebase, via this
 // same routing, so the real cache directory the tool writes to was elsewhere and always healthy). The cache-eviction
 // sweep (quality.h evictOldCacheFamily) and the shard layout (resolveCacheBlobPath) read that same spelling the same
 // way, so cacheDirLadder() now resolves it ONCE through rw::os::rebased_path, at the source, for every consumer. That

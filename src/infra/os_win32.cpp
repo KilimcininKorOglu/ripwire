@@ -1712,7 +1712,7 @@ char* realpath( const char* path, char* resolved )
 // The public counterpart of NativePath's private rebase(): same routing (oswin::rebasedProgramPath over
 // userTempDirectory()), but for a caller OUTSIDE this file that must hand a path to something which performs no
 // rebase of its own — #326's fix, so --doctor's cache-dir writability probe and blob scan measure the same
-// directory os::mkdir/os::open/os::stat already write into, instead of the un-rebased "/tmp/ripwire-<uid>"
+// directory os::mkdir/os::open/os::stat already write into, instead of the un-rebased "/tmp/<cache-dir>-<uid>"
 // spelling read literally off the current drive.
 std::string rebased_path( const char* path )
 {
