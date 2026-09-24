@@ -5703,6 +5703,34 @@ inline std::size_t countTestedIn( const IngestResult& ing, const std::vector<cha
     return n;
 }
 
+// cut-fix C (2026-09-23): the RELEVANCE WEIGHT the navigation lists rank by before a cap (filter.h rankBeforeCap) — a
+// symbol's resolved in-degree, the --metrics fan-in: how much else already depends on this row. Integer-exact,
+// free (one CSR row length) and identical on every surface that holds the graph, so the CLI and MCP twins cannot
+// disagree about which rows a cap keeps. PageRank was the other candidate and was not taken: a float needs a tie
+// rule, a pr_iters= disclosure on every root it orders and a power iteration per call, for the same reading.
+// kNoNode (a file-scope use site: no enclosing symbol) weighs 0, so it ranks after every attributed row.
+inline std::uint32_t navRelevanceWeight( const Graph& g, NodeId n ) noexcept
+{
+    if( n >= g.inEdges.rows() )
+    {
+        return 0u;
+    }
+    const std::uint32_t* ro = g.inEdges.rowOffsets();
+    ASSUME( ro[n] <= ro[n + 1], "CSR row offsets are monotone (verifyCsr holds after every production build)" );
+    return ro[n + 1] - ro[n];
+}
+
+// The --uses row order, shared by its three emitters (the CLI arm, the MCP twin and the member-field arm,
+// fielduses.h): a use SITE weighs what its enclosing symbol (`from`) weighs, so a capped listing keeps the sites
+// inside the most-depended-on code and drops file-scope and leaf sites first. `Site` is each emitter's own row
+// struct; all three carry fileId and from. Called on the documented (tier, path, line, …) order, before the window.
+template<class Site>
+inline void rankUseSites( const IngestResult& ing, const Graph& g, std::vector<Site>& sites )
+{
+    rankBeforeCap( ing, sites, [ ]( const Site& u ) { return u.fileId; },
+                   [ & ]( const Site& u ) { return navRelevanceWeight( g, u.from ); } );
+}
+
 // union-find (LCOM4 components). Deterministic: unions in a fixed order over id-sorted method slots.
 struct UnionFind
 {
@@ -6088,13 +6116,21 @@ inline ImporterScan scanImporterEdges( std::uint32_t f, const std::vector<std::u
 // file runs conditionally; 0 ⇒ at least one edge is a top-level (unconditional) directive. Omitting it
 // skips the per-pair bookkeeping entirely (the pre-72 fast `break`-on-first-hit path), so a caller that
 // only wants membership pays nothing extra.
+// `fileFanInOut` (cut-fix C): optional, default nullptr — when non-null it receives, per FILE, how many distinct
+// files import it (the deduped adjacency's in-degree): the file-granular twin of navRelevanceWeight, which the
+// import tier ranks its importers by before its cap.
 inline std::vector<std::uint32_t> importersOfFiles( const IngestResult& ing, const std::vector<std::uint32_t>& defFiles,
-                                                     std::vector<char>* lazyOut = nullptr )
+                                                     std::vector<char>* lazyOut = nullptr,
+                                                     std::vector<std::uint32_t>* fileFanInOut = nullptr )
 {
     std::vector<std::uint32_t> importers;
     if( lazyOut != nullptr )
     {
         lazyOut->clear();
+    }
+    if( fileFanInOut != nullptr )
+    {
+        fileFanInOut->assign( ing.files.size(), 0u );
     }
     if( defFiles.empty() || ing.includes.empty() )
     {
@@ -6120,6 +6156,13 @@ inline std::vector<std::uint32_t> importersOfFiles( const IngestResult& ing, con
     // scanImporterEdges' own comment). The narrower, correct exclusion — f is never its own importer — is
     // enforced inside scanImporterEdges via `to == f`, which self-includes make structurally unreachable
     // (buildPreciseIncludeAdj drops them) but which the scan states honestly rather than relying on that.
+    for( std::uint32_t f = 0; fileFanInOut != nullptr && f < F && f < adj.size(); ++f )
+    {
+        for( const std::uint32_t to : adj[f] )   // dedup=true above: each (f, to) pair counts once
+        {
+            if( to < F && to != f ) { ++( *fileFanInOut )[to]; }
+        }
+    }
     for( std::uint32_t f = 0; f < F && f < adj.size(); ++f )
     {
         const ImporterScan scan = scanImporterEdges( f, adj[f], isDef, F, lazyOut ? &lazyPairs : nullptr );
@@ -6142,9 +6185,13 @@ inline std::vector<std::uint32_t> importersOfFiles( const IngestResult& ing, con
 // XML escaping and JSON quoting are the caller's dialect, not this file's.
 //
 // `files` is the FULL, ordered list; `shown` is how many of it a row-bearing dialect prints. The order is
-// filter.h's shared tier key — SOURCE first, then test/bench, then docs, then by path — so a capped window
-// can never fill with fixtures while the real dependents sit below the cut (LB-G's lesson, applied here
-// before this listing could repeat it).
+// filter.h's shared tier key — SOURCE first, then test/bench, then docs — so a capped window can never fill with
+// fixtures while the real dependents sit below the cut (LB-G's lesson). cut-fix C: within a tier the most-imported
+// importer comes first (its own importer count, filter.h rankBeforeCap), then the path, so the cut drops the
+// least-included files instead of the alphabetically-last ones; and `pageLimit` (the answer's --limit / MCP
+// limit) sizes the cap like the symbol rows' — one limit, one size in one answer, the rule find_symbol's two
+// arrays already follow — so a cut tier is one known call away (limit=importers=). offset= still windows the
+// symbol rows only (pageview.h rule 6: the paging half is theirs).
 struct ImportTier
 {
     std::vector<std::uint32_t> files;
@@ -6155,7 +6202,7 @@ struct ImportTier
     std::string                xmlAttrs;   // " importers= shown_importers= importers_capped=" — pure digits, nothing to escape
 };
 
-inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<NodeId>& seeds )
+inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<NodeId>& seeds, int pageLimit )
 {
     std::vector<std::uint32_t> defFiles;
     defFiles.reserve( seeds.size() );
@@ -6167,8 +6214,9 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
     defFiles.erase( std::unique( defFiles.begin(), defFiles.end() ), defFiles.end() );
 
     ImportTier t;
-    std::vector<char> lazyByFileOrder;   // importersOfFiles' own order (ascending file id) — see below
-    t.files = importersOfFiles( ing, defFiles, &lazyByFileOrder );
+    std::vector<char>          lazyByFileOrder;   // importersOfFiles' own order (ascending file id) — see below
+    std::vector<std::uint32_t> fileFanIn;         // per file: how many files import it — the rank-before-cap weight
+    t.files = importersOfFiles( ing, defFiles, &lazyByFileOrder, &fileFanIn );
 
     // t.files is about to be RESORTED into tier/path order; lazyByFileOrder must move WITH each entry, not
     // stay behind at its ascending-file-id slot — sort an index permutation, then rebuild both in lockstep.
@@ -6184,11 +6232,20 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
         sortedFiles[i] = t.files[ order[i] ];
         sortedLazy[i]  = lazyByFileOrder[ order[i] ];
     }
-    t.files = std::move( sortedFiles );
-    t.lazy  = std::move( sortedLazy );
-
-    t.shown  = std::min( t.files.size(), std::size_t( rw::kImportReachRowCap ) );
+    // cut-fix C: rank before the cap — each importer by how many files import IT (filter.h rankBeforeCap). The
+    // permutation is of INDICES into the two parallel arrays, so `lazy` travels with its file as it does above.
+    std::vector<std::uint32_t> rankOrder( sortedFiles.size() );
+    for( std::size_t i = 0; i < rankOrder.size(); ++i ) { rankOrder[i] = std::uint32_t( i ); }
+    rw::rankBeforeCap( ing, rankOrder, [ & ]( std::uint32_t i ) { return sortedFiles[i]; },
+                       [ & ]( std::uint32_t i ) { return sortedFiles[i] < fileFanIn.size() ? fileFanIn[ sortedFiles[i] ] : 0u; } );
+    for( std::size_t i = 0; i < rankOrder.size(); ++i )
+    {
+        t.files[i] = sortedFiles[ rankOrder[i] ];
+        t.lazy.push_back( sortedLazy[ rankOrder[i] ] );
+    }
+    t.shown  = std::min( t.files.size(), std::size_t( rw::effectiveRowCap( pageLimit, rw::kImportReachRowCap ) ) );
     t.capped = t.shown < t.files.size();
+    ENSURES( t.lazy.size() == t.files.size() && t.shown <= t.files.size(), "lazy stays parallel to files; the page is a prefix" );
     // Emitted UNCONDITIONALLY, zero included: an absent importers= reads as "this build cannot measure it",
     // and a shown_ without its capped= is the missing-attribute ambiguity pageview.h rule 3 forbids.
     t.xmlAttrs = " importers=\"" + std::to_string( t.files.size() ) + "\""

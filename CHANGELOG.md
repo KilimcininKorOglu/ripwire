@@ -13,6 +13,42 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Changed — navigation lists rank before they cap: `--callers`, `--callees`, `--uses` and the `--impact` import tier keep the most-depended-on rows
+
+Each of these lists sorted its rows by tier, then path, then line, and then cut at a default cap (40 symbol
+rows, 100 use sites, 40 importer files). The cut therefore dropped whatever sorted last by path, not the
+weakest rows: on this repository `--callers=kindIs` kept the 40 alphabetically-first of its 135 callers.
+
+- **One order, ranked.** Within a tier (source, then test/bench, then docs — unchanged), rows now come
+  most-called first: a caller or callee by its own caller count (the `--metrics` fan-in), a use site by the
+  caller count of the symbol it sits in (file-scope sites last), an importer file by how many files import it.
+  Path and line break ties, so a list whose weights tie is byte-identical to before, and an answer with one
+  row, or rows of equal weight, is unchanged. **The emitted row order changes** on any multi-row answer whose
+  weights differ: the most-called rows lead. That is the same total order the cap and `--offset`/`--limit`
+  read, so a page is a slice of it and `page[0:k] + page[k:2k] == page[0:2k]` still holds. Selecting by rank
+  and then re-sorting each page by path was considered and rejected because it would break that identity.
+  The MCP twins (`find_referencing_symbols`, `find_symbol`'s `calls` and `calledBy`, `uses`, `impact`) share
+  the order.
+- **`find_symbol`'s `calledBy` array states its cut.** It is windowed by the same `limit`/`offset` as `calls`,
+  but `count` and the paging keys describe `calls` only, so a 105-caller symbol served 40 `calledBy` rows with
+  no sign that any were missing. A cut array now carries `calledBy_total`, `shown_calledBy`,
+  `calledBy_capped` and `calledBy_next` (the `--callers` call that continues it). An uncut array is unchanged.
+- **`--limit` reaches the `--impact` import tier.** `shown_importers` was fixed at 40 whatever `--limit` said,
+  so a cut tier had no call that fetched the rest. `--limit=N` now sizes the tier like the symbol rows (one
+  limit, one size in one answer). `offset=` still windows the symbol rows only.
+
+Measured on this repository's own history at 60b65f02, with a new instrument (no existing recall measure
+covered these lists). The "row that mattered" is a caller or use site last rewritten, per `git blame -w`, by
+the same commit that last rewrote a line of the symbol's definition. Commits touching more than 40 files are
+excluded. For importers it is a file changed by such a commit. Default cap, before → after:
+`--callers` hit rate 0.41 → 0.71, recall 0.32 → 0.51 (17 symbols over the cap); `--uses` hit rate 0.53 → 0.74,
+recall 0.43 → 0.52 (19); import tier hit rate 0.78 → 1.00, recall 0.40 → 0.70 (9). With `--limit=10`
+(76 / 80 / 30 symbols), `--callers` recall is 0.62 → 0.67 and `--uses` 0.51 → 0.54. The import tier's recall
+is 0.47 → 0.46, a slight drop at that depth. Bytes are unchanged apart from the legend: the rows are the same
+set whenever nothing is cut.
+
 ## [0.6.2] — 2026-09-21
 
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate

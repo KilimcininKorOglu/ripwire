@@ -183,7 +183,9 @@ if [ "$p2_rows" = "10" ] && [ "$p2_next" = "20" ] && [ "$p2_more" = "1" ]; then
 else
     no "(4b) paging is wrong: rows=$p2_rows next_offset=$p2_next has_more=$p2_more"
 fi
-# the page seam is exact — page 2 must be the rows the full list holds at [10,20)
+# the page seam is exact — page 2 must be the rows the full list holds at [10,20) (cut-fix C: the list is ranked
+# most-called first, and every row here ties at 0 callers, so the ranked order IS the path order; arm 11d asserts the
+# seam on a list whose weights differ)
 if [ "$( rows "$PAGE2" | head -1 )" = "$( rows "$FULL" | sed -n '11p' )" ]; then
     ok "(4c) the page seam is exact: page 2 starts at the full list's row 11"
 else
@@ -292,6 +294,111 @@ for v in "--callers=neighbourHubFn" "--callees=neighbourHubCaller" "--uses=neigh
         if printf '%s' "$r1" | xmllint --noout - 2>/dev/null; then ok "(10b) $v is well-formed XML"; else no "(10b) $v is not well-formed XML"; fi
     fi
 done
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo "=== (11) RANK BEFORE THE CAP (cut-fix C): the cap drops the least-called rows, not the last path ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# docs/METHODOLOGY.md §9: the ceiling bounds the tail, never the head. Before cut-fix C every list here cut in
+# PATH order, so the rows that survived a cap were the alphabetically-first files. The second sandbox is built so
+# path order and relevance DISAGREE: 100 leaf callers (nobody calls them) in asrc/, which sorts first, and 5 heavy
+# callers (each called by 3 drivers) in zsrc/, which sorts last. 105 callers > the 40 cap, 105 call sites > the
+# 100 cap. On the base binary the default --callers page is 40 leaves and --uses drops exactly the 5 heavy sites.
+# RED on 60b65f02 (arms 11b 11c 11e 12 12b 13c; recorded 2026-09-23); GREEN on cut-fix C. 11d 13 13b 13d 13e are guards, green on both.
+RB="$TMP/ranksandbox"
+mkdir -p "$RB/asrc" "$RB/zsrc"
+python3 - "$RB" <<'PY'
+import sys, os
+d = sys.argv[1]
+open( os.path.join( d, "zsrc", "core.py" ), "w" ).write( "def rankHubFn( x ):\n    return x\n" )
+with open( os.path.join( d, "asrc", "leaves.py" ), "w" ) as fh:
+    for i in range( 100 ):
+        fh.write( "def leaf_%03d( ):\n    return rankHubFn( %d )\n\n" % ( i, i ) )
+with open( os.path.join( d, "zsrc", "heavy.py" ), "w" ) as fh:
+    for i in range( 5 ):
+        fh.write( "def heavy_%d( ):\n    return rankHubFn( %d )\n\n" % ( i, i ) )
+with open( os.path.join( d, "zsrc", "drivers.py" ), "w" ) as fh:
+    for j in range( 3 ):
+        fh.write( "def driver_%d( ):\n    return %s\n\n" % ( j, " + ".join( "heavy_%d( )" % i for i in range( 5 ) ) ) )
+PY
+rr(){ "$BIN" "$RB" --no-cache "$@" 2>/dev/null; }
+R_FULL="$( rr --callers=rankHubFn --limit=500 )"
+R_DEF="$( rr --callers=rankHubFn )"
+heavyIn(){ printf '%s' "$1" | grep -oE '<s t="[^"]*" n="heavy_[0-9]"' | wc -l | tr -d ' '; }
+if [ "$( attr count "$R_FULL" )" = 105 ] && [ "$( heavyIn "$R_FULL" )" = 5 ] && [ "asrc/leaves.py" \< "zsrc/heavy.py" ]; then
+    ok "(11) presence guard: 105 callers, all 5 heavy ones in the uncapped list, and they sort LAST by path"
+else
+    no "(11) fixture broken: count=$( attr count "$R_FULL" ) heavy=$( heavyIn "$R_FULL" )"
+fi
+[ "$( heavyIn "$R_DEF" )" = 5 ] && [ "$( rows "$R_DEF" | wc -l | tr -d ' ' )" = "$CAP_CALL" ] \
+    && ok "(11b) the default $CAP_CALL-row page keeps all 5 heavy callers (the cut dropped leaves)" \
+    || no "(11b) the default page kept $( heavyIn "$R_DEF" ) of 5 heavy callers in $( rows "$R_DEF" | wc -l | tr -d ' ' ) rows — the cap cut the head"
+[ "$( rows "$R_DEF" | head -5 | grep -c 'n="heavy_' )" = 5 ] \
+    && ok "(11c) the most-called rows lead the page (rows 1-5 are the heavy callers)" \
+    || no "(11c) the page does not lead with the most-called rows: $( rows "$R_DEF" | head -2 | tr '\n' ' ' )"
+# ONE total order for the cap, the rows and the paging: page[0:k] + page[k:2k] + … == the uncapped list.
+: > "$TMP/pages"
+for off in 0 20 40 60 80 100; do rows "$( rr --callers=rankHubFn --limit=20 --offset=$off )" >> "$TMP/pages"; done
+if rows "$R_FULL" | diff -q - "$TMP/pages" >/dev/null && [ "$( sort -u "$TMP/pages" | wc -l | tr -d ' ' )" = 105 ]; then
+    ok "(11d) six --limit=20 pages concatenate to the uncapped list exactly — one total order, no row dropped or repeated"
+else
+    no "(11d) the pages do not partition the uncapped order ($( sort -u "$TMP/pages" | wc -l | tr -d ' ' ) distinct rows)"
+fi
+R_JS="$( rr --callers=rankHubFn --json )"
+R_COL="$( rr --callers=rankHubFn --format=columnar )"
+{ [ "$( printf '%s' "$R_JS" | grep -oE '"n":"heavy_[0-9]"' | wc -l | tr -d ' ' )" = 5 ] \
+  && [ "$( printf '%s' "$R_COL" | grep -oE 'heavy_[0-9]' | sort -u | wc -l | tr -d ' ' )" = 5 ]; } \
+    && ok "(11e) --json and --format=columnar keep the same 5 heavy callers (one order, every dialect)" \
+    || no "(11e) a dialect cut the head: json=$( printf '%s' "$R_JS" | grep -oE '"n":"heavy_[0-9]"' | wc -l | tr -d ' ' )"
+r1="$( rr --callers=rankHubFn )"
+[ "$r1" = "$R_DEF" ] && ok "(11f) the ranked answer is byte-identical across runs" || no "(11f) the ranked answer is nondeterministic"
+
+echo "=== (12) --uses: the same rule at its own cap ==="
+U_R="$( rr --uses=rankHubFn )"
+heavySites="$( printf '%s' "$U_R" | grep -oE '<u role="call" p="zsrc/heavy.py:[0-9]+"' | wc -l | tr -d ' ' )"
+uRows="$( printf '%s' "$U_R" | grep -oE '<u role="' | wc -l | tr -d ' ' )"
+{ [ "$( attr count "$U_R" )" = 105 ] && [ "$uRows" = "$CAP_USES" ] && [ "$heavySites" = 5 ]; } \
+    && ok "(12) the default $CAP_USES-site page of 105 keeps all 5 sites inside the heavy callers" \
+    || no "(12) --uses kept $heavySites of 5 heavy sites (count=$( attr count "$U_R" ), rows=$uRows)"
+printf '%s' "$U_R" | grep -oE '<u role="[^"]*" p="[^"]*"' | head -1 | grep -q 'zsrc/heavy.py' \
+    && ok "(12b) --uses leads with a site in the most-called enclosing symbol" \
+    || no "(12b) --uses does not lead with the heaviest site"
+
+echo "=== (13) MCP: the same order, and find_symbol's calledBy cut is disclosed ==="
+MCP_OUT="$( python3 - "$BIN" "$RB" <<'PY'
+import json, subprocess, sys
+p = subprocess.Popen( [ sys.argv[1], sys.argv[2], "--mcp" ], stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.DEVNULL )
+def tool( n, name, args ):
+    p.stdin.write( ( json.dumps( { "jsonrpc": "2.0", "id": n, "method": "tools/call", "params": { "name": name, "arguments": args } } ) + "\n" ).encode() )
+    p.stdin.flush()
+    return json.loads( json.loads( p.stdout.readline() )[ "result" ][ "content" ][ 0 ][ "text" ] )
+ref = tool( 1, "find_referencing_symbols", { "symbol": "rankHubFn" } )
+fs  = tool( 2, "find_symbol", { "symbol": "rankHubFn" } )
+sm  = tool( 3, "find_symbol", { "symbol": "heavy_0" } )
+p.stdin.close(); p.wait( 20 )
+print( "REF " + " ".join( r[ "name" ] for r in ref[ "calledBy" ] ) )
+print( "FSCB " + " ".join( r[ "name" ] for r in fs[ "calledBy" ] ) )
+print( "FSKEYS %s %s %s %s" % ( fs.get( "calledBy_total" ), fs.get( "shown_calledBy" ), fs.get( "calledBy_capped" ), fs.get( "calledBy_next" ) ) )
+print( "SMKEYS %s" % ( "calledBy_total" in sm ) )
+PY
+)"
+CLI_NAMES="$( printf '%s' "$R_JS" | grep -oE '"n":"[^"]*"' | sed 's/"n":"//; s/"$//' | tr '\n' ' ' | sed 's/ $//' )"
+[ "$( printf '%s\n' "$MCP_OUT" | sed -n 's/^REF //p' )" = "$CLI_NAMES" ] \
+    && ok "(13) find_referencing_symbols serves the CLI --callers page, row for row" \
+    || no "(13) MCP and CLI disagree on the page: $( printf '%s\n' "$MCP_OUT" | sed -n 's/^REF //p' | cut -c1-80 )"
+[ "$( printf '%s\n' "$MCP_OUT" | sed -n 's/^FSCB //p' )" = "$CLI_NAMES" ] \
+    && ok "(13b) find_symbol's calledBy array is the same ranked page (it kept the 5 heavy callers)" \
+    || no "(13b) find_symbol's calledBy page differs from --callers: $( printf '%s\n' "$MCP_OUT" | sed -n 's/^FSCB //p' | cut -c1-80 )"
+FSK="$( printf '%s\n' "$MCP_OUT" | sed -n 's/^FSKEYS //p' )"
+[ "$FSK" = "105 40 True --callers=rankHubFn --offset=40" ] \
+    && ok "(13c) find_symbol discloses its calledBy cut: calledBy_total=105 shown_calledBy=40 calledBy_capped=true calledBy_next=--callers=rankHubFn --offset=40" \
+    || no "(13c) find_symbol's calledBy cut is silent or wrong: $FSK"
+NEXT_NAMES="$( rr --callers=rankHubFn --offset=40 --json | grep -oE '"n":"[^"]*"' | head -1 )"
+[ "$NEXT_NAMES" = "$( rows "$R_FULL" | sed -n '41p' | grep -oE 'n="[^"]*"' | sed 's/^n="/"n":"/' )" ] \
+    && ok "(13d) the pasted calledBy_next continues at row 41 of the one order" \
+    || no "(13d) calledBy_next does not continue the order: got $NEXT_NAMES"
+[ "$( printf '%s\n' "$MCP_OUT" | sed -n 's/^SMKEYS //p' )" = "False" ] \
+    && ok "(13e) an uncut calledBy array pays no bytes for the disclosure (absent, rule 3's --skill-scan shape)" \
+    || no "(13e) an uncut calledBy array still carries calledBy_total"
 
 echo
 [ "$fail" = 0 ] && { echo "neighbourcapcheck: PASS"; exit 0; } || { echo "neighbourcapcheck: FAIL"; exit 1; }

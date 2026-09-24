@@ -53,7 +53,7 @@ inline std::string renderFieldUses( const IngestResult& ing, FieldId fieldId, co
     const Symbol&        field  = ing.fields[ fieldId ];
     const FieldUseAnswer answer = collectFieldUseSites( ing, fieldId );
 
-    struct Row { std::uint32_t fileId; std::uint32_t line; RefRole role; std::uint32_t candidateCount; std::string in; };
+    struct Row { std::uint32_t fileId; std::uint32_t line; RefRole role; std::uint32_t candidateCount; std::string in; NodeId from; };   // from: rankUseSites' weight
     std::vector<Row> rows;
     rows.reserve( answer.sites.size() );
     const std::string_view rootForId = args.singleRoot ? args.root : std::string_view{};
@@ -65,7 +65,7 @@ inline std::string renderFieldUses( const IngestResult& ing, FieldId fieldId, co
         {
             in = canonicalIdForEmit( ing, ing.symbols[ r.fromSymbol ], rootForId );
         }
-        rows.push_back( { r.fileId, r.line, r.role, site.candidateCount, std::move( in ) } );
+        rows.push_back( { r.fileId, r.line, r.role, site.candidateCount, std::move( in ), r.fromSymbol } );
     }
     const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, rows, [ ]( const Row& u ) { return u.fileId; } );
     std::sort( rows.begin(), rows.end(), [ & ]( const Row& a, const Row& b )
@@ -75,6 +75,7 @@ inline std::string renderFieldUses( const IngestResult& ing, FieldId fieldId, co
                    if( a.role != b.role ) { return std::uint8_t( a.role ) < std::uint8_t( b.role ); }
                    return a.in < b.in;
                } );
+    rankUseSites( ing, args.graph, rows );   // cut-fix C: the --uses order, shared — the cap drops the lightest sites
 
     const PageWindow  window      = pageWindow( rows.size(), effectiveRowCap( args.pageLimit, kUseSiteRowCap ), args.pageOffset );
     const std::size_t pageRows    = window.end - window.begin;

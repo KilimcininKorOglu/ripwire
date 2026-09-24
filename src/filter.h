@@ -176,6 +176,57 @@ inline int compareTierThenPath( const IngestResult& ing, const std::vector<std::
     return ing.files[a] < ing.files[b] ? -1 : 1;
 }
 
+// ── cut-fix C (2026-09-23): RANK BEFORE THE CAP — the navigation lists' ONE row order ─────────────────────
+// --callers/--callees (and their MCP twins, find_symbol's calledBy array included), --uses (CLI, MCP and the
+// member-field arm) and --impact's import tier sorted their rows by the key above — tier, then path, then line —
+// and then cut at a default cap, so the cut dropped whatever sorted LAST: on a 342-caller answer the 40 survivors
+// were the alphabetically-first files. docs/METHODOLOGY.md §9: the ceiling bounds the tail, never the head.
+//
+// The order is now tier first (LB-G's decision, unchanged: source before test/bench before docs), then
+// `weightOf` DESCENDING, then the caller's own documented key (path, line, …) as the tie-break. It is the ONE
+// total order the cap, the emitted rows and offset=/limit= paging all read, so:
+//   * a cap keeps the heaviest rows and drops the lightest;
+//   * page[0:k] + page[k:2k] == page[0:2k] (test/pagingsweepcheck.sh arm C): the pages ARE slices of the order,
+//     which a select-then-re-sort-by-path page could not keep;
+//   * the most relevant rows come first, which is the reading the owner asked the answer to lead with;
+//   * the key is integer-exact (a uint32 weight; the incoming order is the caller's deterministic sort, and the
+//     sort is stable), so there are no float ties and the result is byte-identical across runs.
+// Rows whose weights tie keep the documented order, so a list of equal weights is byte-identical to before.
+// `rows` must arrive in the documented order; it leaves as a permutation of itself (no row dropped or added).
+template<class Row, class FileIdOf, class WeightOf>
+inline void rankBeforeCap( const IngestResult& ing, std::vector<Row>& rows, FileIdOf fileIdOf, WeightOf weightOf )
+{
+    const std::size_t n = rows.size();
+    EXPECTS( n <= std::size_t( UINT32_MAX ), "positions are carried as uint32 — a row list is bounded by the symbol/reference/file tables" );
+    if( n < 2 )
+    {
+        return;
+    }
+    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, rows, fileIdOf );
+    struct Key { std::uint8_t tier; std::uint32_t weight; std::uint32_t pos; };
+    std::vector<Key>           key( n );
+    std::vector<std::uint32_t> order( n );
+    for( std::size_t i = 0; i < n; ++i )
+    {
+        const std::uint32_t f = fileIdOf( rows[i] );
+        key[i]   = { f < tierOfFile.size() ? tierOfFile[f] : std::uint8_t( 0xFFu ), std::uint32_t( weightOf( rows[i] ) ), std::uint32_t( i ) };
+        order[i] = std::uint32_t( i );
+    }
+    std::sort( order.begin(), order.end(), [ & ]( std::uint32_t a, std::uint32_t b )
+    {
+        const Key& ka = key[a];
+        const Key& kb = key[b];
+        if( ka.tier != kb.tier ) { return ka.tier < kb.tier; }
+        if( ka.weight != kb.weight ) { return ka.weight > kb.weight; }
+        return ka.pos < kb.pos;   // the incoming (documented) position: unique, so this is a TOTAL order
+    } );
+    std::vector<Row> ranked;
+    ranked.reserve( n );
+    for( const std::uint32_t i : order ) { ranked.push_back( std::move( rows[i] ) ); }
+    ENSURES( ranked.size() == n, "a permutation: no row dropped, none repeated" );
+    rows = std::move( ranked );
+}
+
 // ── §P4 de-prioritization tier (SCORING, not ordering) ───────────────────────────────────────────────────
 // The retrieval lenses treated test fixtures and presentation decks as first-class source: a fixture stub
 // outranked the real algorithm on the plan's cited example, and a deck-build local got bodied as a top hit.

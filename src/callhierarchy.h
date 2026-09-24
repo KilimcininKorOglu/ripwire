@@ -57,7 +57,8 @@ inline HopTestedPartition computeHopTestedPartition( const IngestResult& ing, co
 //   matches — every DEFINITION the selector resolved to. Its size is the `defs=` disclosure: the rows below
 //             are the UNION of all of their neighbours, and a reader who thought they were one symbol's
 //             would be wrong by however many definitions the name has.
-//   rows    — the deduped neighbour set, in the served order (tier before path before line before name).
+//   rows    — the deduped neighbour set, in the served order: tier, then most-called first (cut-fix C), then
+//             path, line and name as the tie-break — the one order every window over it reads.
 // `bodylessDefs` is meaningful for the callee direction only (a declaration with no body has no callees),
 // and is counted here rather than at each emitter so the two cannot disagree about what "bodyless" means.
 // `declinedCalls` is the tier-3 declines the rows cannot show (graph.h): for callers, declined calls that named a
@@ -157,6 +158,12 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
         }
         return sa.line != sb.line ? sa.line < sb.line : sa.name < sb.name;
     } );
+    // cut-fix C (2026-09-23): RANK BEFORE THE CAP. Within a tier the most-called neighbour comes first (graph.h
+    // navRelevanceWeight; the path order above is the tie-break), so every window over these rows — the CLI's
+    // default cap, find_referencing_symbols, and find_symbol's calls AND calledBy arrays — keeps the rows most
+    // depended on and drops the lightest (filter.h rankBeforeCap states the rule and its paging guarantee).
+    rankBeforeCap( ing, out.rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; },
+                   [ & ]( NodeId r ) { return navRelevanceWeight( g, r ); } );
     return out;
 }
 
