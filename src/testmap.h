@@ -616,6 +616,10 @@ private:
         texts_.resize( runners_.size() );
         for( std::size_t i = 0; i < runners_.size(); ++i )
         {
+            if( !isDriverCandidate( runners_[i] ) )
+            {
+                continue;   // a TS/JS entry is never another row's driver (matchingRunner), so its text is never read
+            }
             texts_[i] = docparse::detail::readWholeFile( diskPath( *ing_, runners_[i] ) ).value_or( std::string() ); // unreadable ⇒ no evidence, never a guess
         }
     }
@@ -659,6 +663,15 @@ private:
         return matchingRunner( fileId, false );
     }
 
+    // A DRIVER is a shell or Python script: the F1 fallback above is "a named shell/py driver mentioning this exact
+    // file", and that is all it may search (CodeRabbit on #331). runners_ also holds the #323 TS/JS entries so they
+    // can spell their OWN command; left in this search, a jest/vitest test that merely mentions another row's file
+    // (`require("./util.js")`) became that row's runner, and loadTexts read every TS/JS test file to find out.
+    bool isDriverCandidate( std::uint32_t candidate ) const noexcept
+    {
+        return runnerVerb( ing_->files[candidate] ) != kJsEvidenceVerb;
+    }
+
     // Stem first, then mention; skip candidates that have no runnable command. Both passes are path-sorted.
     /// Return the first runnable same-root match in path order, or empty if there is none.
     /// fileId must be valid; byStem selects stem matching, otherwise loadTexts must have run first.
@@ -668,7 +681,7 @@ private:
         for( std::size_t i = 0; i < runners_.size(); ++i )
         {
             const std::uint32_t candidate = runners_[i];
-            if( !sameRoot( fileId, candidate ) )
+            if( !sameRoot( fileId, candidate ) || !isDriverCandidate( candidate ) )
             {
                 continue;
             }
@@ -752,9 +765,13 @@ private:
     // setup file, or a `.d.ts`) is rejected before the manifest is even read — package.json evidence names
     // WHICH runner exists, never WHICH files that runner would collect. A rejection here is not final: the
     // caller (derive()) falls through to matchingRunner's shell/py-driver search, same as any other miss.
+    // The name test reads the ROOT-RELATIVE path, never `disk` (CodeRabbit on #331): the `__tests__/` segment scan
+    // over an absolute path also matched directories ABOVE the crawl root, so a checkout under /work/__tests__/repo/
+    // spelled test/setup.ts as a vitest target that every other checkout reads run_unknown="1" — output that
+    // depended on where the repo sits (the #228/A1 rule isTestPath already follows).
     const char* resolveJsVerb( std::uint32_t runnerFile, const std::string& disk ) const
     {
-        if( !jsrunner::looksLikeJsTestFile( disk ) )
+        if( !jsrunner::looksLikeJsTestFile( rootRelPath( *ing_, runnerFile ) ) )
         {
             return nullptr;
         }
