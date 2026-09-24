@@ -21,12 +21,7 @@ std::string_view elixirTarget( TSNode node, std::string_view src ) noexcept
     {
         return {};
     }
-    const TSNode target = fieldChild( node, NodeField::Target );
-    if( ts_node_is_null( target ) || std::strcmp( ts_node_type( target ), "identifier" ) != 0 )
-    {
-        return {};
-    }
-    return nodeTextOf( target, src );
+    return fieldIdentifierText( node, NodeField::Target, src );
 }
 
 /// Return whether target introduces a function, macro, guard, or delegate definition.

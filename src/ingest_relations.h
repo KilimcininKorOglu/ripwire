@@ -1147,7 +1147,7 @@ inline std::string luaRequireTarget( TSNode n, std::string_view src )
 // the three Kernel loaders and which has NO receiver (`foo.require` is somebody's own method; the bare
 // spelling is the only one that is provably Kernel's). `autoload :Foo, "lib/x"` was a disclosed floor here
 // through kParserVer 81 (its path is argument TWO); rubyAutoloadTarget below lifts it, and the constant
-// spellings — superclass, include/extend/prepend, path-less `autoload :Foo` — live in rubyConstantDirective
+// spellings — superclass, include/extend/prepend, path-less `autoload :Foo` — live in rubyNamedDirective
 // and rubyMixinTargets, resolved by index rather than by path (Include::isSymbolic).
 //
 // The two resolution rules are encoded in the target the way Python's already are — by a LEADING DOT,
@@ -1294,25 +1294,37 @@ inline std::string rubyAutoloadTarget( TSNode n, std::string_view src, bool& sym
     return std::string( txt );
 }
 
-// The receiver-less `call` node's method name when it is one of the constant-shaped directives, else empty.
-// `autoload` and the three mixin verbs; `obj.include X` is somebody's own method and reads as nothing.
-inline std::string_view rubyConstantDirective( TSNode n, std::string_view src )
+// If the node's field child is a bare identifier, its text; else empty. The field-child-is-an-identifier-
+// and-give-me-its-text shape recurs across grammars (elixirTarget, elixirDirectiveTarget, elixirAliasGroup,
+// and the Ruby readers below all open with it).
+inline std::string_view fieldIdentifierText( TSNode n, NodeField field, std::string_view src ) noexcept
+{
+    const TSNode c = fieldChild( n, field );
+    if( ts_node_is_null( c ) || !kindIs( ts_node_type( c ), "identifier" ) )
+    {
+        return {};
+    }
+    return nodeTextOf( c, src );
+}
+
+// The two Ruby named-directive verb sets. `attributes` (plural) has no runtime meaning in base Rails
+// (measured: NoMethodError at class level) — captured for third-party DSLs that define it; the
+// disclosure lives in the CHANGELOG and the tags.scm header.
+inline constexpr std::array<std::string_view, 4> kRubyConstantDirectives = { "include", "extend", "prepend", "autoload" };
+inline constexpr std::array<std::string_view, 5> kRubyAttrFamilyNames    = { "attribute", "attributes", "attr_reader", "attr_writer", "attr_accessor" };
+inline constexpr std::array<std::string_view, 4> kRubyVisibilityNames    = { "module_function", "private", "protected", "public" };
+
+// A receiver-less `call` node's method-name TEXT when it is one of `names`, else empty — the shared reader of
+// the Ruby named directives (`obj.include X` / `obj.attr_writer :x` are somebody's own methods and read as
+// nothing; empty is the "not a directive" signal for every caller).
+inline std::string_view rubyNamedDirective( TSNode n, std::string_view src, std::span<const std::string_view> names )
 {
     if( !ts_node_is_null( fieldChild( n, NodeField::Receiver ) ) )
     {
         return {};
     }
-    const TSNode method = fieldChild( n, NodeField::Method );
-    if( ts_node_is_null( method ) || !kindIs( ts_node_type( method ), "identifier" ) )
-    {
-        return {};
-    }
-    const std::string_view m = nodeTextOf( method, src );
-    if( m == "include" || m == "extend" || m == "prepend" || m == "autoload" )
-    {
-        return m;
-    }
-    return {};
+    const std::string_view m = fieldIdentifierText( n, NodeField::Method, src );
+    return std::find( names.begin(), names.end(), m ) != names.end() ? m : std::string_view{};
 }
 
 // `include A, B` / `extend M` / `prepend P` — ONE directive naming N constants and therefore N Include
@@ -1321,7 +1333,7 @@ inline std::string_view rubyConstantDirective( TSNode n, std::string_view src )
 inline std::vector<std::string> rubyMixinTargets( TSNode n, std::string_view src )
 {
     std::vector<std::string> out;
-    const std::string_view   m = rubyConstantDirective( n, src );
+    const std::string_view   m = rubyNamedDirective( n, src, kRubyConstantDirectives );
     if( m.empty() || m == "autoload" )
     {
         return out;
@@ -1341,6 +1353,61 @@ inline std::vector<std::string> rubyMixinTargets( TSNode n, std::string_view src
         return true;
     } );
     return out;
+}
+
+// Is this macro call at class-DSL position — a class/module/singleton_class body, optionally through the
+// macro call's OWN do/{ } block wrapper or an INLINE VISIBILITY wrapper? In tree-sitter-ruby 0.23.1 the call's
+// do/{ } block is a FIELD (`(call … block: (do_block (body_statement …)))`; `{ }` interposes `block_body`
+// between the field and its statements), so the call itself sits directly at the class body — the fixture
+// passes through the plain body_statement ascent and the `ownBlockWrapper` branch below is a conservatively-
+// unreachable guard against a future grammar that reintroduces a wrapping `block` node. An INLINE visibility
+// wrapper — `private attr_reader :x` (Ruby 3, RuboCop's Style/AccessModifierDeclarations: inline) — parses as
+// the family call being the SOLE argument of a receiverless private/protected/public/module_function call:
+// the visibility call's own parent chain must ALSO pass this gate (its argument is evaluated first — the
+// macro runs and the method IS defined — then visibility applies). A method body, a lambda, or a block
+// nested under anything else is not: a method body runs at call time, and a file top level
+// (`attr_accessor :x` outside any class — defines on Object) is walked to nothing. A `begin`/modifier-`if`-
+// guarded macro call and the do-block bodies of `included`/`class_methods`/`Struct.new`/`Class.new`/
+// `Module.new` or a non-modifier `if … then … end` are disclosed floors (not unwrapped).
+inline bool rubyAttrAtClassBodyLevel( TSNode n, std::string_view src ) noexcept
+{
+    TSNode cur = n;
+    for( int guard = 0; guard < 4; ++guard )   // visibility wrapper + block wrapper + body_statement is the deepest real chain
+    {
+        const TSNode p = ts_node_parent( cur );
+        if( ts_node_is_null( p ) )
+        {
+            return false;
+        }
+        const char* const pt = ts_node_type( p );
+        if( kindIs( pt, "class" ) || kindIs( pt, "module" ) || kindIs( pt, "singleton_class" ) )
+        {
+            return true;
+        }
+        if( kindIs( pt, "argument_list" ) )
+        {
+            // Inline visibility: the sole argument of a receiverless visibility call, and the VISIBILITY
+            // call's own parent chain must pass the same gate (next hop(s)) — this is what keeps
+            // `def m; private attr_reader :x; end` out (`private` inside a method body fails the ascent).
+            const TSNode outer = ts_node_parent( p );
+            if( !ts_node_is_null( outer ) && kindIs( ts_node_type( outer ), "call" )
+                && !rubyNamedDirective( outer, src, kRubyVisibilityNames ).empty()
+                && ts_node_named_child_count( p ) == 1 && ts_node_eq( ts_node_named_child( p, 0 ), cur ) )
+            {
+                cur = outer;   // one more ascent; the visibility call's own parent decides
+                continue;
+            }
+            return false;
+        }
+        const bool ownBlockWrapper = kindIs( pt, "block" ) && ts_node_eq( ts_node_named_child( p, 0 ), cur );
+        const bool statementList   = kindIs( pt, "body_statement" );   // class bodies wrap multi-statement lists; the next hop decides
+        if( !ownBlockWrapper && !statementList )
+        {
+            return false;
+        }
+        cur = p;
+    }
+    return false;
 }
 
 // A CONSTANT CHAIN: `Name`, `A::B::C`, `::A::B` — every segment a constant, the head a constant or absent (`::A`).
@@ -1418,7 +1485,7 @@ inline std::vector<std::string> rubyArgumentTargets( TSNode argList, std::string
 {
     std::vector<std::string> out;
     const TSNode parent = ts_node_parent( argList );
-    if( !ts_node_is_null( parent ) && kindIs( ts_node_type( parent ), "call" ) && !rubyConstantDirective( parent, src ).empty() )
+    if( !ts_node_is_null( parent ) && kindIs( ts_node_type( parent ), "call" ) && !rubyNamedDirective( parent, src, kRubyConstantDirectives ).empty() )
     {
         return out;
     }
@@ -1482,12 +1549,7 @@ inline std::vector<std::string> rubyRescueTargets( TSNode rescueNode, std::strin
 // the name alias does NOT narrow call resolution, exactly as that query's own comment already says.
 inline std::string elixirDirectiveTarget( TSNode n, std::string_view src )
 {
-    const TSNode target = fieldChild( n, NodeField::Target );
-    if( ts_node_is_null( target ) || !kindIs( ts_node_type( target ), "identifier" ) )
-    {
-        return {};
-    }
-    const std::string_view kw = nodeTextOf( target, src );
+    const std::string_view kw = fieldIdentifierText( n, NodeField::Target, src );
     if( kw != "alias" && kw != "import" && kw != "require" && kw != "use" )
     {
         return {};
@@ -1511,12 +1573,7 @@ inline std::string elixirDirectiveTarget( TSNode n, std::string_view src )
 inline std::vector<std::string> elixirAliasGroup( TSNode n, std::string_view src )
 {
     std::vector<std::string> out;
-    const TSNode target = fieldChild( n, NodeField::Target );
-    if( ts_node_is_null( target ) || !kindIs( ts_node_type( target ), "identifier" ) )
-    {
-        return out;
-    }
-    const std::string_view kw = nodeTextOf( target, src );
+    const std::string_view kw = fieldIdentifierText( n, NodeField::Target, src );
     if( kw != "alias" && kw != "import" && kw != "require" && kw != "use" )
     {
         return out;
@@ -1927,7 +1984,7 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
     else if( kindIs( t, "call" ) && lang == Lang::Ruby )                 // Ruby `require_relative "x"` / `require "x"` / `load "x"`
     {
         target = rubyRequireTarget( n, src );
-        if( target.empty() && rubyConstantDirective( n, src ) == "autoload" )    // parser version 82: `autoload :Name[, "path"]`
+        if( target.empty() && rubyNamedDirective( n, src, kRubyConstantDirectives ) == "autoload" )   // parser version 82: `autoload :Name[, "path"]`
         {
             target = rubyAutoloadTarget( n, src, isSymbolic );
             isLazy = !target.empty();   // an autoload is lazy by definition — the file loads on first use
