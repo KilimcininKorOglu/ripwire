@@ -5522,6 +5522,23 @@ inline constexpr const char* kTruncatedBodyLegend =
 // --token-budget drops 29), and the per-body marker's 37 B of frame would then be most of the answer. The ceiling
 // bounds the tail, so it bounds the tail's disclosure too; a body skipped because it did not fit while budget
 // REMAINED keeps its own `<!-- body omitted (over budget): NAME -->`, where it sits. "" when the tail is empty.
+// The names of `ids`, each rendered by the caller's dialect (`render` escapes it), joined by `sep`. ONE loop for
+// every list of omitted names — this comment's and the JSON bodies_omitted array (packtask.h) — so the two
+// dialects cannot drift apart on which names a list holds or in what order.
+template <typename RenderFn>
+inline void appendJoinedSymbolNames( std::string& out, const IngestResult& ing, const std::vector<NodeId>& ids, std::string_view sep,
+                                     RenderFn&& render )
+{
+    for( std::size_t i = 0; i < ids.size(); ++i )
+    {
+        if( i > 0 )
+        {
+            out += sep;
+        }
+        render( out, std::string_view( ing.symbols[ ids[i] ].name ) );
+    }
+}
+
 inline std::string spentTailComment( const IngestResult& ing, const std::vector<NodeId>& tail, std::vector<char>& esc, std::string_view noun )
 {
     if( tail.empty() )
@@ -5531,14 +5548,10 @@ inline std::string spentTailComment( const IngestResult& ing, const std::vector<
     std::string c = "<!-- ";
     c += noun;
     c += " omitted (budget spent): ";
-    for( std::size_t i = 0; i < tail.size(); ++i )
+    appendJoinedSymbolNames( c, ing, tail, ", ", [ & ]( std::string& o, std::string_view name )
     {
-        if( i > 0 )
-        {
-            c += ", ";
-        }
-        c += escapeXml( xmlCommentText( ing.symbols[ tail[i] ].name ), esc );   // A4-F9 / W3FIX M3: a name inside a comment
-    }
+        o += escapeXml( xmlCommentText( name ), esc );   // A4-F9 / W3FIX M3: a name inside a comment
+    } );
     c += " -->";
     return c;
 }

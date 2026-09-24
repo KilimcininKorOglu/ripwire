@@ -442,14 +442,10 @@ inline std::string packTaskOmittedBodiesJson( const IngestResult& ing, const rw:
         return {};
     }
     std::string out = ",\"bodies_omitted\":[";
-    for( std::size_t i = 0; i < emitted.omitted.size(); ++i )
+    appendJoinedSymbolNames( out, ing, emitted.omitted, ",", []( std::string& o, std::string_view name )
     {
-        if( i )
-        {
-            out += ",";
-        }
-        out += "\"" + jsonStr( ing.symbols[ emitted.omitted[i] ].name ) + "\"";
-    }
+        o += "\"" + jsonStr( name ) + "\"";   // serialize.h's one join loop, this dialect's quoting
+    } );
     return out + "]";
 }
 
