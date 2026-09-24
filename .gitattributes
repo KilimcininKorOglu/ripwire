@@ -27,3 +27,10 @@ test/*.sh linguist-detectable=false
 # in the windows job's steps runs a checked-out test/*.sh script directly, only inline `run:` bodies and
 # the two scripts/*.sh helpers above.
 scripts/*.sh text eol=lf
+
+# skills/install.sh and hooks/*.sh are what a Windows user runs under Git Bash — from the windows-x64 zip, or from a
+# clone. The zip is built with core.autocrlf=false (.github/workflows/windows-package.yml) and refuses a CR in them;
+# this rule gives a Git for Windows clone (core.autocrlf=true by default) the same LF bytes, so `bash skills/install.sh`
+# does not fail on "$'\r'" there either.
+skills/*.sh text eol=lf
+hooks/*.sh text eol=lf

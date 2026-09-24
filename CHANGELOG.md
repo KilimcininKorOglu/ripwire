@@ -48,6 +48,23 @@ Each of these cut an answer without saying so. An answer that was not cut is byt
   inside the budget. Before, it carried an `over_ceiling="1"` whose reading ("its first line alone exceeds
   the budget") was false.
 
+### Added — a Windows x64 release asset (preview)
+
+**Releases now carry `ripwire-<version>-windows-x64.zip` and its `.zip.sha256`**, the same layout as the
+tarballs with `ripwire.exe` in place of `ripwire`. It is built with clang-cl in the Release flavour (LTO, no PGO)
+against the static C runtime (`/MT`), so it runs without a Visual C++ Redistributable. One reusable workflow,
+`.github/workflows/windows-package.yml`, builds it for both `release.yml` (on a tag) and `ci.yml` (every full
+matrix), so each train PR run uploads the exact zip a tag would publish. On that PR run it checks the compile lines
+and the exe's imports for the DLL runtime, then unzips the package into a path with a space and, from outside the
+build tree, runs `--version`, `--help` and a map of this repository, checks the SHA-256 with `Get-FileHash`, runs
+`--doctor` (cache directory under `%LOCALAPPDATA%`), checks that the cache is written once and reused, runs
+`skills/install.sh` under Git Bash, and completes an MCP stdio handshake. A new `xplat-diff` job compares a fixed
+verb set (map, `--for`, `--callers`, `--impact`, `--expand` and one MCP call, over LF, CRLF and in-repo copies of
+`test/fixture`) between the unzipped Windows exe and the Linux binary, byte for byte (`scripts/ci-xplat-diff.sh`
+names the three rules), and the Windows side must also match itself across two runs. It stays a **preview** until
+Windows users confirm it: see the README's Windows section for install steps and what CI cannot check. The
+`.gitattributes` now pins `skills/*.sh` and `hooks/*.sh` to LF, so a Git for Windows clone can run them under Git Bash.
+
 ### Added — `--biggest-first` supersedes `--readability`
 
 **`--biggest-first` supersedes `--readability`**, which remains fully functional as a hidden alias and

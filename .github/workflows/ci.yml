@@ -38,7 +38,7 @@ name: CI
 #   LIGHT (style + the one ubuntu-24.04/Release/clang release leg, all 4 shards — that leg already runs the
 #   det-gate and G4 xmllint checks): a push to main, or a pull_request carrying the `train-member` label.
 #   Labelling is maintainer-only by construction — a fork PR cannot add a label to itself.
-#   FULL (all 33 jobs): every other pull_request (integration/* train PRs, direct-land PRs, contributor
+#   FULL (all 35 jobs): every other pull_request (integration/* train PRs, direct-land PRs, contributor
 #   PRs), workflow_dispatch — the owner requires a full build and test on the EXACT commit before any
 #   release tag, so dispatch this manually against the commit you are about to tag rather than trusting an
 #   earlier green nightly — and a nightly `schedule` against main. See the report-failure/report-green jobs
@@ -367,6 +367,21 @@ jobs:
         run: |
           ./build/ripwire --version
           ./build/ripwire --version | grep -q 'emit=std::print'
+
+      # The Linux half of the cross-platform byte-identity check (xplat-diff below; the Windows half runs in
+      # windows-package.yml on the packaged exe). ONE leg — ubuntu-24.04/Release/clang, shard 1, which the light set
+      # also runs — and BEFORE the suite, so the outputs exist even when an unrelated gate goes red. About 6 s.
+      - name: Cross-platform verb set, Linux half (scripts/ci-xplat-outputs.sh)
+        if: matrix.os == 'ubuntu-24.04' && matrix.cc == 'clang' && matrix.flavor == 'Release' && matrix.shard == 1
+        run: bash scripts/ci-xplat-outputs.sh ./build/ripwire xplat-linux
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-24.04' && matrix.cc == 'clang' && matrix.flavor == 'Release' && matrix.shard == 1
+        with:
+          name: xplat-linux
+          path: xplat-linux
+          if-no-files-found: error
+          retention-days: 7
 
       # The HEAD comparison binary, built ONCE per job in its own step: before the suite, outside every gate budget.
       # Six gates (crossdirinclude, nestedimport, preproccond, py/rust/tsimportprecise; binoverridecheck re-runs them)
@@ -921,6 +936,51 @@ jobs:
           cmake -S . -B build-asan -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE= -DRIPWIRE_ASAN=ON || exit /b 1
           cmake --build build-asan --target ripwire_probe || exit /b 1
 
+  # ─── windows-package: the windows-x64 release zip, built exactly as release.yml builds it, then verified ───
+  #
+  # The job IS release.yml's build-windows job: both call .github/workflows/windows-package.yml, so the zip this
+  # run uploads (artifact ripwire-<ver>-windows-x64) is what a tag would publish, and a Windows tester can take it
+  # from the PR run with no release. That file's header lists what it proves on the UNZIPPED exe and its design
+  # choices (clang-cl, Release/LTO, static CRT, zip). About 10-12 runner-minutes, in parallel with the release
+  # shards, so no wall-clock cost; FULL set only, like the windows job above.
+  windows-package:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'   # not part of the light set — as windows/rhel/asan
+    name: windows-package
+    uses: ./.github/workflows/windows-package.yml
+    with:
+      release_tag: ""
+
+  # ─── xplat-diff: the packaged Windows exe and the Linux binary print the same bytes ─────────────────────────
+  #
+  # The strongest check we have on a platform none of us runs: the fixed verb set (scripts/ci-xplat-outputs.sh —
+  # map, --for, --callers, --impact, --expand over three copies of test/fixture, plus one MCP session) from the
+  # windows-package job and from the ubuntu-24.04/Release/clang shard-1 job, diffed byte for byte under the three
+  # rules scripts/ci-xplat-diff.sh names (identity; a '\'-typed root prints '/'; CRLF changes only --expand's
+  # source bytes). It waits for the release shards it needs one artifact from; the job itself takes under a minute.
+  xplat-diff:
+    needs: [plan, release, windows-package]
+    if: ${{ !cancelled() && needs.plan.outputs.full == 'true' }}
+    name: xplat-diff (Windows packaged exe vs Linux, same verbs, same bytes)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: xplat-linux
+          path: xplat/linux
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: xplat-windows
+          path: xplat/windows
+
+      - name: Windows vs Linux, byte for byte (scripts/ci-xplat-diff.sh)
+        run: bash scripts/ci-xplat-diff.sh xplat/linux xplat/windows
+
 
   # ─── report-failure / report-green: this schedule's OWN tracking issue, separate from nightly.yml's ─────
   #
@@ -942,7 +1002,7 @@ jobs:
   # watched live by whoever triggered it. See CONTRIBUTING.md §5 for the paragraph-length version.
   report-failure:
     name: report-failure (open or update the tracking issue)
-    needs: [plan, style, release, fallback-emitter, rhel, asan, windows]
+    needs: [plan, style, release, fallback-emitter, rhel, asan, windows, windows-package, xplat-diff]
     if: failure() && github.event_name == 'schedule' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -966,7 +1026,7 @@ jobs:
             echo "- run: $RUN_URL (schedule)"
             echo "- failing jobs: ${failed_jobs:-none recorded}"
             echo
-            echo "This is ci.yml's full 33-job matrix (release/fallback-emitter/rhel/asan/style/windows), not the"
+            echo "This is ci.yml's full 35-job matrix (release/fallback-emitter/rhel/asan/style/windows/windows-package/xplat-diff), not the"
             echo "nightly.yml ThreadSanitizer run — read this run's own job logs for the failing gate."
           } > "$body"
           if ! gh api "repos/$REPO/labels/$label" --silent 2>/dev/null; then
@@ -986,7 +1046,7 @@ jobs:
 
   report-green:
     name: report-green (close the tracking issue on this workflow's own green schedule run)
-    needs: [plan, style, release, fallback-emitter, rhel, asan, windows]
+    needs: [plan, style, release, fallback-emitter, rhel, asan, windows, windows-package, xplat-diff]
     if: success() && github.event_name == 'schedule' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:

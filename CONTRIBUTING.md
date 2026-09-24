@@ -520,6 +520,12 @@ POSIX leg rather than discovered on Windows.
 A green Windows matrix is **not** the same as a validated platform. The 647-gate suite does not run there — it needs
 the harness on #44 — and the ASan flavour is compiled on Windows but never executed.
 
+The **windows-x64 release zip** (a preview from 0.6.3) is built by `.github/workflows/windows-package.yml`, which
+`release.yml` and `ci.yml` both call, so every full-matrix run uploads the zip a tag would publish. Its header lists
+the design choices (clang-cl, Release, static CRT `/MT`, no PGO) and the checks on the unzipped exe; `xplat-diff`
+then compares `scripts/ci-xplat-outputs.sh`'s verb set between that exe and the Linux binary under the rules
+`scripts/ci-xplat-diff.sh` names. A change that makes the two differ is a Windows bug until shown otherwise.
+
 ### Aliasing: spelling, placement, contract
 
 - **Spelling: `__restrict__` only, never `__restrict`.** On macOS, `<sys/cdefs.h>` does
