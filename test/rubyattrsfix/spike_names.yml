@@ -1,0 +1,4 @@
+# the YAML source of the `name` collision matrix.
+# The `name:` key below is the data-tier Section def ripwire resolves today
+# (same live-picker shape as .github/workflows/ci.yml).
+name: yaml

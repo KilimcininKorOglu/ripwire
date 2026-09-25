@@ -279,7 +279,22 @@ constexpr std::uint32_t kCacheVersion = 25;           // 25: #150 AND #157 (trai
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 120;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 121;          // bump on any grammar/.scm/extraction change
+                                                      // 121 = 2026-09-24 (#310, Ruby class-level attribute DSL,
+                                                      //   test/rubyattrscheck.sh — the attr_* floor reversal): a
+                                                      //   class-body-level receiver-less attr_reader/attr_writer/
+                                                      //   attr_accessor/attribute/attributes call defines one Var
+                                                      //   per simple_symbol argument (plus the `<x>=` setter for
+                                                      //   writer-side macros), so setter CALLS (`record.x = v`)
+                                                      //   now bind; the extracted def SET grows on every Ruby
+                                                      //   corpus. Landed at 115 on the pre-train-6 base, carried
+                                                      //   as 120 on the PR, renumbered 121 when merged after #150
+                                                      //   took 120. No record layout change: kCacheVersion stays
+                                                      //   25 (NOT 24); kQSnapCacheScheme stays 14. Folded in at 121
+                                                      //   (unreleased) in the train-19 review round: a comment before
+                                                      //   `attribute`'s first argument is skipped, `class << X` for
+                                                      //   X != self and `module_function attr_*` define nothing. A
+                                                      //   121 cache written before that round differs only there.
                                                       // 120 = 2026-09-23 (#150): two new per-record extraction
                                                       //   facts — RawRef::qualifierRootsStd (a C++ call's FULL
                                                       //   written qualifier chain is rooted at namespace std, at

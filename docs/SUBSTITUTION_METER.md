@@ -592,6 +592,13 @@ an unstated one makes it untrustworthy:
   payload, so `detail` can be shorter still — `class` is unaffected, and the row stays valid JSON.
 - **`nudge=gated`** rows come from a call outside a git repository or with no `ripwire` on `PATH`.
   They are counted; they were never nudgeable.
+- **The command-word rule skips two shapes of Bash line** (issue #327). Its scan cost grows with the
+  cube of the line's length, so two guards run first. A line longer than 1,024 characters is not
+  scanned. A line that does not contain the literal `ripwire` is not scanned either, and that check
+  reads the raw text before quote removal, so a command word the shell assembles from fragments
+  (`'rip''wire' .`, `rip\wire .`) is not seen. Both shapes read as no ripwire call: the numerator can
+  only fall short, never gain a false call. `test/routehookcheck.sh` O9 pins the assembled words and
+  O10 the cost.
 
 The meter does not estimate around any of this. An unobserved call is absent, and absent is not zero
 — the same rule the rest of the tool's output follows.
@@ -734,6 +741,12 @@ The **prompt router**'s unit is a prompt; its rows are `UserPromptSubmit` decisi
 `intent`, `recommended`, `arm`) and `RouteObservation` outcomes (`adopted` / `missed` / `continued`),
 and it is the instrument the band pre-registered in [`EVALS.md` §4](EVALS.md) ("Claude Code prompt
 router") is measured through.
+
+Its population is prompts whose `cwd` is inside a git work tree (issue #327). Outside one, `--help-task`
+has no file list from git and walks the whole tree under `cwd`; a session started in `$HOME` took over
+30 s for one prompt, past the 8 s hook timeout, and the killed hook wrote no row. Both prompt routers
+now exit before the classifier there. A small non-git tree used to finish in time and write a row; it
+writes none now, so a readout that spans the change compares two populations.
 
 Three things it shares with this meter, and one it does not:
 

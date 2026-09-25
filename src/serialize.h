@@ -5723,7 +5723,16 @@ inline BodyCut cutOversizedBody( std::string& body, std::size_t budgetBytes, std
     // nothing left after the cut (a one-line body, or only an empty line after the last '\n'): serve it whole
     if( cut == std::string::npos || cut + 1 >= body.size() )
     {
-        out.isComplete  = true;
+        out.isComplete = true;
+        // lane B review N5 (cut-fix E): a body exactly one byte over whose last byte is its closing '\n' fits once
+        // that terminator goes — every line of it fits, so the over_ceiling reading ("its first line alone exceeds
+        // the byte budget") would be false. Serve it without the terminator, inside the budget, and say nothing.
+        if( body.size() == budgetBytes + 1 && body.back() == '\n' )
+        {
+            body.pop_back();
+            ENSURES( body.size() <= budgetBytes, "the served body fits the budget" );
+            return out;
+        }
         out.overCeiling = true;              // it is larger than the budget by construction (EXPECTS)
         return out;
     }

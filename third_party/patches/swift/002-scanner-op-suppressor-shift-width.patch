@@ -1,0 +1,18 @@
+diff --git a/third_party/deps/swift/src/scanner.c b/third_party/deps/swift/src/scanner.c
+index 1e67de0f..8879520f 100644
+--- a/third_party/deps/swift/src/scanner.c
++++ b/third_party/deps/swift/src/scanner.c
+@@ -128,7 +128,12 @@ const uint64_t OP_SYMBOL_SUPPRESSOR[OPERATOR_COUNT] = {
+     0, // EQ_EQ,
+     0, // PLUS_THEN_WS,
+     0, // MINUS_THEN_WS,
+-    1UL << FAKE_TRY_BANG, // BANG,
++    // RIPWIRE_VENDOR_PATCH(swift/002-scanner-op-suppressor-shift-width): FAKE_TRY_BANG is enum
++    // ordinal 32 (TokenType has 33 members, 0-indexed); on LLP64 (Windows) `unsigned long` is
++    // 32 bits, so `1UL << 32` shifts by the full width of the operand type — undefined behaviour.
++    // `1ULL` is 64-bit on every supported target (LP64 and LLP64 alike), so the shift is always
++    // in range. Same value as the (accidentally correct on LP64) implicit-width shift.
++    1ULL << FAKE_TRY_BANG, // BANG,
+         0, // THROWS_KEYWORD,
+         0, // RETHROWS_KEYWORD,
+         0, // DEFAULT_KEYWORD,

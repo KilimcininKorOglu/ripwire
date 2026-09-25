@@ -61,6 +61,15 @@ hash_text()
 # control-operator branch, so the digit behind it is read as a command word. That can only ever cost a
 # MISSED call, in a line where `ripwire` sits in exactly that position, and never a false one.
 #
+# COST (issue #327). Each character read rebuilds the rest of the line (`${rw_line#?}`, and the suffix match
+# around it), so the scan grows with the cube of the line's length: 20 s for a 4,000-character line under macOS
+# bash 3.2, in front of the tool call it only counts. Two guards come first. A line that does not contain the
+# word as written holds no call, and that check ends the scan for nearly every command. It reads the raw text,
+# before quote removal, so a command word the shell assembles from quoted or escaped fragments (`'rip''wire'`,
+# `rip\wire`, `"rip""wire"`) reads as no call: a MISSED call, never a false one. A line longer than 1,024
+# characters is not scanned and reads as no call — a MISSED call, the same direction as the limit above; 1,024
+# costs under half a second at worst. test/routehookcheck.sh O10 holds the cost, O9 pins the assembled words.
+#
 # POSIX sh only, no bashisms: routehookcheck.sh extracts this block and runs it under `sh`.
 rw_cmd_word()
 {
@@ -94,6 +103,8 @@ rw_cmd_word()
 
 rw_is_ripwire_call()
 {
+    case "$1" in *ripwire*) ;; *) return 1 ;; esac
+    [ "${#1}" -le 1024 ] || return 1
     rw_nl='
 '
     rw_tab="$( printf '\t' )"
@@ -245,6 +256,14 @@ command -v ripwire >/dev/null 2>&1 || exit 0
 prompt="$( printf '%s' "$input" | jq -r '.prompt // .user_prompt // .input // empty' 2>/dev/null )"
 cwd="$( printf '%s' "$input" | jq -r '.cwd // .workdir // empty' 2>/dev/null )"
 [ -n "$prompt" ] && [ -n "$cwd" ] && [ -d "$cwd" ] || exit 0
+# Route only inside a git work tree (issue #327). Outside one `--help-task` has no file list from git and
+# walks the whole tree under cwd: a session started in $HOME measured over 30 s for one prompt, on every
+# prompt. The cost is routing in a small non-git project too; a missed recommendation is the direction
+# this hook already takes on every doubt.
+# The answer must be `true`, not only exit 0: a bare repository, or a cwd inside a `.git` directory, prints
+# `false` with status 0, and routing there would walk git's own metadata.
+insideWorkTree="$( git -C "$cwd" rev-parse --is-inside-work-tree 2>/dev/null )" || exit 0
+[ "$insideWorkTree" = true ] || exit 0
 session="$( printf '%s' "$input" | jq -r '.session_id // .conversation_id // empty' 2>/dev/null )"
 
 promptBytes="$( printf '%s' "$prompt" | wc -c | tr -d ' ' )"

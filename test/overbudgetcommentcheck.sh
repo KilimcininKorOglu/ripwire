@@ -222,7 +222,10 @@ while True:
         break
     sel = at["next"][ len( "--expand=" ): ]
 ok = "\n".join( parts ) == whole
-print( "%s calls=%d over_ceiling=%d reassembled=%s" % ( "OK" if ok and calls > 1 or ( ok and over ) else "FAIL", calls, over, ok ) )
+# Every B5 fixture holds one line larger than its budget, so a passing chain needs all three: it reassembles, it
+# took more than one call, AND some call served that line whole under over_ceiling="1". Without the last term a
+# binary that stopped disclosing the over-ceiling line (or cut it) but still chained would print OK.
+print( "%s calls=%d over_ceiling=%d reassembled=%s" % ( "OK" if ok and calls > 1 and over > 0 else "FAIL", calls, over, ok ) )
 PY
 for spec in "first_long 1000" "last_long 500" "big_table "; do
     set -- $spec
@@ -261,6 +264,39 @@ if xmllint --noout "$TMP/fmx.xml" 2>/dev/null; then
 else
     no "(B6) the document is not well-formed"
 fi
+
+# ── (B7) lane B review N5 (cut-fix E): a multi-line body exactly budget+1 bytes whose last byte is its closing newline
+# fits once that terminator goes, so it is served whole and inside the budget, with no over_ceiling="1" (whose reading
+# is "its first line alone exceeds the budget", false here: the first line is `## Alpha`). RED on 9936ba4e.
+N5="$TMP/n5"; mkdir -p "$N5"
+python3 - "$N5" <<'PY'
+import os, sys
+lines = [ "## Alpha" ] + [ "line %02d of the alpha section text" % i for i in range( 1, 33 ) ]
+open( os.path.join( sys.argv[1], "doc.md" ), "w" ).write( "\n".join( lines ) + "\n" )
+PY
+N5SZ="$( wc -c <"$N5/doc.md" | tr -d ' ' )"
+"$BIN" "$N5" --expand=Alpha --top-k=0 --pack-budget-bytes=$(( N5SZ - 1 )) --no-cache >"$TMP/n5.xml" 2>/dev/null
+N5B="$( grep -o '<b t="sec"[^>]*>' "$TMP/n5.xml" )"
+# "served whole" is checked on the BODY, not only on the tag: the section's CDATA must be the file's text less its
+# closing newline, so an answer that drops the last lines without saying so fails even with a clean tag.
+N5W="$( python3 - "$TMP/n5.xml" "$N5/doc.md" <<'PY'
+import re, sys
+doc = open( sys.argv[1], "rb" ).read()
+m = re.search( rb'<b t="sec"[^>]*><!\[CDATA\[(.*?)\]\]></b>', doc, re.S )
+want = open( sys.argv[2], "rb" ).read()
+if m is None:
+    print( "FAIL no <b t=\"sec\"> body" ); sys.exit( 0 )
+got = m.group( 1 ).replace( b']]]]><![CDATA[>', b']]>' )
+print( "OK" if got == want[ :-1 ] else "FAIL body is %d B, want the whole %d B less its newline; ends %r" % ( len( got ), len( want ) - 1, got[ -40: ] ) )
+PY
+)"
+case "$N5B" in
+    *over_ceiling*|*truncated*|'') no "(B7) a $N5SZ-byte section at budget $(( N5SZ - 1 )) reads over_ceiling/truncated: $N5B" ;;
+    *) case "$N5W" in
+           OK) ok "(B7) a $N5SZ-byte section ending in its newline at budget $(( N5SZ - 1 )) is served whole (body = the file less its newline), no over_ceiling=" ;;
+           *)  no "(B7) the $N5SZ-byte section's tag is clean but its body is not the whole section: $N5W" ;;
+       esac ;;
+esac
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

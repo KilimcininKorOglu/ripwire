@@ -4,8 +4,12 @@ name: Release
 # PGO training, determinism diff and smoke test under Rosetta 2, and it left the matrix after 0.6.1.
 # scripts/install.sh tells an Intel Mac so, and test/releaseinstallcheck.sh (H7) refuses a macOS x64 leg here.
 #
-# Builds ripwire for macOS arm64 + Linux x64/arm64 on every `vX.Y.Z` tag push and attaches the three
-# binaries to a GitHub Release. UNTESTED UNTIL THE FIRST REAL TAG PUSH:
+# Builds ripwire for macOS arm64 + Linux x64/arm64 + Windows x64 on every `vX.Y.Z` tag push and attaches the four
+# packages to a GitHub Release. Windows x64 (from 0.6.3, a PREVIEW until Windows testers confirm it) is the
+# build-windows job: it calls .github/workflows/windows-package.yml, the same file ci.yml's windows-package job
+# calls on every full-matrix run, so the .zip published here is built by exactly the steps each train PR already
+# ran and uploaded as an artifact. Its design choices (clang-cl, Release/LTO, static CRT /MT, zip, no PGO) are
+# in that file's header. UNTESTED UNTIL THE FIRST REAL TAG PUSH:
 # this file is statically valid (see test/portablebuildcheck.sh's sibling validation note and the workflow
 # README pointer below) but has never actually run — GitHub Actions itself cannot be executed from this
 # dev environment. Review the FIRST run's logs closely before trusting `scripts/install.sh` against it.
@@ -226,6 +230,14 @@ jobs:
             dist/${{ steps.package.outputs.asset }}.tar.gz.sha256
           if-no-files-found: error
 
+  # The windows-x64 leg: ripwire-<ver>-windows-x64.zip + .zip.sha256, the same naming as the tarballs. It runs the
+  # other legs' std::print, determinism and smoke steps, then verifies the UNZIPPED exe (see windows-package.yml).
+  build-windows:
+    name: build (windows-x64)
+    uses: ./.github/workflows/windows-package.yml
+    with:
+      release_tag: ${{ inputs.tag || github.ref_name }}
+
   smoke-rhel:
     name: smoke RHEL 9 (${{ matrix.name }})
     needs: build
@@ -262,7 +274,7 @@ jobs:
 
   publish:
     name: publish GitHub Release
-    needs: [build, smoke-rhel]
+    needs: [build, build-windows, smoke-rhel]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -302,4 +314,6 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
           generate_release_notes: true

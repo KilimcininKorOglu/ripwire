@@ -54,8 +54,26 @@
 ; Stated floors, all pinned by test/rubysettercheck.sh: an operator_assignment (`obj.count += 1`,
 ; `obj.count ||= 1`) reads AND writes and one capture carries one name, so it keeps the getter edge
 ; only; a left_assignment_list (`a.x, b.y = 1, 2`) wraps its targets one level below `left:` and is
-; not read either; and attr_accessor/attr_writer/attr_reader define nothing in the source TEXT, so
-; their generated methods are not symbols and a write against one is an honest nothing, never a
-; wrong edge.
+; not read either. This rule still captures only the CALL shape — but note the parser-version-121
+; REVERSAL: the class-level attribute DSL (attr_reader/attr_writer/attr_accessor/attribute/attributes
+; — EXACTLY these five; ActiveSupport's cattr_accessor/mattr_accessor/thread_mattr_accessor/
+; class_attribute/attr_internal are deliberately not in the family) is no longer "an honest nothing".
+; A class-level DSL call — receiver-less, so `obj.attr_reader :x` is still somebody's own method —
+; mints Var defs (one per simple_symbol argument, plus the `<x>=` setter for the writer-side macros
+; attr_writer/attr_accessor/attribute; attr_reader and the plural `attributes` — third-party DSLs
+; measured READERS-ONLY, e.g. AMS/jsonapi-serializer/dry-struct — spell no setter) via the C++ side-
+; capture in ingest_names.h, so a write against a defined attribute binds to the `<name>=` def instead
+; of dropping. An INLINE-VISIBILITY wrapper (`private attr_reader :x`, Ruby 3 / RuboCop inline) is
+; class-DSL position too: the macro evaluates first and the method IS defined, then visibility applies.
+; The DSL call itself stays a reference like this one; test/rubyattrscheck.sh pins both sides.
+; Disclosed floors of the DSL capture, each pinned by an arm: a `begin`- or modifier-`if`-guarded call
+; and the do-block BODY of an `included`/`class_methods` (ActiveSupport::Concern), of
+; `Struct.new`/`Class.new`/`Module.new`, or a non-modifier `if … then … end` block are NOT unwrapped to
+; class position; and only `simple_symbol` arguments define — a quoted (`:"x"`/`:'x'`), string, or
+; splat/`%i[]` argument stays an honest nothing. All of these define real methods at runtime; the
+; silence is stated, never silent. Also a floor: accessors inside `class << Registry` (another object's
+; singleton class) define nothing, since a def on the enclosing class would be wrong; `class << self`
+; accessors define on the class. `module_function attr_accessor :x` is not a visibility wrapper (it
+; raises in a class and in a module) and defines nothing.
 (call
   method: (identifier) @name) @reference.call

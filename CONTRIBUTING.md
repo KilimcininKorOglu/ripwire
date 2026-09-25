@@ -35,6 +35,35 @@ cmake -S . -B asan -DRIPWIRE_ASAN=ON && cmake --build asan -j
 LSAN_OPTIONS=suppressions=lsan_suppressions.txt ./asan/ripwire <dir> >/dev/null
 ```
 
+**macOS 26 with the Command Line Tools' AppleClang 17: ASan hangs before `main`.** Every
+`-fsanitize=address` binary, even an empty `main`, hangs in ASan's start-up (shadow-memory set-up
+walking the dyld shared cache), so each ASan gate just times out. CI's Xcode 26.6 AppleClang 21 is
+not affected, and CMake warns when it sees the affected pair. Configure the sanitizer tree with
+Homebrew LLVM 22 instead, linking its own libc++ so the headers and the dylib are one release
+(Homebrew clang otherwise links the system libc++ against its libc++ 22 headers):
+
+```bash
+brew install llvm@22     # keg-only; nothing goes on PATH and /usr/bin/clang stays AppleClang
+L=$(brew --prefix llvm@22)
+cmake --fresh -S . -B asan -DRIPWIRE_ASAN=ON \
+  -DCMAKE_C_COMPILER="$L/bin/clang" -DCMAKE_CXX_COMPILER="$L/bin/clang++" \
+  -DCMAKE_EXE_LINKER_FLAGS="-L$L/lib/c++ -L$L/lib/unwind -lunwind -Wl,-rpath,$L/lib/c++ -Wl,-rpath,$L/lib/unwind"
+cmake --build asan -j
+otool -L asan/ripwire    # expect llvm@22's libc++, libunwind and libclang_rt.asan_osx_dynamic.dylib
+```
+
+Name `llvm@22`, not `llvm`: the unversioned keg moves to a new major on `brew upgrade`, and an older
+one may still be installed. `--fresh` makes the switch explicit when `asan/` was first configured with
+AppleClang; without it CMake sees the compiler change, warns, and discards the old cache on its own. The
+directory stays `asan/`, because the gates and `test/regression.sh` look for `asan/ripwire`. Gates that
+compile their own sanitizer harness take the compiler from `CXX` (strkerncheck's CMake leg also reads `CC`
+and `LDFLAGS`), so export
+`CC="$L/bin/clang" CXX="$L/bin/clang++" LDFLAGS="<the linker flags above>"` before running them.
+Keep that environment to the ASan gates: a gate that checks `$CXX` against the compiler that built
+`build/ripwire` (noaliascheck) goes red under it, so run the plain gates from a shell without it.
+With libc++ 22, oswin32logiccheck arm (B) stops on an `-fsanitize=integer` report inside libc++'s own
+`<string>` (`__grow_by` stores `-1` into `size_type` on purpose). That is the toolchain, not ripwire.
+
 ### Stale objects — the build that reports success and is wrong
 
 Make decides what to recompile by comparing timestamps, and header tracking in this tree is correct
@@ -219,12 +248,30 @@ releases and an unpinned checker reports drift on a tree that was formatted corr
 `RIPWIRE_FORMAT_ANY_VERSION=1` to run anyway, and `CLANG_FORMAT=/path/to/clang-format` to point at a
 binary that is not on `PATH` (Homebrew's LLVM is not, on macOS, by default).
 
-**clang-tidy is advisory only, and must stay that way.** `.clang-tidy` carries an empty
-`WarningsAsErrors`, CI runs it with `continue-on-error`, and the config is curated down to
-`bugprone-*` / `clang-analyzer-*` / `performance-*` / `misc-dangling-*`. Its default catalogue argues
-for a different C++ than the data-oriented one §3 and G2 mandate — POD and SoA, C arrays, 32-bit
-handles, `ASSUME` instead of exceptions — so read its output as a to-triage list, never as a queue of
-defects.
+**clang-tidy's broad report is advisory, and must stay that way; one narrow subset gates.**
+`.clang-tidy` carries an empty `WarningsAsErrors`, CI runs it with `continue-on-error`, and the config
+is curated down to `bugprone-*` / `clang-analyzer-*` / `performance-*` / `misc-dangling-*` /
+`misc-redundant-expression`. Its default catalogue argues for a different C++ than the data-oriented one
+§3 and G2 mandate — POD and SoA, C arrays, 32-bit handles, `ASSUME` instead of exceptions — so read its
+output as a to-triage list, never as a queue of defects.
+
+The exception is `scripts/tidycheck.sh`, a separate CI step with `--warnings-as-errors='*'`. It runs
+only checks whose every finding is a silently wrong answer and that sat at **zero rows** on the five CI
+TUs when admitted (0.6.3, clang-tidy 22; `bugprone-use-after-move` had one row, brought to zero by a
+behaviour-neutral fix that `.clang-tidy` describes): `bugprone-use-after-move`, `bugprone-dangling-handle`,
+`bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop`,
+`modernize-use-override` and `clang-analyzer-core.*`. It is a ratchet, not a style gate: a new row is a
+bug to fix, never a `NOLINT`, and a gated check that proves noisy leaves the list with its count, the way
+it came in (`.clang-tidy`'s header has the counts, and the two candidates that stayed out). Run it
+before a PR that touches C++: `scripts/tidycheck.sh` finds clang-tidy 22 on `PATH` or, on macOS, at
+Homebrew's keg-only `/opt/homebrew/opt/llvm@22/bin/clang-tidy` — pin that path, not
+`/opt/homebrew/opt/llvm`, which may be another major — and prints a `SKIP` line (not a pass) when it
+finds neither.
+
+The compiler holds the same line for the UB class: CMakeLists.txt's compile-time fence block makes
+`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, and on Clang
+`-Wdangling` and constant `array-bounds`, errors on our own targets, per compiler, with the cl.exe
+`/we####` equivalents — each measured at zero hits on AppleClang 17, clang 22 and GCC 13/14/16 first.
 
 ---
 
@@ -478,6 +525,12 @@ POSIX leg rather than discovered on Windows.
 
 A green Windows matrix is **not** the same as a validated platform. The 647-gate suite does not run there — it needs
 the harness on #44 — and the ASan flavour is compiled on Windows but never executed.
+
+The **windows-x64 release zip** (a preview from 0.6.3) is built by `.github/workflows/windows-package.yml`, which
+`release.yml` and `ci.yml` both call, so every full-matrix run uploads the zip a tag would publish. Its header lists
+the design choices (clang-cl, Release, static CRT `/MT`, no PGO) and the checks on the unzipped exe; `xplat-diff`
+then compares `scripts/ci-xplat-outputs.sh`'s verb set between that exe and the Linux binary under the rules
+`scripts/ci-xplat-diff.sh` names. A change that makes the two differ is a Windows bug until shown otherwise.
 
 ### Aliasing: spelling, placement, contract
 

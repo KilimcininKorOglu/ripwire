@@ -164,7 +164,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     // were defined only by the full legend, so they read here beside the levels=/files_unlisted= this line already named.
     // That line moved the (U) --zoom probe's compact legend from 324 to 394 B.
     { "zoom",         "zoom",         "nested module hierarchy: <module level= id= size= dir= shown= capped=> of <member t= n= p=>; levels_shown= of levels= printed; symbols= = isolated= + size= of all top_modules=" },
-    { "tree",         "tree",         "each file with its top symbols by rank, files by best symbol: <file p= symbols=> of <s t= n=>; of files= indexed, files_unlisted= have none" },
+    { "tree",         "tree",         "each file with its top 3 symbols by rank, files by best symbol: <file p= symbols=> of <s t= n=>; of files= indexed, files_unlisted= have none" },
     { "seams",        "seams",        "cross-directory call edges NO test reaches: <seam from= to= untested= shown= capped=> of <edge caller= p= callee= cp=>" },
     { "doc-drift",    "doc-drift",    "markdown anchors that no longer hold: <doc p=> of <a k= l= c= why= ref= want= got= tgt=>; unchecked/dated rows disclose the rest" },
     { "flags",        "flags",        "BUILT but DARK: <gate name= kind=compile|cmake|env default= dark= regions= loc= reads= p= l=> with <read p= l=> sites" },
@@ -441,6 +441,13 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // one clause is present exactly when both fields are, and the header-ONLY read still keeps it off <trace unresolved=>,
     // which counts frames. compactlegendcheck (S) accepts an always-on header field spelled inside that clause.
     { "shown_importers",   "shown_importers=: <f> rows (limit= sizes them)", true, "impact" },
+    // cut-fix E (2026-09-24): three cut disclosures that ride only a CUT answer, so each is present-only. importers_next= is
+    // graph.h sizeImportTier's call for the whole tier; shown_bridges=/bridges= is --zoom's secondaryCutAttrs on <zoom>
+    // (kZoomBridgeCap); shown_symbols= is --tree's on <tree> (kTreeSymbolsPerFile). Their *_capped= siblings read in the
+    // shared sub-cap clause.
+    { "importers_next",    "importers_next=: the call listing every importer", true, "impact" },
+    { "shown_bridges",     "shown_bridges=/bridges=: <bridge> rows printed (the 12 heaviest) / all pairs", false, "zoom", MapHeaderRead::No, {}, "zoom" },
+    { "shown_symbols",     "shown_symbols=: <s> rows printed", false, "tree", MapHeaderRead::No, {}, "tree" },
     // THE SWEEP'S LAST PASS (2026-09-12) listed every attribute the compact --impact, --safe-delete, --communities,
     // --community=ID and map-header documents emit and found these still without a reading. Each rides only SOME answers of
     // its root, so each is a present-only term rather than a purpose-line clause. Checked against the emitters:
@@ -1034,7 +1041,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // clauses are prose the compact dialect strips, so without these a default answer carried the count unread.
     { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; never walked, not in eligible_files= (the skipped verb names them)", false, "match", MapHeaderRead::No, {}, "match" },
     { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; never walked, in neither eligible_files= nor skipped_files=", false, "pattern", MapHeaderRead::No, {}, "pattern" },
-    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused; no rule walked them (the skipped verb names them)", false, "lint", MapHeaderRead::No, {}, "lint" },
+    { "nest_refused", "nest_refused=K: K corpus files a pre-parse nesting guard refused, corpus-wide (not narrowed to a language any rule here declares); no rule walked them (the skipped verb names them)", false, "lint", MapHeaderRead::No, {}, "lint" },
     // verify: src/verbs_navigate.h (the verify root)
     { "claim", "claim=/shape=: the claim as given and its shape; from_defs=/to_defs=: defs each name resolved to", false, "verify", MapHeaderRead::No, {}, "verify" },   // also defines shape= from_defs= to_defs=
     { "hops", "hops=N: call edges on the witness path (a confirmed reach claim only)", false, "verify", MapHeaderRead::No, {}, "verify" },

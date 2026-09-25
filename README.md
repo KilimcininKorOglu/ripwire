@@ -59,7 +59,7 @@ have a caller: on vue-core, 72.83% of call sites that `--callers`, `--impact` an
 Answers got smaller where it counts: the compact legend is the default (`--legend=full` restores the old bytes
 byte-for-byte), and over MCP each definition is sent once per session instead of in every answer.
 `--quality-delta` is trustworthy on a clean tree again. Native Windows x64 now builds and gates with **both**
-clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the 647-gate suite doesn't run on
+clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the 648-gate suite doesn't run on
 Windows yet, and ASan compiles there but never executes.
 
 **ripwire 0.6.1 — the answers an agent reads got smaller.** A compact answer is 46–66% smaller per call, and on
@@ -922,6 +922,38 @@ export PATH="$HOME/.local/bin:$PATH"      # not on PATH by default on macOS or m
 ```
 </details>
 
+<a id="windows"></a>
+<details>
+<summary><b>Windows x64 (preview)</b> — a zip with <code>ripwire.exe</code> and the skills, no runtime to install first; a preview until Windows users confirm it</summary>
+
+**Windows x64 — preview.** From 0.6.3 each release carries `ripwire-<version>-windows-x64.zip` and its `.zip.sha256`.
+It is built with clang-cl against the static C runtime, so it needs no Visual C++ Redistributable, and like the Linux
+x64 binary it needs an x86-64-v3 (AVX2) CPU. CI unzips and exercises it on every train, including a byte-for-byte
+comparison of its output with Linux's, but no maintainer runs Windows, so treat it as a preview until Windows users
+report back. The exe is not code-signed, so SmartScreen may warn on first run. In PowerShell:
+
+```powershell
+$v = "0.6.3"; $a = "ripwire-$v-windows-x64"; $u = "https://github.com/redhat-et/ripwire/releases/download/v$v"
+Invoke-WebRequest "$u/$a.zip" -OutFile "$a.zip"; Invoke-WebRequest "$u/$a.zip.sha256" -OutFile "$a.zip.sha256"
+# extracts only when the SHA-256 matches; on a mismatch it throws and nothing is unpacked
+if ((Get-FileHash "$a.zip" -Algorithm SHA256).Hash -eq (Get-Content "$a.zip.sha256").Split(" ")[0]) { Expand-Archive "$a.zip" -DestinationPath "$env:LOCALAPPDATA\Programs" } else { throw "SHA-256 mismatch: do not run $a.zip" }
+$bin = "$env:LOCALAPPDATA\Programs\$a"
+[Environment]::SetEnvironmentVariable("Path", "$bin;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
+$env:Path = "$bin;$env:Path"   # this window too; new windows read the user Path
+ripwire --version
+```
+
+- **Git for Windows** is needed for the git-history features (churn, `--situ`, the `git` row of `--doctor`) and for
+  the skills installer. The map itself runs without it.
+- **`ripwire . --doctor`**: every row should read `ok="1"` except `binary-path`, which Windows marks
+  `degraded="1"` and may report as failing even when `ripwire` is on `Path` (its PATH lookup is a known gap).
+  The cache lives in `%LOCALAPPDATA%\Temp\ripwire-<uid>`.
+- **Agent skills** (Claude Code, Codex): from Git Bash, in the unzipped folder, `bash skills/install.sh` (Claude Code)
+  or `bash skills/install.sh --codex`. Or copy them by hand in PowerShell:
+  `New-Item -ItemType Directory -Force "$HOME\.claude\skills" | Out-Null; Copy-Item -Recurse -Force "$bin\skills\ripwire-*" "$HOME\.claude\skills\"`
+  (Codex reads `$HOME\.agents\skills`). `--hook` is untested on Windows, and `scripts/install.sh` (the curl installer) does not run there.
+</details>
+
 **Building it yourself needs CMake 3.24+ and a C++23 compiler, and nothing else installed first** —
 every dependency is vendored in-tree, so the build completes with the network off.
 
@@ -1330,9 +1362,12 @@ with several definitions and the resolver guessed. Read the source when which-ta
 
 **The test gate** — `--test-gate` names the obligations and exits 4 while any remain. Captured with an
 uncommitted change in the tree: `changed="1"` and the rows below appear only because something was
-actually pending. A clean clone exits 0 with every changed/impacted/test count at zero — except
-`script_gates_unmodelled=`, which is structural (it counts script-to-binary test runners the call
-graph cannot see, not git status) and stays nonzero even then:
+actually pending. A clean clone exits 0 with every changed/impacted/test count at zero. The structural
+counts describe the tree, not git status, so they stay nonzero even then: `script_gates_unmodelled=`
+(script-to-binary test runners the call graph cannot see), `script_gates_registered=`,
+`script_gates_mapped=` and `script_gates_unresolved_dynamic=` (the suite's registered shell gates, and how
+many of them map to their dependencies), and the resolver gauges `graph_ambiguous=`, `graph_unresolved=`
+and `graph_unindexed=`. The capture below predates the `script_gates_*` registry counts and those gauges:
 
 ```
 $ ripwire . --test-gate          # exit code: 4
@@ -1377,6 +1412,8 @@ counts toward `impacted=` when it is a real caller in the blast radius, just nev
 Those excluded owners are counted, not dropped without a trace: `untested_modscope="N"` (always
 present, alongside `untested=`) says how many, so a change whose only reader is an untestable
 entrypoint discloses why `untested=` reads zero instead of looking like there was nothing to find.
+The capture above predates that attribute (and a few other root attributes added since), so its root
+lacks it; today's root carries `untested_modscope="N"` immediately after `untested=`.
 
 A TS/JS `run_unknown="1"` can mean the manifest genuinely names nothing recognized, or it can mean a
 real runner this tool does not yet derive: node's own test runner invoked through `tsx` (a common way
@@ -1892,9 +1929,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>647 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>648 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **647 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **648 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2244,7 +2281,7 @@ same renderer. One computation has one output shape.
 
 | Item | Requirement |
 | --- | --- |
-| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). Native Windows x64 **builds** with both clang-cl and MSVC `cl.exe` — CI builds both on `windows-latest` every full matrix and smoke-tests each binary (`--version`, `ctest`, a real crawl, the two-run byte-identical contract, well-formed XML); the 647-gate suite does not run there, and ASan is compiled but never executed, so treat it as a build, not a validated platform. No prebuilt Windows binary is published; WSL2 remains the supported way to RUN it on a Windows machine. |
+| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). Native Windows x64 **builds** with both clang-cl and MSVC `cl.exe` — CI builds both on `windows-latest` every full matrix and smoke-tests each binary (`--version`, `ctest`, a real crawl, the two-run byte-identical contract, well-formed XML); the 648-gate suite does not run there, and ASan is compiled but never executed, so treat it as a build, not a validated platform. From 0.6.3 a prebuilt `windows-x64` zip ships as a **preview** ([Windows](#windows)): CI unzips it and compares its output with Linux's byte for byte, but no maintainer runs Windows, so WSL2 remains the fully supported way to run it on a Windows machine. |
 | Prebuilt Linux floor | RHEL 8 or later (glibc 2.28) |
 | Prebuilt macOS floor | macOS 14 or later, Apple silicon. 0.6.1 is the last release with an Intel macOS binary; on an Intel Mac, pin `RIPWIRE_VERSION=v0.6.1` or build from source. |
 | x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later), for a prebuilt binary and a source build alike |
@@ -2292,6 +2329,8 @@ binary to `~/.local/bin`. The installer also stages the agent skills under
 `~/.local/share/ripwire/skills`. It activates the skills for each agent it finds. It does not edit
 your shell profile. It does not register hooks. To register hooks, run
 `bash ~/.local/share/ripwire/skills/install.sh --hook`.
+
+On Windows the installer does not apply: download the `windows-x64` zip instead ([Windows](#windows), a preview).
 
 #### 3.2 Build from source
 
@@ -2635,7 +2674,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 222 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 224 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.

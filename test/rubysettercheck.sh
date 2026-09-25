@@ -150,19 +150,21 @@ PW="$( rowOf 'n="pairwriter" ' )"
 if echo "$PW" | grep -q '<c n="count"'; then ok "pairwriter: a.count, b.count = 1, 2 → getter edge only (the read half)"; else no "pairwriter: lost the getter edge: $PW"; fi
 echo "$PW" | grep -q '<c n="count="' && no "pairwriter: a multiple assignment edges count= — the floor moved; update this gate AND src/ingest_names.h" || ok "pairwriter: no edge to count= (floor, stated)"
 
-echo "=== stated floor: attr_accessor / attr_writer / attr_reader generate NO indexed methods ==="
-# Ruby's attr_* macros generate `gsize`/`gsize=` at load time; nothing in the SOURCE TEXT defines them, and
-# ripwire indexes definitions it can see. So the generated names are not symbols and a write against one
-# resolves to NOTHING — an honest zero, not a wrong edge. This is UNCHANGED by the setter fix (before it,
-# `g.gsize = 1` named `gsize`, which was equally undefined), and it is pinned here so the day someone
-# synthesises attr_* definitions has to come through this gate and say so.
-grep -q 'n="gsize"\|n="gsize="\|n="gcolor="\|n="glabel"' "$SPLIT" \
-    && no "an attr_* generated method is now indexed — synthesising them is a real change: say so here, in queries/ruby/tags.scm's header and in CHANGELOG.md" \
-    || ok "attr_accessor/attr_writer/attr_reader generate no symbols (floor, stated)"
+echo "=== REVERSED floor (parser version 121): the class-level attribute DSL DOES define symbols — as Vars ==="
+# This gate used to pin the opposite: "attr_* generate no indexed methods; a write against one is an honest
+# NOTHING". The DSL capture reversed it deliberately — a class-level `attr_*`/`attribute` call mints Var defs
+# (one per simple_symbol argument, plus the `<x>=` setter for the writer-side macros) — so the generated names
+# are now symbols, the writes BIND, and the edges below are the graph half of the reversal. See queries/ruby/
+# tags.scm's header, CHANGELOG.md, and test/rubyattrscheck.sh; this gate keeps the per-verb spellings honest.
+if grep -q '<s t="var" n="gsize" sc="Generated"' "$SPLIT" && grep -q '<s t="var" n="gsize=" sc="Generated"' "$SPLIT"; \
+    then ok "attr_accessor :gsize → Var gsize + Var gsize="; else no "attr_accessor Var rows missing: $( grep -o 'n="gsize[^"]*"[^>]*' "$SPLIT" | head -3 | tr '\n' ' ' )"; fi
+if grep -q '<s t="var" n="gcolor=" sc="Generated"' "$SPLIT" && ! grep -q '<s t="var" n="gcolor" sc="Generated"' "$SPLIT"; \
+    then ok "attr_writer :gcolor → Var gcolor= ONLY (no bare-name def)"; else no "attr_writer Var rows wrong: $( grep -o 'n="gcolor[^"]*"[^>]*' "$SPLIT" | head -3 | tr '\n' ' ' )"; fi
+if grep -q '<s t="var" n="glabel" sc="Generated"' "$SPLIT" && ! grep -q '<s t="var" n="glabel=" sc="Generated"' "$SPLIT"; \
+    then ok "attr_reader :glabel → Var glabel ONLY (no setter def)"; else no "attr_reader Var rows wrong: $( grep -o 'n="glabel[^"]*"[^>]*' "$SPLIT" | head -3 | tr '\n' ' ' )"; fi
 AU="$( rowOf 'n="attruser" ' )"
-echo "$AU" | grep -q '<c n="gsize=\?"\|<c n="gcolor=\?"\|<c n="glabel"' \
-    && no "attruser edges an attr_* generated name — where did the definition come from? $AU" \
-    || ok "…and a write against one is an honest NOTHING, never a wrong edge"
+if echo "$AU" | grep -q '<c n="gsize="' && echo "$AU" | grep -q '<c n="gcolor="' && echo "$AU" | grep -q '<c n="glabel"'; \
+    then ok "attruser: the writes bind to the Var setters and the read to the Var reader — reversal visible in the graph, not only the table"; else no "attruser edges wrong: $AU"; fi
 
 echo "=== the two write spellings that DO reach the setter ==="
 # `w.name=(4)` is the explicit call spelling and `w.inner.name = 5` a chained receiver: both are still an

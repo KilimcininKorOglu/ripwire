@@ -15,6 +15,68 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — silent cuts in the report verbs and the MCP twins now say what they dropped
+
+Each of these cut an answer without saying so. An answer that was not cut is byte-identical.
+- MCP `owners` (40 rows) and `mentions` (100 files) are capped on that surface only, since their CLI
+  twins print every row. A cut answer now carries `shown=`, `capped="1"`, `total=`, `has_more=` and
+  `next_offset=`, and `offset=` continues it. Rows stay in path order: that is the CLI's paging order,
+  so an offset names the same rows on both surfaces.
+- `--zoom` `<bridge>` rows (the 12 heaviest): `shown_bridges=`, `bridges_capped="1"` and `bridges=` (all
+  pairs). `--zoom --mermaid`: each of its three caps (10 top modules, 8 child modules and 5 symbols per
+  subgraph) writes a `%% … shown=N total=M capped=1` comment where it cuts.
+- `--tree`: a file lists its 3 best-ranked symbols. A page where some list was cut carries
+  `shown_symbols=` and `symbols_capped="1"`, and each row's `symbols=` is its total.
+- `next=` on `--tree`, `--zoom` and `--external-surface` now keeps the caller's `--limit`, plus the flags
+  that shape the listing (`--zoom=D`, `--zoom-levels=N`, `--include-builtins`, `--pack-top-n=N`). A
+  `--limit=5` page used to point at a default-sized second page.
+- `--impact`: a cut import tier names the call that lists all of it, `importers_next="--impact=SYM
+  --limit=N"` (a `"importers_next"` key in `--json`). Before, the cut was counted but gave no way to get
+  the rest.
+- `--situ`: the co-change section probes the first 20 changed files, so on a larger diff it adds
+  `partners_capped="1" probed= changed_files=`, because its partner count is then a floor.
+- `--run-trace`: a success tail that kept fewer lines than the capture holds carries `capped="1"`.
+- `--nonlocal-state`: the 2048-cell ceiling (`cells_capped=`/`decls_capped=`) is a collection cut, so the
+  root now also says `capped="1"` and `counts_floor="1"` instead of reading as a complete page.
+- `--plan-lanes --brief`: a lane whose ranking held more than its 12 claims carries `"symbols_total":N` and
+  `"symbols_capped":true`.
+- `--from-trace` `<test_hop>`: the dropped-row count is `dropped=`. It was `capped=`, which is a 0|1 flag
+  everywhere else.
+- The `--recall`/`memory_recall` capped note names both spellings of each setting
+  (`--top-k/top_k`, `--max-tokens/budget_tokens`), so an MCP caller is not told to pass a CLI flag.
+- A body exactly one byte over the byte budget, where that byte is its final newline, is served whole
+  inside the budget. Before, it carried an `over_ceiling="1"` whose reading ("its first line alone exceeds
+  the budget") was false.
+
+### Added — a Windows x64 release asset (preview)
+
+**Releases now carry `ripwire-<version>-windows-x64.zip` and its `.zip.sha256`**, the same layout as the
+tarballs with `ripwire.exe` in place of `ripwire`. It is built with clang-cl in the Release flavour (LTO, no PGO)
+against the static C runtime (`/MT`), so it runs without a Visual C++ Redistributable. One reusable workflow,
+`.github/workflows/windows-package.yml`, builds it for both `release.yml` (on a tag) and `ci.yml` (every full
+matrix), so each train PR run uploads the exact zip a tag would publish. On that PR run it checks the compile lines
+and the exe's imports for the DLL runtime, then unzips the package into a path with a space and, from outside the
+build tree, runs `--version`, `--help` and a map of this repository, checks the SHA-256 with `Get-FileHash`, runs
+`--doctor` (cache directory under `%LOCALAPPDATA%`), checks that the cache is written once and reused, runs
+`skills/install.sh` under Git Bash, and completes an MCP stdio handshake. A new `xplat-diff` job compares a fixed
+verb set (map, `--for`, `--callers`, `--impact`, `--expand` and one MCP call, over LF, CRLF and in-repo copies of
+`test/fixture`) between the unzipped Windows exe and the Linux binary, byte for byte (`scripts/ci-xplat-diff.sh`
+names the three rules), and the Windows side must also match itself across two runs. It stays a **preview** until
+Windows users confirm it: see the README's Windows section for install steps and what CI cannot check. The
+`.gitattributes` now pins `skills/*.sh` and `hooks/*.sh` to LF, so a Git for Windows clone can run them under Git Bash.
+
+### Fixed — vendored Swift scanner: an undefined shift width on Windows (LLP64)
+
+The vendored `tree-sitter-swift` scanner suppressed a fake `try!`/`!` token with
+`1UL << FAKE_TRY_BANG`, where `FAKE_TRY_BANG` is enum ordinal 32. `unsigned long` (`UL`) is only 32
+bits on LLP64 (Windows), so that shift was undefined behaviour there — well-defined, and equal to
+`1ULL << 32`, on every LP64 host this repo builds and tests on (Linux, macOS), which is why it was
+invisible locally and in CI. Effect: `try!` and some `!` inside `#if` blocks could parse differently
+on a Windows build. Fixed with `third_party/patches/swift/002-scanner-op-suppressor-shift-width.patch`
+(`1UL` → `1ULL`, same value everywhere it already ran correctly, no `kParserVer` change).
+`test/vendorpatchcheck.sh` gains arm M, a static audit for this shift-width defect class across every
+vendored scanner, not just Swift's.
+
 ### Added — `--biggest-first` supersedes `--readability`
 
 **`--biggest-first` supersedes `--readability`**, which remains fully functional as a hidden alias and
@@ -469,6 +531,76 @@ n=9). Nowhere does any of the three ranked lists score significantly below its p
 - **`--clones` printed `counts_floor="1"` on every run.** The Type-3 pair cap was never disclosed in a release
   build, and the floor marker was hard-coded. `counts_floor="1" type3_capped="1"` now appear only on a run
   where the cap fired.
+
+### Fixed — the hooks' command-word rule no longer holds a Bash call for minutes on a long line (#327)
+
+`rw_is_ripwire_call`, the one rule the three hooks share to decide whether a Bash line runs ripwire, rebuilt
+the rest of the line for every character it read, so its cost grew with the cube of the line's length: 2.9 s at
+2,000 characters, 20.6 s at 4,000 and 155 s at 8,000 under macOS bash 3.2. The PreToolUse meter runs it on every
+Bash call, and one command carrying a heredoc held the call for 6 min 49 s. Two guards now run before the scan,
+and both can only turn a call into a missed one, never create a false one:
+
+- A line that does not contain the literal `ripwire` holds no call. The check reads the raw text before quote
+  removal, so a command word the shell assembles from quoted or escaped fragments (`'rip''wire' .`,
+  `rip\wire .`) now reads as no call; the scan alone read it as one.
+- A line longer than 1,024 characters is not scanned and reads as no call.
+
+For the substitution meter this is a numerator that can fall short on those two shapes
+(`docs/SUBSTITUTION_METER.md`, "Known undercount"). `test/routehookcheck.sh` O10 holds the cost (4,000
+characters: 20 s before, 0 s after) and O9 pins the four assembled-word shapes.
+
+### Fixed — the prompt routers no longer time out on every prompt outside a git work tree (#327)
+
+`hooks/ripwire-claude-route.sh` and `hooks/ripwire-codex-route.sh` ran `--help-task` for every prompt. Outside
+a git work tree it has no file list from git and walks the whole tree under `cwd`: a session started in `$HOME`
+still ran after 30 s, past the 8 s hook timeout, so Claude Code discarded the hook and printed a timeout warning
+on every prompt (0.08 s for the same prompt in a git repository). Both routers now exit before the classifier
+when git does not place `cwd` inside a work tree. A small non-git project gets no recommendation and
+writes no routing row either. `test/routehookcheck.sh` O11 holds it with a stub `ripwire` that records each call.
+
+### Added — Ruby's class-level attribute DSL (`attr_*`) defines Var symbols
+
+`attr_reader`/`attr_writer`/`attr_accessor` are Ruby's canonical class DSL, and `attribute`/`attributes` are
+their ActiveModel counterparts: each macro generates the accessor methods named by its arguments when the
+class is defined — `attr_reader` spells only the reader, `attr_writer` only the writer, and `attr_accessor`/
+`attribute` spell both. The family is EXACTLY these five verbs; ActiveSupport's neighbouring accessor macros
+(`cattr_accessor`, `mattr_accessor`, `thread_mattr_accessor`, `class_attribute`, `attr_internal`) are
+deliberately not in it — the scope is a decision, not an omission.
+Those generated names were indexed by none of them — a write against one resolved to nothing. The class DSL
+now mints real symbols: one `Var` def per `simple_symbol` argument (named as the argument, minus the leading
+`:`), plus the `<x>=` setter for the writer-side macros (`attr_writer`/`attr_accessor`/`attribute`; the plural
+`attributes` is READERS-ONLY — its third-party owners, AMS/jsonapi-serializer/dry-struct, define no setters,
+measured — so no phantom setter weight) — the exact spelling the setter-call rename already produces, so
+`record.x = v` BINDS to a def instead of dropping. The singular `attribute` takes one name; a trailing type
+or `default:` argument is metadata, not a def. An `attributes` do-block body is walked but defines nothing.
+An INLINE-VISIBILITY wrapper is also class-DSL position: `private attr_reader :x` (Ruby 3, RuboCop's
+Style/AccessModifierDeclarations: inline) evaluates its argument first — the macro runs and the method IS
+defined — then applies visibility, so the capture unwraps one receiverless `private`/`protected`/`public`
+call when the family call is its sole argument. `module_function attr_accessor :x` is not unwrapped: it raises
+in a class (NoMethodError) and in a module (TypeError), so it defines nothing. Accessors inside `class << self`
+define on the class; inside `class << Registry` (another object's singleton) they define nothing, rather than a
+def on the enclosing class. A comment before `attribute`'s first argument is skipped, not taken as that
+argument. This REVERSES a stated floor:
+queries/ruby/tags.scm used to say "attr_accessor/attr_writer/attr_reader define nothing in the source TEXT
+… a write against one is an honest nothing". That posture predated measurement; tested to be working in a
+real, running Rails application (test/rubyattrsfix/USECASES.md), these macros define methods that every
+`record.price` reads — the silence was a coverage hole, not honesty. The reversal is GLOBAL: every indexed
+Ruby corpus gains Var defs, attribute names leave the external surface, setter writes bind, and — because
+Call refs are language-gated, not kind-gated — attr names receive real call edges and PageRank weight
+(accepted churn, disclosed here). The DSL CALL itself stays a reference capture: `attr_accessor` and friends
+remain external-surface names, the same posture as the schema DSL rows. One id caveat: a same-class
+`def x` + `attr_accessor :x` produces TWO defs sharing one `p::sc::n` id (the dedup ladder folds only
+same-byte captures; the pair is two identities) — the id is not unique in that case. kParserVer 120 → 121
+(extraction facts changed, the bump past everything main carries; no record layout change — kCacheVersion
+stays 25, kQSnapCacheScheme stays 14).
+Gate: `test/rubyattrscheck.sh` on `test/rubyattrsfix/` (fixture proven against a running Rails application;
+red on the pre-change binary — the before-state `defs=0 external=1` attribution rows are the before-evidence).
+Disclosed capture floors, pinned by the gate's `floor_attr.rb` arms: a `begin`- or modifier-`if`-guarded macro
+call is not unwrapped to class-DSL position; the do-block BODY of an `included`/`class_methods`
+(ActiveSupport::Concern), of `Struct.new`/`Class.new`/`Module.new`, and a non-modifier `if … then … end`
+block are not unwrapped either (each defines real methods at runtime); and only `simple_symbol` arguments
+define — a quoted (`:"x"`/`:'x'`), string, or splat/`%i[]` argument stays an honest nothing (Ruby defines
+those methods; ripwire does not capture them). Every floor is stated and pinned, never silent.
 
 ## [0.6.2] — 2026-09-21
 

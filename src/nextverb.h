@@ -32,13 +32,17 @@ inline constexpr const char* kNextLegendClause =
     "next= is ONE pasteable follow-up — this tool's flags, or a shell line copied from a run= row — the call that "
     "ends this search; paste it as-is. ";
 
-// attribute-escaped ` next="…"`; empty invocation ⇒ empty string (a root with nothing honest to suggest says nothing)
-inline std::string nextAttrXml( std::string_view invocation )
+// attribute-escaped ` next="…"`; empty invocation ⇒ empty string (a root with nothing honest to suggest says nothing).
+// `attr` names a SECONDARY listing's own follow-up (cut-fix E: --impact's importers_next=, beside the root's next=),
+// escaped by the same policy; the default is the root's one next=.
+inline std::string nextAttrXml( std::string_view invocation, std::string_view attr = "next" )
 {
     if( invocation.empty() ) { return {}; }
     std::string a;
-    a.reserve( invocation.size() + 12 );
-    a += " next=\"";
+    a.reserve( invocation.size() + attr.size() + 8 );
+    a += ' ';
+    a += attr;
+    a += "=\"";
     // serialize.h escapeXml's policy, byte for byte (w3fixbudgetcheck: a --grep pattern with a raw newline / C0 /
     // invalid UTF-8 byte is echoed by grep's next= and MUST NOT reach markup — G4): the five XML escapes, the three
     // legal control bytes as character references, every other C0 byte (and DEL) as '?', invalid UTF-8 as '?'.
@@ -137,6 +141,23 @@ inline std::string nextFlag( std::string_view flag, std::string_view value )
         if( c == '\'' ) { out += "'\\''"; } else { out += c; }
     }
     out += '\'';
+    return out;
+}
+
+// cut-fix E: the NEXT PAGE of a default-windowed listing, as one pasteable call. The --tree/--zoom/--external-surface
+// next= values were spelled `<verb> --offset=N` and dropped the caller's own --limit, so a `--limit=10` page
+// pointed at a default-sized (80/40/100-row) second page: rows past the next ten were served without being asked
+// for, and the page boundaries stopped lining up. `pageLimit` is the caller's --limit (0 = none was given, and
+// then none is added: the default window is what the next page uses too). `invocation` carries every other flag
+// that shapes the rows (--zoom=D, --zoom-levels=N), since the next page must be a page of the SAME listing.
+inline std::string pagedNext( std::string_view invocation, int pageLimit, std::size_t nextOffset )
+{
+    std::string out( invocation );
+    if( pageLimit > 0 )
+    {
+        out += " --limit=" + std::to_string( pageLimit );
+    }
+    out += " --offset=" + std::to_string( nextOffset );
     return out;
 }
 

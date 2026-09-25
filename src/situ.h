@@ -356,6 +356,7 @@ inline std::vector<DeclDefPartner> declDefPartners( const IngestResult& ing, con
 inline constexpr std::size_t kSituBlastFilesShown = 8;    // section [1] — blast-radius file rows; a raisable DEFAULT
 inline constexpr std::size_t kSituPartnerRowsShown = 8;   // section [3] — co-change partner rows; a raisable DEFAULT
 inline constexpr std::size_t kSituPartnerFileRowsShown = 4;   // section [1] — decl/def partner rows
+inline constexpr std::uint32_t kSituCochangeProbeFiles = 20;  // section [3] — changed files probed for co-change (cut-fix E: disclosed)
 inline constexpr std::size_t kSituSiblingRowsShown = 8;      // section [1] — L-D lexical sibling rows; a raisable DEFAULT
 
 // §B12.1 gave this the "showing N of M <noun>" form so a reader could see the gap without a second sentence;
@@ -833,7 +834,12 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     const std::size_t              coCommits  = coSets.size();
     HashMap<std::uint32_t, double> partnerDeg;
     std::uint32_t                  probed = 0;
-    for( std::uint32_t f = 0; f < F && probed < 20; ++f )
+    std::size_t                    changedCount = 0;   // cut-fix E: the probe's denominator
+    for( std::uint32_t f = 0; f < F; ++f )
+    {
+        changedCount += changedFile[f] ? 1u : 0u;
+    }
+    for( std::uint32_t f = 0; f < F && probed < kSituCochangeProbeFiles; ++f )
     {
         if( !changedFile[f] )
         {
@@ -862,8 +868,14 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     // absence of one. --cochange, the component this composes, already emits both.
     const PageWindow  partnerPage  = pageWindow( partners.size(), effectiveRowCap( page.limit, int( kSituPartnerRowsShown ) ), page.offset );
     const std::size_t partnerShown = partnerPage.end - partnerPage.begin;
-    rw::emitTo( out, "  [3] co-change — usually edited with these but NOT in your diff ({}) window=\"{}\" commits=\"{}\"{}:\n",
-                  partners.size(), coWindow.c_str(), coCommits,
+    // cut-fix E: only the first kSituCochangeProbeFiles changed files (file-id order) are probed, so on a larger diff
+    // the partner count above is a FLOOR — THE TRUNCATION VOCABULARY rule 4's marker, with probed= naming how many
+    // of changed_files= were read. Present only when the probe cut (a small diff is byte-identical).
+    const std::string probeCut = changedCount > probed
+        ? " partners_capped=\"1\" probed=\"" + std::to_string( probed ) + "\" changed_files=\"" + std::to_string( changedCount ) + "\""
+        : std::string();
+    rw::emitTo( out, "  [3] co-change — usually edited with these but NOT in your diff ({}) window=\"{}\" commits=\"{}\"{}{}:\n",
+                  partners.size(), coWindow.c_str(), coCommits, probeCut.c_str(),
                   situShowingNote( partnerShown, partners.size(), "files",
                                    situNextInvocation( page.selector, partners.size() ) ).c_str() );
     if( partners.empty() )

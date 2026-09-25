@@ -1015,6 +1015,14 @@ if(WIN32)
 endif()
 
 if(RIPWIRE_ASAN)
+  # AppleClang 17's ASan runtime hangs in its own start-up on macOS 26 (Darwin 25), before main, so every
+  # sanitizer run times out. CI's Xcode 26.6 AppleClang 21 is unaffected. A warning, not an error: the
+  # tree still builds, and CONTRIBUTING's sanitizer section has the Homebrew LLVM 22 recipe.
+  if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 21
+     AND CMAKE_HOST_SYSTEM_VERSION VERSION_GREATER_EQUAL 25)
+    message(WARNING "RIPWIRE_ASAN: AppleClang ${CMAKE_CXX_COMPILER_VERSION} on macOS 26 is known to hang in "
+      "ASan start-up before main. Configure this tree with Homebrew LLVM 22 (CONTRIBUTING.md, Sanitizer build).")
+  endif()
   set(_ripwire_windows_clangcl_asan OFF)
   set(_ripwire_no_omit_frame_pointer -fno-omit-frame-pointer)
   # The optimization and debug-info spellings the sanitizer arm needs, in the driver's own dialect. clang-cl only
@@ -1116,7 +1124,7 @@ if(RIPWIRE_ASAN)
     COMMENT "Run the G1 fixture with the platform leak-detection policy")
 endif()
 
-# ---- compile-time fences: two warnings that are errors on OUR C++ targets, every compiler, every flavour ----
+# ---- compile-time fences: warnings that are errors on OUR C++ targets, every compiler, every flavour ----
 # The tree passes no warning set (no -Wall), so until this block a check only a warning could make was a check nobody
 # read, and on GCC -Wswitch did not run at all: GCC enables it only under -Wall, Clang by default.
 #   -Werror=switch                  a switch over an enum with no `default:` must name every enumerator, so appending
@@ -1140,10 +1148,52 @@ endif()
 # C26819 — so on cl.exe that half of the fence is NOT held, and the [[fallthrough]] rule is enforced by every other
 # leg instead. This is the only clang-dialect flag set in this file that is not already chosen per compiler
 # (cmake/PortableFlags.cmake branches on the same two conditions; the -mllvm option below is probed before use).
+#
+# UB-CLASS FENCES (0.6.3): diagnostics whose every hit is a program that computes a silently wrong answer — a value
+# read before it was written, a function that falls off its end, a pointer to a dead frame, a printf whose arguments
+# do not match its format, an index past a fixed array. NOT a style set: nothing here is -Wall, -Wextra or -Wshadow.
+# Measured 2026-09-24 on 60b65f02 over all 11 owned TUs (ripwire, ripwire_probe, the five RIPWIRE_TESTS verifiers),
+# each flag as a plain -W first: AppleClang 17 and Homebrew clang 22 (-fsyntax-only, debug and -DNDEBUG), GCC 13.4,
+# 14.4 and 16.2 (a real compile, -O0 and -O3 -DNDEBUG): 0 hits for every flag kept below, on every one of them. A
+# planted instance of each fires, so the zero is not a flag that never ran. cl.exe: 0 of the mapped C-numbers in the
+# last full-matrix Windows log (the default /W1, where each one below is on). Windows-only code (src/infra/os_win32.cpp)
+# compiles only there, so the two Windows legs are the first run of these errors on it, as they were for the two above.
+#   return-type          a non-void function that can reach its closing brace (C4715 on cl.exe).
+#   uninitialized        a read of a local that no path wrote (C4700). Clang adds sometimes-uninitialized (one branch
+#                        skips the write) and conditional-uninitialized (a loop may skip it): both front-end CFG
+#                        passes, identical at every -O. GCC's -Werror=uninitialized ALSO promotes -Wmaybe-uninitialized
+#                        (verified on gcc 16: a loop-conditional write is a hard error with the one flag), and that
+#                        one is the optimizer's guess — it moves with -O level and GCC release — so -Wno-maybe-
+#                        uninitialized keeps it exactly as off as it was before this block.
+#   format format-security  printf-family argument/format mismatch, and a non-literal format (C4477/C4473 on
+#                        cl.exe; the non-literal half is C4774, a level-4 warning never measured on this tree: not held).
+#                        On GCC, -Werror=format also makes -Wformat-overflow=1 and -Wformat-truncation=1 errors (a
+#                        planted sprintf/snprintf overflow is a hard error on g++ 13/14/16 at -O0 and -O2). Both are
+#                        middle-end passes that read value ranges, like the ones ruled out here, but level 1 fires only
+#                        on a certain or likely overflow, the snprintf-truncation class this repo has shipped as a bug,
+#                        and both are 0 on this tree: kept. If one proves optimizer-noisy on a CI GCC, drop it on GCC
+#                        with -Wno-error=format-truncation / -Wno-error=format-overflow and write it down here.
+#   return-stack-address (GCC: return-local-addr) the address of a local or a temporary returned (C4172).
+#   dangling             Clang only: the -Wdangling group (a view or pointer that outlives the object it names —
+#                        string_view of a temporary, a dangling member, a gsl::Pointer from a dead owner). cl.exe has
+#                        only the /analyze-only C26815/C26816: not held there.
+#   array-bounds         Clang only: a constant index past a fixed-size array, decided in Sema. GCC's -Warray-bounds is a
+#                        different pass: it needs -O2 and reads the optimizer's value ranges, so its answer moves with
+#                        -O level, inlining and GCC release — the property that rules out maybe-uninitialized. It is 0
+#                        here on GCC 13/14/16 at -O3 too, and still OFF on GCC for that reason. cl.exe's C4789 is a
+#                        backend warning of optimised builds, which the plain Windows legs never run: not held.
+# A flag that is noise on one compiler is dropped on that compiler and written down here, never silenced by a pragma.
 if(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS /we4062)
+  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS /we4062
+    /we4715 /we4700 /we4477 /we4473 /we4172)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough
+    -Werror=return-type -Werror=uninitialized -Werror=sometimes-uninitialized -Werror=conditional-uninitialized
+    -Werror=format -Werror=format-security -Werror=return-stack-address -Werror=dangling -Werror=array-bounds)
 else()
-  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough)
+  set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough
+    -Werror=return-type -Werror=uninitialized -Wno-maybe-uninitialized
+    -Werror=format -Werror=format-security -Werror=return-local-addr)
 endif()
 foreach(_t IN LISTS RIPWIRE_OWNED_CXX_TARGETS)
   target_compile_options(${_t} PRIVATE ${RIPWIRE_COMPILE_TIME_FENCE_FLAGS})

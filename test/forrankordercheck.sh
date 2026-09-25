@@ -326,26 +326,34 @@ s = sys.stdin.read()
 m = re.search( r"<sigs([^>]*)>(.*?)</sigs>", s, re.S )
 if not m: print( "FAIL no <sigs>" ); sys.exit( 1 )
 seq = [ int( x ) for x in re.findall( r"<d [^>]*\br=\"([0-9]+)\"", m.group( 2 ) ) ]
+if len( seq ) < int( sys.argv[ 1 ] ): print( "FAIL %d served rows, want at least %s: an empty head is 1..0 and would pass the order test" % ( len( seq ), sys.argv[ 1 ] ) ); sys.exit( 1 )
 sh = re.search( r"shown=\"([0-9]+)\"", m.group( 1 ) ); tt = re.search( r"total=\"([0-9]+)\"", m.group( 1 ) )
 if seq != list( range( 1, len( seq ) + 1 ) ): print( "FAIL served r= is not the rank head 1..S: %s" % seq ); sys.exit( 1 )
 if not ( sh and tt and "capped=\"1\"" in m.group( 1 ) ): print( "FAIL the gate cut is undisclosed: <sigs%s>" % m.group( 1 ) ); sys.exit( 1 )
 if int( sh.group( 1 ) ) != len( seq ) or int( tt.group( 1 ) ) <= len( seq ): print( "FAIL shown=/total= do not count the cut: <sigs%s> with %d rows" % ( m.group( 1 ), len( seq ) ) ); sys.exit( 1 )
-print( "OK r=1..%d of total=%s" % ( len( seq ), tt.group( 1 ) ) )'; }
+print( "OK r=1..%d of total=%s" % ( len( seq ), tt.group( 1 ) ) )' "${1:-0}"; }
 gate_json(){ python3 -c '
 import json, sys
 d = json.load( sys.stdin )
 seq = [ r[ "r" ] for r in d[ "sigs" ] ]
+if len( seq ) < int( sys.argv[ 1 ] ): print( "FAIL %d served rows, want at least %s: an empty head is 1..0 and would pass the order test" % ( len( seq ), sys.argv[ 1 ] ) ); sys.exit( 1 )
 if seq != list( range( 1, len( seq ) + 1 ) ): print( "FAIL served r is not the rank head 1..S: %s" % seq ); sys.exit( 1 )
 if d.get( "capped" ) is not True or d.get( "sigs_shown" ) != len( seq ) or not d.get( "sigs_total", 0 ) > len( seq ):
     print( "FAIL the gate cut is undisclosed: capped=%r sigs_shown=%r sigs_total=%r rows=%d" % ( d.get( "capped" ), d.get( "sigs_shown" ), d.get( "sigs_total" ), len( seq ) ) ); sys.exit( 1 )
-print( "OK r=1..%d of sigs_total=%d" % ( len( seq ), d[ "sigs_total" ] ) )'; }
+print( "OK r=1..%d of sigs_total=%d" % ( len( seq ), d[ "sigs_total" ] ) )' "${1:-0}"; }
+# A floor on the served rows: at 2000 B this query serves 8 today (measured at a2faa525), so a regression that dropped
+# every row while still saying capped="1" total>0 must fail (an empty head is 1..0, so the order test alone passes it).
+# 64 B serves 1 today, and the floor holds there too: gateSigRowsRankFirst (src/serialize.h, which packSignatures calls)
+# tests `used >= budgetBytes` before each row with `used` starting at 0, so the first row is admitted at any budget by
+# construction. The floor is 1, not 8, so a legitimate byte change to the rows does not trip it.
 for pb in 64 2000; do
-    if v="$( "$BIN" src --for="rank graph teleport" --pack-budget-bytes=$pb --no-cache 2>/dev/null | gate_xml )"; then
+    minrows=1
+    if v="$( "$BIN" src --for="rank graph teleport" --pack-budget-bytes=$pb --no-cache 2>/dev/null | gate_xml $minrows )"; then
         ok "(7) --pack-budget-bytes=$pb XML: $v"
     else
         no "(7) --pack-budget-bytes=$pb XML: $v"
     fi
-    if v="$( "$BIN" src --for="rank graph teleport" --pack-budget-bytes=$pb --json --no-cache 2>/dev/null | gate_json )"; then
+    if v="$( "$BIN" src --for="rank graph teleport" --pack-budget-bytes=$pb --json --no-cache 2>/dev/null | gate_json $minrows )"; then
         ok "(7) --pack-budget-bytes=$pb JSON: $v"
     else
         no "(7) --pack-budget-bytes=$pb JSON: $v"

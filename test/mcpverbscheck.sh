@@ -760,6 +760,75 @@ EOF
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
+echo "=== 8. cut-fix E — MCP owners/mentions disclose their surface-only default cut ==="
+# `owners` (40 <f> rows) and `mentions` (100 files) are capped on this surface alone — the CLI twins print every row —
+# and both cut with discloseCap=false, so a cut answer said nothing. RED on 9936ba4e (no shown=/capped= on the cut);
+# GREEN: the cut carries shown=/capped="1"/total=/next_offset=, offset= continues it, an uncut answer adds no bytes.
+CR="$TMP/cutrepo"; mkdir -p "$CR/docs"
+git -C "$CR" init -q
+for i in $( seq -w 1 45 ); do printf 'int cutfn%s( int x ) { return x + 1; }\n' "$i" >"$CR/f$i.c"; done
+for i in $( seq -w 1 105 ); do printf '# note %s\n\nSee `cutfn01` here.\n' "$i" >"$CR/docs/n$i.md"; done
+printf '# solo\n\nOnly `cutfn02` is named here.\n' >"$CR/docs/solo.md"   # the uncut mentions answer has one real row
+( cd "$CR" && git add -A && GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL=a@x.com GIT_COMMITTER_NAME=A GIT_COMMITTER_EMAIL=a@x.com \
+    GIT_AUTHOR_DATE=2026-06-01T12:00:00 GIT_COMMITTER_DATE=2026-06-01T12:00:00 git commit -q -m one )
+for i in $( seq -w 1 45 ); do printf '// b\n' >>"$CR/f$i.c"; done
+( cd "$CR" && git add -A && GIT_AUTHOR_NAME=B GIT_AUTHOR_EMAIL=b@x.com GIT_COMMITTER_NAME=B GIT_COMMITTER_EMAIL=b@x.com \
+    GIT_AUTHOR_DATE=2026-06-02T12:00:00 GIT_COMMITTER_DATE=2026-06-02T12:00:00 git commit -q -m two )
+cut_text(){ mcp_call '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"'"$1"'","arguments":'"$2"'}}' | tail -1 \
+    | python3 -c 'import sys, json; r = json.load(sys.stdin); print(r["result"]["content"][0]["text"] if "result" in r else "__ERROR__")'; }
+OW="$( cut_text owners '{"path":"'"$CR"'"}' )"
+OWROOT="$( printf '%s' "$OW" | grep -o '<owners [^>]*>' | head -1 )"
+case "$OWROOT" in
+    *' shown="40" capped="1" total="45" has_more="1" next_offset="40"'*) ok "owners: the 40-row cut discloses shown=40 capped=1 total=45 next_offset=40" ;;
+    *) no "owners: the 40-row cut is silent: $OWROOT" ;;
+esac
+OW2="$( cut_text owners '{"path":"'"$CR"'","offset":40}' )"
+OW2N="$( printf '%s' "$OW2" | grep -o '<f p="' | wc -l | tr -d ' ' )"
+if [ "$OW2N" = 5 ]; then ok "owners: offset=40 serves the other 5 rows"; else no "owners: offset=40 served $OW2N rows (want 5)"; fi
+# The uncut arms first prove the answer IS the expected one: an error (cut_text prints __ERROR__) or an empty answer
+# also lacks shown=, so "no shown=" alone would pass on a verb that failed.
+OW3="$( cut_text owners '{"path":"'"$CR"'","symbol":"cutfn01"}' )"
+OW3ROOT="$( printf '%s' "$OW3" | grep -o '<owners [^>]*>' | head -1 )"
+OW3ROWS="$( printf '%s' "$OW3" | grep -o '<f p="[^"]*"' | tr '\n' ' ' )"
+if [ -z "$OW3ROOT" ] || [ "$OW3ROWS" != '<f p="f01.c" ' ]; then
+    no "owners: the uncut answer is not the one f01.c row: root [$OW3ROOT] rows [$OW3ROWS] ($( printf '%s' "$OW3" | head -c 120 ))"
+elif printf '%s' "$OW3ROOT" | grep -q ' shown='; then
+    no "owners: an uncut answer gained shown="
+else
+    ok "owners: an uncut answer (the one f01.c row) is unchanged (no shown=)"
+fi
+MN="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn01"}' )"
+printf '%s' "$MN" | python3 -c '
+import sys, json
+d = json.loads( sys.stdin.read() )
+ok = d.get( "shown" ) == 100 and d.get( "capped" ) is True and d.get( "total" ) == 105 and d.get( "next_offset" ) == 100 and len( d[ "files" ] ) == 100
+sys.exit( 0 if ok else 1 )' && ok "mentions: the 100-file cut discloses shown=100 capped=true total=105 next_offset=100" \
+    || no "mentions: the 100-file cut is silent: $( printf '%s' "$MN" | head -c 200 )"
+MN2="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn01","offset":100}' )"
+if printf '%s' "$MN2" | python3 -c 'import sys, json; sys.exit( 0 if len( json.loads( sys.stdin.read() )[ "files" ] ) == 5 else 1 )'; then
+    ok "mentions: offset=100 serves the other 5 files"
+else
+    no "mentions: offset=100 did not serve the other 5 files"
+fi
+MN3="$( cut_text mentions '{"path":"'"$CR"'","symbol":"cutfn02"}' )"
+if MN3V="$( printf '%s' "$MN3" | python3 -c '
+import sys, json
+try:
+    d = json.loads( sys.stdin.read() )
+except ValueError:
+    print( "not JSON (an MCP error reads __ERROR__)" ); sys.exit( 1 )
+files = [ f.get( "file" ) for f in d.get( "files", [] ) ]
+if d.get( "symbol" ) != "cutfn02" or files != [ "docs/solo.md" ]:
+    print( "want the one docs/solo.md row, got symbol=%r files=%r" % ( d.get( "symbol" ), files ) ); sys.exit( 1 )
+if "shown" in d:
+    print( "an uncut answer gained \"shown\"" ); sys.exit( 1 )
+print( "the one docs/solo.md row, no \"shown\"" )' )"; then
+    ok "mentions: an uncut answer is unchanged: $MN3V"
+else
+    no "mentions: uncut answer: $MN3V"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"

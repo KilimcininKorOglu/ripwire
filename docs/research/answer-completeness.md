@@ -32,7 +32,7 @@ An answer is **complete** when the thing the question asked for is inside the se
 | question type | verb(s) | gold | complete when | judge that exists |
 | --- | --- | --- | --- | --- |
 | localisation | `--for=TASK`, MCP `for` | the file(s) / function(s) a fix touched | every gold function is a `<sigs><d>` row of the served head (**strict**); at least one is (**any**); a gold path appears anywhere in `<sigs>`, `<tail>` or `<hops>` (**lenient**) | `served_head()` in `bench/locbench/calibrate_confidence.py` (on `lane/served-syms-result`, not on main); `run_locbench.py`'s strict / any / lenient grades; `labels_ranking.tsv`'s `path#Symbol` targets in `bench/recalleval/run_recalleval.py` |
-| set questions | `--callers=X`, `--impact=X`, `--uses=X`, `--affected=F` | the set the graph holds | the emitted rows plus the disclosed remainder equal the set: `shown == total`, or `capped="1"` with a `next=` whose answer, unioned once, reaches `total` | the verbs' own `shown= total= capped= counts_floor= next=`; the re-derivation gates §9 principle 6 names (`--uses` against `--callers`, `--format=candidates` against a bundle) |
+| set questions | `--callers=X`, `--impact=X`, `--uses=X`, `--affected=F` | the set the graph holds | the emitted rows plus the disclosed remainder equal the set: `shown == total`, or `capped="1"` with the verb's **paging continuation** — the same verb re-run at `--offset=<next_offset>`, page after page until `has_more="0"` — reaching `total`. The root's `next=` is not that continuation on these verbs: it names a different follow-up (`--callers` → `--uses=`, `--impact` → `--safe-delete=`; `src/nextverb.h`). A verb that does not page (`--affected`) is complete only at `shown == total`. *(Amended 2026-09-24, before any result: the earlier text followed `next=` once, which on these verbs is a different follow-up, not the remainder.)* | the verbs' own `shown= total= capped= has_more= next_offset= counts_floor=`; the re-derivation gates §9 principle 6 names (`--uses` against `--callers`, `--format=candidates` against a bundle) |
 | a body or its lines | `--expand=SEL`, `--slice=SEL[:VAR]`, auto-bodies in `--for` | the lines a fix changed inside the served function | every gold line's text is in the delivered payload (line recall 1.0); the score is the fraction otherwise | `bench/slice/run_slicerecall.py` (own history, cpp family); the R5 protocol of `docs/research/slice-line-recall.md` (on `lane/research-arise-slice`, not on main) |
 | orientation | the default map, `--handoff`, `--communities` | none that is mechanical | **not judged complete offline.** Judged by terminality only, and by the *structural* half of the chop rate (§1.3), which needs no gold | the meter; the silent-cut gate of §3.2 |
 
@@ -46,8 +46,11 @@ A **chop** is a §9 violation in one served document. There are exactly two kind
 - **head-chop** (principle 2 violated): a row the answer needed was *available* to the verb — it is in the
   uncapped run or the `--format=candidates` export of the same query, at a rank the served document reached —
   and is absent from the served document because a ceiling, quota, cap, page or budget removed it. The
-  mechanical form: `gold ∈ uncapped(q)` and `gold ∉ served(q)`. It needs gold, so it is measured only on the
-  populations of §3 that carry gold.
+  mechanical form: `gold ∈ uncapped(q)`, `gold ∉ served(q)`, and `rank_uncapped(gold) ≤ max_rank(served(q))`
+  (the rank of the lowest served row in the uncapped order), so a gold row below the served document's reach is a
+  rank-tail miss, not a head-chop. It needs gold, so it is measured only on the
+  populations of §3 that carry gold. *(Amended 2026-09-24, before any result: the mechanical form lacked the rank
+  condition the prose above already stated.)*
 - **silent-chop** (principle 3 violated): the served document holds fewer rows than the uncapped run of the
   same query, and carries no attribute that says so — no `shown=`/`total=`/`capped=`/`has_more=`/
   `over_ceiling=`/`counts_floor=` on the element that shrank and no `next=` that fetches the remainder. It
@@ -89,9 +92,10 @@ never raise it:
 1. a document credited as complete must be complete under §1.2 **and** free of chops under §1.3 — a
    document that is complete only because the gold happened to survive a silent cut still scores 0, because
    the cut is a defect whether or not it hit gold this time;
-2. a **disclosed cut is credited as complete only after following `next=` once**, and is charged the bytes of
-   *both* calls up to the answering row — so a stub is worth shipping exactly when
-   `bytes(stub) + bytes(next call) < bytes(section)`, the rule the 0.6.2 section stub already applies with
+2. a **disclosed cut is credited as complete only after following its continuation** — the element's `next=`
+   where that fetches the remainder (a section stub, a truncated body), else the verb's paging continuation of
+   §1.2 followed until `has_more="0"` — and is charged the bytes of *every* call up to the answering row — so a
+   stub is worth shipping exactly when `bytes(stub) + bytes(next call) < bytes(section)`, the rule the 0.6.2 section stub already applies with
    its legend clause (`kForSectionStubLegend`, `src/serialize.h`) charged whole;
 3. an answer with `over_ceiling="1"` is credited as complete at its real bytes — exceeding the ceiling is
    the honest move principle 2 prescribes, and the metric does not punish it; the ceiling's job is done by
@@ -173,7 +177,8 @@ A gate in the house pattern (`test/*check.sh`, five registrations) that for ever
 runs the fixture tree at defaults and at the tightest budget the verb honours (`--token-budget`, `--limit`,
 `--top-k`, `--pack-budget-bytes`, the verb's own cap), parses both documents, and asserts: **for every
 element whose row count fell, the served element carries `shown=`+`total=`+`capped=` (or the verb's registered
-equivalent, `has_more=`/`next_offset=`/`counts_floor=`/`over_ceiling=`) and a `next=` that, run once,
+equivalent, `has_more=`/`next_offset=`/`counts_floor=`/`over_ceiling=`) and a continuation (§1.4 rule 2: a
+`next=` that fetches the remainder, or the verb's `--offset=<next_offset>` pages until `has_more="0"`) that
 returns the missing rows.** It fails on the first element that shrank silently, naming verb, element and cap,
 and reports a counted cut with no `next=` separately as a dead-end cut (§1.3), so the two classes never pool.
 It also asserts the `total=` ruling of §1.3: on a byte-trimmed element, `total=` equals the rows the same call
@@ -255,8 +260,14 @@ the cut is disclosed.
   expect: Δ +0.026, CI [0.004, 0.049], more losing pairs than winning ones — adopt at a lower bound above
   zero, publish the loss count.
 - **Stop if:** the lower bound includes zero for a verb — that verb keeps its order and the negative is
-  recorded; or if the reorder changes which rows are *served* (it may only change where they land) — then it
-  is a ranking change and belongs to a different registration.
+  recorded; or if the change alters the *candidate set* or the ranking itself — the rows handed to the cut
+  (`total=`, the uncapped run) or their order — rather than only where the cut is applied — then it is a
+  ranking change and belongs to a different registration. A **rank-before-cap** fix (the cut moved after the
+  rank sort, §5.7 row 1(a)/(c), rows 3–5) *does* change which rows survive whenever its cut fires: the head
+  survives in place of the rows the file-major or id-order walk happened to reach first. That is the step's
+  purpose, not a stop: it is judged by the success band above (head-chop, complete, bytes-before-answer). A
+  reorder with no cut in play must leave the served rows unchanged. *(Amended 2026-09-24, before any result:
+  the earlier text forbade any change to the served rows, which forbade the fix this step exists for.)*
 
 ### Step 2 — disclosed cuts everywhere
 
@@ -494,8 +505,10 @@ verb, low frequency, but the flagship one-call verb should not be silent), `--ou
 interface cap (silent, opt-in surfaces), `--pack-top-n` files past the truncated one (deprecated verb).
 
 **What the stair-steps already cover.** Every row above is either a step-1 order decision or a step-2
-disclosure; none needs step 3 or 4, and none changes what is *served* — only where it lands and what the
-document says about it. The §3.2 gate is what keeps the seven silent sites and the `capped="0"` case from
+disclosure; none needs step 3 or 4, and none changes the candidate set a verb ranks. A step-2 disclosure changes
+only what the document says about a cut; a step-1 rank-before-cap fix changes which rows survive a cut that fires
+(the head instead of whatever the walk reached first), judged by step 1's band, and leaves an uncut answer's rows
+unchanged. The §3.2 gate is what keeps the seven silent sites and the `capped="0"` case from
 returning after they are fixed.
 
 ### 5.8 Where each row stands against the cut-fix lanes (status as of 2026-09-24)

@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-24 (PR #310, Ruby attr DSL, merged in train 19 after #150): RE-DERIVED with UPDATE_GOLDEN=1
+#   (hash acd95b16fc…1ac9a7d). kParserVer 120 -> 121 (indexes the Ruby attr-family's names AND the
+#   inline-visibility lift; the PR carried 120, which #150 took first). Only the extraction-identity
+#   declaration moves — kQSnapCacheScheme stays 14, kCacheVersion stays 25 — so no cached Snapshot MEANING
+#   changes. It matches #150's brief 121/25 intermediate below, whose manifest inputs were the same.
 # 2026-09-24, lane/std-nested-binding-150 (#150 delta review): RE-DERIVED with UPDATE_GOLDEN=1 — hash
 #   COLLAPSES BACK to 82d60238f7…08e7e9b (identical to the 2026-09-23 entry below). kParserVer 121 -> 120: the
 #   prior entry's 121 bump is undone, not superseded — 121 never reached main or a release (this whole

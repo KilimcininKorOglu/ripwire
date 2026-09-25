@@ -184,8 +184,10 @@ inline constexpr int kImportReachRowCap   = 40;
 // defaults on the ripwire tree: --tree 187,209 B (3,773 rows), --zoom 433,867 B (390 top modules x 6 levels),
 // --external-surface 67,862 B (1,422 rows led by sh builtins). Each is a first screen ≤ ~12 KB here, paged with the
 // house quintet + next=. Explicit --limit=N raises any of them (effectiveRowCap).
+inline constexpr std::size_t kTreeSymbolsPerFile = 3;   // cut-fix E: --tree's <s> rows per <file>, disclosed by the root's shown_symbols=/symbols_capped=
 inline constexpr int kTreeRowCap            = 80;    // files, by best symbol's rank: 80 rows ≈ 11.5 KB on this repo (100 = 14.3 KB)
-inline constexpr int kZoomTopModuleCap      = 40;    // top-level modules, size desc (their children ride along: levels_shown=2)
+inline constexpr int kZoomTopModuleCap      = 40;    // top-level modules, rank-mass desc then size desc then id (massSizeIdLess; their children ride along: levels_shown=2)
+inline constexpr std::size_t kZoomBridgeCap = 12;    // cut-fix E: --zoom's <bridge> rows (traffic desc), a secondary listing disclosed by secondaryCutAttrs
 inline constexpr int kExternalSurfaceRowCap = 100;   // names, by ref count (≈ 5.2 KB on this repo)
 
 // The values pageDisclosure() renders under EVERY PageSyntax (XML attrs and §A3a/§A4c JSON keys) — hoisted

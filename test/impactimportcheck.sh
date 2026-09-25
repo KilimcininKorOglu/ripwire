@@ -291,6 +291,21 @@ body "$R_DEF" | grep -oE '<f via="import" p="[^"]*"' | head -3 | grep -c 'pkg/z_
   && [ "$( body "$R_ALL" | grep -oE '<f via="import"' | wc -l | tr -d ' ' )" = 48 ]; } \
     && ok "reach: --limit=100 serves the whole 48-file tier (shown_importers=48 importers_capped=0) — the cut is one known call away" \
     || no "reach: --limit=100 left the tier at shown_importers=$( attr shown_importers "$R_ALL" ) — --limit cannot reach it"
+# ── #9c THE CUT NAMES ITS CALL (cut-fix E, 2026-09-24) ──────────────────────────────────────────────────
+# A cut tier was a DEAD-END cut (answer-completeness §1.3/§5.8): counted, and no call named that serves the rest.
+# importers_next= on a cut root (the root's next= is --safe-delete's), in the XML and the JSON dialect; pasting it
+# serves the whole tier; absent on an uncut tier. RED on 9936ba4e (no importers_next= anywhere).
+INX="$( attr importers_next "$R_DEF" )"
+[ "$INX" = "--impact=importHubFn --limit=48" ] \
+    && ok "next: the cut tier names its call, importers_next=\"$INX\"" \
+    || no "next: the cut tier carries importers_next='$INX' (want --impact=importHubFn --limit=48)"
+R_NX="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$RS" $INX --no-cache 2>/dev/null )"
+{ [ "$( attr shown_importers "$R_NX" )" = 48 ] && [ "$( attr importers_capped "$R_NX" )" = 0 ] && [ -z "$( attr importers_next "$R_NX" )" ]; } \
+    && ok "next: pasting importers_next= serves all 48 importers, and that uncut answer carries no importers_next=" \
+    || no "next: pasting importers_next= gave shown_importers=$( attr shown_importers "$R_NX" ) importers_next='$( attr importers_next "$R_NX" )'"
+ri --json | grep -q '"importers_next":"--impact=importHubFn --limit=48"' \
+    && ok "next: the --json dialect carries the same importers_next" \
+    || no "next: --json lacks \"importers_next\" on the cut tier"
 rm -rf "$RS"
 
 # ── #10 determinism + well-formedness ─────────────────────────────────────────────────────────────────

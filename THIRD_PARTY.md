@@ -1,8 +1,9 @@
 # Third-party code
 
-Everything in `third_party/` is upstream open-source code, kept byte-for-byte with its original
-license block intact. Nothing here is relicensed; each file is governed by the license named
-below, not by the repository's `LICENSE`.
+Everything in `third_party/` is upstream open-source code with its original license block intact,
+kept byte-for-byte except for the local patches recorded under `third_party/patches/` (see the
+notes below). Nothing here is relicensed; each file is governed by the license named below, not by
+the repository's `LICENSE`.
 
 Code under `src/` — including `src/infra/` — is first-party and covered by the repository
 `LICENSE` (Apache-2.0), except the adapted passages listed under
@@ -84,6 +85,9 @@ Notes:
   force-moved server-side, a SHA cannot.
 - `deps/swift` is pinned to a bare commit rather than a tag because upstream's default branch does
   not carry a generated `parser.c`; that commit's generated output is what is vendored here.
+  `deps/swift/src/scanner.c` carries two local patches, recorded under
+  `third_party/patches/swift/` and policed by `test/vendorpatchcheck.sh` — see that directory's
+  README for the convention and the full list of vendored-code patches across every dependency.
 - `deps/kotlin` is pinned to a bare commit rather than the last tag (`v0.3.8`, Aug 2024) because
   that tag predates a scanner segfault fix (upstream #136) present on `main`; the pinned commit is
   `main`'s tip as of this vendoring, chosen for the fix, not for being a release.
@@ -97,8 +101,12 @@ Notes:
   `scripts/cmake/` — everything its own `CMakeLists.txt` reads. Its `doctest/extensions/` MPI
   headers are dropped: they include an external `<mpi.h>` this build never compiles. doctest is
   built only when the repository is configured with `-DRIPWIRE_TESTS=ON`.
-- Nothing in `third_party/deps/` is modified. Re-deriving any row is `git clone` + `git checkout
-  <pinned commit>` + the prune described above; a diff against the upstream commit is the audit.
+- `third_party/deps/` is upstream's code except for the local patches recorded under
+  `third_party/patches/<dep>/` (`third_party/patches/README.md` lists each one and why). The tree
+  ships patched. Re-deriving a row is
+  `git clone` + `git checkout <pinned commit>` + the prune described above + `git apply` of that
+  dependency's patches in number order. A diff against the upstream commit is the audit: it must
+  equal those patches, and `test/vendorpatchcheck.sh` checks that every patch is still applied.
 
 ## Adapted code under `src/`
 
