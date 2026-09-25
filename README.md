@@ -54,24 +54,37 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
+**ripwire 0.6.3 — nothing cut quietly, and a Windows download.** A cut answer now keeps its strongest rows and
+names what it dropped, with a `next=` for the rest. Releases include a Windows x64 zip (preview), checked against
+Linux output on every train, and the Windows cache works as `--doctor` reports (thanks @elsRobin). `--regex`
+escapes, nested `std::` calls, `--field-affinity` and `--clones` paging no longer give wrong answers, and
+`--test-gate` finds TS/JS test runners (thanks @mariadb-KyleHutchinson). Ruby's `attr_*` defines its methods (thanks
+@mpapis), and the hooks no longer stall long Bash calls (thanks @KilimcininKorOglu).
+
 **ripwire 0.6.2 — complete, honest, fast lookups, and Windows.** Calls that live outside any named function now
 have a caller: on vue-core, 72.83% of call sites that `--callers`, `--impact` and `--test-gate` could not see.
 Answers got smaller where it counts: the compact legend is the default (`--legend=full` restores the old bytes
 byte-for-byte), and over MCP each definition is sent once per session instead of in every answer.
 `--quality-delta` is trustworthy on a clean tree again. Native Windows x64 now builds and gates with **both**
-clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the 648-gate suite doesn't run on
+clang-cl and MSVC's own `cl.exe`, verified in CI on every full matrix — the 647-gate suite doesn't run on
 Windows yet, and ASan compiles there but never executes.
+*Thanks to @lennix1337 for the native Windows port. Code from @mpapis (`--lsp`), @sclyde (GDScript), @s0undt3ch,
+@rainhuang0220, @qinghuanandejiangshi, @csy20, @aniruddhaadak80 and @llvm-x86. Reports from @YogevKr,
+@alex-michaud, @mariadb-KyleHutchinson, @hnipps and @SVC-MACSTUDIO.*
 
 **ripwire 0.6.1 — the answers an agent reads got smaller.** A compact answer is 46–66% smaller per call, and on
 llvm-project the declined-call index drops from 114 MB to 368 KB with every count and every byte of output
 unchanged. `--in=DIR` scopes "what changed recently" to a directory. Elixir resolves natively by module, name and
 arity (thanks @henry-hz), `--scip` reads scip-java indexes (thanks @dpunosevac), and a `file:name` selector no
 longer answers with a definition from another file (thanks @andriytyurnikov).
+*Also thanks to @antoleod (a first contribution) and @heliocipher (the README rewrite).*
 
 **ripwire 0.6.0 — out now.** Kotlin and Dart bring it to 24 vendored grammars, and Ruby now reads the dependencies a
 Rails application actually has: superclasses, mixins, `autoload`, and the constant receivers an autoloader loads
 through. On llvm-project — 182,555 files — the cold parse drops from 194 s to 156 s of CPU. Declined calls, derailed parses
 and cut answers now say so, instead of returning a quiet zero.
+*Thanks to @xCatG (Kotlin), @calvinchengx (Dart), @andriytyurnikov (Ruby dependencies), @AnkitArya and
+@ashutoshsinghpr7 (Hermes), @s0undt3ch and @PollyBot13. Reports from @snrmwg, @mariadb-KyleHutchinson and @YogevKr.*
 
 **[The presentation](present/ripwire-showcase.pdf) · [the changelog](CHANGELOG.md)** — with thanks to the
 contributors named there; this release is largely theirs.
