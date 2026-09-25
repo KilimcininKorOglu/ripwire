@@ -279,7 +279,17 @@ constexpr std::uint32_t kCacheVersion = 25;           // 25: #150 AND #157 (trai
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 124;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 125;          // bump on any grammar/.scm/extraction change
+                                                      // 125 = 2026-09-27 (#338, test/rubydescribedclasscheck.sh): RSpec's
+                                                      //   `described_class` receiver is classified as the constant
+                                                      //   the innermost constant-described example group names
+                                                      //   (ingest_binds.h::rspecDescribedClass), so RawRef::recv /
+                                                      //   recvVar change VALUE for those call sites — NamedVar
+                                                      //   "Calc" where they were NamedVar "described_class". Carried
+                                                      //   as 121 on the PR; renumbered 125 after #310 (121), #320
+                                                      //   (122) and #220 (124), with 123 reserved for #325. No record
+                                                      //   layout change: kCacheVersion stays 25 (NOT 24); a Ruby cache
+                                                      //   written at 124 holds the old receiver and must re-parse.
                                                       // 124 = 2026-09-26 (#220 part 2, test/depsprecisecheck.sh
                                                       //   P2-O): a TS/JS RE-EXPORT (`export … from './y'`) is an
                                                       //   Include like an import (ingest_relations.h
