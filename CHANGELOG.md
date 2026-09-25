@@ -13,7 +13,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
-## [Unreleased]
+## [0.6.3] — 2026-09-25
 
 ### Fixed — silent cuts in the report verbs and the MCP twins now say what they dropped
 
