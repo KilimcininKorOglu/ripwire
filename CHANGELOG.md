@@ -22,12 +22,16 @@ Part 1 (0.6.4) disclosed these imports; they now resolve, at graph time, the way
 includes all gain the edges. On the issue's own tree the alias spelling now finds both cycles and gives
 `<cycles>`/`<godfiles>` byte-identical to the relative spelling of the same tree.
 - **`paths`**: the one key `tsc` picks (exact, else the longest wildcard prefix), targets in order, from
-  `baseUrl` or the declaring config; **`baseUrl`** paths; `extends` chains (relative, and package-form from an
+  `baseUrl` or the declaring config (a matched key that finds nothing stops there, as in `tsc`); **`baseUrl`** paths; `extends` chains (relative, and package-form from an
   in-tree `node_modules`).
 - **tsconfig `references`**: when the nearest tsconfig.json does not hold the file (create-vite's `files: []`),
-  the referenced project that does owns it (`files`/`include`/`exclude`, through nested references).
+  the referenced project that does owns it (`files`/`include`/`exclude`, through nested references); a file that
+  is in a project only because a held file imports it resolves under the projects that can place the specifier.
+- **package.json `imports`** (`#lib/x`, `#*` patterns, conditions) through the nearest package.json; a `#`
+  specifier nothing answers is counted, never treated as an external package.
 - **Workspace packages**: package.json `workspaces` (array or `{ "packages" }`) and pnpm-workspace.yaml (block or
-  flow list); `exports` (subpaths, `*` patterns, `import`/`require`/`default` conditions), else `module`/`main`/
+  flow list); `exports` (subpaths, `*` patterns; the `import`/`require`/`node`/`default` conditions must agree, else the import is
+  counted as ambiguous), else `module`/`main`/
   `index`, with an emitted `dist/` entry mapped back to its source through the package's own `outDir`→`rootDir`.
 - **Re-exports are imports**: `export … from './y'` (all four forms) is now recorded, so a barrel file's edges
   and the cycles through it exist, relative or aliased. `kParserVer` 122 → 124 (123 stays reserved);
@@ -40,7 +44,8 @@ includes all gain the edges. On the issue's own tree the alias spelling now find
   beside `counts_floor="1"` on `--impact`). An asset import (a stylesheet, an image, a font) that no indexed file
   answers is not counted: the graph has no node for it.
 - The `--deps` help line now says which imports the counter holds (those that name the tree yet drew no edge),
-  matching the legend. A workspace glob that is empty is skipped rather than read.
+  matching the legend, and that the nearest tsconfig's aliases apply to every file below it whether or not its
+  `include` lists the file. A workspace glob that is empty is skipped rather than read.
 
 ## [0.6.4] — 2026-09-25
 
