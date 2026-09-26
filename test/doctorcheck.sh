@@ -307,6 +307,22 @@ WGOTPATH="$( PATH="/usr/bin:/bin" bash "$WEVALSCRIPT" 2>/dev/null )"
     && ok "(G2) no side effect from evaluating the pasted line (a broken quote would let \` or \$() run)" \
     || no "(G2) a marker file exists — the pasted line ran something"
 
+# ── (G3) CodeRabbit 4109273959, second comment: a user pastes the hint from the command to its END, so nothing may
+#     follow the command. The hint used to end "... :"$PATH" (and put that line in your shell rc file)", and pasting
+#     that made bash and sh refuse the whole line (syntax error near `(`) and zsh fail ("number expected"), so PATH
+#     never changed. Evaluate everything from `export PATH=` to the end of the hint in each shell present, and require
+#     exit 0 with the literal directory first on PATH. RED on 0.6.4's trailing guidance.
+WTAIL="$( printf '%s' "$WHINT_UNESC" | sed -e 's/^hint="//' -e 's/"$//' | sed -n 's/.*\(export PATH=\)/\1/p' )"
+[ -n "$WTAIL" ] || no "(G3) no 'export PATH=' in the not-on-PATH hint: $WHINT"
+for g3sh in bash sh zsh; do
+    command -v "$g3sh" >/dev/null 2>&1 || continue
+    printf '%s\nprintf "%%s" "${PATH%%%%:*}"\n' "$WTAIL" >"$TMP/g3-$g3sh.sh"
+    G3OUT="$( PATH="/usr/bin:/bin" "$g3sh" "$TMP/g3-$g3sh.sh" 2>"$TMP/g3-$g3sh.err" )"; G3RC=$?
+    [ "$G3RC" -eq 0 ] && [ "$G3OUT" = "$WEIRDDIR_REAL" ] \
+        && ok "(G3) $g3sh: pasting the hint from 'export PATH=' to its end runs and puts the directory first on PATH" \
+        || no "(G3) $g3sh: pasting the hint's tail failed (rc=$G3RC, PATH head [$G3OUT], stderr [$( head -c 120 "$TMP/g3-$g3sh.err" )]): [$WTAIL]"
+done
+
 # §P11 doctor item: binary-path's ok="0" row names which of self=/which= is the STALE (older) one.
 echo "$SOUT" | grep -oE '<c n="binary-path" ok="0"[^<]*/>' | grep -q 'hint="STALE:' \
     && ok "genuine-stale binary -> binary-path row carries hint=\"STALE: ...\"" \

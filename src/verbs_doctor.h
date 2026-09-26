@@ -249,7 +249,8 @@ inline std::string doctorNotOnPathHint( const std::string& selfPath, std::vector
     const std::string selfDir = ( slash == std::string::npos ) ? std::string( "." ) : selfPath.substr( 0, slash );
     return " hint=\"" + std::string( rw::escapeXml( std::string_view(
                   "NOT ON PATH: no ripwire resolves from PATH; this run used " + selfPath
-                + " — add its directory: " + rw::os::path_prepend_hint( selfDir ) ), esc ) ) + "\"";   // #334: PowerShell's spelling on Windows
+                + " — add its directory (" + std::string( rw::os::path_prepend_scope() ) + "), the command last so pasting from it runs: "
+                + rw::os::path_prepend_hint( selfDir ) ), esc ) ) + "\"";   // #334: PowerShell's spelling on Windows
 }
 
 inline std::string doctorBinaryPathVerdictAttr( const std::string& selfPath, const std::string& whichPath,

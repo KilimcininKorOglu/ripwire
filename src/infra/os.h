@@ -246,15 +246,19 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 // site comparing that answer to a real path must not read the difference alone as proof the two files differ.
 [[gnu::always_inline]] inline bool which_spelling_is_exact() { return true; }
 // path_prepend_hint: the line a user pastes to put `dir` (a program path) first on PATH in the shell they use there, as
-// --doctor's NOT ON PATH hint prints it. POSIX: an `export PATH=` line and the rc-file reminder. Windows: PowerShell's
-// `$env:Path =` (oswin::powerShellPathPrependHint), since a POSIX line pasted there does nothing (#334).
-// `dir` is single-quoted as a shell literal (CodeRabbit 4109273959): unquoted or double-quoted, a `$`, a backtick or
-// a `$(...)` in the directory name would expand or run when the user pastes the hint. `$PATH` stays outside the
-// quotes so it still expands to the existing PATH.
+// --doctor's NOT ON PATH hint prints it — the COMMAND ONLY, so pasting all of it runs (CodeRabbit 4109273959, second
+// comment: a trailing "(and put that line in your shell rc file)" made bash/sh refuse the whole line as a syntax error
+// and zsh fail with "number expected", so a complete paste changed nothing). POSIX: an `export PATH=` line. Windows:
+// PowerShell's `$env:Path =` (oswin::powerShellPathPrependHint), since a POSIX line pasted there does nothing (#334).
+// path_prepend_scope is the guidance that used to trail it (which session it changes, and where the permanent change
+// goes); a caller prints it BEFORE the command. `dir` is single-quoted as a shell literal (CodeRabbit 4109273959):
+// unquoted or double-quoted, a `$`, a backtick or a `$(...)` in the directory name would expand or run when the user
+// pastes the hint. `$PATH` stays outside the quotes so it still expands to the existing PATH.
 inline std::string path_prepend_hint( std::string_view dir )
 {
-    return "export PATH=" + shSingleQuote( std::string( dir ) ) + ":\"$PATH\" (and put that line in your shell rc file)";
+    return "export PATH=" + shSingleQuote( std::string( dir ) ) + ":\"$PATH\"";
 }
+inline std::string_view path_prepend_scope() { return "for this shell; put the same line in your shell rc file"; }
 
 // ── process start and path intake ──────────────────────────────────────────────────────────────────────────
 // Inside the program a path is UTF-8 with '/' separators on every platform, so the spelling is fixed where a path
@@ -804,6 +808,7 @@ std::string which( std::string_view command );   // PATH is ';'-separated; PATHE
 [[gnu::always_inline]] inline bool which_spelling_is_exact() { return false; }
 // path_prepend_hint (see the POSIX branch): PowerShell's spelling, native separators
 inline std::string path_prepend_hint( std::string_view dir ) { return oswin::powerShellPathPrependHint( dir ); }
+inline std::string_view path_prepend_scope() { return oswin::kPowerShellPathPrependScope; }
 void init_process( int& argc, char**& argv );
 void normalize_path_arg( char* text );
 
