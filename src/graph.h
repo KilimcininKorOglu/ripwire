@@ -1844,7 +1844,8 @@ struct ExternalVeto
 // real Python corpus a lone `ConnectionPool.get` collected 611 callers, nearly all of them `dict.get`, became the map's
 // first symbol and inflated every --callers, --impact and --test-gate answer that reached it. Rule 3's include narrow did
 // the same one step earlier: a caller file that transitively imports the class's module says nothing about whether THIS
-// receiver is an instance of it, so the gate runs in its place for these names.
+// receiver is an instance of it, so for these names Rule 3 chooses only among the candidates the gate admits (it still
+// picks the imported one of two admitted free functions, as before).
 //
 // The gate keeps a candidate only when the caller's FILE gives evidence that the receiver can be an instance of it:
 //   * a METHOD — a definition some class owns (Symbol::scope when that names a class, else the innermost class whose
@@ -1854,10 +1855,11 @@ struct ExternalVeto
 //     in the caller's file is evidence for every call there, so a self call inside the class keeps its edge;
 //   * a FREE definition (no owning class): kept unless the call is a member access the extractor classified (a named,
 //     field or literal receiver, or self), which can never reach a free function — except `mod.get()` through a Python
-//     module alias, which an import binding of the receiver name (and no local of that name) keeps.
+//     module alias, which an IN-TREE (or unknown) import binding of the receiver name, and no local of that name, keeps;
+//     `os.environ.get( k )`, rooted at an import from outside the tree, keeps none.
 // Nothing kept means the call is DECLINED, as tier 3 declines: no edge, counted on the caller (the header's declined=),
 // and its whole candidate list recorded, so --callers and --impact of the definition it could have meant say
-// declined_calls=. Something kept means the ladder runs on exactly those candidates, unchanged. A name outside the
+// declined_calls=. Something kept means Rule 3 and the ladder run on exactly those candidates, unchanged. A name outside the
 // tables never reaches this gate: the list decides WHEN evidence is required, never what the target is.
 //
 // Why FILE grain: in Python and TypeScript a class a file uses by name must be imported, defined or constructed there, and
@@ -1977,7 +1979,10 @@ struct BuiltinMethodGate
         return std::ranges::any_of( named, [ & ]( std::uint32_t k ) { return cones.contains( cone, className[ owner ], className[ k ] ); } );
     }
 
-    // A member access the extractor classified, whose receiver is not a Python module alias.
+    // A member access the extractor classified, whose receiver is not rooted at an IN-TREE Python module alias
+    // (`mod.get()` and `pkg.mod.get()` reach a free function; the import verdict is 'i' in-tree or 'u' unknown). A
+    // receiver rooted at an EXTERNAL import ('x': `os.environ.get( k )`) is a member of something outside the tree, so
+    // it can no more reach an in-repo free function than a dict can.
     bool isObjectMemberCall( const Reference& r ) const
     {
         const bool member = r.recv == RecvKind::NamedVar || r.recv == RecvKind::FieldOfThis || r.recv == RecvKind::FieldOfVar
@@ -1986,9 +1991,12 @@ struct BuiltinMethodGate
         {
             return false;
         }
-        const bool moduleAlias = r.lang == Lang::Python && !r.recvVar.empty() && ( r.recv == RecvKind::NamedVar || r.recv == RecvKind::FieldOfVar )
-                              && veto.importVerdict( r, r.recvVar ) != '\0' && !veto.hasLocal( r, r.recvVar );
-        return !moduleAlias;
+        if( r.lang != Lang::Python || r.recvVar.empty() || ( r.recv != RecvKind::NamedVar && r.recv != RecvKind::FieldOfVar ) || veto.hasLocal( r, r.recvVar ) )
+        {
+            return true;
+        }
+        const char verdict = veto.importVerdict( r, r.recvVar );
+        return verdict != 'i' && verdict != 'u';
     }
 
     bool admits( const Reference& r, NodeId c, ChaConeMemo& cones ) const
@@ -2702,7 +2710,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // method of the caller language's builtin map/list/set/string type. Inert (active=false) on a corpus with no
     // symbol in a gated language.
     const BuiltinMethodGate builtinGate = buildBuiltinMethodGate( ing, externalVeto );
-    std::vector<NodeId>     gatedAll;   // reused: a gated call's lang/root-compatible candidates, the list a decline records
+    std::vector<NodeId>     gatedAll;        // reused: a gated call's lang/root-compatible candidates, the list a decline records
+    rw::SmallVec<NodeId, 2> gatedAdmitted;   // reused: the subset of gatedAll the gate admits (Rule 3's input for a gated call)
     const auto vetoExternal = [ & ]( const Reference& ref ) -> CallDisposition
     {
         ++g.externalCalls;
@@ -3277,13 +3286,30 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // only on an unambiguous single-included-file match with NO same-file candidate (that is the name-based fallback's job);
         // otherwise degrades to the name-based fallback. Skipped when already pinned canonically / by Rule 1 / Rule 2 (more specific).
         // The builtin-method name gate (BuiltinMethodGate): a call whose name is a builtin type's method and that no rule
-        // above resolved is decided by the gate INSTEAD of Rule 3 — a transitive import of the class's module is evidence
-        // about the file, never about this receiver. Computed here; applied in the name fill below.
+        // above resolved keeps only the candidates the gate admits, and Rule 3 then chooses among THOSE — a transitive
+        // import of a class's module is evidence about the file, never about this receiver, but it still picks between two
+        // admitted free functions exactly as before. gatedAll is every candidate the call could have meant (the list a
+        // decline records); the name fill below reads gatedAdmitted instead of the whole bucket.
         const bool builtinGated = !scipPinned && !canonical && !narrowed && it != byName.end() && builtinGate.appliesTo( r );
         gatedAll.clear();
-        if( !scipPinned && !canonical && !narrowed && it != byName.end() && !builtinGated )
+        gatedAdmitted.clear();
+        if( builtinGated )
         {
-            if( narrower.rule3IncludeFile( it->second, r.fileId, rule3Out ) )
+            for( const NodeId c : it->second )
+            {
+                if( langCompatible( ing.symbols[ c ].lang, r.lang ) && sameRoot( c, r.fileId ) )
+                {
+                    gatedAll.push_back( c );
+                    if( builtinGate.admits( r, c, chaCones ) )
+                    {
+                        gatedAdmitted.push_back( c );
+                    }
+                }
+            }
+        }
+        if( !scipPinned && !canonical && !narrowed && it != byName.end() )
+        {
+            if( narrower.rule3IncludeFile( builtinGated ? gatedAdmitted : it->second, r.fileId, rule3Out ) )
             {
                 for( NodeId c : rule3Out )
                 {
@@ -3323,21 +3349,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             else
             {
-                for( NodeId c : it->second )
+                if( builtinGated )
                 {
-                    if( !langCompatible( ing.symbols[c].lang, r.lang ) || !sameRoot( c, r.fileId ) )
+                    cand.assign( gatedAdmitted.begin(), gatedAdmitted.end() );   // the gate's filter over the same fill, computed above Rule 3
+                }
+                else
+                {
+                    for( NodeId c : it->second )
                     {
-                        continue;
-                    }
-                    if( builtinGated )
-                    {
-                        gatedAll.push_back( c );   // what the call could have meant, whether or not the gate admits it
-                        if( !builtinGate.admits( r, c, chaCones ) )
+                        if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
                         {
-                            continue;
+                            cand.push_back( c ); // same lang, or ObjC↔C++ bridge; same ROOT (A10)
                         }
                     }
-                    cand.push_back( c ); // same lang, or ObjC↔C++ bridge; same ROOT (A10)
                 }
                 // §3.1 cross-root EVIDENCE channel for a name with NO same-root def: admit another root's
                 // def ONLY when the caller's file has a path-resolved (transitive) include/import reaching

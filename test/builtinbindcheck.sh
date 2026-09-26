@@ -30,6 +30,11 @@
 #       while the bare call inside its enclosing method still binds
 #   (D) control: a name OUTSIDE the table (`checkout`) still binds by name from the same plain file — the gate is not
 #       a general receiver-type requirement
+#   (M) control: Rule 3 still chooses between two admitted FREE functions — a bare `add( … )` in a file that imports
+#       helpers/sums.py binds there and not to other/sums.py's namesake, as it did before the gate
+#   (N) a member call can never reach a free function: `table.get`, `config.get`, `self.store.get` and
+#       `os.environ.get` (rooted at an import from outside the tree) all skip the module-level `def get` in lookup.py,
+#       which the pre-change binary split every one of them onto by directory locality
 #   (E) JavaScript: Map.get and Array.push are declined; `new ConnectionPool()` in the file keeps its edge
 #   (F) TypeScript: the named import carries a parameter annotated with the class (the extractor records no
 #       per-parameter type there), while Map.get in a file that never names it is declined
@@ -122,6 +127,14 @@ check "(C) --callers=py/pool.py:decode is only its enclosing render; raw.decode(
 echo "=== (D) control: a non-builtin name still binds by name ==="
 check "(D) --callers=py/pool.py:checkout keeps untyped_checkout (not a builtin name: the ladder is unchanged)" \
       py/pool.py:checkout 'py/plain.py:untyped_checkout' ''
+
+# ── (M) (N) free functions ────────────────────────────────────────────────────────────────────────────────────
+echo "=== (M)(N) free functions: Rule 3 still chooses among admitted ones; a member call reaches none ==="
+check "(M) --callers=py/helpers/sums.py:add is the importing bare call (Rule 3 over the admitted free functions)" \
+      py/helpers/sums.py:add 'py/uses_add.py:total' ''
+check "(M) --callers=py/other/sums.py:add has no caller and no decline (the import chose its namesake)" py/other/sums.py:add '' ''
+check "(N) --callers=py/lookup.py:get has no caller: the four member .get calls could have meant it and are declined_calls=\"4\"" \
+      py/lookup.py:get '' 4
 
 # ── (E) (F) (G) the other gated languages ─────────────────────────────────────────────────────────────────────
 echo "=== (E)(F)(G) JavaScript, TypeScript, Ruby ==="
