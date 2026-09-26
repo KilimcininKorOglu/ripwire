@@ -615,11 +615,11 @@ inline constexpr const char* kGraphPartialAttrXml = " graph_partial=\"1\""; // t
 // graph_partial='s reading is ONE sentence, spelled identically in both full legends below and in the compact term
 // (compactlegend.h); test/depsprecisecheck.sh's #220 (I) arms pin it in all three, so the wordings cannot fork.
 inline constexpr const char* kDepsImportsUnresolvedLegend =
-    "imports_unresolved=N graph_partial=1 (root, absent at 0): N TS/JS imports name this tree (a tsconfig/jsconfig paths alias, a baseUrl path, a workspace package) yet drew no edge, so every value here is measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios (an absent cycles element is no proof of none); afferent=/transitive=/ccd/acd/nccd can only rise. ";
+    "imports_unresolved=N graph_partial=1 (root, absent at 0): N TS/JS imports name this tree (a tsconfig/jsconfig paths alias, a baseUrl path, a workspace package, a package.json imports entry, an @/ or ~ specifier no registry can publish; asset imports never count) yet drew no edge, so every value here is measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios (an absent cycles element is no proof of none); afferent=/transitive=/ccd/acd/nccd can only rise. ";
 inline constexpr const char* kArchImportsUnresolvedLegend =
-    " imports_unresolved=N graph_partial=1 (absent at 0): N TS/JS imports name this tree (a paths alias, a baseUrl path, a workspace package) yet drew no edge, so an edge through one was never judged: violations= can only rise, and the metrics are measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios.";
+    " imports_unresolved=N graph_partial=1 (absent at 0): N TS/JS imports name this tree (a paths alias, a baseUrl path, a workspace package, a package.json imports entry, an @/ or ~ specifier; asset imports never count) yet drew no edge, so an edge through one was never judged: violations= can only rise, and the metrics are measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios.";
 inline constexpr const char* kImpactImportsUnresolvedLegend =
-    "imports_unresolved=N (absent at 0): N TS/JS imports name this tree (a tsconfig/jsconfig paths alias, a baseUrl path, a workspace package) yet drew no edge, so importers= is a floor. ";
+    "imports_unresolved=N (absent at 0): N TS/JS imports name this tree (a tsconfig/jsconfig paths alias, a baseUrl path, a workspace package, a package.json imports entry, an @/ or ~ specifier no registry can publish; asset imports never count) yet drew no edge, so importers= is a floor. ";
 // #220 part 2 — the resolver's two further disclosures, beside imports_unresolved= and absent at zero like it:
 // imports_dts= counts the edges that land only on a declaration file (types, not source — every count includes them),
 // tsconfig_unread= the owning configs whose `extends` base or `references` project is not in the tree and could have
@@ -644,10 +644,10 @@ inline std::string tsImportRootAttrXml( std::uint64_t importsUnresolved, std::ui
 inline constexpr const char* kDepsImportsDtsLegend =
     "imports_dts=N (root, absent at 0): N TS/JS imports resolved through a paths alias, a baseUrl path or a workspace package only to a .d.ts declaration, not to source; their edges are in every count. ";
 inline constexpr const char* kDepsTsconfigUnreadLegend =
-    "tsconfig_unread=N graph_partial=1 (root, absent at 0): N owning tsconfig/jsconfig files extend a base or reference a project that is not in the tree (a package not installed in node_modules, an excluded file) and could declare an alias, so every value here is measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios. ";
+    "tsconfig_unread=N graph_partial=1 (root, absent at 0): N config files that could declare an alias or a workspace package were not read (an extends base or referenced project not in the tree, one that does not parse, or a tsconfig/jsconfig/workspace root above the crawl root, looked for up to the git top-level), so every value here is measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios. ";
 inline constexpr const char* kArchImportsDtsLegend = " imports_dts=N (absent at 0): N TS/JS imports resolved only to a .d.ts declaration.";
 inline constexpr const char* kArchTsconfigUnreadLegend =
-    " tsconfig_unread=N graph_partial=1 (absent at 0): N owning tsconfig/jsconfig files extend a base or reference a project not in the tree that could declare an alias, so an edge through one was never judged: violations= can only rise, and the metrics are measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios.";
+    " tsconfig_unread=N graph_partial=1 (absent at 0): N config files that could declare an alias or a workspace package were not read (an extends base or referenced project not in the tree, one that does not parse, or a tsconfig/jsconfig/workspace root above the crawl root, looked for up to the git top-level), so an edge through one was never judged: violations= can only rise, and the metrics are measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios.";
 // Two legend clauses, each exactly when its count is non-zero (the #220 composers below all have this shape).
 inline std::string clausesForCounts( std::uint64_t countA, const char* clauseA, std::uint64_t countB, const char* clauseB )
 {
@@ -667,7 +667,7 @@ inline const char* archImportsUnresolvedLegend( bool on ) noexcept { return on ?
 // the root carries its attribute. An unread config makes importers= a floor for the same reason (an alias nobody read
 // drew no edge; importers= only rises as edges are added).
 inline constexpr const char* kImpactTsconfigUnreadLegend =
-    "tsconfig_unread=N (absent at 0): N owning tsconfig/jsconfig files extend a base or reference a project not in the tree that could declare an alias, so importers= is a floor. ";
+    "tsconfig_unread=N (absent at 0): N config files that could declare an alias or a workspace package were not read (an extends base or referenced project not in the tree, one that does not parse, or a tsconfig/jsconfig/workspace root above the crawl root, looked for up to the git top-level), so importers= is a floor. ";
 inline std::string impactTsImportLegend( std::uint64_t importsUnresolved, std::uint64_t tsconfigUnread )
 {
     return clausesForCounts( importsUnresolved, kImpactImportsUnresolvedLegend, tsconfigUnread, kImpactTsconfigUnreadLegend );
