@@ -211,15 +211,18 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
     return path;   // no rewrite on this platform: `path` already is the spelling every os:: call above touches
 }
 
-// which: the path a shell would run for `command` — `command` itself when it contains a '/' and is executable,
-// otherwise the first executable PATH entry joined with it (an empty entry is the current directory, as sh
-// reads it); "" when there is none. No POSIX call does this search (execvp does it without saying what it found).
+// which: the path a shell would run for `command` — `command` itself when it contains a '/' and is an executable
+// file, otherwise the first PATH entry holding one, joined with it (an empty entry is the current directory, as sh
+// reads it); "" when there is none. "Executable file" is a regular file with execute permission, the test which(1)
+// makes: a DIRECTORY named `command` is searchable (X_OK) but not a program, and neither which(1) nor execvp stops at
+// it. No POSIX call does this search (execvp does it without saying what it found).
 [[gnu::always_inline]] inline std::string which( std::string_view command )
 {
     if( command.empty() ) { return {}; }
     const auto executable = []( const std::string& path )
     {
-        return ::access( path.c_str(), X_OK ) == 0;
+        struct ::stat st {};
+        return ::stat( path.c_str(), &st ) == 0 && S_ISREG( st.st_mode ) && ::access( path.c_str(), X_OK ) == 0;
     };
     if( command.find( '/' ) != std::string_view::npos )
     {
@@ -240,11 +243,6 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
     return {};
 }
 
-// which_spelling_is_exact: does a `which NAME` answer (this which() above, or a child shell's popen `which`, as
-// --doctor's binary-path row runs) come back with NAME's own on-disk spelling, extension included? True on POSIX,
-// where a name IS the spelling. False only on Windows, where Git Bash's MSYS `which` never prints ".exe" — a call
-// site comparing that answer to a real path must not read the difference alone as proof the two files differ.
-[[gnu::always_inline]] inline bool which_spelling_is_exact() { return true; }
 // path_prepend_hint: the line a user pastes to put `dir` (a program path) first on PATH in the shell they use there, as
 // --doctor's NOT ON PATH hint prints it. POSIX: an `export PATH=` line and the rc-file reminder. Windows: PowerShell's
 // `$env:Path =` (oswin::powerShellPathPrependHint), since a POSIX line pasted there does nothing (#334).
@@ -798,10 +796,7 @@ int   setenv( const char* name, const char* value, int overwrite );
 std::string rebased_path( const char* path );
 
 // process start and path intake (see the POSIX branch)
-std::string which( std::string_view command );   // PATH is ';'-separated; PATHEXT names; relative entries (the current directory) are never searched
-// Git Bash's MSYS `which` never prints ".exe" — always false here, unlike the POSIX branch (see the POSIX branch
-// above for the full contract); no Windows API call needed, so this stays inline rather than in os_win32.cpp.
-[[gnu::always_inline]] inline bool which_spelling_is_exact() { return false; }
+std::string which( std::string_view command );   // PATH is ';'-separated; PATHEXT names; relative entries (the current directory) are never searched; oswin::searchProgramPath
 // path_prepend_hint (see the POSIX branch): PowerShell's spelling, native separators
 inline std::string path_prepend_hint( std::string_view dir ) { return oswin::powerShellPathPrependHint( dir ); }
 void init_process( int& argc, char**& argv );

@@ -9,6 +9,8 @@
 #   (D) non-vacuity without a source mutation: assert the check COUNT in checks="N" equals the number
 #       of emitted <c ...> rows (a doctor that silently dropped a check would still exit 0/1 plausibly,
 #       but the count would betray it).
+#   (F4)-(F6) #334 binary-path lookup: PATH is read by this process (a shell's `which` is never asked); an unreadable
+#       PATH copy is UNVERIFIED (same_bytes="unknown"), never STALE; which= equals which(1)'s answer on POSIX.
 #   (G) tracked-binary staleness: a binary committed, then its same-stem source
 #       edited in a LATER commit with the binary never recommitted, fires stale="1" ok="0" (git-commit-order,
 #       never mtime); a binary + source committed TOGETHER in their most recent touch stays stale="0" ok="1".
@@ -256,6 +258,65 @@ echo "$OHINT" | grep -qF "STALE: $OLDDIR/ripwire (ripwire 0.6.2" \
 echo "$TROW" | grep -q 'which_version=' \
     && no "(F3) a byte-identical copy was asked for its version (only a mismatch runs the PATH copy)" \
     || ok "(F3) a byte-identical PATH copy carries no which_version= (the PATH binary is run only on a mismatch)"
+
+# ── (F4) #334: the row asks THIS process's PATH (os::which), never a child shell's `which`. On Windows, Git Bash's
+#     `which` answered from another PATH order, in a "/c/..." spelling, and named ~/bin's copy while PowerShell ran the
+#     0.6.4 install. Here a `which` that names a different copy (the byte-flipped STALEDIR one) comes first on PATH, and
+#     the ripwire PATH really runs is TWICEDIR's byte-identical copy. The row must follow PATH: ok="1" copied="1". ──
+FAKEWHICH="$TMP/fakewhich"; mkdir -p "$FAKEWHICH"
+printf '%s\n' '#!/bin/sh' "echo '$STALEDIR/ripwire'" >"$FAKEWHICH/which"
+chmod +x "$FAKEWHICH/which"
+F4CACHE="$TMP/f4cache"; mkdir -p "$F4CACHE"
+F4ROW="$( PATH="$FAKEWHICH:$TWICEDIR:$PATH" TMPDIR="$F4CACHE" "$BIN" "$REPO" --doctor --no-cache 2>/dev/null | grep -oE '<c n="binary-path"[^<]*/>' )"
+{ echo "$F4ROW" | grep -q ' ok="1"' && echo "$F4ROW" | grep -q 'copied="1"' && echo "$F4ROW" | grep -qF "which=\"$TWICEDIR/ripwire\""; } \
+    && ok "(F4) a shell \`which\` that names another copy is not asked: the row follows PATH to the identical copy (ok=\"1\" copied=\"1\")" \
+    || no "(F4) the row followed a child shell's \`which\` instead of PATH: $F4ROW"
+
+# ── (F5) #334: a PATH copy whose bytes cannot be READ has no known contents. Windows' version of this was the "/c/..."
+#     spelling std::fopen could not open: a byte-identical copy came out "STALE … their contents differ". Here the same
+#     size and the same build, but execute-only. The row must fail as unverified (same_bytes="unknown", the file named
+#     in the hint), never as STALE. (Skipped where the copy stays readable, e.g. as root.) ──
+UNREADDIR="$TMP/unreaddir"; mkdir -p "$UNREADDIR"
+cp -p "$BIN" "$UNREADDIR/ripwire"; chmod 111 "$UNREADDIR/ripwire"
+if [ -r "$UNREADDIR/ripwire" ]; then
+    ok "(F5) skipped: an execute-only copy is still readable here (root?), so it cannot model an unreadable file"
+else
+    F5CACHE="$TMP/f5cache"; mkdir -p "$F5CACHE"
+    F5ROW="$( PATH="$UNREADDIR:$PATH" TMPDIR="$F5CACHE" "$BIN" "$REPO" --doctor --no-cache 2>/dev/null | grep -oE '<c n="binary-path"[^<]*/>' )"
+    { echo "$F5ROW" | grep -q ' ok="0"' && echo "$F5ROW" | grep -q 'same_bytes="unknown"' \
+      && echo "$F5ROW" | grep -qF "hint=\"UNVERIFIED: could not read $UNREADDIR/ripwire"; } \
+        && ok "(F5) an unreadable same-size copy reads same_bytes=\"unknown\" with an UNVERIFIED hint naming it" \
+        || no "(F5) an unreadable copy was not reported as unverified: $F5ROW"
+    echo "$F5ROW" | grep -q 'STALE' \
+        && no "(F5) an unreadable copy was called STALE (no evidence the contents differ): $F5ROW" \
+        || ok "(F5) an unreadable copy is never called STALE"
+fi
+chmod 755 "$UNREADDIR/ripwire" 2>/dev/null
+
+# ── (F6) POSIX parity: dropping the child shell must not change which copy the row names. For each PATH shape, which=
+#     must be exactly what which(1) prints: a directory named ripwire first, a non-executable file first, a symlink, an
+#     empty PATH entry (the current directory). (Skipped when this host has no which(1) to compare with.) ──
+if command -v which >/dev/null 2>&1 && [ -x "$( command -v which )" ]; then
+    SHAPES="$TMP/shapes"; mkdir -p "$SHAPES/dirnamed/ripwire" "$SHAPES/noexec" "$SHAPES/link" "$SHAPES/cwd"
+    cp "$BIN" "$SHAPES/noexec/ripwire"; chmod 644 "$SHAPES/noexec/ripwire"
+    ln -s "$TWICEDIR/ripwire" "$SHAPES/link/ripwire"
+    cp "$BIN" "$SHAPES/cwd/ripwire"; chmod 755 "$SHAPES/cwd/ripwire"
+    F6CACHE="$TMP/f6cache"; mkdir -p "$F6CACHE"
+    f6bad=0; f6n=0
+    for shape in "$SHAPES/dirnamed:$TWICEDIR" "$SHAPES/noexec:$TWICEDIR" "$SHAPES/link:$TWICEDIR" ":$TWICEDIR"; do
+        want="$( cd "$SHAPES/cwd" && PATH="$shape:/usr/bin:/bin" which ripwire 2>/dev/null )"
+        row="$( cd "$SHAPES/cwd" && PATH="$shape:/usr/bin:/bin" TMPDIR="$F6CACHE" "$BIN" "$REPO" --doctor --no-cache 2>/dev/null | grep -oE '<c n="binary-path"[^<]*/>' )"
+        f6n=$(( f6n + 1 ))
+        if [ -z "$want" ] || ! echo "$row" | grep -qF "which=\"$want\""; then
+            f6bad=$(( f6bad + 1 )); echo "    PATH=$shape: which(1)=[$want] row: $row"
+        fi
+    done
+    [ "$f6bad" -eq 0 ] \
+        && ok "(F6) which= equals which(1)'s answer on all $f6n PATH shapes (directory, non-executable, symlink, empty entry)" \
+        || no "(F6) which= differs from which(1) on $f6bad of $f6n PATH shapes"
+else
+    ok "(F6) skipped: no which(1) on this host to compare with"
+fi
 
 # ── (G) NOT on PATH at all — the state every fresh install is in until the user adds ~/.local/bin, and the
 #     state in which a stranger runs this binary by absolute path to ask what is wrong. Used to be ok="1"

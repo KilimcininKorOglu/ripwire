@@ -122,32 +122,78 @@ inline std::string doctorPopenTrim( const std::string& cmd )
 // mtime) came out STALE: two byte-identical files, one verdict saying reinstall. Content is the fact this check
 // is about, so read the content: ~10 ms for a 42 MB binary, cheaper than one of the git popens --doctor already
 // pays. Sizes are compared first by the caller so this only runs on a plausible pair.
-inline bool doctorSameFileBytes( const std::string& a, const std::string& b )
+// #334: THREE answers, not two. A file that cannot be opened or read has no known contents; counting that as "differ"
+// is how a byte-identical copy on Windows came out "STALE … their contents differ". Both files are read through the
+// path layer (os::open/os::read take the program's UTF-8 '/' spelling on every OS, binary mode on Windows), never
+// std::fopen, which on Windows reads a narrow path in the ANSI code page and cannot open a non-ASCII user folder.
+enum class DoctorBytes : std::uint8_t
 {
-    std::FILE* fa   = std::fopen( a.c_str(), "rb" );
-    std::FILE* fb   = std::fopen( b.c_str(), "rb" );
-    bool       same = ( fa != nullptr && fb != nullptr );
-    if( same )
+    Same,
+    Differ,
+    Unread,   // `unread` says which file and why; the row makes no claim about the contents
+};
+
+// Fill `buf` from `fd` until it is full or the file ends, retrying EINTR. The byte count, or -1 on a read error.
+inline rw::os::ssize_t doctorReadFull( int fd, std::vector<char>& buf )
+{
+    std::size_t got = 0;
+    while( got < buf.size() )
     {
-        std::vector<char> ba( 1u << 20 ), bb( 1u << 20 );
-        for( ;; )
+        const rw::os::ssize_t n = rw::os::read( fd, buf.data() + got, buf.size() - got );
+        if( n > 0 )
         {
-            const std::size_t na = std::fread( ba.data(), 1, ba.size(), fa );
-            const std::size_t nb = std::fread( bb.data(), 1, bb.size(), fb );
-            if( na != nb || std::memcmp( ba.data(), bb.data(), na ) != 0 )
-            {
-                same = false;
-                break;
-            }
-            if( na == 0 )
-            {
-                break;
-            }
+            got += static_cast<std::size_t>( n );
+        }
+        else if( n == 0 )
+        {
+            break;
+        }
+        else if( errno != EINTR )
+        {
+            return -1;
         }
     }
-    if( fa ) { std::fclose( fa ); }
-    if( fb ) { std::fclose( fb ); }
-    return same;
+    ENSURES( got <= buf.size(), "a read never reports more bytes than it was given room for" );
+    return static_cast<rw::os::ssize_t>( got );
+}
+
+inline DoctorBytes doctorCompareFileBytes( const std::string& a, const std::string& b, std::string& unread )
+{
+    EXPECTS( !a.empty() && !b.empty(), "the caller compares a resolved PATH copy with a resolved self path" );
+    const rw::pathguard::OwnedFd fa( rw::os::open( a.c_str(), O_RDONLY | O_CLOEXEC ) );
+    const int                    errA = errno;
+    const rw::pathguard::OwnedFd fb( rw::os::open( b.c_str(), O_RDONLY | O_CLOEXEC ) );
+    const int                    errB = errno;
+    if( !fa.valid() || !fb.valid() )
+    {
+        unread = fa.valid() ? b + " (" + std::strerror( errB ) + ")" : a + " (" + std::strerror( errA ) + ")";
+        return DoctorBytes::Unread;
+    }
+    std::vector<char> ba( 1u << 20 ), bb( 1u << 20 );
+    for( ;; )
+    {
+        const rw::os::ssize_t na = doctorReadFull( fa.get(), ba );
+        const int             errRa = errno;
+        const rw::os::ssize_t nb = doctorReadFull( fb.get(), bb );
+        if( na < 0 || nb < 0 )
+        {
+            unread = na < 0 ? a + " (" + std::strerror( errRa ) + ")" : b + " (" + std::strerror( errno ) + ")";
+            return DoctorBytes::Unread;
+        }
+        if( na != nb || std::memcmp( ba.data(), bb.data(), static_cast<std::size_t>( na ) ) != 0 )
+        {
+            return DoctorBytes::Differ;
+        }
+        if( na == 0 )
+        {
+            return DoctorBytes::Same;
+        }
+    }
+}
+
+inline const char* doctorBytesValue( DoctorBytes bytes )
+{
+    return bytes == DoctorBytes::Same ? "1" : bytes == DoctorBytes::Differ ? "0" : "unknown";
 }
 
 // Count the advisory edit-lock files under <cacheDir>/locks/<xx>/ (mcpedit.h editLockPath). They are deliberately
@@ -172,27 +218,20 @@ inline std::size_t doctorEditLockCount( const std::string& dir )
     return count;
 }
 
-// The ripwire a bare `ripwire` runs, as `which` names it, and its stat. "" when none resolves. #334: Git Bash's MSYS
-// `which` prints "/c/.../ripwire" with no ".exe" (os::which_spelling_is_exact() is false there), so the stat of that
-// spelling fails and the row used to say NOT ON PATH while an older ripwire.exe sat in that very directory. Before
-// concluding "not on PATH", the spelling the file really has is tried. Identity is then decided by the caller from
-// the stat (device + inode, the volume serial + file index on Windows) and the bytes, never from the name.
+// The ripwire a bare `ripwire` runs, and its stat. "" when none resolves. The lookup is this process's own:
+// os::which reads the PATH ripwire was started with (Windows: PATHEXT too, the order PowerShell and cmd use), never a
+// child shell. #334: Git Bash's `which`, asked through a shell, answered from THAT shell's PATH, in a "/c/..." spelling
+// with no ".exe", so on Windows the row named a copy PowerShell does not run and could not open the file it named.
+// Identity is then decided by the caller from the stat (device + inode, the volume serial + file index on Windows) and
+// the bytes, never from the name.
 inline std::string doctorWhichRipwire( rw::os::stat_t& st )
 {
-    std::string path = doctorPopenTrim( "which ripwire 2>/dev/null" );
-    if( path.empty() || rw::os::stat( path.c_str(), &st ) == 0 )
+    std::string path = rw::os::which( "ripwire" );
+    if( !path.empty() && rw::os::stat( path.c_str(), &st ) != 0 )
     {
-        return path;
+        path.clear();   // it vanished between the search and the stat: nothing on PATH to compare
     }
-    if( !rw::os::which_spelling_is_exact() )
-    {
-        path += ".exe";
-        if( rw::os::stat( path.c_str(), &st ) == 0 )
-        {
-            return path;
-        }
-    }
-    return {};
+    return path;
 }
 
 // The first line the PATH copy prints for --version: the build a bare `ripwire` actually runs, so a mismatch names two
@@ -252,8 +291,10 @@ inline std::string doctorNotOnPathHint( const std::string& selfPath, std::vector
                 + " — add its directory: " + rw::os::path_prepend_hint( selfDir ) ), esc ) ) + "\"";   // #334: PowerShell's spelling on Windows
 }
 
+// `unread` is non-empty when the byte comparison could not read a file (DoctorBytes::Unread): "PATH (reason)".
 inline std::string doctorBinaryPathVerdictAttr( const std::string& selfPath, const std::string& whichPath,
-                                                  const rw::os::stat_t& selfSt, const rw::os::stat_t& whichSt, std::vector<char>& esc )
+                                                  const rw::os::stat_t& selfSt, const rw::os::stat_t& whichSt, std::string_view unread,
+                                                  std::vector<char>& esc )
 {
     // #334: a different ripwire earlier on PATH read as a timestamp puzzle. Its own --version line names the build a
     // bare `ripwire` actually runs. Asked only here, on a mismatch — never when the PATH copy is this file or its
@@ -265,6 +306,14 @@ inline std::string doctorBinaryPathVerdictAttr( const std::string& selfPath, con
     // The release number each binary states outranks the mtimes. A 0.6.2 copied onto PATH after 0.6.3 has the newer
     // mtime, and the mtime rule alone called the running 0.6.3 STALE and told the user to run the 0.6.2 instead.
     const int         order       = doctorVersionOrder( whichVersion, rw::kRipwireVersion );
+    if( !unread.empty() && order == 0 )
+    {
+        // #334: no bytes and no differing release number means no evidence of a difference. Say what is unknown and
+        // why; a STALE verdict here would be a confident wrong answer (it was, for a byte-identical copy on Windows).
+        return out + " hint=\"" + std::string( rw::escapeXml( std::string_view(
+                      "UNVERIFIED: could not read " + std::string( unread ) + ", so the two were not compared byte for byte;"
+                      " compare " + whichPath + " with " + selfPath + " by hand (cmp on POSIX, Get-FileHash in PowerShell)" ), esc ) ) + "\"";
+    }
     const bool        selfIsOlder = order != 0 ? order > 0 : selfSt.st_mtime < whichSt.st_mtime;
     const std::string selfName    = order != 0 ? selfPath + " (ripwire " + rw::kRipwireVersion + ")" : selfPath;
     const std::string whichName   = order != 0 ? whichPath + " (" + whichVersion + ")" : whichPath;
@@ -798,7 +847,7 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     };
 
     // ---- check 1: binary-vs-PATH staleness: identity via (device,inode), then content, of this process's own
-    // binary vs `which ripwire`'s; on a mismatch the PATH copy's own --version line names its build ----
+    // binary vs the one os::which( "ripwire" ) finds on PATH; on a mismatch the PATH copy's own --version line names its build ----
     {
         const std::string selfPath  = selfExecutablePath( argv0 );
         rw::os::stat_t        selfSt {};
@@ -831,10 +880,12 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
                 // Cheap content-equality fallback (degrade, don't crash): equal mtime AND equal size is the
                 // sanctioned proxy for "copied but identical" — a genuine stale shadow almost always differs
                 // in at least one. Only a real mismatch still flags ok=false.
-                const bool sameBytes = ( selfSt.st_size == whichSt.st_size ) && doctorSameFileBytes( selfPath, whichPath );
-                const bool copied    = sameBytes;   // content equality, not the mtime proxy (see doctorSameFileBytes)
+                std::string       unread;
+                const DoctorBytes bytes  = selfSt.st_size != whichSt.st_size ? DoctorBytes::Differ
+                                         : doctorCompareFileBytes( selfPath, whichPath, unread );
+                const bool        copied = bytes == DoctorBytes::Same;   // content equality, not the mtime proxy
                 ok = copied;   // this exact failure bit the LocBench round — stale PATH binary shadows a freshly built one
-                attrs += " same_bytes=\"" + std::string( sameBytes ? "1" : "0" ) + "\"";
+                attrs += " same_bytes=\"" + std::string( doctorBytesValue( bytes ) ) + "\"";
                 attrs += " self_mtime=\""  + std::to_string( (long long)selfSt.st_mtime )  + "\"";
                 attrs += " self_size=\""   + std::to_string( (long long)selfSt.st_size )    + "\"";
                 attrs += " which_mtime=\"" + std::to_string( (long long)whichSt.st_mtime ) + "\"";
@@ -842,28 +893,12 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
                 // §P11 doctor item: a raw ok="0" with four raw timestamps made the reader do the
                 // subtraction themselves — name which of the two IS the stale one (older mtime) and the
                 // fix, so the LocBench-round failure this check exists for reads as a VERDICT.
-                attrs += copied ? std::string( " copied=\"1\"" ) : doctorBinaryPathVerdictAttr( selfPath, whichPath, selfSt, whichSt, esc );
+                attrs += copied ? std::string( " copied=\"1\"" ) : doctorBinaryPathVerdictAttr( selfPath, whichPath, selfSt, whichSt, unread, esc );
             }
         }
         else
         {
             attrs += " on_path=\"1\"";   // could stat the PATH copy but not our own argv[0]-derived path — degrade, don't fail
-        }
-        // D3 fix round, owner call: `which ripwire` runs through Git Bash's MSYS `which`, which prints "/c/.../ripwire"
-        // — normalize_path_arg fixes the drive spelling but not the missing ".exe" — so on_path="0" and same_file/
-        // same_bytes above can all disagree with a correct install. This row is DEGRADED AND DISCLOSED on Windows this
-        // release rather than silently trusted: `ok` above is still whatever the (possibly Windows-spelling-confused)
-        // comparison found, but a reader now sees why it may be wrong. The call site never asks which OS it is on
-        // (osswitchcheck arm G) — it asks os::which_spelling_is_exact(), true on POSIX (byte-identical: the branch
-        // below never taken) and false only on Windows. #334: doctorWhichRipwire now retries the ".exe" spelling
-        // before concluding NOT ON PATH, so the identity compare above runs on Windows too; the disclosure stays
-        // until the native os::which( "ripwire" ) PATH/PATHEXT search (D4 follow-up) replaces the shell's `which`.
-        if( !os::which_spelling_is_exact() )
-        {
-            // The disclosure IS the attribute (a reader of this row's own output sees it); no separate DISCLOSE()
-            // trace — that macro's sink-less form tells the user nothing (Diagnostics.h §4b) and would only grow
-            // selfcheckcheck arm R's pinned sink-less count for no benefit over the attrs= this row already carries.
-            attrs += " degraded=\"1\" degrade_reason=\"win32-which-spelling\"";
         }
         row( "binary-path", ok, attrs );
     }

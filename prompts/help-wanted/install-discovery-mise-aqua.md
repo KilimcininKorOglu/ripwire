@@ -61,7 +61,7 @@ project's rule that a new surface lives in the one executable.
 | `src/wrap.h`, header comment | `wrap` is **pure**: it prints, it never writes configuration. `skills install` is the verb that writes |
 | `src/main.cpp`, `main` | `wrap` is dispatched as a subcommand by `argv[1] == "wrap"` before `parseArgs`. `skills` would sit beside it |
 | `src/verbs_doctor.h`, `selfExecutablePath` | The running binary's own path, **realpath'd**. A shim or symlink resolves to the versioned target, and the unresolved shim path is gone |
-| `src/verbs_doctor.h`, `runDoctor` check 1 and `doctorBinaryPathVerdictAttr` | `binary-path`: `which ripwire` against self, by inode, then by content (`doctorSameFileBytes`). Different bytes fail the row with a STALE hint |
+| `src/verbs_doctor.h`, `runDoctor` check 1 and `doctorBinaryPathVerdictAttr` | `binary-path`: the `ripwire` that `os::which` finds on PATH against self, by inode, then by content (`doctorCompareFileBytes`). Different bytes fail the row with a STALE hint; an unreadable copy fails it as UNVERIFIED |
 | `src/codexdoctor.h`, `binaryCheck`, `resolveExecutable`, `skillsCheck`, `skillManifest`, `claudeInspect` | The `--agent=claude/codex` rows. `skillsCheck` compares `.ripwire-manifest-v1` (skill **names** only) with the live `ripwire-*` directories, and its hint names `bash skills/install.sh` |
 | `src/pathguard.h` | The house predicate and reasoning for never writing through a symlink at a destination |
 | `scripts/install.sh` | The curl installer. It stages `$prefix/share/ripwire/{skills,hooks}` with `rm -rf` and `cp -R` on every install, so that directory is stable across versions |
