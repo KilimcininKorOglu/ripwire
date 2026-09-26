@@ -27,6 +27,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "model.h"              // Lang enum
@@ -34,7 +35,7 @@
 #include "docparse.h"           // detail::readWholeFile — THE canonical whole-file byte read; never re-rolled
 #include "infra/namesplit.h"   // namesplit::stripQuotePair — THE canonical quote-strip; never re-rolled
 #include "infra/Diagnostics.h"  // DISCLOSE (no-op in release; the fprintf below is the visible line)
-#include "handlershape.h"        // hshape:: the handler/placeholder shape tags the AstWalk::HandlerShapes group emits
+#include "infra/tablelookup.h"   // findByField
 
 namespace rw
 {
@@ -1310,31 +1311,25 @@ struct ErrorMaskHit
 // sev="minor", and never fires exit 2. A declarative table, so moving a pair across the line is one row.
 struct HandlerShapeGate
 {
-    std::string_view shape;   // hshape::kLogOnly / hshape::kRethrowOnly
-    Lang             lang;
+    Lang lang;
+    bool logOnlyGates;       // kShapeLogOnly gates in this language
+    bool rethrowOnlyGates;   // kShapeRethrowOnly gates in this language
 };
 
 inline constexpr HandlerShapeGate kHandlerShapeGates[] = {
-    { "log-only",     Lang::Python },   // 40 of 41 hand-labelled hits TRUE (0.976)
-    { "rethrow-only", Lang::Python },   // 33 of 33 hand-labelled hits TRUE (1.000)
+    { Lang::Python, true, true },   // log-only 40 of 41 hand-labelled hits TRUE (0.976); rethrow-only 33 of 33 (1.000)
 };
 
 inline bool handlerShapeGates( std::string_view shape, Lang lang ) noexcept
 {
-    for( const HandlerShapeGate& row : kHandlerShapeGates )
-    {
-        if( row.shape == shape && row.lang == lang )
-        {
-            return true;
-        }
-    }
-    return false;
+    const HandlerShapeGate* row = findByField( kHandlerShapeGates, &HandlerShapeGate::lang, lang );
+    return row != nullptr && ( shape == kShapeLogOnly ? row->logOnlyGates : row->rethrowOnlyGates );
 }
 
 // Is this error-masking hit one of the classic always-gating rows, or a widened shape that gates in `lang`?
 inline bool errorMaskHitGates( std::string_view id, Lang lang ) noexcept
 {
-    return !( id == hshape::kLogOnly || id == hshape::kRethrowOnly ) || handlerShapeGates( id, lang );
+    return !( id == kShapeLogOnly || id == kShapeRethrowOnly ) || handlerShapeGates( id, lang );
 }
 
 // Both families --quality-delta counts per symbol, from ONE read and parse of the tree: the error-masking
@@ -1395,17 +1390,7 @@ inline void keepErrorMaskQueryRows( const IngestResult& ing, std::vector<AstMatc
 inline void sortConstructHits( const IngestResult& ing, std::vector<ErrorMaskHit>& hits )
 {
     std::sort( hits.begin(), hits.end(), [ & ]( const ErrorMaskHit& a, const ErrorMaskHit& b )
-               {
-                   if( ing.files[a.fileId] != ing.files[b.fileId] )
-                   {
-                       return ing.files[a.fileId] < ing.files[b.fileId];
-                   }
-                   if( a.startByte != b.startByte )
-                   {
-                       return a.startByte < b.startByte;
-                   }
-                   return a.id < b.id;
-               } );
+               { return std::tie( ing.files[a.fileId], a.startByte, a.id ) < std::tie( ing.files[b.fileId], b.startByte, b.id ); } );
 }
 
 // Run the built-in error-masking table AND the handler/placeholder walk over the tree, in ONE shared read
@@ -1432,7 +1417,7 @@ inline QualityConstructHits findQualityConstructs( const IngestResult& ing )
     keepErrorMaskQueryRows( ing, groups[0], out.mask );
     for( const AstMatch& m : groups[1] )
     {
-        const bool isPlaceholder = m.tag == hshape::kStub || m.tag == hshape::kTodo;
+        const bool isPlaceholder = m.tag == kShapeStub || m.tag == kShapeTodo;
         ( isPlaceholder ? out.placeholder : out.mask ).push_back( { m.fileId, m.startByte, m.line, m.tag } );
     }
     sortConstructHits( ing, out.mask );

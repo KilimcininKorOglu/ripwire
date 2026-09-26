@@ -1,4 +1,7 @@
 #pragma once
+#if !defined( RIPWIRE_INGEST_TU )
+#error "handlershape.h is a SECTION of src/ingest.cpp's translation unit - include it only from ingest.cpp (see the ingest-family split note there)"
+#endif
 
 // handlershape.h — two structural shape families read off ONE parsed tree, for --quality-delta:
 //
@@ -30,49 +33,41 @@
 // Measured precision per shape and language is in docs/EVALS.md ("error-masking widened"); the table
 // kHandlerShapeGates in lintrules.h decides which shapes gate.
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include <tree_sitter/api.h>
 
 #include "infra/Diagnostics.h"   // ASSUME
+#include "infra/nodekind.h"      // kindIs
+#include "infra/strkern.h"       // strkern::lowerFoldAscii — the ONE ASCII case fold
+#include "infra/tablelookup.h"   // findByField
 #include "infra/tschildren.h"
-#include "model.h"   // Lang
+#include "ingest.h"              // the four kShape* tags, Lang
 
 namespace rw::hshape
 {
 
-// The four tags a hit carries. lintrules.h routes the first two to error-masking, the last two to placeholder.
-inline constexpr std::string_view kLogOnly     = "log-only";
-inline constexpr std::string_view kRethrowOnly = "rethrow-only";
-inline constexpr std::string_view kStub        = "stub";
-inline constexpr std::string_view kTodo        = "todo";
 
 struct ShapeSpan
 {
     std::uint32_t    startByte = 0;
     std::uint32_t    endByte   = 0;
-    std::string_view tag;   // one of the four constants above — static storage, never a view into the file
+    std::string_view tag;   // one of the four kShape* tags (ingest.h) — static storage, never a view into the file
 };
 
 // ── small readers ─────────────────────────────────────────────────────────────────────────────────────
 
 // Every reader below is NULL-SAFE, because tree-sitter's are not: ts_node_end_byte and
 // ts_node_child_by_field_name dereference the node's subtree/tree, so a missing optional field (a catch
-// with no parameter, a raise with no argument) handed to either crashes the walk.
-inline std::string_view nodeText( TSNode n, std::string_view src ) noexcept
-{
-    if( ts_node_is_null( n ) )
-    {
-        return {};
-    }
-    const std::uint32_t a = ts_node_start_byte( n ), b = ts_node_end_byte( n );
-    return ( a <= b && b <= src.size() ) ? src.substr( a, b - a ) : std::string_view();
-}
-
+// with no parameter, a raise with no argument) handed to either crashes the walk. Text is read with
+// ingest_metrics.h's nodeTextOf, which is null-safe the same way.
 inline TSNode namedChild( TSNode n, std::uint32_t index ) noexcept
 {
     return ( ts_node_is_null( n ) || index >= ts_node_named_child_count( n ) ) ? TSNode{} : ts_node_named_child( n, index );
@@ -83,9 +78,16 @@ inline std::uint32_t namedCount( TSNode n ) noexcept
     return ts_node_is_null( n ) ? 0u : ts_node_named_child_count( n );
 }
 
-inline bool typeIs( TSNode n, const char* type ) noexcept
+// A null node's type is the empty string, so kindIs answers false for it rather than crashing.
+inline const char* typeOf( TSNode n ) noexcept
 {
-    return !ts_node_is_null( n ) && std::strcmp( ts_node_type( n ), type ) == 0;
+    return ts_node_is_null( n ) ? "" : ts_node_type( n );
+}
+
+template< std::size_t N >
+inline bool typeIs( TSNode n, const char ( &kind )[N] ) noexcept
+{
+    return kindIs( typeOf( n ), kind );
 }
 
 inline bool isCommentNode( TSNode n ) noexcept
@@ -133,10 +135,10 @@ inline bool mentionsName( TSNode n, std::string_view src, std::string_view name 
     }
     if( namedCount( n ) == 0 )
     {
-        return !ts_node_is_null( n ) && ts_node_is_named( n ) && nodeText( n, src ) == name;
+        return !ts_node_is_null( n ) && ts_node_is_named( n ) && nodeTextOf( n, src ) == name;
     }
     return anyChildBelow( n, -1, true, [ & ]( TSNode c )
-                          { return ts_node_named_child_count( c ) == 0 && nodeText( c, src ) == name; } );
+                          { return ts_node_named_child_count( c ) == 0 && nodeTextOf( c, src ) == name; } );
 }
 
 // The spellings that carry the CURRENT error without naming the caught identifier: Python's
@@ -208,9 +210,9 @@ inline void readPythonHandler( TSNode n, std::string_view src, Handler& h )
         type                = namedChild( value, 0 );
         const TSNode target = field( value, "alias" );
         const TSNode ident  = namedChild( target, 0 );
-        h.name              = typeIs( ident, "identifier" ) ? nodeText( ident, src ) : std::string_view();
+        h.name              = typeIs( ident, "identifier" ) ? nodeTextOf( ident, src ) : std::string_view();
     }
-    h.broad = ts_node_is_null( type ) || ( ( typeIs( type, "identifier" ) || typeIs( type, "attribute" ) ) && isRootErrorType( nodeText( type, src ) ) );
+    h.broad = ts_node_is_null( type ) || ( ( typeIs( type, "identifier" ) || typeIs( type, "attribute" ) ) && isRootErrorType( nodeTextOf( type, src ) ) );
     h.body  = firstChildOfKind( n, true, { "block" } );
     const TSNode tryNode = ts_node_parent( n );
     h.sole  = siblingsOfSameType( n ) == 1 && ( ts_node_is_null( tryNode ) || ts_node_is_null( firstChildOfKind( tryNode, true, { "except_group_clause" } ) ) );
@@ -219,7 +221,7 @@ inline void readPythonHandler( TSNode n, std::string_view src, Handler& h )
 inline void readJavaScriptHandler( TSNode n, std::string_view src, Handler& h )
 {
     const TSNode param = field( n, "parameter" );
-    h.name  = typeIs( param, "identifier" ) ? nodeText( param, src ) : std::string_view();
+    h.name  = typeIs( param, "identifier" ) ? nodeTextOf( param, src ) : std::string_view();
     h.broad = ts_node_is_null( param ) || typeIs( param, "identifier" );   // a JS catch catches everything; a destructured one is not judged
     h.body  = field( n, "body" );
     h.sole  = true;                                                        // a JS try has at most one catch
@@ -234,8 +236,8 @@ inline void readJavaHandler( TSNode n, std::string_view src, Handler& h )
     }
     const TSNode name  = field( param, "name" );
     const TSNode types = firstChildOfKind( param, true, { "catch_type" } );
-    h.name  = nodeText( name, src );
-    h.broad = namedCount( types ) == 1 && isRootErrorType( nodeText( types, src ) );
+    h.name  = nodeTextOf( name, src );
+    h.broad = namedCount( types ) == 1 && isRootErrorType( nodeTextOf( types, src ) );
     h.body  = field( n, "body" );
     h.sole  = siblingsOfSameType( n ) == 1;
 }
@@ -244,8 +246,8 @@ inline void readCSharpHandler( TSNode n, std::string_view src, Handler& h )
 {
     const TSNode decl = firstChildOfKind( n, true, { "catch_declaration" } );
     h.filtered        = !ts_node_is_null( firstChildOfKind( n, true, { "catch_filter_clause" } ) );
-    h.name            = ts_node_is_null( decl ) ? std::string_view() : nodeText( field( decl, "name" ), src );
-    h.broad           = ts_node_is_null( decl ) || isRootErrorType( nodeText( field( decl, "type" ), src ) );
+    h.name            = ts_node_is_null( decl ) ? std::string_view() : nodeTextOf( field( decl, "name" ), src );
+    h.broad           = ts_node_is_null( decl ) || isRootErrorType( nodeTextOf( field( decl, "type" ), src ) );
     h.body            = field( n, "body" );
     h.sole            = siblingsOfSameType( n ) == 1;
 }
@@ -254,8 +256,8 @@ inline void readKotlinHandler( TSNode n, std::string_view src, Handler& h )
 {
     const TSNode ident = firstChildOfKind( n, true, { "simple_identifier" } );
     const TSNode type  = firstChildOfKind( n, true, { "user_type" } );
-    h.name  = nodeText( ident, src );
-    h.broad = !ts_node_is_null( type ) && isRootErrorType( nodeText( type, src ) );
+    h.name  = nodeTextOf( ident, src );
+    h.broad = !ts_node_is_null( type ) && isRootErrorType( nodeTextOf( type, src ) );
     h.body  = firstChildOfKind( n, true, { "statements" } );
     h.sole  = siblingsOfSameType( n ) == 1;
 }
@@ -265,9 +267,9 @@ inline void readRubyHandler( TSNode n, std::string_view src, Handler& h )
     const TSNode exceptions = field( n, "exceptions" );
     const TSNode variable   = field( n, "variable" );
     const TSNode ident      = namedChild( variable, 0 );
-    h.name  = typeIs( ident, "identifier" ) ? nodeText( ident, src ) : std::string_view();
+    h.name  = typeIs( ident, "identifier" ) ? nodeTextOf( ident, src ) : std::string_view();
     h.broad = ts_node_is_null( exceptions )
-           || ( namedCount( exceptions ) == 1 && isRootErrorType( nodeText( namedChild( exceptions, 0 ), src ) ) );
+           || ( namedCount( exceptions ) == 1 && isRootErrorType( nodeTextOf( namedChild( exceptions, 0 ), src ) ) );
     h.body  = field( n, "body" );
     h.sole  = siblingsOfSameType( n ) == 1;
 }
@@ -283,7 +285,7 @@ inline void readCppHandler( TSNode n, std::string_view src, Handler& h )
         {
             d = namedChild( d, namedCount( d ) - 1 );   // & / && / * wrappers carry the name last
         }
-        h.name = typeIs( d, "identifier" ) ? nodeText( d, src ) : std::string_view();
+        h.name = typeIs( d, "identifier" ) ? nodeTextOf( d, src ) : std::string_view();
     }
     h.broad = ts_node_is_null( decl );   // catch( ... ): C++ has no root error type every throw derives from
     h.body  = field( n, "body" );
@@ -322,9 +324,13 @@ inline TSNode statementExpression( TSNode s ) noexcept
     return s;
 }
 
+// Python/Ruby, JS/TS/Go/Kotlin/C++/Rust/Swift, Java, C#.
+inline constexpr const char* kCallNodeTypes[] = { "call", "call_expression", "method_invocation", "invocation_expression" };
+
 inline bool isCallNode( TSNode n ) noexcept
 {
-    return typeIs( n, "call" ) || typeIs( n, "call_expression" ) || typeIs( n, "method_invocation" ) || typeIs( n, "invocation_expression" );
+    const char* t = typeOf( n );
+    return std::any_of( std::begin( kCallNodeTypes ), std::end( kCallNodeTypes ), [ t ]( const char* k ) { return std::strcmp( t, k ) == 0; } );
 }
 
 // The callee of a call, as source text: `print`, `logger.warning`, `console.error`, `System.out.println`,
@@ -334,20 +340,20 @@ inline std::string_view calleeText( TSNode call, std::string_view src, std::stri
     receiverOut = {};
     if( typeIs( call, "method_invocation" ) )
     {
-        receiverOut = nodeText( field( call, "object" ), src );
-        return nodeText( field( call, "name" ), src );
+        receiverOut = nodeTextOf( field( call, "object" ), src );
+        return nodeTextOf( field( call, "name" ), src );
     }
     if( typeIs( call, "call" ) && !ts_node_is_null( field( call, "method" ) ) )   // Ruby
     {
-        receiverOut = nodeText( field( call, "receiver" ), src );
-        return nodeText( field( call, "method" ), src );
+        receiverOut = nodeTextOf( field( call, "receiver" ), src );
+        return nodeTextOf( field( call, "method" ), src );
     }
     TSNode fn = field( call, "function" );
     if( ts_node_is_null( fn ) )
     {
         fn = namedChild( call, 0 );   // Kotlin: the callee is the first child, no field
     }
-    const std::string_view text = nodeText( fn, src );
+    const std::string_view text = nodeTextOf( fn, src );
     const std::size_t      dot  = text.find_last_of( '.' );
     if( dot == std::string_view::npos )
     {
@@ -357,44 +363,39 @@ inline std::string_view calleeText( TSNode call, std::string_view src, std::stri
     return text.substr( dot + 1 );
 }
 
-inline bool iequalsAscii( std::string_view a, std::string_view b ) noexcept
+// An ASCII-lower-cased copy, for the case-insensitive vocabulary tests below (every needle is lower case).
+inline std::string lowerCopy( std::string_view s )
 {
-    if( a.size() != b.size() )
-    {
-        return false;
-    }
-    for( std::size_t i = 0; i < a.size(); ++i )
-    {
-        const char x = ( a[i] >= 'A' && a[i] <= 'Z' ) ? char( a[i] - 'A' + 'a' ) : a[i];
-        const char y = ( b[i] >= 'A' && b[i] <= 'Z' ) ? char( b[i] - 'A' + 'a' ) : b[i];
-        if( x != y )
-        {
-            return false;
-        }
-    }
-    return true;
+    std::string out( s );
+    strkern::lowerFoldAscii( out.data(), out.size() );
+    return out;
 }
 
-inline bool containsLogWord( std::string_view s ) noexcept
+// How many of the (lower-case) `needles` occur in `hay`, case-insensitively. A COUNT rather than the one-line
+// any_of-over-find, because that exact shape structurally matches several unrelated substring checks in the
+// tree under --quality-delta's duplication kind (the class infra/dirwalk.h's banner documents).
+template< std::size_t N >
+inline std::size_t countPhrases( std::string_view hay, const std::string_view ( &needles )[N] )
 {
-    for( std::size_t i = 0; i + 3 <= s.size(); ++i )
+    const std::string lowered = lowerCopy( hay );
+    std::size_t       found   = 0;
+    for( const std::string_view w : needles )
     {
-        if( iequalsAscii( s.substr( i, 3 ), "log" ) )
-        {
-            return true;
-        }
+        found += ( lowered.find( w ) != std::string::npos ) ? 1u : 0u;
     }
-    return false;
+    return found;
 }
 
 // A logging receiver: anything whose LAST segment says log (logger, log, LOG, logging, _log, self.logger,
 // Rails.logger), or one of the console/stream spellings every grammar here uses for print-to-a-reader.
-inline bool isLogReceiver( std::string_view recv ) noexcept
+inline bool isLogReceiver( std::string_view recv )
 {
     const std::size_t      dot  = recv.find_last_of( '.' );
     const std::string_view last = ( dot == std::string_view::npos ) ? recv : recv.substr( dot + 1 );
-    return containsLogWord( last ) || last == "console" || last == "Console" || last == "out" || last == "err" || last == "stderr"
-        || last == "stdout" || last == "warnings" || last == "fmt" || last == "Debug" || last == "Trace";
+    constexpr std::string_view kStreamReceivers[] = { "console", "out", "err", "stderr", "stdout", "warnings", "fmt", "debug", "trace" };
+    const std::string lowered = lowerCopy( last );
+    return lowered.find( "log" ) != std::string::npos
+        || std::find( std::begin( kStreamReceivers ), std::end( kStreamReceivers ), lowered ) != std::end( kStreamReceivers );
 }
 
 // The verbs a logging call ends in. `exception` is deliberately ABSENT (Python's logger.exception writes
@@ -409,7 +410,7 @@ inline constexpr std::string_view kBarePrintCalls[] = { "print", "println", "pri
 
 // Is this statement ONE logging/print call? An unrecognised callee answers no — the shape then does not
 // fire, which is a miss and never a finding.
-inline bool isLogCall( TSNode stmt, std::string_view src ) noexcept
+inline bool isLogCall( TSNode stmt, std::string_view src )
 {
     const TSNode call = statementExpression( stmt );
     if( !isCallNode( call ) )
@@ -433,14 +434,8 @@ inline bool isLogCall( TSNode stmt, std::string_view src ) noexcept
     {
         return false;   // fmt.Errorf / Sprintf BUILD a value; they print nothing
     }
-    for( std::string_view v : kLogVerbs )
-    {
-        if( iequalsAscii( verb, v ) )
-        {
-            return isLogReceiver( recv );
-        }
-    }
-    return false;
+    const std::string lowered = lowerCopy( verb );
+    return std::find( std::begin( kLogVerbs ), std::end( kLogVerbs ), lowered ) != std::end( kLogVerbs ) && isLogReceiver( recv );
 }
 
 // A statement that re-raises the caught error unchanged: bare `raise` / `throw;`, or raise/throw of the
@@ -448,13 +443,13 @@ inline bool isLogCall( TSNode stmt, std::string_view src ) noexcept
 inline bool isRethrowOf( TSNode stmt, std::string_view src, std::string_view name ) noexcept
 {
     const TSNode s = statementExpression( stmt );
-    if( typeIs( s, "identifier" ) && nodeText( s, src ) == "raise" )
+    if( typeIs( s, "identifier" ) && nodeTextOf( s, src ) == "raise" )
     {
         return true;   // Ruby: a bare `raise` parses as an identifier
     }
     const bool isThrow = typeIs( s, "raise_statement" ) || typeIs( s, "throw_statement" )
-                      || ( typeIs( s, "jump_expression" ) && nodeText( s, src ).starts_with( "throw" ) );
-    const bool isRubyRaise = typeIs( s, "call" ) && nodeText( field( s, "method" ), src ) == "raise" && ts_node_is_null( field( s, "receiver" ) );
+                      || ( typeIs( s, "jump_expression" ) && nodeTextOf( s, src ).starts_with( "throw" ) );
+    const bool isRubyRaise = typeIs( s, "call" ) && nodeTextOf( field( s, "method" ), src ) == "raise" && ts_node_is_null( field( s, "receiver" ) );
     if( !isThrow && !isRubyRaise )
     {
         return false;
@@ -469,7 +464,7 @@ inline bool isRethrowOf( TSNode stmt, std::string_view src, std::string_view nam
     {
         return !isRubyRaise || ts_node_is_null( arg );
     }
-    return argCount == 1 && !name.empty() && nodeText( namedChild( arg, 0 ), src ) == name;
+    return argCount == 1 && !name.empty() && nodeTextOf( namedChild( arg, 0 ), src ) == name;
 }
 
 // ── the two error-masking shapes over one handler ─────────────────────────────────────────────────────
@@ -487,7 +482,7 @@ inline std::string_view handlerShape( const Handler& h, std::string_view src, st
     }
     if( h.sole && stmts.size() == 1 && isRethrowOf( stmts[0], src, h.name ) )
     {
-        return kRethrowOnly;
+        return kShapeRethrowOnly;
     }
     if( !h.broad )
     {
@@ -500,7 +495,7 @@ inline std::string_view handlerShape( const Handler& h, std::string_view src, st
             return {};
         }
     }
-    return mentionsError( h.body, src, h.name ) ? std::string_view() : kLogOnly;
+    return mentionsError( h.body, src, h.name ) ? std::string_view() : kShapeLogOnly;
 }
 
 // Go: `if err != nil { log.Printf( "…" ) }` — no else, the error-shaped name compared against nil, and a
@@ -518,7 +513,7 @@ inline std::string_view goLogOnlyShape( TSNode n, std::string_view src, std::vec
         return {};
     }
     const TSNode left = field( cond, "left" ), right = field( cond, "right" ), op = field( cond, "operator" );
-    if( !typeIs( left, "identifier" ) || !typeIs( right, "nil" ) || nodeText( op, src ) != "!=" || !isGoErrName( nodeText( left, src ) ) )
+    if( !typeIs( left, "identifier" ) || !typeIs( right, "nil" ) || nodeTextOf( op, src ) != "!=" || !isGoErrName( nodeTextOf( left, src ) ) )
     {
         return {};
     }
@@ -535,25 +530,20 @@ inline std::string_view goLogOnlyShape( TSNode n, std::string_view src, std::vec
             return {};
         }
     }
-    return mentionsError( body, src, nodeText( left, src ) ) ? std::string_view() : kLogOnly;
+    return mentionsError( body, src, nodeTextOf( left, src ) ) ? std::string_view() : kShapeLogOnly;
 }
 
 // ── placeholders ──────────────────────────────────────────────────────────────────────────────────────
 
 // Case-insensitive search for one of the stub phrases in a string literal's text. "TODO" is matched
 // case-SENSITIVELY and as a whole word, because "todo" in lower case is ordinary English ("todo list").
-inline bool saysNotImplemented( std::string_view s ) noexcept
+inline constexpr std::string_view kStubPhrases[] = { "not implemented", "not yet implemented", "unimplemented", "implement me" };
+
+inline bool saysNotImplemented( std::string_view s )
 {
-    constexpr std::string_view kPhrases[] = { "not implemented", "not yet implemented", "unimplemented", "implement me" };
-    for( std::string_view p : kPhrases )
+    if( countPhrases( s, kStubPhrases ) > 0 )
     {
-        for( std::size_t i = 0; i + p.size() <= s.size(); ++i )
-        {
-            if( iequalsAscii( s.substr( i, p.size() ), p ) )
-            {
-                return true;
-            }
-        }
+        return true;
     }
     for( std::size_t at = s.find( "TODO" ); at != std::string_view::npos; at = s.find( "TODO", at + 1 ) )
     {
@@ -571,7 +561,7 @@ inline bool saysNotImplemented( std::string_view s ) noexcept
 inline bool hasStubMessage( TSNode n, std::string_view src )
 {
     return anyChildBelow( n, 6, true, [ & ]( TSNode c )
-                          { return std::strstr( ts_node_type( c ), "string" ) != nullptr && saysNotImplemented( nodeText( c, src ) ); } );
+                          { return std::strstr( ts_node_type( c ), "string" ) != nullptr && saysNotImplemented( nodeTextOf( c, src ) ); } );
 }
 
 // Python: is this raise inside a method decorated @abstractmethod (the language's declared "subclass
@@ -592,20 +582,11 @@ inline bool insideAbstractMethod( TSNode n, std::string_view src )
 
 // A raise/throw whose text declares a CONTRACT for subclasses ("must be implemented by subclasses",
 // "override this", "abstract") is the language's abstract-method idiom, not a placeholder.
-inline bool declaresAbstractContract( std::string_view t ) noexcept
+inline constexpr std::string_view kAbstractContractWords[] = { "subclass", "override", "abstract", "implemented by", "must implement", "should implement" };
+
+inline bool declaresAbstractContract( std::string_view t )
 {
-    constexpr std::string_view kWords[] = { "subclass", "override", "abstract", "implemented by", "must implement", "should implement" };
-    for( std::string_view w : kWords )
-    {
-        for( std::size_t i = 0; i + w.size() <= t.size(); ++i )
-        {
-            if( iequalsAscii( t.substr( i, w.size() ), w ) )
-            {
-                return true;
-            }
-        }
-    }
-    return false;
+    return countPhrases( t, kAbstractContractWords ) > 0;
 }
 
 // Is `n` the WHOLE body of the function (or method) around it — the only statement, a leading docstring
@@ -655,7 +636,7 @@ inline bool isNotImplementedErrorRaise( TSNode n, std::string_view src )
     {
         what = field( what, "function" );
     }
-    return typeIs( what, "identifier" ) && nodeText( what, src ) == "NotImplementedError" && isWholeFunctionBody( n ) && !insideClass( n, Lang::Python )
+    return typeIs( what, "identifier" ) && nodeTextOf( what, src ) == "NotImplementedError" && isWholeFunctionBody( n ) && !insideClass( n, Lang::Python )
         && !insideAbstractMethod( n, src );
 }
 
@@ -669,7 +650,7 @@ inline bool isStubCall( TSNode n, std::string_view src, Lang lang )
     }
     if( lang == Lang::Ruby && recv.empty() && verb == "raise" )
     {
-        return ( nodeText( n, src ).find( "NotImplementedError" ) != std::string_view::npos && isWholeFunctionBody( n ) && !insideClass( n, Lang::Ruby ) ) || hasStubMessage( n, src );
+        return ( nodeTextOf( n, src ).find( "NotImplementedError" ) != std::string_view::npos && isWholeFunctionBody( n ) && !insideClass( n, Lang::Ruby ) ) || hasStubMessage( n, src );
     }
     const bool stopper = recv.empty() && ( verb == "panic" || verb == "fatalError" || verb == "preconditionFailure" || verb == "assert" );
     return stopper && hasStubMessage( n, src );
@@ -677,25 +658,25 @@ inline bool isStubCall( TSNode n, std::string_view src, Lang lang )
 
 inline bool isStubNode( TSNode n, const char* type, std::string_view src, Lang lang )
 {
-    if( std::strcmp( type, "macro_invocation" ) == 0 )
+    if( kindIs( type, "macro_invocation" ) )
     {
-        const std::string_view m = nodeText( field( n, "macro" ), src );
+        const std::string_view m = nodeTextOf( field( n, "macro" ), src );
         return m == "todo" || m == "unimplemented" || ( m == "panic" && hasStubMessage( n, src ) );
     }
-    if( std::strcmp( type, "raise_statement" ) == 0 )
+    if( kindIs( type, "raise_statement" ) )
     {
         return isNotImplementedErrorRaise( n, src ) || hasStubMessage( n, src );
     }
-    if( std::strcmp( type, "throw_statement" ) == 0 || std::strcmp( type, "throw_expression" ) == 0 )
+    if( kindIs( type, "throw_statement" ) || kindIs( type, "throw_expression" ) )
     {
-        const std::string_view t = nodeText( n, src );
+        const std::string_view t = nodeTextOf( n, src );
         return t.find( "NotImplementedException" ) != std::string_view::npos || hasStubMessage( n, src );
     }
-    if( std::strcmp( type, "jump_expression" ) == 0 )
+    if( kindIs( type, "jump_expression" ) )
     {
-        return nodeText( n, src ).starts_with( "throw" ) && hasStubMessage( n, src );
+        return nodeTextOf( n, src ).starts_with( "throw" ) && hasStubMessage( n, src );
     }
-    if( std::strcmp( type, "call_expression" ) == 0 || std::strcmp( type, "call" ) == 0 )
+    if( kindIs( type, "call_expression" ) || kindIs( type, "call" ) )
     {
         return isStubCall( n, src, lang );
     }
@@ -716,7 +697,7 @@ inline bool namesIssue( std::string_view c ) noexcept
         {
             return true;
         }
-        if( c[i] == '-' && digitNext && i >= 2 && iequalsAscii( c.substr( i - 2, 2 ), "gh" ) )
+        if( c[i] == '-' && digitNext && i >= 2 && lowerCopy( c.substr( i - 2, 2 ) ) == "gh" )
         {
             return true;
         }
@@ -757,22 +738,17 @@ inline bool opensWithTodo( std::string_view c ) noexcept
 
 // ── the walk ──────────────────────────────────────────────────────────────────────────────────────────
 
+// One row per language, so the language finds the row and the node type confirms it.
 inline const HandlerReader* handlerReaderFor( Lang lang, const char* type ) noexcept
 {
-    for( const HandlerReader& r : kHandlerReaders )
-    {
-        if( r.lang == lang && std::strcmp( r.nodeType, type ) == 0 )
-        {
-            return &r;
-        }
-    }
-    return nullptr;
+    const HandlerReader* row = findByField( kHandlerReaders, &HandlerReader::lang, lang );
+    return ( row != nullptr && std::strcmp( row->nodeType, type ) == 0 ) ? row : nullptr;
 }
 
 // A stub, and not an abstract-method contract (declaresAbstractContract) — the one test for every spelling.
 inline bool isPlaceholderStub( TSNode n, const char* type, std::string_view src, Lang lang )
 {
-    return isStubNode( n, type, src, lang ) && !declaresAbstractContract( nodeText( n, src ) );
+    return isStubNode( n, type, src, lang ) && !declaresAbstractContract( nodeTextOf( n, src ) );
 }
 
 // The tag this ONE node carries, if any — empty for almost every node.
@@ -785,16 +761,16 @@ inline std::string_view shapeOfNode( TSNode n, std::string_view src, Lang lang, 
         reader->read( n, src, h );
         return handlerShape( h, src, stmts );
     }
-    if( lang == Lang::Go && std::strcmp( type, "if_statement" ) == 0 )
+    if( lang == Lang::Go && kindIs( type, "if_statement" ) )
     {
         return goLogOnlyShape( n, src, stmts );
     }
     if( isCommentNode( n ) )
     {
-        const std::string_view c = nodeText( n, src );
-        return ( opensWithTodo( c ) && !namesIssue( c ) ) ? kTodo : std::string_view();
+        const std::string_view c = nodeTextOf( n, src );
+        return ( opensWithTodo( c ) && !namesIssue( c ) ) ? kShapeTodo : std::string_view();
     }
-    return isPlaceholderStub( n, type, src, lang ) ? kStub : std::string_view();
+    return isPlaceholderStub( n, type, src, lang ) ? kShapeStub : std::string_view();
 }
 
 // Every hit in one file's tree, in document (DFS pre-) order. Explicit stack with the same pathological-depth
@@ -821,7 +797,7 @@ inline void walkHandlerShapes( TSNode root, std::string_view src, Lang lang, std
             const std::string_view tag = shapeOfNode( frame.node, src, lang, stmts );
             if( !tag.empty() )
             {
-                ASSUME( tag == kLogOnly || tag == kRethrowOnly || tag == kStub || tag == kTodo, "shapeOfNode answers one of the four tags or none" );
+                ASSUME( tag == kShapeLogOnly || tag == kShapeRethrowOnly || tag == kShapeStub || tag == kShapeTodo, "shapeOfNode answers one of the four tags or none" );
                 out.push_back( { ts_node_start_byte( frame.node ), ts_node_end_byte( frame.node ), tag } );
             }
         }

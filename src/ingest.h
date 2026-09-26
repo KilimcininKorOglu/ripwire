@@ -490,6 +490,13 @@ enum class AstWalk : std::uint8_t
     HandlerShapes,
 };
 
+// The tags an AstWalk::HandlerShapes group's rows carry: src/handlershape.h emits them, lintrules.h routes the
+// first two to the error-masking kind and the last two to the placeholder kind.
+inline constexpr std::string_view kShapeLogOnly     = "log-only";
+inline constexpr std::string_view kShapeRethrowOnly = "rethrow-only";
+inline constexpr std::string_view kShapeStub        = "stub";
+inline constexpr std::string_view kShapeTodo        = "todo";
+
 // src/pattern.h owns the compiled form; ingest.h only ever holds a BORROWED pointer to it, so this
 // header stays free of tree-sitter. main.cpp includes pattern.h to build the set and read the
 // disclosures; ingest.cpp includes it to run the match. NOTE: no `struct TSLanguage;` forward
