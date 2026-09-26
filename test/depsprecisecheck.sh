@@ -561,8 +561,8 @@ d220 "$D" >"$TMP/p2m.deps"
 
 # (P2-N) tsconfig `references`: create-vite's layout — tsconfig.json is `files: []` plus references to tsconfig.app.json
 # (which holds `paths` and includes src/) and tsconfig.node.json (vite.config.ts only). src/ is owned by the app project,
-# so @/a <-> @/b is a cycle; vite.config.ts is owned by the node project, which declares no alias, so its '@/a' is
-# neither an edge nor counted (tsc would not resolve it there either).
+# so @/a <-> @/b is a cycle; vite.config.ts is owned by the node project, which declares no alias, so its '@/a' is no
+# edge (tsc would not resolve it there either) — and, `@/` never being a registry name, it is counted (1).
 mkvite() {   # mkvite DIR — the create-vite layout
     rm -rf "$1"
     w220 "$1/tsconfig.json" '{\n  "files": [],\n  "references": [ { "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" } ]\n}\n'
@@ -573,16 +573,16 @@ mkvite() {   # mkvite DIR — the create-vite layout
 }
 D="$TMP/p2-vite"; mkvite "$D"
 d220 "$D" >"$TMP/p2n.deps"
-{ [ "$( ncyc "$TMP/p2n.deps" )" = 1 ] && ! grep -q 'imports_unresolved=\|graph_partial=\|tsconfig_unread=' "$TMP/p2n.deps" && grep -q '<f p="vite.config.ts" includes="1" afferent="0" instab="0.00" transitive="1">' "$TMP/p2n.deps"; } \
-    && ok "#220 (P2-N) references (create-vite): src/ resolves under tsconfig.app.json (a <-> b cycle); vite.config.ts under the node project draws nothing" \
+{ [ "$( ncyc "$TMP/p2n.deps" )" = 1 ] && grep -q 'imports_unresolved="1" graph_partial="1"' "$TMP/p2n.deps" && ! grep -q 'tsconfig_unread=' "$TMP/p2n.deps" && grep -q '<f p="vite.config.ts" includes="1" afferent="0" instab="0.00" transitive="1">' "$TMP/p2n.deps"; } \
+    && ok "#220 (P2-N) references (create-vite): src/ resolves under tsconfig.app.json (a <-> b cycle); vite.config.ts's @/a under the node project: no edge, counted (1)" \
     || no "#220 (P2-N) references not followed — $( ncyc "$TMP/p2n.deps" ) cycle(s), $( root_of "$TMP/p2n.deps" )"
 # two referenced projects hold src/ and disagree on @/*: never choose — no edge, counted
 w220 "$D/tsconfig.test.json" '{ "compilerOptions": { "paths": { "@/*": ["./test/*"] } }, "include": ["src", "test"] }\n'
 w220 "$D/test/a.ts" "export const a = 0;\n"; w220 "$D/test/b.ts" "export const b = 0;\n"
 w220 "$D/tsconfig.json" '{ "files": [], "references": [ { "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }, { "path": "./tsconfig.test.json" } ] }\n'
 d220 "$D" >"$TMP/p2n2.deps"
-{ [ "$( ncyc "$TMP/p2n2.deps" )" = 0 ] && grep -q 'imports_unresolved="2" graph_partial="1"' "$TMP/p2n2.deps"; } \
-    && ok "#220 (P2-N) two projects hold src/ and resolve @/* apart: ambiguous, counted (2), no edge" \
+{ [ "$( ncyc "$TMP/p2n2.deps" )" = 0 ] && grep -q 'imports_unresolved="3" graph_partial="1"' "$TMP/p2n2.deps"; } \
+    && ok "#220 (P2-N) two projects hold src/ and resolve @/* apart: ambiguous, counted (2 + vite.config.ts's 1), no edge" \
     || no "#220 (P2-N) overlapping projects guessed — $( root_of "$TMP/p2n2.deps" )"
 # a reference the crawl did not index could own the file: disclosed as tsconfig_unread, not guessed
 mkvite "$D"; rm -f "$D/tsconfig.app.json"
@@ -591,11 +591,11 @@ d220 "$D" >"$TMP/p2n3.deps"
     && ok "#220 (P2-N) a referenced project not in the tree: tsconfig_unread=\"1\" graph_partial=\"1\"" \
     || no "#220 (P2-N) an unread reference was not disclosed — $( root_of "$TMP/p2n3.deps" )"
 # the same disclosure on the other file-graph answers: --report's cycle line, --impact's importer tier (CLI XML/JSON)
-"$BIN" "$D" --report --no-cache 2>/dev/null | grep -q '^## Dependency cycles (showing 0 of 0; measured over resolved edges: 0 imports unresolved, 1 tsconfig files unread)$' \
+"$BIN" "$D" --report --no-cache 2>/dev/null | grep -q '^## Dependency cycles (showing 0 of 0; measured over resolved edges: [0-9]* imports unresolved, 1 tsconfig files unread)$' \
     && ok "#220 (P2-N) --report: the cycle line is qualified by the unread project (never '(acyclic)')" || no "#220 (P2-N) --report cycle line unqualified"
 w220 "$D/src/b.ts" "import { a } from '@/a';\nexport function b() { return typeof a; }\n"
 "$BIN" "$D" --impact=src/b.ts:b --no-cache >"$TMP/p2n3.imp" 2>/dev/null
-{ grep -q 'importers="0" shown_importers="0" importers_capped="0" tsconfig_unread="1"' "$TMP/p2n3.imp" && grep -q 'counts_floor="1"' "$TMP/p2n3.imp" \
+{ grep -q 'importers="0" shown_importers="0" importers_capped="0"[^>]* tsconfig_unread="1"' "$TMP/p2n3.imp" && grep -q 'counts_floor="1"' "$TMP/p2n3.imp" \
   && grep -q 'tsconfig_unread=N' "$TMP/p2n3.imp" && "$BIN" "$D" --impact=src/b.ts:b --no-cache --json 2>/dev/null | grep -q '"tsconfig_unread":1'; } \
     && ok "#220 (P2-N) --impact importer tier: tsconfig_unread=\"1\" beside counts_floor, defined; the JSON key too" \
     || no "#220 (P2-N) --impact did not disclose the unread project"
@@ -655,8 +655,8 @@ w220 "$D/src/foo.ts" "import { u } from '../lib/util';\nexport const foo = u;\n"
 w220 "$D/lib/util.ts" "import { foo } from '@/foo';\nexport const u = () => foo;\n"
 d220 "$D" >"$TMP/p2r.deps"
 { grep -q '<cycle size="2"[^>]*><f p="src/foo.ts"/><f p="lib/util.ts"/>\|<cycle size="2"[^>]*><f p="lib/util.ts"/><f p="src/foo.ts"/>' "$TMP/p2r.deps" \
-  && ! grep -q 'imports_unresolved=\|graph_partial=' "$TMP/p2r.deps"; } \
-    && ok "#220 (P2-R) references by import: lib/util.ts resolves @/foo under the app project (foo <-> util cycle)" \
+  && grep -q 'imports_unresolved="1" graph_partial="1"' "$TMP/p2r.deps"; } \
+    && ok "#220 (P2-R) references by import: lib/util.ts resolves @/foo under the app project (foo <-> util cycle; only vite.config.ts's @/a counted)" \
     || no "#220 (P2-R) a file in a program by import got no aliases — $( ncyc "$TMP/p2r.deps" ) cycle(s), $( root_of "$TMP/p2r.deps" )"
 
 # (P2-S) `exports` conditions: a `node`/`default` split names two files; Node (node16/nodenext) takes `node`, a bundler
@@ -681,5 +681,136 @@ d220 "$D" >"$TMP/p2t.deps"
 { grep -q 'imports_unresolved="1" graph_partial="1"' "$TMP/p2t.deps" && ! grep -q 'p="lib/thing.ts"' "$TMP/p2t.deps"; } \
     && ok "#220 (P2-T) a matched paths key that fails does not fall through to baseUrl: counted (1), no edge" \
     || no "#220 (P2-T) a failed paths match fell through to baseUrl — $( root_of "$TMP/p2t.deps" )"
+
+# ── fix round 2 (primary review of part 2): each arm is RED on b40256cc ────────────────────────────────────────────────
+cyc2() { ncyc "$1"; }
+# (P2-N2) unread references with NO indexed sibling, and an unread reference NESTED under an indexed solution config:
+# both disclosed (b40256cc: silent, "(acyclic)").
+for SHAPE in only nested; do
+    D="$TMP/p2-refunread-$SHAPE"; rm -rf "$D"
+    if [ "$SHAPE" = only ]; then w220 "$D/tsconfig.json" '{ "files": [], "references": [ { "path": "./gen/tsconfig.app.json" } ] }\n'
+    else w220 "$D/tsconfig.json" '{ "files": [], "references": [ { "path": "./tsconfig.solution2.json" } ] }\n'
+         w220 "$D/tsconfig.solution2.json" '{ "files": [], "references": [ { "path": "./gen/tsconfig.app.json" } ] }\n'; fi
+    w220 "$D/src/a.ts" "import { b } from '@/b';\nexport function a() { return b(); }\n"; w220 "$D/src/b.ts" "import { a } from '@/a';\nexport function b() { return typeof a; }\n"
+    d220 "$D" >"$TMP/p2n2-$SHAPE.deps"
+    { grep -q 'graph_partial="1"' "$TMP/p2n2-$SHAPE.deps" && grep -q 'tsconfig_unread="[1-9]' "$TMP/p2n2-$SHAPE.deps" \
+      && "$BIN" "$D" --report --no-cache 2>/dev/null | grep -q -- '- none found over the resolved edges'; } \
+        && ok "#220 (P2-N2) unread reference ($SHAPE): tsconfig_unread= graph_partial=\"1\", --report never '(acyclic)'" \
+        || no "#220 (P2-N2) unread reference ($SHAPE) silent — $( root_of "$TMP/p2n2-$SHAPE.deps" )"
+done
+
+# (P2-U) a hostile `**` run cannot hang the graph build: 14x`**` in a pnpm glob and in a referenced project's include,
+# over a 28-deep directory, finish inside 30 s (b40256cc: killed at the alarm — C(n+k,k) splits per `**`).
+D="$TMP/p2-globbomb"; rm -rf "$D"; mkdir -p "$D"
+G=$( python3 -c "print('/'.join(['**']*14))" ); P=$( python3 -c "print('/'.join('d%d' % i for i in range(28)))" )
+printf "packages:\n  - '%s/zz'\n" "$G" >"$D/pnpm-workspace.yaml"
+printf '{ "files": [], "references": [ { "path": "./tsconfig.app.json" } ] }\n' >"$D/tsconfig.json"
+printf '{ "include": ["%s/zz.ts"] }\n' "$G" >"$D/tsconfig.app.json"
+w220 "$D/$P/package.json" '{ "name": "deep" }\n'; w220 "$D/$P/a.ts" "import x from 'react';\nexport const a = x;\n"
+perl -e 'alarm shift; exec @ARGV' 30 "$BIN" "$D" --deps --no-cache >/dev/null 2>&1; RCU=$?
+[ "$RCU" = 0 ] && ok "#220 (P2-U) 14x** globs over a 28-deep tree: the build finishes (rc=0 inside 30 s)" \
+    || no "#220 (P2-U) the ** glob blow-up is back (rc=$RCU; 142 = killed at 30 s)"
+
+# (P2-V) a UTF-8 BOM is not a parse error (tsc, node, npm and pnpm strip it): on a member's package.json, on the root
+# package.json that declares the workspaces, and on a tsconfig. A member package.json that does NOT parse is disclosed.
+for WHO in member root tsconfig; do
+    D="$TMP/p2-bom-$WHO"; rm -rf "$D"; MB=""; RB=""; [ "$WHO" = member ] && MB='\xef\xbb\xbf'; [ "$WHO" = root ] && RB='\xef\xbb\xbf'
+    if [ "$WHO" = tsconfig ]; then
+        w220 "$D/tsconfig.json" '\xef\xbb\xbf{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }\n'
+        w220 "$D/src/a.ts" "import { b } from '@/b';\nexport const a = b;\n"; w220 "$D/src/b.ts" "import { a } from '@/a';\nexport const b = a;\n"
+    else
+        w220 "$D/package.json" "$RB"'{ "private": true, "workspaces": ["packages/*"] }\n'
+        w220 "$D/packages/app/package.json" '{ "name": "app" }\n'; w220 "$D/packages/lib/package.json" "$MB"'{ "name": "@x/lib", "main": "src/index.ts" }\n'
+        w220 "$D/packages/lib/src/index.ts" "import { a } from '../../app/src/a';\nexport const i = typeof a;\n"
+        w220 "$D/packages/app/src/a.ts" "import { i } from '@x/lib';\nexport function a() { return i; }\n"
+    fi
+    d220 "$D" >"$TMP/p2v-$WHO.deps"
+    { [ "$( ncyc "$TMP/p2v-$WHO.deps" )" = 1 ] && ! grep -q 'imports_unresolved=\|graph_partial=\|tsconfig_unread=' "$TMP/p2v-$WHO.deps"; } \
+        && ok "#220 (P2-V) a BOM on the $WHO config is read: the cycle, nothing disclosed" \
+        || no "#220 (P2-V) a BOM on the $WHO config broke it — $( ncyc "$TMP/p2v-$WHO.deps" ) cycle(s), $( root_of "$TMP/p2v-$WHO.deps" )"
+done
+D="$TMP/p2-bom-member"; w220 "$D/packages/lib/package.json" '{ "name": "@x/lib", "main": }\n'
+d220 "$D" >"$TMP/p2v-bad.deps"
+grep -q 'tsconfig_unread="1" graph_partial="1"' "$TMP/p2v-bad.deps" \
+    && ok "#220 (P2-V) a member package.json that does not parse: disclosed (tsconfig_unread=\"1\" graph_partial=\"1\")" \
+    || no "#220 (P2-V) an unparseable member package.json was dropped silently — $( root_of "$TMP/p2v-bad.deps" )"
+
+# (P2-W) configs ABOVE the crawl root are not read, so they are disclosed: #220's own tree indexed as its reporter ran
+# it (a subtree, `ripwire <repo>/packages/app/src`) inside a git work tree (b40256cc: 1 cycle, nothing disclosed).
+if command -v git >/dev/null 2>&1; then
+    D="$TMP/p2-above"; mk220 "$D" alias; ( cd "$D" && git init -q . )
+    d220 "$D/packages/app/src" >"$TMP/p2w.deps"
+    { grep -q 'tsconfig_unread="[1-9][0-9]*" graph_partial="1"' "$TMP/p2w.deps" \
+      && "$BIN" "$D/packages/app/src" --report --no-cache 2>/dev/null | grep -q 'tsconfig files unread'; } \
+        && ok "#220 (P2-W) a subtree under a tsconfig/workspace above the crawl root: tsconfig_unread= graph_partial=\"1\", --report qualified" \
+        || no "#220 (P2-W) configs above the crawl root went undisclosed — $( root_of "$TMP/p2w.deps" )"
+    d220 "$D" >"$TMP/p2w-root.deps"
+    grep -q 'tsconfig_unread=' "$TMP/p2w-root.deps" && no "#220 (P2-W) the repo root discloses an ancestor it cannot have" \
+        || ok "#220 (P2-W) at the git top-level nothing above is read or disclosed"
+else
+    ok "#220 (P2-W) skipped: no git"
+fi
+
+# (P2-X) other in-tree import forms: a package importing itself by name through `exports` (Node self-reference);
+# lerna.json and rush.json members; `@/x` with the alias only in a bundler config (never a registry name) is counted.
+D="$TMP/p2-selfref"
+w220 "$D/package.json" '{ "name": "mylib", "exports": { ".": "./src/index.ts", "./util": "./src/util.ts" } }\n'
+w220 "$D/src/index.ts" "export { u } from './util';\nexport function main() { return 1; }\n"; w220 "$D/src/util.ts" "import { main } from 'mylib';\nexport const u = typeof main;\n"
+d220 "$D" >"$TMP/p2x-self.deps"
+{ [ "$( ncyc "$TMP/p2x-self.deps" )" = 1 ] && ! grep -q 'imports_unresolved=' "$TMP/p2x-self.deps"; } \
+    && ok "#220 (P2-X) self-reference through exports: util -> index is an edge (the barrel cycle)" || no "#220 (P2-X) self-reference — $( root_of "$TMP/p2x-self.deps" )"
+for TOOL in lerna rush; do
+    D="$TMP/p2-$TOOL"; rm -rf "$D"
+    if [ "$TOOL" = lerna ]; then w220 "$D/lerna.json" '{ "packages": ["packages/*"], "version": "independent" }\n'
+    else w220 "$D/rush.json" '{\n  // rush.json is JSONC\n  "projects": [ { "packageName": "@acme/a", "projectFolder": "packages/a" }, { "packageName": "@acme/b", "projectFolder": "packages/b" } ]\n}\n'; fi
+    w220 "$D/package.json" '{ "name": "root", "private": true }\n'
+    w220 "$D/packages/a/package.json" '{ "name": "@acme/a", "main": "src/index.ts" }\n'; w220 "$D/packages/a/src/index.ts" "import { b } from '@acme/b';\nexport const a = b;\n"
+    w220 "$D/packages/b/package.json" '{ "name": "@acme/b", "main": "src/index.ts" }\n'; w220 "$D/packages/b/src/index.ts" "import { a } from '@acme/a';\nexport const b = a;\n"
+    d220 "$D" >"$TMP/p2x-$TOOL.deps"
+    [ "$( ncyc "$TMP/p2x-$TOOL.deps" )" = 1 ] && ok "#220 (P2-X) $TOOL members resolve: a <-> b" || no "#220 (P2-X) $TOOL members not read — $( root_of "$TMP/p2x-$TOOL.deps" )"
+done
+D="$TMP/p2-vitealias"
+w220 "$D/package.json" '{ "name": "web", "private": true }\n'
+w220 "$D/src/a.js" "import { b } from '@/b';\nexport function a() { return b(); }\n"; w220 "$D/src/b.js" "import { a } from '~/a';\nexport function b() { return a; }\n"
+d220 "$D" >"$TMP/p2x-vite.deps"
+grep -q 'imports_unresolved="2" graph_partial="1"' "$TMP/p2x-vite.deps" \
+    && ok "#220 (P2-X) @/b and ~/a with no config here: counted (2), never registry packages" || no "#220 (P2-X) @/ or ~ specifiers went uncounted — $( root_of "$TMP/p2x-vite.deps" )"
+
+# (P2-Y) a workspace member used as a package-form `extends` base (fresh clone, no node_modules) is read in the tree;
+# tsc-rejected `paths` shapes (an exact key's `*` target; an empty capture) are counted, not drawn; a pnpm member that
+# shadows a registry range the importer declares is ambiguous; an `exports` entry into dist/ with outDir but no rootDir
+# maps back through the inferred src/.
+D="$TMP/p2-wsbase"
+w220 "$D/pnpm-workspace.yaml" "packages:\n  - 'packages/*'\n"
+w220 "$D/packages/tsconfig/package.json" '{ "name": "@acme/tsconfig" }\n'
+w220 "$D/packages/tsconfig/base.json" '{ "compilerOptions": { "paths": { "@acme/*": ["../*/src/index.ts"] } } }\n'
+w220 "$D/packages/app/package.json" '{ "name": "app" }\n'; w220 "$D/packages/app/tsconfig.json" '{ "extends": "@acme/tsconfig/base.json" }\n'
+w220 "$D/packages/app/src/a.ts" "import { u } from '@acme/util';\nexport function a() { return u; }\n"
+w220 "$D/packages/util/src/index.ts" "import { a } from '../../app/src/a';\nexport const u = typeof a;\n"
+d220 "$D" >"$TMP/p2y-base.deps"
+[ "$( ncyc "$TMP/p2y-base.deps" )" = 1 ] && ok "#220 (P2-Y) a member package as extends base, no node_modules: its paths resolve (a <-> util)" \
+    || no "#220 (P2-Y) member extends base not read — $( root_of "$TMP/p2y-base.deps" )"
+D="$TMP/p2-tscreject"
+w220 "$D/tsconfig.json" '{ "compilerOptions": { "paths": { "@x": ["./src/*"], "@/*": ["./src/*"] } } }\n'
+w220 "$D/src/index.ts" "export const i = 1;\n"; w220 "$D/app.ts" "import { i } from '@x';\nimport { j } from '@/';\nexport const a = i + j;\n"
+d220 "$D" >"$TMP/p2y-rej.deps"
+{ grep -q 'imports_unresolved="2" graph_partial="1"' "$TMP/p2y-rej.deps" && ! grep -q 'p="src/index.ts"' "$TMP/p2y-rej.deps"; } \
+    && ok "#220 (P2-Y) an exact key's * target and an empty capture name no file (tsc): counted (2), no edge" || no "#220 (P2-Y) tsc-rejected paths drew an edge — $( root_of "$TMP/p2y-rej.deps" )"
+D="$TMP/p2-shadow"
+w220 "$D/pnpm-workspace.yaml" "packages:\n  - 'packages/*'\n"
+w220 "$D/packages/app/package.json" '{ "name": "app", "dependencies": { "lodash": "^4.17.21" } }\n'
+w220 "$D/packages/lodash-fork/package.json" '{ "name": "lodash", "main": "index.ts" }\n'; w220 "$D/packages/lodash-fork/index.ts" "export default {};\n"
+w220 "$D/packages/app/src/a.ts" "import _ from 'lodash';\nexport const a = _;\n"
+d220 "$D" >"$TMP/p2y-shadow.deps"
+{ grep -q 'imports_unresolved="1" graph_partial="1"' "$TMP/p2y-shadow.deps" && ! grep -q 'p="packages/lodash-fork/index.ts"' "$TMP/p2y-shadow.deps"; } \
+    && ok "#220 (P2-Y) a pnpm member shadowing a registry range the importer declares: ambiguous, counted, no edge" || no "#220 (P2-Y) registry shadow drew an edge — $( root_of "$TMP/p2y-shadow.deps" )"
+D="$TMP/p2-outdir"
+w220 "$D/package.json" '{ "private": true, "workspaces": ["packages/*"] }\n'
+w220 "$D/packages/lib/package.json" '{ "name": "@x/lib", "exports": "./dist/index.js" }\n'; w220 "$D/packages/lib/tsconfig.json" '{ "compilerOptions": { "outDir": "dist" } }\n'
+w220 "$D/packages/lib/src/index.ts" "import { a } from '../../app/src/a';\nexport const i = typeof a;\n"
+w220 "$D/packages/app/package.json" '{ "name": "app" }\n'; w220 "$D/packages/app/src/a.ts" "import { i } from '@x/lib';\nexport function a() { return i; }\n"
+d220 "$D" >"$TMP/p2y-outdir.deps"
+[ "$( ncyc "$TMP/p2y-outdir.deps" )" = 1 ] && ok "#220 (P2-Y) outDir without rootDir: dist/index.js maps back through src/ (a <-> lib cycle)" \
+    || no "#220 (P2-Y) outDir without rootDir not mapped — $( root_of "$TMP/p2y-outdir.deps" )"
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

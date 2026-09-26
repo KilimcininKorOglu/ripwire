@@ -51,6 +51,7 @@
 #include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey), a `using Base<T>::m;` qualifier (buildUsingReexports)
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
+#include "infra/os.h"           // os::realpath / os::stat — the ancestor-config walk (#220: configs above the crawl root)
 #include "infra/Diagnostics.h"   // ASSUME — buildScopedRecvDecls' index-range precondition
 #include "extentsuspect.h"       // extent::inSet with kHeadRuleLangs / kExtentClassKinds — class identity's C-family and class-kind tables
 
@@ -59,7 +60,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>       // fopen/fread — workspace-only config-file evidence (go.mod / tsconfig.json), §3.2
+#include <climits>      // PATH_MAX — the ancestor-config walk's realpath buffer
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -1913,7 +1916,9 @@ inline void recordLazyPair( HashMap<std::uint64_t, char>& lazyPairs, std::uint32
 //      object's own order, `import`/`require` each with and without `node`, plus `default`, all evaluated — two
 //      different files is ambiguous; `types` never selected), else `module` then `main`, else the package's `index`. A target spelling
 //      the package's EMITTED output (`./dist/index.js`) is mapped back to its source through that package's own
-//      tsconfig `outDir` → `rootDir` first (tsc's tryLoadInputFileForPath), then tried as written.
+//      tsconfig `outDir` → `rootDir` first (without `rootDir`: its `src/`, then its own directory), then tried as
+//      written. That goes beyond tsc, whose tryLoadInputFileForPath maps only the importing program's own output: it is
+//      the source-of-truth edge a monorepo means, stated here as a heuristic.
 // Each candidate path is probed in tsc's order with the house's unique-or-degrade discipline per tier: the exact
 // spelling when it carries an extension, the source a runtime spelling names (`.js` → `.ts`/`.tsx`, kJsRuntimeSource
 // Exts), `+.ts`/`+.tsx`; then the declaration (`+.d.ts`) ONLY when no source answered; then `/index.ts`/`/index.tsx`,
@@ -1940,8 +1945,10 @@ inline void recordLazyPair( HashMap<std::uint64_t, char>& lazyPairs, std::uint32
 // needed it (the unread project could hold the importer).
 // Only bytes the crawl admitted are read for the project's own configs (ing.files, so --exclude, gitignore and the
 // 256 KB .json ceiling apply), through a JSONC reader: a commented-out `// "paths": …` is a comment, never a key (the
-// multi-root text scan above reads it as live; this reader must not). A config that does not parse contributes
-// nothing. All of it happens at GRAPH time, from the config bytes on disk: no ingested record changes.
+// multi-root text scan above reads it as live; this reader must not); a leading UTF-8 BOM is stripped. A config or
+// manifest that does not parse, and a tsconfig/jsconfig or workspace root ABOVE the crawl root (looked for up to the git
+// top-level, never read), is disclosed in tsconfig_unread=. All of it happens at GRAPH time, from the config bytes on
+// disk: no ingested record changes.
 namespace tsimport
 {
 // The JSON subset these three files use: strings, arrays, objects; every other scalar is Kind::Other. Keys keep
@@ -2187,7 +2194,7 @@ struct ProjectFileSet
 // The effective alias view of one config after its `extends` chain.
 struct AliasScope
 {
-    std::vector<PathPattern> paths;
+    std::shared_ptr<const std::vector<PathPattern>> paths;   // shared: every config extending one base holds its table
     std::string              pathsDir;   // the directory of the config that declared `paths`
     std::string              baseDir;    // `baseUrl`, resolved against the config that declared it
     std::string              outDir;     // part 2: `outDir`/`rootDir`, each resolved against its declaring config — a
@@ -2293,7 +2300,7 @@ inline void applyCompilerOptions( const JsonNode& root, const std::string& dir, 
     }
     if( const JsonNode* ps = co->get( "paths" ); ps != nullptr && ps->kind == JsonNode::Kind::Obj )
     {
-        out.paths    = readPathPatterns( *ps );   // a child's paths REPLACES the inherited one (tsc)
+        out.paths    = std::make_shared<const std::vector<PathPattern>>( readPathPatterns( *ps ) );   // a child's paths REPLACES the inherited one (tsc)
         out.pathsDir = dir;
         out.hasPaths = true;
     }
@@ -2311,24 +2318,33 @@ inline void applyCompilerOptions( const JsonNode& root, const std::string& dir, 
 
 // A whole glob (`packages/*`, `apps/**`, `libs/*-core`) against a directory's segments; `**` spans zero or more
 // segments, and within one segment arch.h's wildcardMatch applies (a segment holds no '/').
-inline bool globPath( std::span<const std::string_view> pat, std::span<const std::string_view> path ) noexcept
+inline bool globPath( std::span<const std::string_view> patIn, std::span<const std::string_view> path )
 {
-    if( pat.empty() )
+    // A run of `**` means what one does, and matching is a table over (pattern index, path index), filled from the
+    // ends: O(|pattern| x |path|), where trying every split per `**` was C(n + k, k) — a config or workspace glob of
+    // a dozen `**` over a deep directory hung every graph build (test/fuzz/readers/seeds/resolvecfg/*bomb).
+    std::vector<std::string_view> pat;
+    pat.reserve( patIn.size() );
+    for( const std::string_view seg : patIn )
     {
-        return path.empty();
-    }
-    if( pat.front() == "**" )
-    {
-        for( std::size_t k = 0; k <= path.size(); ++k )
+        if( !( seg == "**" && !pat.empty() && pat.back() == "**" ) )
         {
-            if( globPath( pat.subspan( 1 ), path.subspan( k ) ) )
-            {
-                return true;
-            }
+            pat.push_back( seg );
         }
-        return false;
     }
-    return !path.empty() && wildcardMatch( path.front(), pat.front() ) && globPath( pat.subspan( 1 ), path.subspan( 1 ) );
+    const std::size_t P = pat.size(), S = path.size(), W = S + 1;
+    std::vector<char> m( ( P + 1 ) * W, 0 );   // m[i*W + j]: pattern suffix i matches path suffix j
+    m[ P * W + S ] = 1;
+    for( std::size_t i = P; i-- > 0; )
+    {
+        for( std::size_t j = W; j-- > 0; )
+        {
+            const bool more = j < S;
+            m[ i * W + j ] = pat[i] == "**" ? char( m[ ( i + 1 ) * W + j ] || ( more && m[ i * W + j + 1 ] ) )
+                                           : char( more && m[ ( i + 1 ) * W + j + 1 ] && wildcardMatch( path[j], pat[i] ) );
+        }
+    }
+    return m[0] != 0;
 }
 
 // One `include`/`exclude` pattern against a root-relative file. A pattern whose last segment holds neither `*` nor
@@ -2420,6 +2436,7 @@ struct WorkspaceDecl
 {
     std::string              dir;
     std::vector<std::string> globs;
+    bool                     pnpm = false;   // pnpm-workspace.yaml: pnpm links a member only through `workspace:`
 
     bool admits( std::string_view memberDir ) const
     {
@@ -2445,6 +2462,9 @@ struct WorkspaceDecl
         return in;
     }
 };
+
+// A UTF-8 byte-order mark: editors on Windows write one; every JSON/YAML reader of these files strips it.
+inline constexpr std::string_view kUtf8Bom = "\xEF\xBB\xBF";
 
 // One YAML list item as a glob — trimmed, surrounding quotes (either style) dropped — appended unless empty.
 inline void appendYamlGlob( std::string_view item, std::vector<std::string>& out )
@@ -2512,6 +2532,10 @@ private:
 
 inline std::vector<std::string> pnpmWorkspaceGlobs( std::string_view y )
 {
+    if( y.starts_with( kUtf8Bom ) )
+    {
+        y.remove_prefix( kUtf8Bom.size() );
+    }
     PnpmGlobReader reader;
     for( std::string_view line : splitSegments( y, '\n' ) )
     {
@@ -2623,8 +2647,9 @@ inline std::pair<std::string_view, std::string> splitPackageSpecifier( std::stri
 enum class Verdict : std::uint8_t { External, Resolved, Declaration, InRepoUnresolved };
 struct Outcome
 {
-    std::uint32_t file    = kNoFile;
-    Verdict       verdict = Verdict::External;
+    std::uint32_t file      = kNoFile;
+    Verdict       verdict   = Verdict::External;
+    bool          ambiguous = false;   // two indexed files answered one probe tier (never downgraded as an asset)
 
     bool decided() const noexcept { return verdict != Verdict::External; }
 };
@@ -2709,11 +2734,16 @@ inline const JsonNode* patternMapEntry( const JsonNode& ex, const std::string& s
 // A config or manifest's bytes as a JSON object; false for an empty read, a parse failure or a non-object root.
 inline bool parseJsonObject( const std::string& bytes, JsonNode& out )
 {
-    if( bytes.empty() )
+    std::string_view text( bytes );
+    if( text.starts_with( kUtf8Bom ) )
+    {
+        text.remove_prefix( kUtf8Bom.size() );   // tsc, node, npm and pnpm all strip it
+    }
+    if( text.empty() )
     {
         return false;
     }
-    JsoncReader reader( bytes );
+    JsoncReader reader( text );
     return reader.parse( out ) && out.kind == JsonNode::Kind::Obj;
 }
 
@@ -2751,6 +2781,20 @@ public:
 
     std::uint64_t unreadCount() const noexcept { return unreadConfigs_.size(); }
 
+    // A config or manifest that could declare aliases or packages and was not read (unparseable, above the root).
+    void noteUnread( const std::string& path ) { unreadConfigs_.emplace( path, 1 ); }
+
+    // Configs ABOVE the crawl root (`ripwire pkg/src` inside a monorepo) are not read: tsc would find a tsconfig.json
+    // or jsconfig.json there, and a package manager a workspace root. Walked once, from the crawl root's realpath up
+    // to the enclosing git top-level (never past it; no walk outside a git work tree, where no bound exists). Each
+    // found file is disclosed (tsconfig_unread=) the first time an answer could depend on it: a tsconfig when an
+    // importer has no in-tree config, a workspace root when a bare specifier finds no member here.
+    void noteAncestorTsconfigs() { noteAll( ancestors().tsconfigs ); }
+    void noteAncestorWorkspaces() { noteAll( ancestors().workspaces ); }
+
+    // The workspace members by name (ImportResolver's table), so a member can serve as a package-form `extends` base.
+    void setMemberDirs( const HashMap<std::string, std::string>* memberDirs ) noexcept { memberDirs_ = memberDirs; }
+
     // The configs that own `importer`: the nearest one (scopeForDir), unless it does not hold the file and names
     // `references` (a solution-style tsconfig.json such as create-vite's `files: []` beside tsconfig.app.json and
     // tsconfig.node.json). Then every referenced project that holds it, searched through nested references. When none
@@ -2767,7 +2811,7 @@ public:
         }
         ConfigOwners out;
         const int    c = scopeForDir( dir );
-        if( c >= 0 && !scopes_[ std::size_t( c ) ].references.empty() && !scopes_[ std::size_t( c ) ].holds( importer ) )
+        if( c >= 0 && ( !scopes_[ std::size_t( c ) ].references.empty() || scopes_[ std::size_t( c ) ].unreadReference ) && !scopes_[ std::size_t( c ) ].holds( importer ) )
         {
             std::vector<int> seen{ c };
             collectOwners( c, importer, out.scopes, seen );
@@ -2833,6 +2877,10 @@ private:
                 continue;   // a reference cycle, or a chain past any real layout
             }
             seen.push_back( r );
+            if( scopes_[ std::size_t( r ) ].unreadReference )
+            {
+                unreadConfigs_.emplace( scopeConfig_[ std::size_t( r ) ], 1 );   // a nested unread project could hold it
+            }
             if( scopes_[ std::size_t( r ) ].holds( importer ) )
             {
                 owners.push_back( r );
@@ -2869,6 +2917,11 @@ private:
         {
             return out;
         }
+        const bool asBase = !chain.empty();   // a base's folded scope is the same for every config that extends it
+        if( const auto it = asBase ? baseScopes_.find( rel ) : baseScopes_.end(); it != baseScopes_.end() )
+        {
+            return it->second;
+        }
         if( !parseJsonObject( readConfigBytes( disk ), root ) )
         {
             // A config that does not parse (not tsc's JSONC, or empty) was not read: whatever aliases it declares are
@@ -2893,6 +2946,10 @@ private:
             readReferences( root, dir, out );
         }
         chain.pop_back();
+        if( asBase )
+        {
+            baseScopes_.emplace( rel, out );   // one parse per base, not one per child (an Nx base holds every lib's key)
+        }
         return out;
     }
 
@@ -2947,6 +3004,37 @@ private:
         return at;
     }
 
+    // An in-tree member package as an `extends` base: the subpath (with or without `.json`), else its package.json
+    // `tsconfig` field, else `tsconfig.json` — the first the crawl indexed.
+    std::optional<BaseLoc> probeMemberDir( const std::string& memberDir, const std::string& sub ) const
+    {
+        std::vector<std::string> tries;
+        if( sub != "." )
+        {
+            tries = { sub.substr( 2 ), sub.substr( 2 ) + ".json" };
+        }
+        else
+        {
+            JsonNode pj;
+            const auto pjIt = fileIndex_.find( joinRel( memberDir, "package.json" ) );
+            if( const JsonNode* t = pjIt != fileIndex_.end() && parseJsonObject( readConfigBytes( diskPath( ing_, pjIt->second ) ), pj ) ? pj.get( "tsconfig" ) : nullptr;
+                t != nullptr && t->kind == JsonNode::Kind::Str && !t->str.empty() )
+            {
+                tries.push_back( t->str );
+            }
+            tries.push_back( "tsconfig.json" );
+        }
+        for( const std::string& t : tries )
+        {
+            const std::string r = joinRel( memberDir, t );
+            if( const auto it = r.empty() ? fileIndex_.end() : fileIndex_.find( r ); it != fileIndex_.end() )
+            {
+                return BaseLoc{ r, diskPath( ing_, it->second ) };
+            }
+        }
+        return std::nullopt;
+    }
+
     static std::string diskDirOf( const std::string& disk )
     {
         return includerDir( disk ).empty() ? std::string( "." ) : std::string( includerDir( disk ) );
@@ -2981,6 +3069,13 @@ private:
         if( name.empty() || b.starts_with( '/' ) )
         {
             return std::nullopt;
+        }
+        // A workspace member IS the package the link in node_modules points at (tsc reads it through the realpath),
+        // installed or not: read it in the tree, where its own `paths` resolve.
+        if( const auto m = memberDirs_ != nullptr ? memberDirs_->find( std::string( name ) ) : HashMap<std::string, std::string>::const_iterator{};
+            memberDirs_ != nullptr && m != memberDirs_->end() && m->second != "\x1f" )
+        {
+            return probeMemberDir( m->second, sub );
         }
         const std::string diskDir = diskDirOf( disk );
         std::string       relDir( includerDir( rel ) ), up;
@@ -3030,14 +3125,90 @@ private:
         return std::nullopt;
     }
 
+    struct AncestorConfigs
+    {
+        std::vector<std::string> tsconfigs, workspaces;
+    };
+
+    void noteAll( const std::vector<std::string>& paths )
+    {
+        for( const std::string& p : paths )
+        {
+            unreadConfigs_.emplace( p, 1 );
+        }
+    }
+
+    const AncestorConfigs& ancestors()
+    {
+        if( !ancestors_ )
+        {
+            ancestors_ = findAncestorConfigs( ing_.crawlRoot );
+        }
+        return *ancestors_;
+    }
+
+    static bool pathExists( const std::string& p )
+    {
+        os::stat_t st;
+        return os::stat( p.c_str(), &st ) == 0;
+    }
+
+    static AncestorConfigs findAncestorConfigs( const std::string& crawlRoot )
+    {
+        AncestorConfigs out;
+        char            buf[ PATH_MAX ];
+        if( crawlRoot.empty() || os::realpath( crawlRoot.c_str(), buf ) == nullptr )
+        {
+            return out;   // a multi-root merge reads each root's config itself (§3.2); an unresolvable root has no parent
+        }
+        std::vector<std::string> above;   // strictly above the root, nearest first, up to the git top-level
+        std::string              d       = buf;
+        bool                     bounded = false;
+        while( !pathExists( d + "/.git" ) && d.size() > 1 )
+        {
+            const std::size_t cut = d.rfind( '/' );
+            if( cut == std::string::npos )
+            {
+                break;
+            }
+            d = cut == 0 ? std::string( "/" ) : d.substr( 0, cut );
+            above.push_back( d );
+            bounded = pathExists( d + "/.git" );
+        }
+        if( !bounded )
+        {
+            return out;   // the root IS the top-level (nothing above to read), or no git work tree bounds the walk
+        }
+        for( const std::string& d : above )
+        {
+            for( const char* name : { "/tsconfig.json", "/jsconfig.json" } )
+            {
+                if( pathExists( d + name ) )
+                {
+                    out.tsconfigs.push_back( d + name );
+                }
+            }
+            JsonNode pj;
+            if( pathExists( d + "/pnpm-workspace.yaml" ) || pathExists( d + "/lerna.json" ) || pathExists( d + "/rush.json" )
+                || ( parseJsonObject( readConfigBytes( d + "/package.json" ), pj ) && !packageJsonWorkspaceGlobs( pj ).empty() ) )
+            {
+                out.workspaces.push_back( d );
+            }
+        }
+        return out;
+    }
+
     const IngestResult&                        ing_;
     const HashMap<std::string, std::uint32_t>& fileIndex_;
+    std::optional<AncestorConfigs>             ancestors_;
     HashMap<std::string, int>                  dirScope_;       // directory → index into scopes_, -1 = no config above it
     HashMap<std::string, int>                  cfgScope_;       // config path → index into scopes_
     std::vector<AliasScope>                    scopes_;
     std::vector<std::string>                   scopeConfig_;    // scopes_[i]'s config path
     HashMap<std::string, char>                 unreadConfigs_;
     HashMap<std::string, ConfigOwners>         owners_;         // importer path → its owning scopes (ownersFor)
+    HashMap<std::string, AliasScope>           baseScopes_;     // base config path → its folded scope (loadChain)
+    const HashMap<std::string, std::string>*   memberDirs_ = nullptr;   // workspace member name → its dir ("\x1f" = two)
 };
 
 // The resolver. One per adjacency build that met a bare TS/JS specifier its relative branch could not place; every
@@ -3073,7 +3244,7 @@ public:
             return it->second;
         }
         Outcome o = spec.empty() ? Outcome{} : resolveOwned( dir, owners, spec );
-        if( o.verdict == Verdict::InRepoUnresolved && isAssetSpecifier( spec ) )
+        if( o.verdict == Verdict::InRepoUnresolved && !o.ambiguous && isAssetSpecifier( spec ) )
         {
             o = {};   // an asset no indexed file answers: the graph has no node for it (isAssetSpecifier)
         }
@@ -3093,6 +3264,7 @@ private:
         std::string              dir;
         std::size_t              manifest = 0;   // index into manifests_
         std::vector<std::string> declDirs;       // the directories of the workspace declarations that admit it
+        bool                     pnpmOnly = false;   // admitted only by pnpm-workspace.yaml globs
     };
     struct Hit
     {
@@ -3105,25 +3277,27 @@ private:
     std::vector<JsonNode>                           manifests_;
     std::vector<Member>                             members_;
     HashMap<std::string, std::vector<std::size_t>>  membersByName_;
+    HashMap<std::string, std::string>               memberDirByName_;   // name → its member's dir, "\x1f" when two share it
     ConfigScopes                                    configs_;
     HashMap<std::string, Outcome>                   memo_;
     std::vector<std::pair<std::string, JsonNode>>   scopePackages_;  // (directory, package.json) — `imports` scopes
     HashMap<std::string, int>                       dirPackage_;     // directory → index into scopePackages_, -1 = none
 
     // Several owning projects (a file two `references` include) answer as one only when they agree: the edit a user
-    // makes compiles under each, and the record cannot say which build the reader means. By import only, a project
-    // that finds nothing (External) is not the program compiling the file, so only the projects that DO place the
-    // specifier must agree; none placing it is External, as it is for tsc in every one of them.
+    // makes compiles under each, and the record cannot say which build the reader means. By import only, the file
+    // compiles in whichever program imports it, and only a program that RESOLVES the specifier can be that program:
+    // the files those programs name must agree (else ambiguous); none resolving is counted if any placed it here.
     Outcome resolveOwned( const std::string& dir, const ConfigOwners& owners, std::string_view spec )
     {
         EXPECTS( !owners.scopes.empty() );
         Outcome agreed;
-        bool    first = true;
+        bool    first = true, placed = false;
         for( const int si : owners.scopes )
         {
             const Outcome o = resolveUncached( dir, si, spec );
-            if( owners.byImport && !o.decided() )
+            if( owners.byImport && o.file == kNoFile )
             {
+                placed = placed || o.decided();
                 continue;
             }
             if( !first && ( o.verdict != agreed.verdict || o.file != agreed.file ) )
@@ -3133,12 +3307,16 @@ private:
             agreed = o;
             first  = false;
         }
-        return agreed;
+        return first && placed ? Outcome{ kNoFile, Verdict::InRepoUnresolved } : agreed;
     }
 
     Outcome resolveUncached( const std::string& dir, const int si, std::string_view spec )
     {
         bool inRepo = false;   // a literal `paths` key placed it in the tree, whatever answers below
+        if( si < 0 )
+        {
+            configs_.noteAncestorTsconfigs();   // no config in the tree owns it: one above the crawl root could
+        }
         if( si >= 0 )
         {
             configs_.noteUnreadIfMatters( si );
@@ -3159,11 +3337,45 @@ private:
         {
             return throughImports( dir, spec );   // a package-internal import: never another package's name
         }
+        if( const Outcome o = throughSelfName( dir, spec ); o.decided() )
+        {
+            return o;
+        }
         if( const Outcome o = throughWorkspace( dir, spec ); o.decided() )
         {
             return o;
         }
-        return { kNoFile, inRepo ? Verdict::InRepoUnresolved : Verdict::External };
+        if( !inRepo && !cannotBeRegistryName( spec ) )
+        {
+            configs_.noteAncestorWorkspaces();   // a workspace declared above the crawl root could own this name
+            return {};
+        }
+        return { kNoFile, Verdict::InRepoUnresolved };
+    }
+
+    // `@/x` (an empty npm scope) and `~…` are not names a registry can publish: only a bundler or tsconfig alias
+    // gives them meaning, so one nothing here answers names this tree and is counted.
+    static bool cannotBeRegistryName( std::string_view spec ) noexcept { return spec.starts_with( "@/" ) || spec.starts_with( '~' ); }
+
+    // Node's self-reference: a package imports itself by its own name through its own `exports` (the nearest
+    // package.json at or above the importer). Without `exports` the name goes to node_modules like any other.
+    Outcome throughSelfName( const std::string& dir, std::string_view spec )
+    {
+        const int pi = nearestPackage( dir );
+        if( pi < 0 )
+        {
+            return {};
+        }
+        const auto& [ pkgDir, pj ] = scopePackages_[ std::size_t( pi ) ];
+        const auto [ name, sub ]   = splitPackageSpecifier( spec );
+        const JsonNode* own        = pj.get( "name" );
+        const JsonNode* ex         = pj.get( "exports" );
+        if( name.empty() || own == nullptr || own->kind != JsonNode::Kind::Str || own->str != name || ex == nullptr || ex->kind == JsonNode::Kind::Other )
+        {
+            return {};
+        }
+        const Outcome o = throughExports( pkgDir, *ex, sub );
+        return o.decided() ? o : Outcome{ kNoFile, Verdict::InRepoUnresolved };
     }
 
     // Node's PACKAGE_IMPORTS_RESOLVE: `#x` through the `imports` map of the nearest package.json at or above the
@@ -3239,7 +3451,7 @@ private:
     // package steps (tryLoadModuleUsingOptionalResolutionSettings returns the failed match).
     Outcome throughPaths( const AliasScope& sc, std::string_view spec, bool& inRepo, bool& matched ) const
     {
-        const PathPattern* pp = sc.hasPaths ? bestPathsKey( sc.paths, spec ) : nullptr;
+        const PathPattern* pp = sc.hasPaths && sc.paths ? bestPathsKey( *sc.paths, spec ) : nullptr;
         matched               = pp != nullptr;
         if( pp == nullptr )
         {
@@ -3251,7 +3463,10 @@ private:
         for( const std::string& t : pp->targets )
         {
             const std::size_t star = t.find( '*' );
-            const std::string sub  = star == std::string::npos ? t : t.substr( 0, star ) + std::string( capture ) + t.substr( star + 1 );
+            // tsc substitutes only a non-empty capture of a wildcard key; an exact key's `*`, or an empty capture
+            // (`@/` against `@/*`), leaves the target verbatim, so its literal `*` names no file
+            const bool        subst = star != std::string::npos && pp->wild && !capture.empty();
+            const std::string sub   = subst ? t.substr( 0, star ) + std::string( capture ) + t.substr( star + 1 ) : t;
             for( std::string& at : candidateAt( base, sub ) )
             {
                 cands.push_back( std::move( at ) );
@@ -3282,7 +3497,7 @@ private:
     {
         if( h.ambiguous )
         {
-            return { kNoFile, Verdict::InRepoUnresolved };
+            return { kNoFile, Verdict::InRepoUnresolved, true };
         }
         if( h.file == kNoFile )
         {
@@ -3368,9 +3583,12 @@ private:
         return firstTier( { sources, decls } );
     }
 
-    // tsc's tryLoadInputFileForPath: an entry inside the package's `outDir` names the file its `rootDir` compiles
-    // there. Both come from the config that owns the package directory; without both there is no mapping.
-    std::string sourceOfEmitted( const std::string& pkgDir, const std::string& at )
+    // After tsc's tryLoadInputFileForPath (see the header: applied to the target package's own config): an entry
+    // inside the package's `outDir` names the file its `rootDir` compiles there. Both come from the config that owns
+    // the package directory.
+    // Without `rootDir`, tsc infers the common directory of the program's sources; the two it lands on in practice
+    // are the config's `src/` and the config's own directory, tried in that order (each probe is unique-or-degrade).
+    std::vector<std::string> sourcesOfEmitted( const std::string& pkgDir, const std::string& at )
     {
         const int si = configs_.scopeForDir( pkgDir );
         if( si < 0 )
@@ -3378,12 +3596,20 @@ private:
             return {};
         }
         const AliasScope& sc = configs_.scope( si );
-        if( !sc.hasOutDir || !sc.hasRootDir || sc.outDir.empty() || sc.outDir == sc.rootDir || at.size() <= sc.outDir.size()
-            || !at.starts_with( sc.outDir ) || at[ sc.outDir.size() ] != '/' )
+        if( !sc.hasOutDir || sc.outDir.empty() || at.size() <= sc.outDir.size() || !at.starts_with( sc.outDir ) || at[ sc.outDir.size() ] != '/' )
         {
             return {};
         }
-        return joinRel( sc.rootDir, std::string_view( at ).substr( sc.outDir.size() + 1 ) );
+        const std::string_view   frag = std::string_view( at ).substr( sc.outDir.size() + 1 );
+        std::vector<std::string> out;
+        for( const std::string& root : sc.hasRootDir ? std::vector<std::string>{ sc.rootDir } : std::vector<std::string>{ joinRel( sc.projectDir, "src" ), sc.projectDir } )
+        {
+            if( root != sc.outDir )
+            {
+                out.push_back( joinRel( root, frag ) );
+            }
+        }
+        return out;
     }
 
     // A path the package names (an `exports` target, `module`/`main`, a subpath): inside the package only. Its source
@@ -3396,9 +3622,12 @@ private:
             return {};
         }
         std::vector<std::string> cands;
-        if( std::string src = sourceOfEmitted( pkgDir, at ); !src.empty() )
+        for( std::string& src : sourcesOfEmitted( pkgDir, at ) )
         {
-            cands.push_back( std::move( src ) );
+            if( !src.empty() )
+            {
+                cands.push_back( std::move( src ) );
+            }
         }
         cands.push_back( at );
         if( !exact )
@@ -3523,8 +3752,33 @@ private:
         {
             return {};
         }
+        if( only->pnpmOnly && declaresRegistrySpec( dir, name ) )
+        {
+            return { kNoFile, Verdict::InRepoUnresolved };   // pnpm links it only through `workspace:`; this may be the registry copy
+        }
         const Outcome o = resolvePackage( *only, sub );
         return o.decided() ? o : Outcome{ kNoFile, Verdict::InRepoUnresolved };
+    }
+
+    // Does the importer's own package.json depend on `name` with a spec other than `workspace:…` (a registry range)?
+    bool declaresRegistrySpec( const std::string& dir, std::string_view name )
+    {
+        const int pi = nearestPackage( dir );
+        if( pi < 0 )
+        {
+            return false;
+        }
+        const JsonNode& pj = scopePackages_[ std::size_t( pi ) ].second;
+        for( const std::string_view field : { "dependencies", "devDependencies", "peerDependencies", "optionalDependencies" } )
+        {
+            const JsonNode* deps = pj.get( field );
+            const JsonNode* spec = deps != nullptr ? deps->get( name ) : nullptr;
+            if( spec != nullptr && spec->kind == JsonNode::Kind::Str && !spec->str.starts_with( "workspace:" ) )
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Every indexed package.json whose directory a workspace glob admits, with its name and the declarations that
@@ -3533,6 +3787,7 @@ private:
     {
         std::vector<WorkspaceDecl>                    decls;
         std::vector<std::pair<std::string, JsonNode>> manifests;   // (directory, parsed package.json)
+        std::vector<std::pair<std::string, bool>>     unparsed;    // (path, its bytes name "workspaces")
         for( std::uint32_t f = 0; f < ing_.files.size(); ++f )
         {
             const std::string rel = lexicalNormalize( rootRelPath( ing_, f ) );
@@ -3540,10 +3795,20 @@ private:
             JsonNode          pj;
             if( fileNamed( rel, "pnpm-workspace.yaml" ) )
             {
-                decls.push_back( { dir, pnpmWorkspaceGlobs( readConfigBytes( diskPath( ing_, f ) ) ) } );
+                decls.push_back( { dir, pnpmWorkspaceGlobs( readConfigBytes( diskPath( ing_, f ) ) ), /*pnpm=*/true } );
             }
-            else if( fileNamed( rel, "package.json" ) && parseJsonObject( readConfigBytes( diskPath( ing_, f ) ), pj ) )
+            else if( fileNamed( rel, "lerna.json" ) || fileNamed( rel, "rush.json" ) )
             {
+                addToolDecl( rel, dir, readConfigBytes( diskPath( ing_, f ) ), decls );
+            }
+            else if( fileNamed( rel, "package.json" ) )
+            {
+                const std::string bytes = readConfigBytes( diskPath( ing_, f ) );
+                if( !parseJsonObject( bytes, pj ) )
+                {
+                    unparsed.emplace_back( rel, bytes.find( "\"workspaces\"" ) != std::string::npos );
+                    continue;
+                }
                 if( std::vector<std::string> globs = packageJsonWorkspaceGlobs( pj ); !globs.empty() )
                 {
                     decls.push_back( { dir, std::move( globs ) } );
@@ -3555,18 +3820,75 @@ private:
         {
             addMember( decls, dir, std::move( pj ) );
         }
+        // A package.json that does not parse was not read: disclosed when it could declare workspaces or be a member.
+        for( const auto& [ rel, mentionsWorkspaces ] : unparsed )
+        {
+            const std::string dir( includerDir( rel ) );
+            if( mentionsWorkspaces || std::any_of( decls.begin(), decls.end(), [ & ]( const WorkspaceDecl& d ) { return d.admits( dir ); } ) )
+            {
+                configs_.noteUnread( rel );
+            }
+        }
+        configs_.setMemberDirs( &memberDirByName_ );
+    }
+
+    // lerna.json `packages` (lerna's default `packages/*` when absent) or rush.json `projects[].projectFolder`: the
+    // same member rule as package.json workspaces. One that does not parse is disclosed.
+    void addToolDecl( const std::string& rel, const std::string& dir, const std::string& bytes, std::vector<WorkspaceDecl>& decls )
+    {
+        JsonNode cfg;
+        if( !parseJsonObject( bytes, cfg ) )
+        {
+            configs_.noteUnread( rel );
+            return;
+        }
+        WorkspaceDecl d{ dir, {} };
+        if( fileNamed( rel, "lerna.json" ) )
+        {
+            const JsonNode* ps = cfg.get( "packages" );
+            d.globs            = ps != nullptr ? stringItems( *ps ) : std::vector<std::string>{ "packages/*" };
+        }
+        else if( const JsonNode* projects = cfg.get( "projects" ); projects != nullptr )
+        {
+            for( const JsonNode& pr : projects->vals )
+            {
+                if( const JsonNode* folder = pr.kind == JsonNode::Kind::Obj ? pr.get( "projectFolder" ) : nullptr; folder != nullptr && folder->kind == JsonNode::Kind::Str )
+                {
+                    d.globs.push_back( folder->str );
+                }
+            }
+        }
+        if( !d.globs.empty() )
+        {
+            decls.push_back( std::move( d ) );
+        }
+    }
+
+    static std::vector<std::string> stringItems( const JsonNode& arr )
+    {
+        std::vector<std::string> out;
+        for( const JsonNode& e : arr.vals )
+        {
+            if( e.kind == JsonNode::Kind::Str && !e.str.empty() )
+            {
+                out.push_back( e.str );
+            }
+        }
+        return out;
     }
 
     // One package.json: a member when a declaration admits its directory and it names itself.
     void addMember( const std::vector<WorkspaceDecl>& decls, const std::string& dir, JsonNode&& pj )
     {
         Member m;
-        m.dir = dir;
+        m.dir      = dir;
+        m.pnpmOnly = true;
         for( const WorkspaceDecl& d : decls )
         {
             if( d.admits( dir ) )
             {
                 m.declDirs.push_back( d.dir );
+                m.pnpmOnly = m.pnpmOnly && d.pnpm;
             }
         }
         const JsonNode* name = pj.get( "name" );
@@ -3576,6 +3898,10 @@ private:
         }
         m.manifest = manifests_.size();
         membersByName_[ name->str ].push_back( members_.size() );
+        if( const auto [ it, fresh ] = memberDirByName_.emplace( name->str, dir ); !fresh && it->second != dir )
+        {
+            it->second = "\x1f";   // two members, one name: no single package to read as an `extends` base
+        }
         manifests_.push_back( std::move( pj ) );
         members_.push_back( std::move( m ) );
         ENSURES( manifests_.size() == members_.size() );

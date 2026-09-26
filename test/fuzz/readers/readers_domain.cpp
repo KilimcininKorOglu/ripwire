@@ -57,22 +57,49 @@ int scip( const std::uint8_t* data, std::size_t size )
     return 0;
 }
 
-// Workspace config evidence read from the tree: tsconfig.json `paths` and go.mod `replace` (first byte picks).
+// Workspace config evidence read from the tree (first byte picks, mod 4): tsconfig.json `paths` and go.mod `replace`
+// (the multi-root scan); a pnpm-workspace.yaml's globs and a tsconfig's `include`, each matched against a 32-deep
+// path — the `**` matcher must stay polynomial in both (#220 fix round: a dozen `**` once hung every graph build).
 int resolvecfg( const std::uint8_t* data, std::size_t size )
 {
     std::string_view in( reinterpret_cast<const char*>( data ), size );
     const std::uint8_t          pick = takeByte( in );
     const std::string           bytes( in );
     std::vector<rw::ConfigAlias> out;
-    if( ( pick & 1 ) == 0 )
+    static const std::string    deep = []()
     {
-        rw::parseTsconfigPaths( bytes, 0, "/fuzz/root", out );
-    }
-    else
+        std::string d;
+        for( int i = 0; i < 32; ++i )
+        {
+            d += "d" + std::to_string( i ) + "/";
+        }
+        return d;
+    }();
+    switch( pick % 4 )
     {
-        rw::parseGoModReplaces( bytes, 0, "/fuzz/root", out );
+        case 0: rw::parseTsconfigPaths( bytes, 0, "/fuzz/root", out ); noteAccepted( !out.empty() ); break;
+        case 1: rw::parseGoModReplaces( bytes, 0, "/fuzz/root", out ); noteAccepted( !out.empty() ); break;
+        case 2:
+        {
+            const rw::tsimport::WorkspaceDecl decl{ "", rw::tsimport::pnpmWorkspaceGlobs( bytes ) };
+            (void)decl.admits( deep + "zz" );
+            noteAccepted( !decl.globs.empty() );
+            break;
+        }
+        default:
+        {
+            rw::tsimport::JsonNode   cfg;
+            rw::tsimport::AliasScope scope;
+            const bool               ok = rw::tsimport::parseJsonObject( bytes, cfg );
+            if( ok )
+            {
+                rw::tsimport::applyProjectFiles( cfg, "", scope );
+                (void)scope.holds( deep + "zz.ts" );
+            }
+            noteAccepted( ok );
+            break;
+        }
     }
-    noteAccepted( !out.empty() );
     return 0;
 }
 
