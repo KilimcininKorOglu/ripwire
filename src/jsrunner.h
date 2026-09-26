@@ -951,7 +951,7 @@ inline bool hasNodeTestImport( std::string_view source, std::string_view path )
 
 // train20-cr C9: how many local TypeScript modules the reachability walk below reads, the test file
 // included, before it stops. A cut walk proves nothing, so a cut answers "no command" — never a guess.
-constexpr std::size_t kMaxTsModulesWalked = 64;
+constexpr std::size_t kMaxTsModulesWalked = 64;   // past it the walk is cut and the answer is run_unknown="1", never a guessed command
 
 inline bool isTsModulePath( std::string_view path ) noexcept
 {
