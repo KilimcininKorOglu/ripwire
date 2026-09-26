@@ -13,6 +13,35 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Fixed — a builtin-type method name no longer binds a call to a lone in-repo method by spelling alone
+
+A member call whose receiver's type no rule proved — `d.get( k )` on a dict, `m.get( k )` on a JavaScript `Map`,
+`h.fetch( k )` on a Ruby `Hash` — used to bind to the repository's only method of that name. On a public ~420-file
+Python repository one `ConnectionPool.get` collected 611 callers, 5 of them real, and was the default map's first
+symbol; `--impact` on it reached 3,930 symbols.
+
+The resolver now requires evidence for a call whose name is a method of the language's builtin map, list, set or
+string type (generated tables for Python, JavaScript/TypeScript and Ruby, each with the command that regenerates it).
+A method is kept as a target only when the caller's file names its class or a class in its inheritance cone
+(imports, constructs, annotates, subclasses or binds it); a free function only when the call is not a member access
+on an object, and a nested local function is never taken for a method. A call with no such evidence gets no edge and
+is counted, never guessed: the map header's `declined=`, `declined_calls=` on `--callers` and `--impact` (and their
+MCP twins) for every definition it could have meant, and on `--callees` of the caller. Such a definition is also not
+reported as dead code. Names outside the tables resolve exactly as before, and the include narrow still chooses between two
+admitted free functions.
+
+On that repository: `ConnectionPool.get` falls from rank 1 to rank 147 with 9 callers (the 5 real ones and 4 calls
+inside its own module) and `declined_calls="1487"`; `--impact` reaches 551 symbols; the map is 27,663 bytes
+(was 29,816), `declined=` 2,995 (was 502).
+
+Go, Java, Kotlin, C#, Swift, Rust, C, C++ and ObjC resolve the same construct by name too and are unchanged here, each
+for a reason stated beside the gate: Go's builtin types have no methods; the extractor records no declared parameter
+or local type for Java, Kotlin, C#, Swift or Rust, so a gate would drop typed true edges with the false ones; C, C++
+and ObjC carry declared-type evidence already and want a rule that uses it. Graph-time only: `kParserVer` stays 122
+and `kCacheVersion` stays 25. Gate: `test/builtinbindcheck.sh`.
+
 ## [0.6.4] — 2026-09-25
 
 ### Added — Astro (`.astro`) frontmatter is indexed on the TypeScript grammar (#320, #67)
