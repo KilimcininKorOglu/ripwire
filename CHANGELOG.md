@@ -44,6 +44,10 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
   variables first, as the two prompt route hooks already did.
 - `--doctor --agent=codex` and `--agent=claude` count a `ripwire-*` skill directory as live only when it holds
   a `SKILL.md`. An empty directory, as 0.6.3's installer could leave on Git Bash, no longer reads as parity.
+- `--doctor`'s NOT ON PATH hint now ends with the command. It used to end with `(and put that line in your shell rc
+  file)` after the `export PATH=` line, so pasting the whole hint was a syntax error in bash and sh (and zsh stopped
+  with "number expected"), and PATH never changed. The PowerShell hint had the same trailing note. The guidance now
+  comes before the command.
 - The `--help` footer's determinism recipe quotes `"$t/a"` and `"$t/b"`, like every other copy.
 
 ---
