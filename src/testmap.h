@@ -772,7 +772,7 @@ private:
     //
     // #60 (train 20): package.json evidence still goes first and, when it DECIDES anything — including an
     // authoritative-but-unrecognized scripts.test (mocha, say) — still WINS; only when it decides nothing
-    // (no manifest anywhere in the boundary, or the nearest one is a true marker per nearestPackageJson's
+    // (no manifest anywhere in the boundary, or the nearest one is a true marker per nearestPackageManifests's
     // own F5 rule) does the test file's OWN node:test import/require get a say. That ordering is what makes
     // the precedence gate arm hold without any special-casing here: a manifest naming vitest/jest/node --test
     // already returns below, before jsrunner::hasNodeTestImport is ever consulted.
@@ -788,14 +788,16 @@ private:
         {
             return nullptr;
         }
-        const std::string manifest = jsrunner::nearestPackageJson( disk, evidenceRoot( runnerFile ) );
-        const jsrunner::Framework fw = jsrunner::detectFramework( manifest );
+        const jsrunner::PackageManifests manifests  = jsrunner::nearestPackageManifests( disk, evidenceRoot( runnerFile ) );
+        const std::string&               manifest   = manifests.evidence;
+        const std::string                moduleType = jsrunner::moduleTypeOf( manifests );   // train20-cr C8: Node's own package scope
+        const jsrunner::Framework        fw         = jsrunner::detectFramework( manifest );
         if( fw == jsrunner::Framework::NodeTest )
         {
             // #60: node's own runner needs a Node-version decision (see jsrunner.h's own banner) whether it
             // was named by scripts.test or (below) inferred from the test file's own import — one spelling.
             const std::string source = docparse::detail::readWholeFile( disk ).value_or( "" );
-            return jsrunner::nodeTestVerb( relPath, manifest, source, disk );
+            return jsrunner::nodeTestVerb( relPath, manifest, moduleType, source, disk );
         }
         if( const char* verb = jsrunner::verbFor( fw ); verb != nullptr )
         {
@@ -810,7 +812,7 @@ private:
         {
             return nullptr;   // no package.json evidence, and the file's own bytes name no runner either
         }
-        return jsrunner::nodeTestVerb( relPath, manifest, source, disk );
+        return jsrunner::nodeTestVerb( relPath, manifest, moduleType, source, disk );
     }
 
     /// Validate a candidate script and format its disk path as one shell argument.

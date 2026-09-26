@@ -44,7 +44,7 @@
 // the same kind pythonrunner::hasMainGuard already reads for Python's main-guard case, so `hasNodeTestImport`
 // below re-parses the test file with its own grammar (never a substring scan — a "node:test" mention inside
 // a comment or an unrelated string literal is not a real import) and is consulted ONLY as a FALLBACK, after
-// `nearestPackageJson`'s own evidence has had its say: an authoritative-but-unrecognized `scripts.test`
+// `nearestPackageManifests`'s own evidence has had its say: an authoritative-but-unrecognized `scripts.test`
 // (mocha, say) still wins and is never overridden by this weaker, file-local evidence (the same F2 rule
 // `detectFramework` already applies one level up, restated at this new layer) — see resolveJsVerb's own
 // caller comment in testmap.h.
@@ -62,25 +62,31 @@
 // Node's module resolver (ESM under type stripping, and CJS `require` under it too) never probes an
 // extension and never maps a `.js` specifier onto a `.ts` source — both are exactly how tsc-, tsx- and
 // bundler-run TS code imports its own siblings. So a `.ts`/`.mts`/`.cts` command is derived only when
-// EVERY relative (`./`/`../`) static `import`/`export … from`/`require(...)` specifier the test file's
-// own bytes name resolves to a real file at EXACTLY that path — `relativeImportsResolvable` below, walking
-// the same grammar `hasNodeTestImport` already re-parses with. Anything else (extensionless, or an
-// extension that does not exist on disk) is `run_unknown="1"`: the file's own bytes already prove the
-// command would fail, so this is read off the parse, never guessed.
+// EVERY relative (`./`/`../`) static `import`/`export … from`/`require(...)` specifier resolves to a real
+// file at EXACTLY that path. train20-cr C9 extends this from the test file's own specifiers to every local
+// TypeScript module it reaches (a bounded walk, `tsModuleGraphLoadable`; a cut walk answers "no command"),
+// and C10 refuses, on the same walk, syntax type stripping cannot erase (an `enum`, a namespace with runtime
+// code, a parameter property, an import alias, a decorator). Anything else is `run_unknown="1"`: the bytes
+// already prove the command would fail, so this is read off the parse, never guessed.
 //
 // F3 — the flag itself needs a Node new enough to accept it. `--experimental-strip-types` exists from
 // Node 22.6 only; type stripping is ON BY DEFAULT (the flag becomes a harmless no-op) from 22.18 and from
 // 23.6 — two separate release lines, not one continuous floor: 23.6 turned it on first, the 22.x line got
 // it later by backport (22.18), and 23.0-23.5 do not have it. So a `.ts`/`.mts`/`.cts` command reads
 // `engines.node` from the SAME nearest manifest (if any) and picks one of three answers, never a fourth
-// guess: the bare form when the floor
-// proves every satisfying Node is new enough to have stripping on by default; the flagged form when the
-// floor proves >= 22.6 but not provably default-on; and `run_unknown="1"` when the floor is below 22.6
-// (an explicit `engines.node` that admits an older Node — `>=18`, `^20`, even a compound `>=24 || ^20`,
-// whose LOWEST admitted version is what decides it) or when the range cannot be read with confidence at
-// all. An ABSENT `engines.node` is not "no constraint" here — it is read as the honest default assumption
-// (Node >= 22.6, the flagged form), documented as exactly that, never claimed to be foolproof. See
-// `nodeTestVerb`, `relativeImportsResolvable` and `typeStrippingDecision` below.
+// guess: the bare form when every Node the range admits has stripping on by default; the flagged form when
+// every one has the flag; and `run_unknown="1"` when the range admits a Node below 22.6 (`>=18`, `^20`,
+// even a compound `>=24 || ^20`, whose `^20` alternative decides it) or cannot be read with confidence at
+// all. Each `||` alternative is read for its floor AND its ceiling (`detail::engineClause`), because the
+// version sets are not monotone: an unbounded `>=22.18` reaches the 23.0-23.5 gap and keeps the flag. An
+// ABSENT `engines.node` is not "no constraint" here — it is read as the honest default assumption (a Node
+// that strips types with the flag, the flagged form), documented as exactly that, never claimed to be
+// foolproof. See `nodeTestVerb`, `tsModuleGraphLoadable` and `typeStrippingDecision` below.
+//
+// train20-cr C8 — the module KIND is a fourth way to fail, for `.js` as much as `.ts`: a file with a static
+// ES `import`/`export` runs only where Node reads it as an ES module (`.mjs`/`.mts`, `"type": "module"` in
+// its nearest package.json, or a Node with default module-syntax detection, 22.7+/20.19+, proven by
+// `engines.node`). `moduleSyntaxLoadable` below.
 
 #include "docparse.h"
 #include "infra/Diagnostics.h" // ASSUME — the same raw-reparse contract pythonrunner.h's hasMainGuard uses
@@ -92,8 +98,10 @@
 #include "infra/tschildren.h" // ChildCursor/appendChildren — the ONE DFS-stack child-walk shape (tschildren.h's own banner)
 #include "pattern.h"          // pattern::stripQuotePair — the ONE quote-strip this and importSpecifierText both apply
 
+#include <algorithm>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -165,7 +173,11 @@ struct ObjSpan
     std::size_t end   = std::string_view::npos;
 };
 
-inline ObjSpan topLevelObjectBody( std::string_view json, std::string_view key )
+// The offset of the first byte of the FIRST top-level `"key"`'s VALUE in `json` (whitespace after the colon
+// skipped), or npos when no depth-1 key of that name exists — the one scan `topLevelObjectBody` (an object
+// value) and `topLevelStringValue` (a string value) both start from, so the two never disagree about which
+// key is top-level.
+inline std::size_t topLevelValueStart( std::string_view json, std::string_view key )
 {
     std::size_t p     = 0;
     int         depth = 0;
@@ -177,45 +189,17 @@ inline ObjSpan topLevelObjectBody( std::string_view json, std::string_view key )
             const std::string k = readQuoted( json, p );
             if( depth == 1 && k == key )
             {
-                std::size_t colon = json.find( ':', p );
-                if( colon == std::string_view::npos )
+                std::size_t v = json.find( ':', p );
+                if( v == std::string_view::npos )
                 {
-                    return {};
+                    return std::string_view::npos;
                 }
-                std::size_t v = colon + 1;
+                ++v;
                 while( v < json.size() && ( json[v] == ' ' || json[v] == '\t' || json[v] == '\n' || json[v] == '\r' ) )
                 {
                     ++v;
                 }
-                if( v >= json.size() || json[v] != '{' )
-                {
-                    return {};   // scripts/dependencies must be an object; anything else is not this shape
-                }
-                const std::size_t objStart = v + 1;
-                int                d       = 0;
-                for( ; v < json.size(); ++v )
-                {
-                    if( json[v] == '"' )
-                    {
-                        const std::size_t close = rw::jsonStringEnd( json, v );
-                        v = ( close == std::string_view::npos ) ? json.size() : close + 1;
-                        --v;   // the for-loop's ++v re-lands exactly past the string
-                        continue;
-                    }
-                    if( json[v] == '{' )
-                    {
-                        ++d;
-                    }
-                    else if( json[v] == '}' )
-                    {
-                        --d;
-                        if( d == 0 )
-                        {
-                            return { objStart, v };
-                        }
-                    }
-                }
-                return {};   // unterminated object: malformed input, no evidence
+                return v < json.size() ? v : std::string_view::npos;
             }
             continue;   // p already advanced past this string by readQuoted
         }
@@ -229,7 +213,53 @@ inline ObjSpan topLevelObjectBody( std::string_view json, std::string_view key )
         }
         ++p;
     }
-    return {};
+    return std::string_view::npos;
+}
+
+inline ObjSpan topLevelObjectBody( std::string_view json, std::string_view key )
+{
+    std::size_t v = topLevelValueStart( json, key );
+    if( v == std::string_view::npos || json[v] != '{' )
+    {
+        return {};   // scripts/dependencies must be an object; anything else is not this shape
+    }
+    const std::size_t objStart = v + 1;
+    int                d       = 0;
+    for( ; v < json.size(); ++v )
+    {
+        if( json[v] == '"' )
+        {
+            const std::size_t close = rw::jsonStringEnd( json, v );
+            v = ( close == std::string_view::npos ) ? json.size() : close + 1;
+            --v;   // the for-loop's ++v re-lands exactly past the string
+            continue;
+        }
+        if( json[v] == '{' )
+        {
+            ++d;
+        }
+        else if( json[v] == '}' )
+        {
+            --d;
+            if( d == 0 )
+            {
+                return { objStart, v };
+            }
+        }
+    }
+    return {};   // unterminated object: malformed input, no evidence
+}
+
+// train20-cr C8: the string value of package.json's top-level `key` (`"type"`), or "" when absent or not a
+// string — the same "no evidence" reading `stringValue` gives an absent field.
+inline std::string topLevelStringValue( std::string_view json, std::string_view key )
+{
+    std::size_t v = topLevelValueStart( json, key );
+    if( v == std::string_view::npos || json[v] != '"' )
+    {
+        return {};
+    }
+    return readQuoted( json, v );
 }
 
 // Whether `body` (an object's byte span, exclusive of its braces) declares `name` as one of its OWN keys.
@@ -409,7 +439,7 @@ inline bool isNpmPlaceholderScript( std::string_view script ) noexcept
 /// DIFFERENT question from `detectFramework(...) != Framework::None`: a manifest whose `scripts.test`
 /// authoritatively runs mocha (unrecognized) and a manifest with NO `scripts.test` at all both return
 /// `Framework::None`, but only the first has actually DECIDED anything for its subtree — the second is a
-/// pure marker (a bare `{"type":"commonjs"}`) with nothing to decide. `nearestPackageJson` below needs to
+/// pure marker (a bare `{"type":"commonjs"}`) with nothing to decide. `nearestPackageManifests` below needs to
 /// tell those apart: the first must END the walk (its own unrecognized runner is the honest answer,
 /// never overridable by a root manifest naming something else — F2's own rule, one level up), the second
 /// must not (F5's whole point).
@@ -554,7 +584,16 @@ inline const char* verbFor( Framework fw ) noexcept
 /// package's own evidence, not deferred to a root manifest. `test/testgatecheck.sh` arm (p1)
 /// (`fx/mochavitestdep`, mocha script + vitest dependency, single package) already pins the single-
 /// package half of this; monorepo arm (u2) below pins that the SAME rule holds one level up a tree.
-inline std::string nearestPackageJson( const std::string& file, std::string_view root )
+/// train20-cr C8: the walk also keeps the NEAREST manifest whatever it decides (`nearest`), because Node reads
+/// a `.js`/`.ts` file's module kind from the nearest package.json's `"type"` — its package scope — not from
+/// whichever manifest named the runner.
+struct PackageManifests
+{
+    std::string evidence;   // the deciding manifest, else the nearest one (the runner evidence)
+    std::string nearest;    // the nearest non-empty package.json, decisive or not
+};
+
+inline PackageManifests nearestPackageManifests( const std::string& file, std::string_view root )
 {
     namespace fs = std::filesystem;
     std::string fallback;   // the NEAREST manifest found, even if it decides nothing (F5)
@@ -584,11 +623,21 @@ inline std::string nearestPackageJson( const std::string& file, std::string_view
         decisive = std::move( bytes );   // G1: an authoritative-but-unrecognized script also ends the walk
         return true;
     } );
-    return decisive.empty() ? fallback : decisive;
+    PackageManifests out;
+    out.nearest  = fallback;
+    out.evidence = decisive.empty() ? std::move( fallback ) : std::move( decisive );
+    return out;
+}
+
+/// train20-cr C8: the nearest package.json's top-level `"type"` (`"module"`, `"commonjs"`), or "" when it
+/// has none or there is no manifest in the boundary.
+inline std::string moduleTypeOf( const PackageManifests& manifests )
+{
+    return detail::topLevelStringValue( manifests.nearest, "type" );
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// #60 (train 20): the test file's OWN node:test import/require, consulted ONLY when nearestPackageJson's
+// #60 (train 20): the test file's OWN node:test import/require, consulted ONLY when nearestPackageManifests's
 // manifest evidence decided nothing for this file (see this section's own banner above, and resolveJsVerb's
 // caller comment in testmap.h for the precedence wiring).
 // ---------------------------------------------------------------------------------------------------------
@@ -745,123 +794,233 @@ inline void collectRelativeSpecifiers( TSNode node, std::string_view src, std::v
 
 } // namespace detail
 
-/// #60: whether `source` (the bytes of a TS/JS test file at `path`) itself imports or requires node's own
-/// "node:test" module — checked by re-parsing `source` with the grammar `path`'s extension selects and
-/// walking the WHOLE tree (a DFS stack, `infra/tschildren.h::appendChildren`'s own documented shape),
-/// never a substring scan: a "node:test" mention inside a comment or an unrelated string literal is not an
-/// import and must not count (the negative-control gate arm pins this). Oversized input, a failed parse, or
-/// any syntax error anywhere in the file yields NO evidence — the same conservative read
-/// pythonrunner::topLevelEvidence already applies to Python's main-guard scan, applied here to a whole-tree
-/// walk instead of a top-level-only one (a `require("node:test")` can sit inside a function body, unlike an
-/// ES `import`, which the grammar accepts only at top level regardless of source validity).
-inline bool hasNodeTestImport( std::string_view source, std::string_view path )
+namespace detail
 {
-    if( source.size() > std::numeric_limits<std::uint32_t>::max() )
+
+/// train20-cr C10: whether `stmt`, one statement directly inside a TS `namespace`/`module` body, is erased
+/// whole by type stripping. Node's strip-only mode accepts a namespace that holds no runtime code and
+/// refuses one that does (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX), so a namespace is non-erasable exactly when
+/// one of its statements is not type-only. A NESTED namespace counts as type-only here because the walk
+/// reaches it too and judges its own body.
+inline bool isTypeOnlyStatement( TSNode stmt ) noexcept
+{
+    const char* kind = ts_node_type( stmt );
+    if( rw::kindIs( kind, "interface_declaration" ) || rw::kindIs( kind, "type_alias_declaration" ) || rw::kindIs( kind, "ambient_declaration" )
+        || rw::kindIs( kind, "internal_module" ) || rw::kindIs( kind, "module" ) || rw::kindIs( kind, "comment" ) || rw::kindIs( kind, "empty_statement" ) )
     {
-        return false;
+        return true;
     }
-    TSParser* parser = ts_parser_new();
-    ASSUME( parser != nullptr, "ts_parser_new: the default tree-sitter allocator aborts on failure" );
-    const bool languageSet = ts_parser_set_language( parser, detail::grammarForPath( path ) );
-    ASSUME( languageSet, "the javascript/typescript/tsx grammars are linked into this binary at a supported ABI" );
-    TSTree* tree = ts_parser_parse_string( parser, nullptr, source.data(), std::uint32_t( source.size() ) );
-    ts_parser_delete( parser );
-    if( tree == nullptr )
+    if( rw::kindIs( kind, "export_statement" ) )
     {
-        return false;   // an external-scanner error on this text: no evidence, never a guessed runner
+        const TSNode decl = fieldChild( stmt, NodeField::Declaration );
+        return !ts_node_is_null( decl ) && isTypeOnlyStatement( decl );
     }
-    const TSNode root = ts_tree_root_node( tree );
-    bool         found = false;
-    if( !ts_node_has_error( root ) )
+    if( rw::kindIs( kind, "expression_statement" ) && ts_node_named_child_count( stmt ) == 1 )
     {
-        std::vector<TSNode> pending{ root };
-        while( !pending.empty() )
-        {
-            const TSNode node = pending.back();
-            pending.pop_back();
-            if( detail::nodeIsNodeTestEvidence( node, source ) )
-            {
-                found = true;
-                break;
-            }
-            rw::ChildCursor cursor( node );
-            rw::appendChildren( node, cursor.cur, pending );
-        }
+        const char* inner = ts_node_type( ts_node_named_child( stmt, 0 ) );
+        return rw::kindIs( inner, "internal_module" ) || rw::kindIs( inner, "module" );   // `namespace X {}` parses as an expression statement
     }
-    ts_tree_delete( tree );
-    return found;
+    return false;
 }
 
-/// rv-nodetest-runner-60 F2: whether EVERY relative (`./`/`../`) static specifier `source` (a TS test file
-/// at `path`, on disk at `diskPath`) names resolves to a REAL file at EXACTLY that path — Node's module
-/// resolver, under type stripping, never probes an extension and never maps a `.js` specifier onto a `.ts`
-/// source, so an extensionless specifier (`"../src/bounded"`) or one whose exact extension does not exist
-/// on disk (`"../src/bounded.js"` when only `bounded.ts` is there) is a command that fails outright before
-/// a single test runs. This is read off the file's OWN bytes, the same re-parse `hasNodeTestImport` already
-/// does (grammar by extension, whole-tree DFS, `ts_node_has_error`/oversized-input both answer "no
-/// evidence") — extended here to collect specifiers instead of testing one fixed string. A file with NO
-/// relative specifiers at all (every import is a bare package, or there are none) has nothing to fail on
-/// and reads true — vacuously resolvable, not "no evidence".
-///
-/// Deliberately NOT recursive: only the test file's OWN specifiers are checked, never what `bounded.ts`
-/// itself goes on to import — the same one-hop scope `nodeIsNodeTestEvidence` already keeps (the file's own
-/// bytes are the evidence; a second file's bytes are a second file's problem, out of scope for this repro
-/// and this fix — see the fix report).
-inline bool relativeImportsResolvable( std::string_view source, std::string_view path, std::string_view diskPath )
+/// train20-cr C10: whether `node` (outside any `declare`) is TypeScript syntax that type stripping cannot
+/// erase: Node's own list (an `enum`, a `namespace`/`module` with runtime code, a parameter property, an
+/// import alias `import A = B.C` / `import x = require(…)`) plus a decorator, which strip-only mode rejects
+/// as a parse error. Each fails before a single test runs, so a hit means the command would fail.
+inline bool nodeIsNonErasable( TSNode node ) noexcept
 {
+    const char* kind = ts_node_type( node );
+    if( rw::kindIs( kind, "enum_declaration" ) || rw::kindIs( kind, "import_alias" ) || rw::kindIs( kind, "import_require_clause" )
+        || rw::kindIs( kind, "decorator" ) )
+    {
+        return true;
+    }
+    if( rw::kindIs( kind, "internal_module" ) || rw::kindIs( kind, "module" ) )
+    {
+        const TSNode body = fieldChild( node, NodeField::Body );
+        if( ts_node_is_null( body ) )
+        {
+            return false;
+        }
+        const std::uint32_t count = ts_node_named_child_count( body );
+        for( std::uint32_t i = 0; i < count; ++i )
+        {
+            if( !isTypeOnlyStatement( ts_node_named_child( body, i ) ) )
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    if( rw::kindIs( kind, "required_parameter" ) || rw::kindIs( kind, "optional_parameter" ) )
+    {
+        const std::uint32_t count = ts_node_child_count( node );   // `readonly` is an anonymous token: every child, not only named ones
+        for( std::uint32_t i = 0; i < count; ++i )
+        {
+            const char* part = ts_node_type( ts_node_child( node, i ) );
+            if( rw::kindIs( part, "accessibility_modifier" ) || rw::kindIs( part, "override_modifier" ) || rw::kindIs( part, "readonly" ) )
+            {
+                return true;   // a parameter property: TS rewrites it into a constructor assignment
+            }
+        }
+    }
+    return false;
+}
+
+/// What ONE parse of one module's bytes says — every fact nodeTestVerb reads off a file comes from this one
+/// walk, so the test file is parsed once whatever path asked (#60's node:test evidence, F2's specifiers,
+/// train20-cr C8's module syntax and C10's erasability).
+struct ModuleScan
+{
+    bool                     parsed      = false;   // false: oversized, a scanner failure, or a syntax error anywhere — no evidence at all
+    bool                     nodeTest    = false;   // an `import … from "node:test"` or `require("node:test")` (nodeIsNodeTestEvidence)
+    bool                     esmSyntax   = false;   // a static `import`/`export` statement: the ES module syntax CommonJS cannot evaluate
+    bool                     nonErasable = false;   // TS syntax strip-only mode rejects (nodeIsNonErasable), outside any `declare`
+    std::vector<std::string> relativeSpecs;         // every `./`/`../` static specifier (collectRelativeSpecifiers)
+};
+
+/// Parse `source` with the grammar `path`'s extension selects and walk the WHOLE tree once (a DFS stack,
+/// `infra/tschildren.h::appendChildren`'s own documented shape). Oversized input, a failed parse, or any
+/// syntax error anywhere yields `parsed == false` and no facts: the same conservative read
+/// pythonrunner::topLevelEvidence gives Python's main-guard scan. Everything below a `declare` is ambient
+/// and erased whole, so the erasability check is not applied inside it.
+inline ModuleScan scanModule( std::string_view source, std::string_view path )
+{
+    ModuleScan scan;
     if( source.size() > std::numeric_limits<std::uint32_t>::max() )
     {
-        return false;
+        return scan;
     }
     TSParser* parser = ts_parser_new();
     ASSUME( parser != nullptr, "ts_parser_new: the default tree-sitter allocator aborts on failure" );
-    const bool languageSet = ts_parser_set_language( parser, detail::grammarForPath( path ) );
+    const bool languageSet = ts_parser_set_language( parser, grammarForPath( path ) );
     ASSUME( languageSet, "the javascript/typescript/tsx grammars are linked into this binary at a supported ABI" );
     TSTree* tree = ts_parser_parse_string( parser, nullptr, source.data(), std::uint32_t( source.size() ) );
     ts_parser_delete( parser );
     if( tree == nullptr )
     {
-        return false;   // an external-scanner error on this text: no reliable evidence either way
+        return scan;   // an external-scanner error on this text: no evidence, never a guessed runner
     }
     const TSNode root = ts_tree_root_node( tree );
-    if( ts_node_has_error( root ) )
+    if( !ts_node_has_error( root ) )
     {
-        ts_tree_delete( tree );
-        return false;   // a syntax error anywhere: the same conservative "no evidence" hasNodeTestImport gives it
-    }
-    std::vector<std::string> specs;
-    std::vector<TSNode>      pending{ root };
-    while( !pending.empty() )
-    {
-        const TSNode node = pending.back();
-        pending.pop_back();
-        detail::collectRelativeSpecifiers( node, source, specs );
-        rw::ChildCursor cursor( node );
-        rw::appendChildren( node, cursor.cur, pending );
+        scan.parsed = true;
+        struct Pending
+        {
+            TSNode node;
+            bool   ambient;
+        };
+        std::vector<Pending> pending{ { root, false } };
+        std::vector<TSNode>  children;
+        while( !pending.empty() )
+        {
+            const auto [ node, ambient ] = pending.back();
+            pending.pop_back();
+            const char* kind = ts_node_type( node );
+            scan.nodeTest    = scan.nodeTest || nodeIsNodeTestEvidence( node, source );
+            scan.esmSyntax   = scan.esmSyntax || rw::kindIs( kind, "import_statement" ) || rw::kindIs( kind, "export_statement" );
+            scan.nonErasable = scan.nonErasable || ( !ambient && nodeIsNonErasable( node ) );
+            collectRelativeSpecifiers( node, source, scan.relativeSpecs );
+            const bool childAmbient = ambient || rw::kindIs( kind, "ambient_declaration" );
+            children.clear();
+            rw::ChildCursor cursor( node );
+            rw::appendChildren( node, cursor.cur, children );
+            for( const TSNode child : children )
+            {
+                pending.push_back( { child, childAmbient } );
+            }
+        }
     }
     ts_tree_delete( tree );
+    ENSURES( scan.parsed || ( !scan.nodeTest && !scan.esmSyntax && !scan.nonErasable && scan.relativeSpecs.empty() ),
+             "an unparsed module carries no facts" );
+    return scan;
+}
 
-    if( specs.empty() )
-    {
-        return true;   // nothing relative to resolve: vacuously fine, never a guess either way
-    }
+} // namespace detail
+
+/// #60: whether `source` (the bytes of a TS/JS test file at `path`) itself imports or requires node's own
+/// "node:test" module — a real parse (`detail::scanModule`), never a substring scan: a "node:test" mention
+/// inside a comment or an unrelated string literal is not an import and must not count (the
+/// negative-control gate arm pins this). A `require("node:test")` inside a function body counts too; an ES
+/// `import` can only sit at top level anyway.
+inline bool hasNodeTestImport( std::string_view source, std::string_view path )
+{
+    return detail::scanModule( source, path ).nodeTest;
+}
+
+// train20-cr C9: how many local TypeScript modules the reachability walk below reads, the test file
+// included, before it stops. A cut walk proves nothing, so a cut answers "no command" — never a guess.
+constexpr std::size_t kMaxTsModulesWalked = 64;
+
+inline bool isTsModulePath( std::string_view path ) noexcept
+{
+    return path.ends_with( ".ts" ) || path.ends_with( ".mts" ) || path.ends_with( ".cts" );
+}
+
+/// rv-nodetest-runner-60 F2, extended by train20-cr C9 and C10: whether Node, under type stripping, can
+/// LOAD the test file (already scanned as `testScan`, on disk at `diskPath`) and every local TypeScript
+/// module it reaches. Node's resolver under type stripping never probes an extension and never maps a `.js`
+/// specifier onto a `.ts` source, so every relative (`./`/`../`) specifier must name a real file at exactly
+/// that path, and every module must be free of syntax stripping cannot erase. The walk follows each specifier
+/// that lands on a `.ts`/`.mts`/`.cts` file (a `.js` target is loaded as JavaScript and needs no stripping),
+/// reads at most `kMaxTsModulesWalked` modules, and answers false when it is cut there, when any module does
+/// not parse, or on the first failing specifier or non-erasable module. A module with no relative specifiers
+/// is vacuously loadable. Type-only imports are followed too (a conservative read: stripping erases them, so
+/// a failure found only through one may be a false "no command", never a false command).
+inline bool tsModuleGraphLoadable( const detail::ModuleScan& testScan, std::string_view diskPath )
+{
     namespace fs = std::filesystem;
-    const fs::path dir = fs::path( std::string( diskPath ) ).parent_path();
-    for( const std::string& spec : specs )
+    struct Module
     {
-        const std::size_t      lastSlash = spec.rfind( '/' );
-        const std::string_view lastSeg = ( lastSlash == std::string::npos ) ? std::string_view( spec )
-            : std::string_view( spec ).substr( lastSlash + 1 );
-        if( lastSeg.find( '.' ) == std::string_view::npos )
+        fs::path           disk;
+        detail::ModuleScan scan;
+    };
+    std::vector<std::string> visited{ fs::path( std::string( diskPath ) ).lexically_normal().string() };
+    std::vector<Module>      pending;
+    pending.push_back( { fs::path( std::string( diskPath ) ), testScan } );
+    while( !pending.empty() )
+    {
+        const Module module = std::move( pending.back() );
+        pending.pop_back();
+        if( !module.scan.parsed || module.scan.nonErasable )
         {
-            return false;   // extensionless: Node's resolver under type stripping never probes for one
+            return false;   // no evidence either way, or syntax stripping rejects before any test runs
         }
-        std::error_code ec;
-        if( !fs::is_regular_file( fs::status( dir / spec, ec ) ) )
+        const fs::path dir = module.disk.parent_path();
+        for( const std::string& spec : module.scan.relativeSpecs )
         {
-            return false;   // the exact spelled path is not a real file — no probing, no .js -> .ts mapping
+            const std::size_t      lastSlash = spec.rfind( '/' );
+            const std::string_view lastSeg   = ( lastSlash == std::string::npos ) ? std::string_view( spec ) : std::string_view( spec ).substr( lastSlash + 1 );
+            if( lastSeg.find( '.' ) == std::string_view::npos )
+            {
+                return false;   // extensionless: Node's resolver under type stripping never probes for one
+            }
+            const fs::path  target = ( dir / spec ).lexically_normal();
+            std::error_code ec;
+            if( !fs::is_regular_file( fs::status( target, ec ) ) )
+            {
+                return false;   // the exact spelled path is not a real file — no probing, no .js -> .ts mapping
+            }
+            const std::string key = target.string();
+            if( !isTsModulePath( key ) || std::find( visited.begin(), visited.end(), key ) != visited.end() )
+            {
+                continue;
+            }
+            if( visited.size() >= kMaxTsModulesWalked )
+            {
+                return false;   // C9: the walk is cut, so the modules past the cut were never checked
+            }
+            visited.push_back( key );
+            const std::optional<std::string> bytes = docparse::detail::readWholeFile( key );
+            if( !VALIDATE( bytes.has_value(), "a local module the resolver just found on disk is readable" ) )
+            {
+                return false;   // unreadable: its imports and syntax are unknown, so the command is too
+            }
+            pending.push_back( { target, detail::scanModule( *bytes, key ) } );
         }
     }
+    ENSURES( visited.size() <= kMaxTsModulesWalked, "the walk never reads past its bound" );
     return true;
 }
 
@@ -877,16 +1036,62 @@ inline std::string enginesNode( std::string_view packageJson )
 namespace detail
 {
 
-/// rv-nodetest-runner-60 F3: the FLOOR (as `major*1000 + minor`) a single, non-compound `engines.node`
-/// range clause asserts, or `0` when this clause asserts NO usable lower bound at all — a `<`/`<=`-led
-/// clause (asserts an UPPER bound only: the range could still admit an arbitrarily old Node, so treating it
-/// as "no floor" rather than skipping it is what makes an alternative like `"<24"` alone correctly force
-/// the conservative answer below, not silently pass through undecided) or a clause with no version number
-/// this reader can find at all (unparseable ⇒ the SAME "admits anything" floor, never a guess in the other
-/// direction). This is NOT a semver engine: it reads the FIRST major.minor pair as the floor, which is
-/// exactly right for the shapes real package.json files use (">=X.Y[.Z]", "^X.Y[.Z]", "~X.Y[.Z]", a bare
-/// "X.Y[.Z]", ">X.Y[.Z]" — patch-level exclusivity never changes a major.minor comparison).
-inline long long engineFloorClause( std::string_view clause ) noexcept
+// A Node version as `major*1000 + minor`, the unit every floor below is spelled in.
+constexpr long long nodeVersion( long long major, long long minor ) noexcept
+{
+    return major * 1000 + minor;
+}
+
+constexpr long long kNoCeiling = std::numeric_limits<long long>::max();
+
+/// What ONE `engines.node` alternative (the text between two `||`) admits, read as far as the decisions
+/// below need it — NOT a semver engine. `floor` is the LOWEST version it admits, from its FIRST major.minor
+/// pair (">=X.Y[.Z]", "^X.Y[.Z]", "~X.Y[.Z]", a bare "X.Y[.Z]", ">X.Y[.Z]": patch-level exclusivity never
+/// changes a major.minor comparison); `0` when it asserts no lower bound this reader can find — a
+/// `<`/`<=`-led clause or no version number at all — read as "admits anything", never a guess in the other
+/// direction. `ceilMajor` is the first major it can no longer reach (exclusive), or `kNoCeiling`: an exact,
+/// `=`, `^` or `~` version stays in its own major (`^0.x` stays tighter still, which only lowers the true
+/// ceiling), a later `<X[.Y[.Z]]`/`<=X…` comparator and a hyphen range's upper end both bound it too.
+/// train20-cr: the ceiling exists because the three version sets below are not monotone — `node --test`
+/// exists on 16.17+ and 18.1+ but not 17.x; default type stripping on 22.18+ and 23.6+ but not 23.0-23.5;
+/// default module-syntax detection on 20.19+ and 22.7+ but not 21.x — so a floor alone cannot say whether a
+/// range reaches a gap.
+struct EngineClause
+{
+    long long floor     = 0;
+    long long ceilMajor = kNoCeiling;
+};
+
+/// Reads `major[.minor[.patch]]` at `p` (advancing it), `-1` for each part that has no digits.
+inline void readVersion( std::string_view text, std::size_t& p, long long& major, long long& minor, long long& patch ) noexcept
+{
+    const auto readInt = [ & ]() -> long long
+    {
+        const std::size_t start = p;
+        long long         v     = 0;
+        while( p < text.size() && text[p] >= '0' && text[p] <= '9' && p - start < 6 )
+        {
+            v = v * 10 + ( text[p] - '0' );
+            ++p;
+        }
+        return p == start ? -1 : v;
+    };
+    major = readInt();
+    minor = -1;
+    patch = -1;
+    if( major >= 0 && p < text.size() && text[p] == '.' )
+    {
+        ++p;
+        minor = readInt();
+        if( minor >= 0 && p < text.size() && text[p] == '.' )
+        {
+            ++p;
+            patch = readInt();
+        }
+    }
+}
+
+inline EngineClause engineClause( std::string_view clause ) noexcept
 {
     std::size_t p = 0;
     while( p < clause.size() && ( clause[p] == ' ' || clause[p] == '\t' ) )
@@ -895,138 +1100,212 @@ inline long long engineFloorClause( std::string_view clause ) noexcept
     }
     if( p < clause.size() && clause[p] == '<' )
     {
-        return 0;   // an upper-bound-led clause asserts nothing about the floor: read as "admits anything"
+        return {};   // an upper-bound-led clause asserts nothing about the floor: read as "admits anything"
     }
-    while( p < clause.size() && !( clause[p] >= '0' && clause[p] <= '9' ) )   // skip '>=', '^', '~', '>', or nothing
+    const std::size_t opStart = p;
+    while( p < clause.size() && !( clause[p] >= '0' && clause[p] <= '9' ) )   // skip '>=', '^', '~', '>', '=', 'v', or nothing
     {
         ++p;
     }
-    const auto readInt = [ & ]() -> long long
-    {
-        const std::size_t start = p;
-        long long         v     = 0;
-        while( p < clause.size() && clause[p] >= '0' && clause[p] <= '9' && p - start < 6 )
-        {
-            v = v * 10 + ( clause[p] - '0' );
-            ++p;
-        }
-        return p == start ? -1 : v;
-    };
-    const long long major = readInt();
+    const std::string_view op = clause.substr( opStart, p - opStart );
+    long long major = -1, minor = -1, patch = -1;
+    readVersion( clause, p, major, minor, patch );
     if( major < 0 )
     {
-        return 0;   // no version number found at all: unparseable, read as "admits anything"
+        return {};   // no version number found at all: unparseable, read as "admits anything"
     }
-    long long minor = 0;
-    if( p < clause.size() && clause[p] == '.' )
+    EngineClause out;
+    out.floor = nodeVersion( major, minor < 0 ? 0 : minor );
+    if( op.empty() || op == "=" || op == "v" || op == "=v" || op == "^" || op == "~" )
     {
-        ++p;
-        const long long m = readInt();
-        minor = m < 0 ? 0 : m;
+        out.ceilMajor = major + 1;
     }
-    return major * 1000 + minor;
+    const std::string_view rest = clause.substr( p );
+    if( const std::size_t lt = rest.find( '<' ); lt != std::string_view::npos )
+    {
+        std::size_t q = lt + 1;
+        const bool inclusive = q < rest.size() && rest[q] == '=';
+        while( q < rest.size() && !( rest[q] >= '0' && rest[q] <= '9' ) )
+        {
+            ++q;
+        }
+        long long uMajor = -1, uMinor = -1, uPatch = -1;
+        readVersion( rest, q, uMajor, uMinor, uPatch );
+        if( uMajor >= 0 )
+        {
+            const long long ceil = ( inclusive || uMinor > 0 || uPatch > 0 ) ? uMajor + 1 : uMajor;
+            out.ceilMajor = std::min( out.ceilMajor, ceil );
+        }
+    }
+    else if( const std::size_t dash = rest.find( " - " ); dash != std::string_view::npos )
+    {
+        std::size_t q = dash + 3;
+        while( q < rest.size() && !( rest[q] >= '0' && rest[q] <= '9' ) )
+        {
+            ++q;
+        }
+        long long uMajor = -1, uMinor = -1, uPatch = -1;
+        readVersion( rest, q, uMajor, uMinor, uPatch );
+        if( uMajor >= 0 )
+        {
+            out.ceilMajor = std::min( out.ceilMajor, uMajor + 1 );   // a hyphen range's upper end is inclusive
+        }
+    }
+    ENSURES( out.floor >= 0 && out.ceilMajor > 0, "a floor is a version and a ceiling is a major past zero" );
+    return out;
+}
+
+/// Whether EVERY `||` alternative of a non-empty `range` passes `admits` — a compound range admits whichever
+/// alternative a reader's Node satisfies, so each one must pass on its own (`">=24 || ^20"` is decided by
+/// `^20`, not by `>=24`).
+template<class Admits>
+inline bool everyClause( std::string_view range, Admits admits )
+{
+    EXPECTS( !range.empty(), "an absent engines.node is each caller's own decision" );
+    std::size_t start = 0;
+    while( true )
+    {
+        const std::size_t      pos    = range.find( "||", start );
+        const std::string_view clause = range.substr( start, pos == std::string_view::npos ? range.size() - start : pos - start );
+        if( !admits( engineClause( clause ) ) )
+        {
+            return false;
+        }
+        if( pos == std::string_view::npos )
+        {
+            return true;
+        }
+        start = pos + 2;
+    }
+}
+
+// The version facts the decisions below read. `--test` (the CLI flag, not only the `node:test` module) was
+// added in Node 18.1 and backported to 16.17; 17.x never had it, and 18.0 has the module but not the flag.
+// `--experimental-strip-types` exists from 22.6 (an older Node refuses to start with it at all); stripping is
+// on by default — the flag a harmless no-op — from 23.6, and on the 22.x line from its 22.18 backport, so
+// 23.0-23.5 do not have it. Module-syntax detection (an ES-syntax file with no `"type"` runs as ESM) is on by
+// default from 22.7, backported to 20.19; 21.x and 22.0-22.6 need a flag for it.
+inline bool clauseHasTestFlag( EngineClause c ) noexcept
+{
+    return c.floor >= nodeVersion( 18, 1 ) || ( c.floor >= nodeVersion( 16, 17 ) && c.ceilMajor <= 17 );
+}
+
+inline bool clauseHasStripFlag( EngineClause c ) noexcept
+{
+    return c.floor >= nodeVersion( 22, 6 );
+}
+
+inline bool clauseStripsByDefault( EngineClause c ) noexcept
+{
+    return c.floor >= nodeVersion( 23, 6 ) || ( c.floor >= nodeVersion( 22, 18 ) && c.ceilMajor <= 23 );
+}
+
+inline bool clauseDetectsModuleSyntax( EngineClause c ) noexcept
+{
+    return c.floor >= nodeVersion( 22, 7 ) || ( c.floor >= nodeVersion( 20, 19 ) && c.ceilMajor <= 21 );
 }
 
 } // namespace detail
 
-/// rv-nodetest-runner-60 F3: the LOWEST Node version `range` can possibly admit, as `major*1000 + minor` —
-/// `-1` when `range` is empty (no `engines.node` field at all; the caller reads that differently from a
-/// present-but-unbounded range, see `nodeTestVerb`). A compound range (`"a || b"`, npm's own OR syntax)
-/// admits whichever alternative a reader's Node satisfies, so its floor is the MINIMUM over every `||`
-/// alternative's own floor — "if the range can't be parsed confidently, fall back to run_unknown" (the
-/// re-sign brief) falls out of this for free: an unparseable or upper-bound-only alternative reads as floor
-/// `0` (`engineFloorClause`'s own contract), which pulls the whole compound range's minimum down to `0` —
-/// exactly the "admits anything, including something ancient" answer that must refuse to derive.
-inline long long enginesFloor( std::string_view range ) noexcept
+/// rv-nodetest-runner-60 F3: the three-way answer an `engines.node` range gives for a `.ts`/`.mts`/`.cts`
+/// command — bare (every Node the range admits strips types by default), flagged (every one has the flag,
+/// not every one strips by default), or refused (some admitted Node lacks the flag, or an alternative could
+/// not be read with confidence, which `engineClause` folds into "admits anything"). An EMPTY `range` (no
+/// `engines.node` anywhere in the boundary) is read as the honest default assumption — a Node that strips
+/// types with the flag — and gets the flagged form: stated, never proven.
+enum class StripDecision : std::uint8_t { Bare, Flagged, Unknown };
+
+inline StripDecision typeStrippingDecision( std::string_view range )
 {
     if( range.empty() )
     {
-        return -1;
+        return StripDecision::Flagged;
     }
-    long long   floor = -1;
-    std::size_t start = 0;
-    while( true )
-    {
-        const std::size_t pos = range.find( "||", start );
-        const std::string_view clause = range.substr( start, pos == std::string_view::npos ? range.size() - start : pos - start );
-        const long long         f     = detail::engineFloorClause( clause );
-        if( floor < 0 || f < floor )
-        {
-            floor = f;
-        }
-        if( pos == std::string_view::npos )
-        {
-            break;
-        }
-        start = pos + 2;
-    }
-    return floor;
-}
-
-// rv-nodetest-runner-60 F3: `--experimental-strip-types` exists from Node 22.6 only (an OLDER Node treats
-// it as an unrecognized flag and refuses to start at all — the flag is not "sometimes unnecessary", it is
-// sometimes a fatal error); type stripping is ON BY DEFAULT — the flag becomes a harmless no-op — from TWO
-// separate floors, 22.18 and 23.6: 23.6 turned it on upstream first and the 22.x line got it later, by
-// backport, in 22.18, so a bare 23.0-23.5 does NOT have it on by default even though it sorts after 22.18.
-constexpr long long kFloor22_6  = 22 * 1000 + 6;
-constexpr long long kFloor22_18 = 22 * 1000 + 18;
-constexpr long long kFloor23_0  = 23 * 1000 + 0;
-constexpr long long kFloor23_6  = 23 * 1000 + 6;
-constexpr long long kFloor18_0  = 18 * 1000 + 0;   // node:test itself exists from Node 18 (plain JS floor)
-
-/// rv-nodetest-runner-60 F3: the three-way answer an `engines.node` FLOOR gives for a `.ts`/`.mts`/`.cts`
-/// command — bare (default-on stripping is guaranteed for every version the range admits), flagged
-/// (>= 22.6 is guaranteed but default-on is not), or refused (the range admits something below 22.6, or
-/// the floor could not be read with confidence at all, which `enginesFloor` already folds into the same
-/// "admits anything" floor `0`). `floor == -1` is `enginesFloor`'s OWN sentinel for "no `engines.node`
-/// field anywhere in the boundary" — distinct from a present-but-low floor — and is read as the honest
-/// DEFAULT ASSUMPTION (Node >= 22.6), the flagged form, never proven and never claimed to be.
-enum class StripDecision : std::uint8_t { Bare, Flagged, Unknown };
-
-inline StripDecision typeStrippingDecision( long long floor ) noexcept
-{
-    if( floor >= 0 && floor < kFloor22_6 )
+    if( !detail::everyClause( range, detail::clauseHasStripFlag ) )
     {
         return StripDecision::Unknown;   // admits a Node where the flag itself is a fatal "bad option"
     }
-    const bool bareOk = floor >= kFloor23_6 || ( floor >= kFloor22_18 && floor < kFloor23_0 );
-    return bareOk ? StripDecision::Bare : StripDecision::Flagged;
+    return detail::everyClause( range, detail::clauseStripsByDefault ) ? StripDecision::Bare : StripDecision::Flagged;
+}
+
+/// train20-cr C8: whether Node will read the test file at `path` (scanned as `scan`) as the module kind its
+/// own syntax needs. `.mjs`/`.mts` are always ES modules and `"type": "module"` in the NEAREST package.json
+/// (`moduleType`, Node's own package scope) makes a `.js`/`.ts` one too. A file with no static
+/// `import`/`export` runs either way. ES syntax in a `.cjs`/`.cts`, or under an explicit
+/// `"type": "commonjs"`, fails before any test runs. ES syntax in a typeless `.js`/`.ts` runs only on a
+/// Node with default module-syntax detection, so `range` must prove it; with no `engines.node` at all the
+/// answer is `absentAssumed` — nodeTestVerb passes true for TypeScript, whose command already rests on the
+/// stated assumption of a type-stripping Node (every one of which detects module syntax except 22.6.x), and
+/// false for JavaScript, whose command otherwise rests on no assumption at all. A file whose syntax is
+/// unknown (`!scan.parsed`) is loadable only where its syntax cannot matter.
+/// Not covered: the mirror case — a CommonJS `require` in a file Node reads as an ES module — since an ES
+/// module can define its own `require` (`createRequire`) and a call alone does not prove it fails.
+inline bool moduleSyntaxLoadable( std::string_view path, const detail::ModuleScan& scan, std::string_view moduleType, std::string_view range,
+                                  bool absentAssumed )
+{
+    const bool alwaysEsm = path.ends_with( ".mjs" ) || path.ends_with( ".mts" );
+    const bool alwaysCjs = path.ends_with( ".cjs" ) || path.ends_with( ".cts" );
+    if( alwaysEsm || ( !alwaysCjs && moduleType == "module" ) )
+    {
+        return true;
+    }
+    if( !scan.parsed )
+    {
+        return false;   // the file's module kind depends on syntax this parse could not read
+    }
+    if( !scan.esmSyntax )
+    {
+        return true;
+    }
+    if( alwaysCjs || moduleType == "commonjs" )
+    {
+        return false;   // ES syntax in a file Node must evaluate as CommonJS: an explicit type turns detection off
+    }
+    return range.empty() ? absentAssumed : detail::everyClause( range, detail::clauseDetectsModuleSyntax );
 }
 
 /// rv-nodetest-runner-60: the command for node's own built-in test runner at `path`, on disk at `diskPath`
-/// with source bytes `source` — decided ENTIRELY from evidence this repo actually carries, never a guess at
-/// the Node version or the module graph that will actually run it. Returns `nullptr` for `run_unknown="1"`,
-/// the SAME "no command" contract every other evidence miss in this file already uses:
+/// with source bytes `source`, under the nearest package.json's `"type"` (`moduleType`) and the evidence
+/// manifest `packageJson` — decided ENTIRELY from evidence this repo actually carries, never a guess at the
+/// Node version or the module graph that will actually run it. Returns `nullptr` for `run_unknown="1"`, the
+/// SAME "no command" contract every other evidence miss in this file already uses:
 ///  * F1 — `.tsx`/`.jsx` can never be spelled: type stripping does not cover `.tsx`, and plain `node`
 ///    cannot load `.jsx` at all, on ANY Node version.
-///  * F2 — a `.ts`/`.mts`/`.cts` file whose own relative imports/requires are not ALL resolvable exactly as
-///    written (`relativeImportsResolvable`) is refused: the file's own bytes already prove the command
-///    would fail before a single test runs.
-///  * F3 — a `.ts`/`.mts`/`.cts` file's command additionally depends on `engines.node` (`enginesFloor` of
-///    `enginesNode(packageJson)`): refused below a 22.6 floor, flagged in [22.6, 22.18) or [23.0, 23.6),
-///    bare at >= 23.6 or in [22.18, 23.0). An ABSENT `engines.node` (`enginesFloor` returns `-1`, distinct
-///    from a present-but-low floor) is read as the honest default assumption — Node >= 22.6 — and gets the
-///    flagged form; this is documented as an assumption, not proven, because nothing in the repo says so.
-///  * Plain `.js`/`.mjs`/`.cjs` never need type stripping, so `engines.node` only matters for the OTHER
-///    direction: node:test itself exists from Node 18, so a range that admits something below 18 is
-///    refused too; an absent `engines.node` carries no such admission and keeps the bare form.
-inline const char* nodeTestVerb( std::string_view path, std::string_view packageJson, std::string_view source, std::string_view diskPath )
+///  * `engines.node` must not admit a Node without the `--test` flag (below 16.17, 17.x, 18.0); an absent
+///    `engines.node` carries no such admission.
+///  * train20-cr C8 — the file must load as the module kind its syntax needs (`moduleSyntaxLoadable`).
+///  * F2 + C9 + C10 — a `.ts`/`.mts`/`.cts` test file and every local TypeScript module it reaches must
+///    load under type stripping (`tsModuleGraphLoadable`).
+///  * F3 — a `.ts`/`.mts`/`.cts` command's flag comes from `typeStrippingDecision` over `engines.node`.
+/// The test file is parsed once (`detail::scanModule`), and every fact above that needs its bytes reads
+/// that one scan.
+inline const char* nodeTestVerb( std::string_view path, std::string_view packageJson, std::string_view moduleType, std::string_view source,
+                                 std::string_view diskPath )
 {
     if( path.ends_with( ".tsx" ) || path.ends_with( ".jsx" ) )
     {
         return nullptr;   // F1: never runnable, with or without a flag, on any Node
     }
-    const bool isTs = path.ends_with( ".ts" ) || path.ends_with( ".mts" ) || path.ends_with( ".cts" );
+    const std::string range = enginesNode( packageJson );
+    if( !range.empty() && !detail::everyClause( range, detail::clauseHasTestFlag ) )
+    {
+        return nullptr;   // admits a Node where `--test` itself is a fatal "bad option"
+    }
+    const bool               isTs = isTsModulePath( path );
+    const detail::ModuleScan scan = detail::scanModule( source, path );
+    if( !moduleSyntaxLoadable( path, scan, moduleType, range, isTs ) )
+    {
+        return nullptr;   // C8: Node would read this file as the other module kind
+    }
     if( !isTs )
     {
-        const long long floor = enginesFloor( enginesNode( packageJson ) );
-        return ( floor >= 0 && floor < kFloor18_0 ) ? nullptr : "node --test";
+        return "node --test";
     }
-    if( !relativeImportsResolvable( source, path, diskPath ) )
+    if( !tsModuleGraphLoadable( scan, diskPath ) )
     {
-        return nullptr;   // F2: the file's own imports already prove this command would fail
+        return nullptr;   // F2/C9/C10: a reachable module cannot load under type stripping
     }
-    switch( typeStrippingDecision( enginesFloor( enginesNode( packageJson ) ) ) )
+    switch( typeStrippingDecision( range ) )
     {
         case StripDecision::Bare:    return "node --test";
         case StripDecision::Flagged: return "node --experimental-strip-types --test";

@@ -1416,18 +1416,25 @@ wins over this — including an authoritative-but-unrecognized script, which is 
 import fallback only ever fires on what was previously `run_unknown="1"`.
 
 For a `.ts`/`.mts`/`.cts` file — whether the runner was named by `scripts.test: "node --test"` or inferred
-from the import above — a `run=` command is spelled only when it will actually run, never a guess:
+from the import above — a `run=` command is spelled only where the checks below find nothing that makes Node
+refuse to start it. They are read off the repository's own bytes, so they cannot see the Node that will run
+it, and a refusal is `run_unknown="1"`, never a guess:
 
 - **`.tsx` and `.jsx` never get a command.** Node's type stripping does not cover `.tsx` at all
   (`ERR_UNKNOWN_FILE_EXTENSION`), and plain `node` cannot load a `.jsx` file at all, on any Node version —
   both stay `run_unknown="1"` unconditionally.
-- **Every relative import/require in the test file must resolve exactly as written.** Node's module
-  resolver, under type stripping, never probes an extension and never maps a `.js` specifier onto a `.ts`
-  source — the exact shapes tsc-, tsx- and bundler-run TS code uses to import its own siblings. So a
-  command is spelled only when every relative (`./`/`../`) static `import`/`export … from` specifier or
-  `require(...)` argument in the test file's own bytes names a file that exists on disk at that exact path;
-  an extensionless specifier, or one whose spelled extension is not the file actually on disk, stays
-  `run_unknown="1"`.
+- **Every relative import/require must resolve exactly as written, in the test file and in every local
+  TypeScript module it reaches.** Node's module resolver, under type stripping, never probes an extension
+  and never maps a `.js` specifier onto a `.ts` source — the exact shapes tsc-, tsx- and bundler-run TS code
+  uses to import its own siblings. So a command is spelled only when every relative (`./`/`../`) static
+  `import`/`export … from` specifier or `require(...)` argument names a file that exists on disk at that
+  exact path. The walk follows each specifier that lands on a `.ts`/`.mts`/`.cts` file, reads at most 64
+  modules, and a walk cut at that bound stays `run_unknown="1"` too.
+- **No module on that walk may use syntax type stripping cannot erase.** Node strips types and rewrites
+  nothing, so an `enum`, a `namespace` with runtime code, a constructor parameter property, an import alias
+  (`import A = B.C`, `import x = require(…)`) or a decorator stops it with
+  `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` (or a parse error) before any test runs; any of them outside a
+  `declare` stays `run_unknown="1"`. A type-only namespace and a `declare enum` are erased and do not count.
 - **The command is additionally Node-version-aware, from `engines.node`.** `--experimental-strip-types`
   itself exists from Node 22.6 only (an older Node refuses to start at all with it); stripping is ON BY
   DEFAULT — the flag becomes a harmless no-op — from Node 22.18 and separately from Node 23.6 (two floors,
@@ -1436,13 +1443,27 @@ from the import above — a `run=` command is spelled only when it will actually
   Node will run the emitted command, so it reads `engines.node` from the nearest manifest: the bare
   `node --test <file>` when that range proves every satisfying Node has stripping on by default; the
   flagged `node --experimental-strip-types --test <file>` when it proves >= 22.6 but not provably
-  default-on, or when there is no manifest at all (a stated assumption of Node >= 22.6, not a guess at an
-  unseen runtime); and `run_unknown="1"` when the range admits ANY Node below 22.6 (a plain `>=18`/`^20`,
-  or a compound range like `>=24 || ^20`, whose LOWEST admitted alternative decides it) or cannot be read
-  with confidence at all.
+  default-on, or when there is no manifest at all (a stated assumption of a Node that strips types with the
+  flag, not a guess at an unseen runtime); and `run_unknown="1"` when the range admits ANY Node below 22.6
+  (a plain `>=18`/`^20`, or a compound range like `>=24 || ^20`, where every `||` alternative must pass on
+  its own) or cannot be read with confidence at all. Each alternative is read for its upper bound too,
+  because the default-on versions have a gap: `^22.18.0` gets the bare form, but `>=22.18` also admits
+  23.0–23.5 and keeps the flag.
 
-`.js`/`.mjs`/`.cjs` never need the flag and always get the bare form, unless `engines.node` admits a Node
-below 18 (`node:test` itself does not exist there), in which case they too stay `run_unknown="1"`.
+Every node:test file, `.js` or TypeScript, must also load as the module kind its own syntax needs. A file
+with a static ES `import`/`export` runs as an ES module only as `.mjs`/`.mts`, under `"type": "module"` in
+its nearest `package.json`, or on a Node with default module-syntax detection (22.7 and later, 20.19 on the
+20.x line). Without one of those the command stays `run_unknown="1"`: an explicit `"type": "commonjs"` (or a
+`.cjs`/`.cts` file) turns detection off, and with no `"type"` the `engines.node` range must prove detection —
+`>=22.7` does, `>=20.19` does not, since it admits 21.x. With no `engines.node` at all, a TypeScript file keeps
+the stated assumption above and a `.js` file stays `run_unknown="1"`, since its command otherwise rests on
+no assumption at all. A CommonJS file (`require`, no ES `import`/`export`) runs either way.
+
+`.js`/`.mjs`/`.cjs` never need the flag. Their one version question is the runner itself: the `--test` flag
+exists from Node 18.1 and, by backport, 16.17 — never on 17.x, and 18.0 has the `node:test` module but not
+the flag. So `engines.node` must not admit any of those: `^16.17.0` and `>=18.1` get the bare form, while
+`>=16.17` (it reaches 17.x) and `>=18` (it admits 18.0) stay `run_unknown="1"`. No `engines.node` at all keeps
+the bare form.
 
 A TS/JS `run_unknown="1"` can still mean the manifest genuinely names nothing recognized (and the test file
 itself names no `node:test` import either), one of the refusals above, or a real runner this tool does not
