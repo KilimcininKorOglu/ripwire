@@ -2548,11 +2548,18 @@ inline std::vector<std::string> pnpmWorkspaceGlobs( std::string_view y )
     return std::move( reader.globs );
 }
 
+inline std::vector<std::string> globList( const JsonNode* ws );
+
 // The package.json `workspaces` globs (an array, or yarn's `{ "packages": [...] }`); empty when it declares none.
 inline std::vector<std::string> packageJsonWorkspaceGlobs( const JsonNode& pj )
 {
+    return globList( pj.get( "workspaces" ) );
+}
+
+// A glob list: an array of strings, or an object's `packages` array (yarn's `{ "packages": [...] }`). Empty items drop.
+inline std::vector<std::string> globList( const JsonNode* ws )
+{
     std::vector<std::string> out;
-    const JsonNode*          ws = pj.get( "workspaces" );
     if( ws != nullptr && ws->kind == JsonNode::Kind::Obj )
     {
         ws = ws->get( "packages" );
@@ -3008,22 +3015,11 @@ private:
     // `tsconfig` field, else `tsconfig.json` — the first the crawl indexed.
     std::optional<BaseLoc> probeMemberDir( const std::string& memberDir, const std::string& sub ) const
     {
-        std::vector<std::string> tries;
-        if( sub != "." )
+        const std::vector<std::string> tries = configTries( sub, [ & ]
         {
-            tries = { sub.substr( 2 ), sub.substr( 2 ) + ".json" };
-        }
-        else
-        {
-            JsonNode pj;
             const auto pjIt = fileIndex_.find( joinRel( memberDir, "package.json" ) );
-            if( const JsonNode* t = pjIt != fileIndex_.end() && parseJsonObject( readConfigBytes( diskPath( ing_, pjIt->second ) ), pj ) ? pj.get( "tsconfig" ) : nullptr;
-                t != nullptr && t->kind == JsonNode::Kind::Str && !t->str.empty() )
-            {
-                tries.push_back( t->str );
-            }
-            tries.push_back( "tsconfig.json" );
-        }
+            return pjIt != fileIndex_.end() ? readConfigBytes( diskPath( ing_, pjIt->second ) ) : std::string();
+        } );
         for( const std::string& t : tries )
         {
             const std::string r = joinRel( memberDir, t );
@@ -3033,6 +3029,25 @@ private:
             }
         }
         return std::nullopt;
+    }
+
+    // What a package-form `extends` names inside the package, in order: the subpath (with or without `.json`), else the
+    // package.json `tsconfig` field (`manifest` reads its bytes, only then), else `tsconfig.json`.
+    template <class ReadManifest>
+    static std::vector<std::string> configTries( const std::string& sub, ReadManifest&& manifest )
+    {
+        if( sub != "." )
+        {
+            return { sub.substr( 2 ), sub.substr( 2 ) + ".json" };
+        }
+        std::vector<std::string> tries;
+        JsonNode                 pj;
+        if( const JsonNode* t = parseJsonObject( manifest(), pj ) ? pj.get( "tsconfig" ) : nullptr; t != nullptr && t->kind == JsonNode::Kind::Str && !t->str.empty() )
+        {
+            tries.push_back( t->str );
+        }
+        tries.push_back( "tsconfig.json" );
+        return tries;
     }
 
     static std::string diskDirOf( const std::string& disk )
@@ -3099,21 +3114,7 @@ private:
     // else `tsconfig.json`; the first that has bytes on disk.
     static std::optional<BaseLoc> probePackageDir( const std::string& nmRel, const std::string& nmDisk, const std::string& sub )
     {
-        std::vector<std::string> tries;   // relative to the package's directory
-        if( sub != "." )
-        {
-            tries = { sub.substr( 2 ), sub.substr( 2 ) + ".json" };
-        }
-        else
-        {
-            JsonNode pj;
-            if( const JsonNode* t = parseJsonObject( readConfigBytes( nmDisk + "/package.json" ), pj ) ? pj.get( "tsconfig" ) : nullptr;
-                t != nullptr && t->kind == JsonNode::Kind::Str && !t->str.empty() )
-            {
-                tries.push_back( t->str );
-            }
-            tries.push_back( "tsconfig.json" );
-        }
+        const std::vector<std::string> tries = configTries( sub, [ & ] { return readConfigBytes( nmDisk + "/package.json" ); } );
         for( const std::string& t : tries )
         {
             std::string d = nmDisk + "/" + t;
@@ -3147,49 +3148,51 @@ private:
         return *ancestors_;
     }
 
-    static bool pathExists( const std::string& p )
+    static bool hasEntry( const std::string& dir, std::string_view name )
     {
-        os::stat_t st;
-        return os::stat( p.c_str(), &st ) == 0;
+        const std::string at = dir + std::string( name );
+        os::stat_t        st;
+        return os::stat( at.c_str(), &st ) == 0;
+    }
+
+    // The directories strictly above `crawlRoot`, nearest first, up to and including the git top-level; empty when the
+    // root IS the top-level or no git work tree bounds the walk.
+    static std::vector<std::string> dirsAboveToGitTop( const std::string& crawlRoot )
+    {
+        char buf[ PATH_MAX ];
+        if( crawlRoot.empty() || os::realpath( crawlRoot.c_str(), buf ) == nullptr )
+        {
+            return {};   // a multi-root merge reads each root's config itself (§3.2); an unresolvable root has no parent
+        }
+        std::vector<std::string> above;
+        std::string              d = buf;
+        while( !hasEntry( d, "/.git" ) && d.size() > 1 )
+        {
+            const std::size_t cut = d.rfind( '/' );
+            if( cut == std::string::npos )
+            {
+                return {};
+            }
+            d = cut == 0 ? std::string( "/" ) : d.substr( 0, cut );
+            above.push_back( d );
+        }
+        return !above.empty() && hasEntry( above.back(), "/.git" ) ? above : std::vector<std::string>{};
     }
 
     static AncestorConfigs findAncestorConfigs( const std::string& crawlRoot )
     {
         AncestorConfigs out;
-        char            buf[ PATH_MAX ];
-        if( crawlRoot.empty() || os::realpath( crawlRoot.c_str(), buf ) == nullptr )
+        for( const std::string& d : dirsAboveToGitTop( crawlRoot ) )
         {
-            return out;   // a multi-root merge reads each root's config itself (§3.2); an unresolvable root has no parent
-        }
-        std::vector<std::string> above;   // strictly above the root, nearest first, up to the git top-level
-        std::string              d       = buf;
-        bool                     bounded = false;
-        while( !pathExists( d + "/.git" ) && d.size() > 1 )
-        {
-            const std::size_t cut = d.rfind( '/' );
-            if( cut == std::string::npos )
+            for( const std::string_view name : { std::string_view( "/tsconfig.json" ), std::string_view( "/jsconfig.json" ) } )
             {
-                break;
-            }
-            d = cut == 0 ? std::string( "/" ) : d.substr( 0, cut );
-            above.push_back( d );
-            bounded = pathExists( d + "/.git" );
-        }
-        if( !bounded )
-        {
-            return out;   // the root IS the top-level (nothing above to read), or no git work tree bounds the walk
-        }
-        for( const std::string& d : above )
-        {
-            for( const char* name : { "/tsconfig.json", "/jsconfig.json" } )
-            {
-                if( pathExists( d + name ) )
+                if( hasEntry( d, name ) )
                 {
-                    out.tsconfigs.push_back( d + name );
+                    out.tsconfigs.push_back( d + std::string( name ) );
                 }
             }
             JsonNode pj;
-            if( pathExists( d + "/pnpm-workspace.yaml" ) || pathExists( d + "/lerna.json" ) || pathExists( d + "/rush.json" )
+            if( hasEntry( d, "/pnpm-workspace.yaml" ) || hasEntry( d, "/lerna.json" ) || hasEntry( d, "/rush.json" )
                 || ( parseJsonObject( readConfigBytes( d + "/package.json" ), pj ) && !packageJsonWorkspaceGlobs( pj ).empty() ) )
             {
                 out.workspaces.push_back( d );
@@ -3820,15 +3823,7 @@ private:
         {
             addMember( decls, dir, std::move( pj ) );
         }
-        // A package.json that does not parse was not read: disclosed when it could declare workspaces or be a member.
-        for( const auto& [ rel, mentionsWorkspaces ] : unparsed )
-        {
-            const std::string dir( includerDir( rel ) );
-            if( mentionsWorkspaces || std::any_of( decls.begin(), decls.end(), [ & ]( const WorkspaceDecl& d ) { return d.admits( dir ); } ) )
-            {
-                configs_.noteUnread( rel );
-            }
-        }
+        discloseUnparsedManifests( unparsed, decls );
         configs_.setMemberDirs( &memberDirByName_ );
     }
 
@@ -3842,39 +3837,42 @@ private:
             configs_.noteUnread( rel );
             return;
         }
-        WorkspaceDecl d{ dir, {} };
-        if( fileNamed( rel, "lerna.json" ) )
+        if( std::vector<std::string> globs = toolGlobs( fileNamed( rel, "lerna.json" ), cfg ); !globs.empty() )
         {
-            const JsonNode* ps = cfg.get( "packages" );
-            d.globs            = ps != nullptr ? stringItems( *ps ) : std::vector<std::string>{ "packages/*" };
-        }
-        else if( const JsonNode* projects = cfg.get( "projects" ); projects != nullptr )
-        {
-            for( const JsonNode& pr : projects->vals )
-            {
-                if( const JsonNode* folder = pr.kind == JsonNode::Kind::Obj ? pr.get( "projectFolder" ) : nullptr; folder != nullptr && folder->kind == JsonNode::Kind::Str )
-                {
-                    d.globs.push_back( folder->str );
-                }
-            }
-        }
-        if( !d.globs.empty() )
-        {
-            decls.push_back( std::move( d ) );
+            decls.push_back( { dir, std::move( globs ) } );
         }
     }
 
-    static std::vector<std::string> stringItems( const JsonNode& arr )
+    static std::vector<std::string> toolGlobs( bool lerna, const JsonNode& cfg )
     {
-        std::vector<std::string> out;
-        for( const JsonNode& e : arr.vals )
+        if( lerna )
         {
-            if( e.kind == JsonNode::Kind::Str && !e.str.empty() )
+            const JsonNode* ps = cfg.get( "packages" );
+            return ps != nullptr ? globList( ps ) : std::vector<std::string>{ "packages/*" };
+        }
+        std::vector<std::string> out;
+        const JsonNode*          projects = cfg.get( "projects" );
+        for( const JsonNode& pr : projects != nullptr ? projects->vals : std::vector<JsonNode>{} )
+        {
+            if( const JsonNode* folder = pr.kind == JsonNode::Kind::Obj ? pr.get( "projectFolder" ) : nullptr; folder != nullptr && folder->kind == JsonNode::Kind::Str )
             {
-                out.push_back( e.str );
+                out.push_back( folder->str );
             }
         }
         return out;
+    }
+
+    // A package.json that does not parse was not read: disclosed when it could declare workspaces or be a member.
+    void discloseUnparsedManifests( const std::vector<std::pair<std::string, bool>>& unparsed, const std::vector<WorkspaceDecl>& decls )
+    {
+        for( const auto& [ rel, mentionsWorkspaces ] : unparsed )
+        {
+            const std::string dir( includerDir( rel ) );
+            if( mentionsWorkspaces || std::any_of( decls.begin(), decls.end(), [ & ]( const WorkspaceDecl& d ) { return d.admits( dir ); } ) )
+            {
+                configs_.noteUnread( rel );
+            }
+        }
     }
 
     // One package.json: a member when a declaration admits its directory and it names itself.
