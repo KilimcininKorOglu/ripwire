@@ -99,6 +99,27 @@ else
     no "binary probe: a Read of src/svector.h did not yield --expand (binary unreachable or stem svector no longer a symbol) -- last row: $( tail -n1 "$LOG" | cut -c1-200 )"
 fi
 
+# ---- train20-cr C3's shape in this hook: a Read in a NON-git cwd must abstain with reason=no-repo, also when
+#      the caller exports GIT_DIR naming another repository. With it exported, `git -C "$cwd" rev-parse
+#      --show-toplevel` prints the non-git cwd as its own top level, so the hook routed there. RED on the hook
+#      without the inherited-variable reset. The first row is the control: no GIT_DIR, same cwd, same answer. ----
+NGCWD="$TMP/nongit"; mkdir -p "$NGCWD"
+NGOTHER="$TMP/othergit"; mkdir -p "$NGOTHER"; git -C "$NGOTHER" init -q
+NGREAD="$( jq -cn --arg p "$NGCWD/svector.h" '{file_path:$p}' )"
+for ngcase in control GIT_DIR; do
+    : >"$LOG"
+    if [ "$ngcase" = control ]; then
+        run_hook Read "$NGREAD" "nongit-$ngcase" "$NGCWD" >/dev/null; ngrc=$?
+    else
+        GIT_DIR="$NGOTHER/.git" run_hook Read "$NGREAD" "nongit-$ngcase" "$NGCWD" >/dev/null; ngrc=$?
+    fi
+    if [ "$ngrc" = 0 ] && tail -n1 "$LOG" | jq -e '.status == "abstain" and .reason == "no-repo"' >/dev/null 2>&1; then
+        ok "non-git cwd ($ngcase): a Read abstains with reason=no-repo"
+    else
+        no "non-git cwd ($ngcase): rc=$ngrc, last row: $( tail -n1 "$LOG" | cut -c1-200 )"
+    fi
+done
+
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # Per-session cap: the 4th recommend-worthy event in one session abstains with reason=cap, and injects
 # nothing, in either arm.
