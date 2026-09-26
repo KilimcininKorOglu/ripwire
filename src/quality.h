@@ -3091,7 +3091,11 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // resolution, and so two builds that resolve differently served each other's dead set (see producerIdentity).
 // Since v14 a bump is no longer what keeps two builds' blobs apart — any source change renames every blob — so
 // a semantics change that lands without one leaves this history incomplete, not a wrong answer across builds.
-constexpr std::uint32_t kQSnapCacheScheme = 14;
+// v15 (2026-09-26, lane/builtin-bind-065) — isDeadCandidate no longer counts a definition dead when a call the
+// builtin-method name gate DECLINED could have meant it (graph.h BuiltinMethodGate, Graph::gateDeclinedTarget):
+// the dead SET moved, as in v9/v12. The producer identity already keeps this build's blobs apart from older ones;
+// bumped 14 -> 15 so the history above stays complete. No extraction change: kParserVer 122 and its mirror stay.
+constexpr std::uint32_t kQSnapCacheScheme = 15;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
