@@ -511,7 +511,7 @@ fi
 #     reachable-module walk, C10 non-erasable TypeScript syntax, and default stripping's upper gap. Each
 #     fixture is built here, under $TMP (not committed), from the same two-file shape as the #60 repro:
 #     test/behavior.test.{js,ts} imports ../src/bounded.{js,ts} and calls it. RED on the 0.6.4 binary:
-#     z1, z3, z6, z8, z9, z10, z11, z12, z13, z14, z16 (and x2 above); the rest are controls that pass on
+#     z1, z3, z6, z9, z10, z11, z12, z13, z14, z16 (and x2 above); the rest are controls that pass on
 #     both, so each RED arm is shown to be about the named construct and not about the fixture shape.
 fxjs(){ # fxjs DIR [PACKAGE_JSON] — ES-syntax .js test file
     mkdir -p "$1/src" "$1/test"
@@ -560,7 +560,10 @@ zwant '(z6) node --test floor: engines "^16.17.0" stays on the 16.x line, which 
 fxcjs "$Z/z7" '{ "engines": { "node": ">=16.17" } }'
 zwant '(z7) node --test floor control: ">=16.17" also admits 17.x, which never had --test' "$Z/z7" src/bounded.js run_unknown
 fxcjs "$Z/z8" '{ "engines": { "node": ">=18" } }'
-zwant '(z8) node --test floor: ">=18" admits 18.0, which has node:test but not the --test flag (18.1)' "$Z/z8" src/bounded.js run_unknown
+# 18.0.0 has node:test but not --test (18.1); treated as supporting it on purpose (one release, a loud failure; see kHasTestFlag)
+zwant '(z8) node --test floor: ">=18" gets a command (18.0.x is accepted by design)' "$Z/z8" src/bounded.js "$JSCMD"
+fxcjs "$Z/z8b" '{ "engines": { "node": ">=16" } }'
+zwant '(z8b) node --test floor: ">=16" admits 16.0-16.16 and 17.x, which never had --test' "$Z/z8b" src/bounded.js run_unknown
 fxcjs "$Z/z9" '{ "engines": { "node": ">=16.17 <17 || >=18.1" } }'
 zwant '(z9) node --test floor: every alternative of ">=16.17 <17 || >=18.1" has --test' "$Z/z9" src/bounded.js "$JSCMD"
 # C9: the reachable local TypeScript modules, not only the test file's own imports

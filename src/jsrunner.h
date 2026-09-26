@@ -1177,7 +1177,9 @@ struct VersionSet
 // default — the flag a harmless no-op — from 23.6, and on the 22.x line from its 22.18 backport, so 23.0-23.5 do not
 // have it. Module-syntax detection (an ES-syntax file with no `"type"` runs as ESM) is on by default from 22.7,
 // backported to 20.19; 21.x and 22.0-22.6 need a flag for it.
-constexpr VersionSet kHasTestFlag         { nodeVersion( 18, 1 ), nodeVersion( 16, 17 ), 17 };
+// kHasTestFlag's floor is 18.0, not 18.1, ON PURPOSE (owner, 2026-09-26): 18.0.0 is one April-2022 release that fails loudly
+// ("bad option"), and refusing ">=18" -- the most common spelling -- would make run= useless on most projects; below 18 stays strict.
+constexpr VersionSet kHasTestFlag         { nodeVersion( 18, 0 ), nodeVersion( 16, 17 ), 17 };
 constexpr VersionSet kHasStripFlag        { nodeVersion( 22, 6 ), nodeVersion( 22, 6 ), kNoCeiling };
 constexpr VersionSet kStripsByDefault     { nodeVersion( 23, 6 ), nodeVersion( 22, 18 ), 23 };
 constexpr VersionSet kDetectsModuleSyntax { nodeVersion( 22, 7 ), nodeVersion( 20, 19 ), 21 };

@@ -30,10 +30,11 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
   command.
 - **Syntax type stripping cannot erase.** On the same walk: an `enum`, a `namespace` with runtime code, a
   constructor parameter property, an import alias or a decorator, outside any `declare`.
-- **Node versions.** The `--test` flag exists from Node 18.1 and, by backport, 16.17, but not on 17.x or 18.0.
-  Stripping is on by default from 22.18 and 23.6, but not on 23.0–23.5. Each `engines.node` alternative is now
-  read for its upper bound as well as its floor, so `^16.17.0` and `>=18.1` get a command, `>=16.17` and `>=18`
-  do not, and `>=22.18` keeps `--experimental-strip-types` where `^22.18.0` gets the bare form.
+- **Node versions.** The `--test` flag exists from Node 18 (18.1 strictly; the single 18.0.0 release is accepted on
+  purpose) and, by backport, 16.17, but never on 17.x. Stripping is on by default from 22.18 and 23.6, but not on
+  23.0–23.5. Each `engines.node` alternative is now read for its upper bound as well as its floor, so `^16.17.0` and
+  `>=18` get a command, `>=16` and `>=16.17` do not, and `>=22.18` keeps `--experimental-strip-types` where
+  `^22.18.0` gets the bare form.
 
 ### Fixed — hooks and doctor
 

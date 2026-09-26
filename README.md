@@ -1461,9 +1461,10 @@ no assumption at all. A CommonJS file (`require`, no ES `import`/`export`) runs 
 
 `.js`/`.mjs`/`.cjs` never need the flag. Their one version question is the runner itself: the `--test` flag
 exists from Node 18.1 and, by backport, 16.17 — never on 17.x, and 18.0 has the `node:test` module but not
-the flag. So `engines.node` must not admit any of those: `^16.17.0` and `>=18.1` get the bare form, while
-`>=16.17` (it reaches 17.x) and `>=18` (it admits 18.0) stay `run_unknown="1"`. No `engines.node` at all keeps
-the bare form.
+the flag. So `engines.node` must not admit a Node below 18 without it: `^16.17.0`, `>=18` and `>=18.1` get the bare
+form, while `>=16` and `>=16.17` (they reach 17.x) stay `run_unknown="1"`. `>=18` is accepted although it admits 18.0:
+that is one release from April 2022, the command fails loudly there, and refusing the most common spelling would make
+the answer useless on most projects. No `engines.node` at all keeps the bare form.
 
 A TS/JS `run_unknown="1"` can still mean the manifest genuinely names nothing recognized (and the test file
 itself names no `node:test` import either), one of the refusals above, or a real runner this tool does not
