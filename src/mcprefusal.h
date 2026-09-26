@@ -792,7 +792,8 @@ inline constexpr std::size_t kMcpGitOnlyCount = std::size( kMcpGitOnlyVerbs );
 // absence has to describe itself: what was dropped, and the one condition that would bring it back.
 // Derived from the table — the names are never restated, which is how the two would drift apart.
 //
-// The three renderers below all take the SAME `omitted` flag and answer "" when it is false, so their call
+// The three renderers below all take the SAME omission decision (the note as a per-verb predicate, so an --mcp-tools
+// subset can narrow it) and answer "" when nothing is omitted, so their call
 // sites in the tools/list assembly are plain concatenations. That is not decoration: the alternative is one
 // conditional per site inside dispatchMcpLine, a function already carrying enough branches that a
 // --quality-delta run gates on it. The predicate is decided once; these say what it means.
@@ -804,15 +805,15 @@ inline constexpr std::size_t kMcpGitOnlyCount = std::size( kMcpGitOnlyVerbs );
 // per-request refusal already carries the qualifier ("not a git repository (or no HEAD commit)" — see
 // mcp.h:1261/1268), so this disclosure now renders the same two-cause sentence instead of asserting the
 // narrower one unconditionally.
-// `isListed` (--mcp-tools): a verb the tool subset leaves out is not named here — it would be absent on a git
-// checkout too, so "point a server at a git checkout to get them back" would not be true of it. No verb left to
-// name, no sentence.
-inline std::string gitOnlyOmissionNote( bool omitted, bool isGitDir, const std::function<bool( std::string_view )>& isListed )
+// `isOmittedHere` names the verbs the sentence is about: the git-only verbs this server omits for want of git AND
+// would otherwise list. With --mcp-tools a verb the subset leaves out is absent on a git checkout too, so "point a
+// server at a git checkout to get them back" would not be true of it. No verb left to name, no sentence.
+inline std::string gitOnlyOmissionNote( const std::function<bool( std::string_view )>& isOmittedHere, bool isGitDir )
 {
     std::size_t namedCount = 0;
     for( const McpGitOnlyVerb& row : kMcpGitOnlyVerbs )
     {
-        namedCount += ( omitted && isListed( row.verb ) ) ? 1 : 0;
+        namedCount += isOmittedHere( row.verb ) ? 1 : 0;
     }
     if( namedCount == 0 )
     {
@@ -826,7 +827,7 @@ inline std::string gitOnlyOmissionNote( bool omitted, bool isGitDir, const std::
     const char* separator = " ";
     for( const McpGitOnlyVerb& row : kMcpGitOnlyVerbs )
     {
-        if( isListed( row.verb ) )
+        if( isOmittedHere( row.verb ) )
         {
             note += separator;
             note += row.verb;

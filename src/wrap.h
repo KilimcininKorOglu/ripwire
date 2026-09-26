@@ -69,6 +69,14 @@ inline std::vector<std::string> wrapVerbGroupLines( McpToolMask mask = kMcpAllTo
     return lines;
 }
 
+// What every recipe lists about the server: the grouped verb lines (header first) and the --mcp-tools argument to
+// write into its command ("" = none, the default server).
+struct WrapListing
+{
+    std::vector<std::string> verbLines;
+    std::string              toolsArg;
+};
+
 // ── THE AGENT REGISTRY ───────────────────────────────────────────────────────────────────────────
 // One row per agent. Adding an agent is a ROW, not a branch.
 //
@@ -620,7 +628,7 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
 // it, because a warm index across calls is a real reason to want one.
 inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
                               const std::string_view executablePath,
-                              const std::vector<std::string>& verbLines, std::string_view toolsArg ) noexcept
+                              const WrapListing& listing ) noexcept
 {
     rw::emitTo( stdout, "# ripwire -> {} (CLI-first)\n", std::string_view( row.displayName.data(), static_cast<int>( row.displayName.size() ) ) );
     wrapPrintPathNote( token );
@@ -656,7 +664,7 @@ inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
             // every row held exactly one %s. Splitting the command at its substitution point removes
             // the hazard rather than containing it: there is no format string left to get wrong.
             rw::emitTo( stdout, "{}{}{}", std::string_view( row.mcpAddPre.data(), static_cast<int>( row.mcpAddPre.size() ) ),
-                         token.c_str(), wrapCliAddPost( row, toolsArg ) );
+                         token.c_str(), wrapCliAddPost( row, listing.toolsArg ) );
             break;
         }
         case McpForm::Toml:
@@ -681,21 +689,20 @@ inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
                 "# opencode.json (project) or ~/.config/opencode/opencode.json (global; merged\n"
                 "# per-key, project wins). The key is \"mcp\" — the \"mcpServers\" shape other clients\n"
                 "# use parses fine here and is then silently ignored:\n" );
-            wrapMcpJsonOpencode( token, toolsArg );
+            wrapMcpJsonOpencode( token, listing.toolsArg );
             break;
         case McpForm::Json:
         case McpForm::None:
             break;
     }
-    for( const std::string& line : verbLines )
+    for( const std::string& line : listing.verbLines )
     {
         rw::emitTo( stdout, "{}\n", line.c_str() );
     }
 }
 
 // Emit the configuration recipe for a single agent (shared by runWrap and --all logic)
-inline void wrapEmitAgent( const std::string_view agent, const std::vector<std::string>& verbLines,
-                           const std::string_view executablePath, std::string_view toolsArg = {} ) noexcept
+inline void wrapEmitAgent( const std::string_view agent, const WrapListing& listing, const std::string_view executablePath ) noexcept
 {
     const std::string token = wrapCommandToken( executablePath );   // 2026-09-06: "ripwire", or this binary's absolute path when PATH has none
 
@@ -713,19 +720,19 @@ inline void wrapEmitAgent( const std::string_view agent, const std::vector<std::
 
     if( cliFirst )
     {
-        wrapEmitCliFirst( *cliRow, token, executablePath, verbLines, toolsArg );
+        wrapEmitCliFirst( *cliRow, token, executablePath, listing );
     }
     else if( agent == "cursor" )
     {
-        wrapMcpJson( ".cursor/mcp.json  (project)  or  ~/.cursor/mcp.json  (global)", token, toolsArg );
+        wrapMcpJson( ".cursor/mcp.json  (project)  or  ~/.cursor/mcp.json  (global)", token, listing.toolsArg );
     }
     else if( agent == "windsurf" )
     {
-        wrapMcpJson( "~/.codeium/windsurf/mcp_config.json", token, toolsArg );
+        wrapMcpJson( "~/.codeium/windsurf/mcp_config.json", token, listing.toolsArg );
     }
     else if( agent == "gemini" )
     {
-        wrapMcpJson( "~/.gemini/settings.json", token, toolsArg );
+        wrapMcpJson( "~/.gemini/settings.json", token, listing.toolsArg );
     }
     else if( agent == "aider" )
     {
@@ -741,13 +748,13 @@ inline void wrapEmitAgent( const std::string_view agent, const std::vector<std::
     // instead of duplicating the printf calls per-branch); aider has no MCP verbs to list.
     if( !cliFirst && ( agent == "cursor" || agent == "windsurf" || agent == "gemini" ) )
     {
-        for( const std::string& line : verbLines )
+        for( const std::string& line : listing.verbLines )
         {
             rw::emitTo( stdout, "{}\n", line.c_str() );
         }
     }
 
-    wrapPrintToolsArgNote( cliRow, toolsArg );   // --mcp-tools given but not written into this agent's form
+    wrapPrintToolsArgNote( cliRow, listing.toolsArg );   // --mcp-tools given but not written into this agent's form
 
     // A4-S2: adoption recipes name a skill install step only for verified agent discovery paths.
     wrapPrintSkillsLine( stdout, agent, executablePath );
@@ -768,6 +775,7 @@ inline WrapToolsArg wrapToolsArg( int argc, char** argv )
 {
     static constexpr std::string_view kPrefix = "--mcp-tools=";
     WrapToolsArg out;
+    bool         seen = false;
     for( int argIndex = 3; argIndex < argc; ++argIndex )
     {
         const std::string_view arg = argv[ argIndex ];
@@ -776,23 +784,21 @@ inline WrapToolsArg wrapToolsArg( int argc, char** argv )
             continue;
         }
         const McpToolSpec spec = mcpParseToolSpec( arg.substr( kPrefix.size() ) );
-        if( !VALIDATE( spec.refusal.empty() && out.mask == kMcpAllToolsMask && out.toolsArg.empty(), "argv: one valid --mcp-tools" ) )
+        if( !VALIDATE( spec.refusal.empty() && !seen, "argv: one valid --mcp-tools" ) )
         {
             return { .refusal = spec.refusal.empty() ? std::string( "--mcp-tools given twice; give one list" ) : spec.refusal };
         }
+        seen         = true;
         out.mask     = spec.mask;
         out.toolsArg = spec.mask != kMcpAllToolsMask ? std::string( arg ) : std::string{};
     }
     return out;
 }
 
-inline int runWrap( int argc, char** argv, const std::string_view executablePath )
+// ── P1-C: scan local skill directories before emitting the recipe ─────────────────────────
+// Best-effort: missing dirs are silently skipped. CRITICAL → true (the caller refuses) unless --force.
+inline bool wrapSkillScanRefuses( int argc, char** argv )
 {
-    if( argc < 3 ) { wrapList( stdout ); return 0; }
-    const std::string_view arg = argv[ 2 ];
-
-    // ── P1-C: scan local skill directories before emitting the recipe ─────────────────────────
-    // Best-effort: missing dirs are silently skipped. CRITICAL → block unless --force.
     bool force = false;
     for( int i = 3; i < argc; ++i )
     {
@@ -811,6 +817,18 @@ inline int runWrap( int argc, char** argv, const std::string_view executablePath
         rw::emitRaw( stderr,
             "ripwire wrap: CRITICAL skill findings above — refusing to emit recipe.\n"
             "              Fix the skills or re-run with --force to proceed anyway.\n" );
+        return true;
+    }
+    return false;
+}
+
+inline int runWrap( int argc, char** argv, const std::string_view executablePath )
+{
+    if( argc < 3 ) { wrapList( stdout ); return 0; }
+    const std::string_view arg = argv[ 2 ];
+
+    if( wrapSkillScanRefuses( argc, argv ) )
+    {
         return 1;
     }
 
@@ -824,7 +842,7 @@ inline int runWrap( int argc, char** argv, const std::string_view executablePath
     }
 
     // All MCP verbs, grouped — derived from mcp.h's kMcpVerbTable so this cannot re-drift (A4-S2).
-    const std::vector<std::string> verbLines = wrapVerbGroupLines( toolMask );
+    const WrapListing listing{ wrapVerbGroupLines( toolMask ), toolsArg };
 
     // ── Handle --all: detect + emit every installed agent ─────────────────────────────────────
     if( arg == "--all" )
@@ -844,7 +862,7 @@ inline int runWrap( int argc, char** argv, const std::string_view executablePath
                 rw::emitRaw( stdout, "\n" ); // blank line separator between agents
             }
             rw::emitTo( stdout, "# ──── {} ────\n", std::string_view( ac.name.data(), ac.name.size() ) );
-            wrapEmitAgent( ac.name, verbLines, executablePath, toolsArg );
+            wrapEmitAgent( ac.name, listing, executablePath );
             ++configuredCount;
         }
 
@@ -857,7 +875,7 @@ inline int runWrap( int argc, char** argv, const std::string_view executablePath
     const std::string_view agent = arg;
     if( agentTarget( agent ) != nullptr )   // the table IS the accept-list; a new row needs no edit here
     {
-        wrapEmitAgent( agent, verbLines, executablePath, toolsArg );
+        wrapEmitAgent( agent, listing, executablePath );
         return 0;
     }
 

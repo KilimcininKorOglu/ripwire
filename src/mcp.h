@@ -31,6 +31,7 @@
 #include <string>
 #include <algorithm>       // std::find — the --mcp-tools duplicate check and the batch-served lookup
 #include <bit>             // std::popcount — the --mcp-tools profile check
+#include "infra/tablelookup.h"   // findByField — mcpToolIndex, the same row lookup wrap and ingest use
 #include <cstdlib>         // ::realpath — the workspace-pin canonicalization (mcpCanonRoot)
 #include <climits>         // PATH_MAX
 #include "infra/os.h"      // rw::os::getcwd — R2a: the launch-cwd assumed root (resolved once at startup)
@@ -138,14 +139,8 @@ inline constexpr McpToolMask kMcpAllToolsMask = ( McpToolMask{ 1 } << kMcpVerbCo
 // kMcpVerbTable's row for `name`, or kMcpVerbCount when the name is not an advertised tool.
 constexpr std::size_t mcpToolIndex( std::string_view name ) noexcept
 {
-    for( std::size_t toolIndex = 0; toolIndex < kMcpVerbCount; ++toolIndex )
-    {
-        if( name == kMcpVerbTable[ toolIndex ].name )
-        {
-            return toolIndex;
-        }
-    }
-    return kMcpVerbCount;
+    const McpVerbInfo* const row = findByField( kMcpVerbTable, &McpVerbInfo::name, name );
+    return row == nullptr ? kMcpVerbCount : static_cast<std::size_t>( row - kMcpVerbTable );
 }
 
 // The named profiles. `members` is a comma list of tool names; "" means every tool.
@@ -1200,8 +1195,8 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                        "\"instructions\":\"" + mcpdetail::jsonEscape( mcpInstructionsText( policy )   // V3/F4: the; --mcp-tools: only hints for listed tools
                                                     + mcpLegendPointer( policy )   // r2-LO: the session dictionary, where a session exists
                                                     + mcpToolSubsetNote( policy )   // --mcp-tools: a subset announces itself
-                                                    + mcprefuse::gitOnlyOmissionNote( omitGitVerbs, policy.pinnedRootIsGitDir,
-                                                                                      [ & ]( std::string_view verb ) { return mcpToolEnabled( policy, verb ); } ) ) + "\"}}";  // omission announces itself, finding #7: qualified by which cause it is
+                                                    + mcprefuse::gitOnlyOmissionNote( [ & ]( std::string_view verb ) { return omitGitVerbs && mcpToolEnabled( policy, verb ); },
+                                                                                      policy.pinnedRootIsGitDir ) ) + "\"}}";  // omission announces itself, finding #7: qualified by which cause it is
             }
         }
         else if( method == "tools/list" )
@@ -2696,14 +2691,63 @@ inline void emitMcpStdioLineOverflowRefusal()
     std::fflush( stdout );
 }
 
-// stdio MCP loop: one JSON object per line. Returns the process exit code. `root`/`roots` are the
-// positional args `ripwire <root> --mcp` was started with (roots.size()>=2 = a multi-root workspace);
-// both default empty for the pre-X7 "no startup root" mode, in which every request must still name its
-// own `path` exactly as before. `root` mirrors `McpHttpConfig::root`; `roots` mirrors `::roots` — same
-// plumbing as runMcpHttp(), just building McpDispatchPolicy::defaultRoot instead of ::pinnedRoot (D3/D4).
-inline int runMcp( int topK, bool stable = false, bool noRedact = false,
-                   const std::string& root = std::string(), const std::vector<std::string>& roots = {},
-                   McpToolMask toolMask = kMcpAllToolsMask, std::string toolSpec = {} )
+// What `ripwire [root…] --mcp` hands the stdio loop — the stdio twin of mcpserver.h's McpHttpConfig. `root`/`roots` are
+// the positional args (roots.size()>=2 = a multi-root workspace); both empty for the pre-X7 "no startup root" mode, in
+// which every request must still name its own `path` exactly as before. toolMask/toolSpec are --mcp-tools, already
+// validated by main.cpp (the whole catalog by default).
+struct McpStdioConfig
+{
+    int                      topK     = 200;
+    bool                     stable   = false;
+    bool                     noRedact = false;
+    std::string              root;
+    std::vector<std::string> roots;
+    McpToolMask              toolMask = kMcpAllToolsMask;
+    std::string              toolSpec;
+};
+
+// The stdio server's dispatch policy. Same root plumbing as runMcpHttp(), building McpDispatchPolicy::defaultRoot
+// instead of ::pinnedRoot (D3/D4).
+inline McpDispatchPolicy mcpStdioPolicy( const McpStdioConfig& cfg )
+{
+    // X7 (D3/D4): resolve the SOFT stdio default root, same shape as runMcpHttp()'s pinnedRoot resolution
+    // (mcpWorkspaceKey for 2+ roots, else a plain mcpCanonRoot) but never refuses to start — a malformed
+    // multi-root set just leaves defaultRoot empty (falls back to the pre-X7 "every request names its own
+    // path" behavior) rather than exiting, since stdio has no analogous "refuse to bind" moment.
+    std::string defaultRoot;
+    if( cfg.roots.size() >= 2 )
+    {
+        std::string wsErr;
+        const std::string key = mcpWorkspaceKey( cfg.roots, wsErr );
+        if( !key.empty() )
+        {
+            defaultRoot = mcpCanonRoot( key );
+        }
+    }
+    else if( !cfg.root.empty() )
+    {
+        defaultRoot = mcpCanonRoot( cfg.root );
+    }
+
+    // stdio: no HARD workspace pinning (pinnedRoot stays ""), edit verbs allowed; r2-LO: this process's one legend session
+    McpDispatchPolicy policy{ .legendSession = &mcpStdioLegendSession() };
+    policy.defaultRoot = defaultRoot;   // "" unless a startup root was given — see the comment above
+    policy.toolMask    = cfg.toolMask;  // --mcp-tools
+    policy.toolSpec    = cfg.toolSpec;
+
+    // R2a (the 2026-08-12 usage mine): with NO startup root, resolve the launch cwd ONCE as the softest
+    // default — see McpDispatchPolicy::assumedRoot for the full contract and mcpResolveAssumedRoot for
+    // the guards ("/" and $HOME are nobody's workspace; getcwd failure degrades to the refusal).
+    if( defaultRoot.empty() )
+    {
+        policy.assumedRoot = mcpResolveAssumedRoot();
+    }
+    ENSURES( policy.pinnedRoot.empty(), "stdio never pins a workspace" );
+    return policy;
+}
+
+// stdio MCP loop: one JSON object per line. Returns the process exit code.
+inline int runMcp( const McpStdioConfig& cfg )
 {
     // MEASURE-FIRST instrumentation (RIPWIRE_MCP_TIMINGS, off by default → byte-identical + silent server, same
     // discipline as ingest.cpp's RIPWIRE_CACHE_STATS). When set, emit ONE stderr TSV line per handled request:
@@ -2713,38 +2757,7 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
     // round, so we use the env var instead (recorded in bench/PROFILE.md's appendix) — same zero-cost-off contract.
     const bool timingsOn = std::getenv( "RIPWIRE_MCP_TIMINGS" ) != nullptr;
 
-    // X7 (D3/D4): resolve the SOFT stdio default root, same shape as runMcpHttp()'s pinnedRoot resolution
-    // (mcpWorkspaceKey for 2+ roots, else a plain mcpCanonRoot) but never refuses to start — a malformed
-    // multi-root set just leaves defaultRoot empty (falls back to the pre-X7 "every request names its own
-    // path" behavior) rather than exiting, since stdio has no analogous "refuse to bind" moment.
-    std::string defaultRoot;
-    if( roots.size() >= 2 )
-    {
-        std::string wsErr;
-        const std::string key = mcpWorkspaceKey( roots, wsErr );
-        if( !key.empty() )
-        {
-            defaultRoot = mcpCanonRoot( key );
-        }
-    }
-    else if( !root.empty() )
-    {
-        defaultRoot = mcpCanonRoot( root );
-    }
-
-    // stdio: no HARD workspace pinning (pinnedRoot stays ""), edit verbs allowed; r2-LO: this process's one legend session
-    McpDispatchPolicy policy{ .legendSession = &mcpStdioLegendSession() };
-    policy.defaultRoot = defaultRoot;   // "" unless a startup root was given — see the comment above
-    policy.toolMask    = toolMask;      // --mcp-tools (validated by main.cpp); the whole catalog by default
-    policy.toolSpec    = std::move( toolSpec );
-
-    // R2a (the 2026-08-12 usage mine): with NO startup root, resolve the launch cwd ONCE as the softest
-    // default — see McpDispatchPolicy::assumedRoot for the full contract and mcpResolveAssumedRoot for
-    // the guards ("/" and $HOME are nobody's workspace; getcwd failure degrades to the refusal).
-    if( defaultRoot.empty() )
-    {
-        policy.assumedRoot = mcpResolveAssumedRoot();
-    }
+    const McpDispatchPolicy policy = mcpStdioPolicy( cfg );
 
     // R4: readByteSafeLineBounded, NOT std::getline( std::cin, ... ) — libc++'s getline narrows
     // int_type→char on every std::cin byte, so a single 0x80..0xFF request byte aborted the sanitizer
@@ -2772,7 +2785,7 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
             timingsOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         const std::uint64_t rebuildAtStart = timingsOn ? mcpRebuildCounter().load( std::memory_order_relaxed ) : 0;
 
-        const McpDispatchResult r = dispatchMcpLine( line, topK, stable, noRedact, policy );
+        const McpDispatchResult r = dispatchMcpLine( line, cfg.topK, cfg.stable, cfg.noRedact, policy );
         if( r.isNotification )
         {
             continue;
