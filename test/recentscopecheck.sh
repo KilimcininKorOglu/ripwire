@@ -564,6 +564,20 @@ if [ -n "$nextLong" ]; then
     [ -n "$ofP2Long" ] && [ "$ofP2Long" = "$ofLong" ] \
         && ok "arm 10f: the full over-120-byte next= runs and lands on the SAME corpus (of=\"$ofP2Long\" both sides)" \
         || no "arm 10f: the over-120-byte next= did not reproduce its own page — pasted of=\"$ofP2Long\", original of=\"$ofLong\": $nextLong"
+    # 10g: the SAME corpus is not enough — a next= that dropped --offset replays page one on the same corpus. The
+    # long invocation asked for --limit=39 --offset=1, so its next page is --offset=40 (arm 3a pins this for the
+    # short invocation), and the replayed page must say offset="40" and share no row with the page it came from.
+    offLong="$( printf '%s' "$tagLong" | grep -oE ' offset="[0-9]+"' | head -1 | tr -dc '0-9' )"
+    offP2Long="$( scopedTag "$P2LONG" | grep -oE ' offset="[0-9]+"' | head -1 | tr -dc '0-9' )"
+    rowsLong="$( scopedRows "$LONG" )"; rowsP2Long="$( scopedRows "$P2LONG" )"
+    sharedLong="$( printf '%s\n' "$rowsP2Long" | grep -c -x -F -f <( printf '%s\n' "$rowsLong" ) )"
+    case " $nextLong " in
+        *" --offset=40 "*) nextOff=1 ;;
+        *)                 nextOff=0 ;;
+    esac
+    { [ "$nextOff" = 1 ] && [ "$offLong" = 1 ] && [ "$offP2Long" = 40 ] && [ -n "$rowsLong" ] && [ -n "$rowsP2Long" ] && [ "$sharedLong" = 0 ]; } \
+        && ok "arm 10g: the long next= carries --offset=40 and its page starts past the original (offset=\"1\" -> offset=\"40\", no shared row)" \
+        || no "arm 10g: the long next= does not continue past its page — --offset=40 in next=: $nextOff, offset=\"$offLong\" -> offset=\"$offP2Long\", $sharedLong shared row(s): $nextLong"
 else
     no "arm 10f: no next= to paste (arm 10e already failed)"
 fi
