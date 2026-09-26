@@ -596,34 +596,29 @@ inline std::string declinedCallsKeyJson( std::size_t declinedCalls )
 // spelling per dialect, shared by the CLI --impact and its MCP twin so the two cannot drift. Absent when the reach set
 // is empty (reaches="0" has no depth to partition). The XML form spells each depth (`1:9,2:20`) rather than relying on
 // position: a reader never has to count commas to learn which depth a number belongs to.
-inline std::string byDepthAttrXml( std::span<const std::uint32_t> counts )
+inline std::string byDepthField( std::span<const std::uint32_t> counts, bool json )
 {
     if( counts.empty() )
     {
         return {};
     }
-    std::string out = " by_depth=\"";
+    std::string out = json ? ",\"by_depth\":[" : " by_depth=\"";
     for( std::size_t k = 0; k < counts.size(); ++k )
     {
-        out += ( k ? "," : "" ) + std::to_string( k + 1 ) + ":" + std::to_string( counts[k] );
+        out += json ? std::string( k ? "," : "" ) : ( k ? "," : "" ) + std::to_string( k + 1 ) + ":";
+        out += std::to_string( counts[k] );
     }
-    out += '"';
+    out += json ? ']' : '"';
     return out;
+}
+inline std::string byDepthAttrXml( std::span<const std::uint32_t> counts )
+{
+    return byDepthField( counts, false );
 }
 // The JSON twin is an array: element i is depth i+1 (a JSON consumer indexes it; the XML reader reads it).
 inline std::string byDepthKeyJson( std::span<const std::uint32_t> counts )
 {
-    if( counts.empty() )
-    {
-        return {};
-    }
-    std::string out = ",\"by_depth\":[";
-    for( std::size_t k = 0; k < counts.size(); ++k )
-    {
-        out += ( k ? "," : "" ) + std::to_string( counts[k] );
-    }
-    out += ']';
-    return out;
+    return byDepthField( counts, true );
 }
 
 // The legend clause, one per dialect (the columnar form carries the depth as a dense column, not a row attribute).

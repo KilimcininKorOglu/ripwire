@@ -124,33 +124,49 @@ inline void emitPathTable( std::FILE* out, const IngestResult& ing,
     std::fputs( "</paths>", out );
 }
 
-// A6: the optional dense 0/1 `<tested>` column, split out of emitColumnarSymbolRows so that function's own
-// branch count does not grow for a column three of its four callers never ask for.
-inline void emitColumnarTestedColumn( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& rows,
-                                      const std::vector<char>& testReach )
+// The OPTIONAL dense columns of a symbol-row answer — `<TAG>v0,v1,…</TAG>`, one value per row, in row order — written
+// by ONE loop: A6's 0/1 `<tested>` column and 0.6.5's `<depth>` column (--impact's hop depth per row) differ only in
+// the value, so they share the writer rather than carrying two copies of it.
+template<class ValueOf>
+inline void emitColumnarDenseColumn( std::FILE* out, std::string_view tag, const std::vector<NodeId>& rows, ValueOf&& valueOf )
 {
-    std::fputs( "<tested>", out );
+    rw::emitTo( out, "<{}>", tag );
     for( std::size_t i = 0; i < rows.size(); ++i )
     {
         if( i )
         {
             std::fputc( ',', out );
         }
-        std::fputc( isTestedByReach( ing, testReach, rows[i] ) ? '1' : '0', out );
+        rw::emitTo( out, "{}", valueOf( rows[i] ) );
     }
-    std::fputs( "</tested>", out );
+    rw::emitTo( out, "</{}>", tag );
 }
 
-// 0.6.5: the optional dense `<depth>` column (--impact's hop depth per row), split out for the same reason as the
-// tested column above: the one caller that asks for it pays for it.
-inline void emitColumnarDepthColumn( std::FILE* out, const std::vector<NodeId>& rows, const std::vector<std::uint32_t>& depth )
+// A6: the optional dense 0/1 `<tested>` column, split out of emitColumnarSymbolRows so that function's own
+// branch count does not grow for a column three of its four callers never ask for.
+inline void emitColumnarTestedColumn( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& rows,
+                                      const std::vector<char>& testReach )
 {
-    std::fputs( "<depth>", out );
-    for( std::size_t i = 0; i < rows.size(); ++i )
+    emitColumnarDenseColumn( out, "tested", rows, [ & ]( NodeId n ) { return isTestedByReach( ing, testReach, n ) ? 1 : 0; } );
+}
+
+// The optional columns a caller asked for, and the fields= suffix naming them, in ONE place: emitColumnarSymbolRows
+// reads each through these, so its own branch count does not grow per optional column.
+inline std::string_view columnarOptionalFields( bool hasTested, bool hasDepth ) noexcept
+{
+    return hasTested ? ( hasDepth ? ",tested,depth" : ",tested" ) : ( hasDepth ? ",depth" : "" );
+}
+inline void emitColumnarOptionalColumns( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& rows,
+                                         const std::vector<char>* testReach, const std::vector<std::uint32_t>* depth )
+{
+    if( testReach )
     {
-        rw::emitTo( out, "{}{}", i ? "," : "", depth[ rows[i] ] );
+        emitColumnarTestedColumn( out, ing, rows, *testReach );
     }
-    std::fputs( "</depth>", out );
+    if( depth )
+    {
+        emitColumnarDenseColumn( out, "depth", rows, [ & ]( NodeId n ) { return ( *depth )[n]; } );
+    }
 }
 
 // COLUMNAR form of a symbol-row verb (--callers/--callees/--impact/--pr-context symbols). `wrapperTag` is the
@@ -182,7 +198,7 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
     std::fputs( kColumnarLegend, out );   // §B1.5: once per output, before the element it describes
     rw::emitTo( out, "<{} {} format=\"columnar\">", wrapperTag, wrapperAttrs.c_str() );
     emitPathTable( out, ing, uniqueFiles, esc, rootPrefix );
-    rw::emitTo( out, "<cols n=\"{}\" fields=\"path,name,line,kind{}{}\">", rows.size(), testReach ? ",tested" : "", depth ? ",depth" : "" );
+    rw::emitTo( out, "<cols n=\"{}\" fields=\"path,name,line,kind{}\">", rows.size(), columnarOptionalFields( testReach != nullptr, depth != nullptr ) );
 
     // path index array
     std::fputs( "<path>", out );
@@ -230,15 +246,8 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
         std::fputs( symTag( ing.symbols[rows[i]].kind ), out );
     }
     std::fputs( "</kind>", out );
-    // A6: present only when the caller passed the lens — see the wrapper banner and emitColumnarTestedColumn.
-    if( testReach )
-    {
-        emitColumnarTestedColumn( out, ing, rows, *testReach );
-    }
-    if( depth )
-    {
-        emitColumnarDepthColumn( out, rows, *depth );
-    }
+    // A6 / 0.6.5: each present only when the caller passed it — see the wrapper banner and emitColumnarOptionalColumns.
+    emitColumnarOptionalColumns( out, ing, rows, testReach, depth );
 
     rw::emitTo( out, "</cols></{}>", wrapperTag );
 }
