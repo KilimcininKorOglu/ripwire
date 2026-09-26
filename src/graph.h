@@ -1899,22 +1899,24 @@ struct BuiltinMethodGate
     // The committed table for a caller's language; empty for every language this gate deliberately leaves alone.
     static std::span<const std::string_view> tableFor( Lang lang ) noexcept
     {
-        switch( lang )
-        {
-            case Lang::Python:     return externalnames::kPythonBuiltinMethodNames;
-            case Lang::JavaScript:
-            case Lang::TypeScript: return externalnames::kJsBuiltinMethodNames;
-            case Lang::Ruby:       return externalnames::kRubyBuiltinMethodNames;
-            default:               return {};
-        }
+        using Table = std::span<const std::string_view>;
+        const bool js = lang == Lang::JavaScript || lang == Lang::TypeScript;
+        return lang == Lang::Python ? Table( externalnames::kPythonBuiltinMethodNames )
+             : js                   ? Table( externalnames::kJsBuiltinMethodNames )
+             : lang == Lang::Ruby   ? Table( externalnames::kRubyBuiltinMethodNames )
+                                    : Table();
     }
 
     // Whether the call is one the gate decides. The caller has already established that nothing more specific (SCIP, a
     // qualifier, an import binding, a receiver rule) resolved it; super() never reaches here (its miss is a veto).
     bool appliesTo( const Reference& r ) const
     {
-        return active && r.role == RefRole::Call && r.qualifier.empty() && r.recv != RecvKind::SuperObj
-            && externalnames::tableHasName( tableFor( r.lang ), r.calleeName );
+        if( !active || r.role != RefRole::Call || !r.qualifier.empty() || r.recv == RecvKind::SuperObj )
+        {
+            return false;
+        }
+        const std::span<const std::string_view> table = tableFor( r.lang );   // strictly sorted: externalnames.h's static_asserts
+        return std::binary_search( table.begin(), table.end(), std::string_view( r.calleeName ), rw::sortutil::svLess );
     }
 
     // The class that owns definition `c`, or kNoClass for a free definition. The innermost definition whose span contains
@@ -2013,6 +2015,52 @@ struct BuiltinMethodGate
 // The gate's evidence, built once per graph. Deterministic: class ids follow symbol-id order, and each file's list is
 // sorted and deduplicated before any lookup. Files with no symbol in a gated language get no list (their calls are
 // never gated), which keeps a mostly-C++ corpus from paying for a Python corner of it.
+//
+// collectFileClassEvidence: every class NAME each gated file mentions — the classes it defines, and any class a reference
+// there names as callee, receiver or qualifier, or a binding names as type, variable or imported name.
+inline void collectFileClassEvidence( const IngestResult& ing, const std::vector<char>& fileGated, BuiltinMethodGate& gate )
+{
+    gate.fileClasses.assign( ing.files.size(), {} );
+    const auto note = [ & ]( std::uint32_t fileId, const std::string& name )
+    {
+        if( fileId >= fileGated.size() || fileGated[ fileId ] == 0 || name.empty() )
+        {
+            return;
+        }
+        if( const auto it = gate.classId.find( name ); it != gate.classId.end() )
+        {
+            gate.fileClasses[ fileId ].push_back( it->second );
+        }
+    };
+    for( const Symbol& s : ing.symbols )
+    {
+        if( BuiltinMethodGate::isClassLike( s ) )
+        {
+            note( s.fileId, s.name );   // defined here: every call in the file may be on an instance of it
+        }
+    }
+    for( const Reference& r : ing.references )
+    {
+        if( !r.isDocLink )   // a backtick mention in prose is not code evidence
+        {
+            note( r.fileId, r.calleeName );
+            note( r.fileId, r.recvVar );
+            note( r.fileId, r.qualifier );
+        }
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        note( b.fileId, b.typeName );
+        note( b.fileId, b.var );
+        note( b.fileId, b.importedName );
+    }
+    for( std::vector<std::uint32_t>& named : gate.fileClasses )
+    {
+        std::sort( named.begin(), named.end() );
+        named.erase( std::unique( named.begin(), named.end() ), named.end() );
+    }
+}
+
 inline BuiltinMethodGate buildBuiltinMethodGate( const IngestResult& ing, const ExternalVeto& veto )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: builtin-method name gate" );
@@ -2040,46 +2088,7 @@ inline BuiltinMethodGate buildBuiltinMethodGate( const IngestResult& ing, const 
     // Containers only in gated files: a gated call's candidates are language-compatible with it, so they live there too.
     gate.containersByFile = symbolsByFileInIdOrder( ing, [ & ]( const Symbol& s )
         { return fileGated[ s.fileId ] != 0 && ( BuiltinMethodGate::isClassLike( s ) || s.kind == SymKind::Function || s.kind == SymKind::Method ); } );
-    gate.fileClasses.assign( ing.files.size(), {} );
-    const auto note = [ & ]( std::uint32_t fileId, const std::string& name )
-    {
-        if( fileId >= fileGated.size() || fileGated[ fileId ] == 0 || name.empty() )
-        {
-            return;
-        }
-        if( const auto it = gate.classId.find( name ); it != gate.classId.end() )
-        {
-            gate.fileClasses[ fileId ].push_back( it->second );
-        }
-    };
-    for( const Symbol& s : ing.symbols )
-    {
-        if( BuiltinMethodGate::isClassLike( s ) )
-        {
-            note( s.fileId, s.name );   // defined here: every call in the file may be on an instance of it
-        }
-    }
-    for( const Reference& r : ing.references )
-    {
-        if( r.isDocLink )
-        {
-            continue;   // a backtick mention in prose is not code evidence
-        }
-        note( r.fileId, r.calleeName );
-        note( r.fileId, r.recvVar );
-        note( r.fileId, r.qualifier );
-    }
-    for( const Binding& b : ing.bindings )
-    {
-        note( b.fileId, b.typeName );
-        note( b.fileId, b.var );
-        note( b.fileId, b.importedName );
-    }
-    for( std::vector<std::uint32_t>& named : gate.fileClasses )
-    {
-        std::sort( named.begin(), named.end() );
-        named.erase( std::unique( named.begin(), named.end() ), named.end() );
-    }
+    collectFileClassEvidence( ing, fileGated, gate );
     return gate;
 }
 

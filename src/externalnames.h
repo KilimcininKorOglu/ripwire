@@ -269,8 +269,9 @@ inline constexpr std::string_view kRubyBuiltinMethodNames[] = {
     "valid_encoding?", "value?", "values", "values_at", "zip"
 };
 
-// ONE sortedness proof and ONE lookup for the three tables above, each taking the table as a span, so the three stay
-// one shape rather than three near-copies of the assert and search this file already spells per table.
+// ONE sortedness proof for the three tables above, taking the table as a span, so the three stay one shape rather than
+// three near-copies of the assert this file already spells per table. The lookup is graph.h BuiltinMethodGate::appliesTo,
+// its only reader, which picks the table by language first.
 constexpr bool isStrictlySortedTable( std::span<const std::string_view> table ) noexcept
 {
     return std::is_sorted( table.begin(), table.end(), rw::sortutil::svLess ) && std::adjacent_find( table.begin(), table.end() ) == table.end();
@@ -278,11 +279,6 @@ constexpr bool isStrictlySortedTable( std::span<const std::string_view> table ) 
 static_assert( isStrictlySortedTable( kPythonBuiltinMethodNames ), "kPythonBuiltinMethodNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kJsBuiltinMethodNames ), "kJsBuiltinMethodNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kRubyBuiltinMethodNames ), "kRubyBuiltinMethodNames must be strictly sorted (binary search)" );
-
-inline bool tableHasName( std::span<const std::string_view> table, std::string_view name ) noexcept
-{
-    return std::binary_search( table.begin(), table.end(), name, rw::sortutil::svLess );
-}
 
 }   // namespace externalnames
 }   // namespace rw
