@@ -72,6 +72,23 @@ this failure mode. Prefer your editor tool when you're already looking at the fi
 whole-definition replace/insert (a mid-body tweak isn't representable — `replace_symbol_body` is
 signature-through-closing-brace or nothing).
 
+## Listing fewer tools — `--mcp-tools` {#mcp-tools}
+
+```
+ripwire --mcp --mcp-tools=core              # 8 tools: explore batch from_trace impact uses fetch_body edit_check quality_delta
+ripwire --mcp --mcp-tools=core,grep,slice   # names and profiles union
+ripwire wrap claude --mcp-tools=core        # the printed recipe carries the flag
+```
+
+- **Why.** An eager-loading client pays for every listed schema at session start: `tools/list` is 46,368 B for
+  all 33 tools and 13,834 B for `core` (measured 2026-09-26). The default stays `full`.
+- **Never silent.** `initialize` says a subset is in force; its instructions only name listed tools. A call to an
+  unlisted tool is a `-32602` error naming the restart that enables it (and the `batch` sub-query that answers it now,
+  when `batch` is listed and serves that verb). `batch` keeps serving its own sub-verbs either way.
+- **Validated.** An unknown name (with its near miss and the valid names), a name given twice, or an empty name
+  exits 1 before the server starts. `wrap` writes the flag for claude, cursor, windsurf, gemini and opencode; for
+  codex, openclaw and hermes it prints a NOTE to add it by hand.
+
 ## Remote transport — `--listen` reference {#remote-transport}
 
 ```

@@ -13,6 +13,24 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Added — `--mcp-tools=LIST`: the MCP server can list a subset of its tools
+
+`ripwire --mcp --mcp-tools=LIST` (and `--listen`) lists and answers only the named tools. LIST is a comma list of
+tool names and/or two profiles: `core` (explore, batch, from_trace, impact, uses, fetch_body, edit_check,
+quality_delta; the tools the server's own instructions name, plus fetch_body) and `full` (all 33, the default).
+Measured on this build with a bare stdio server, `tools/list` is 46,368 bytes for `full`, 13,834 for `core` and
+4,224 for `grep,impact,uses`; `initialize` grows from 1,035 to 1,252 bytes under `core` for the sentence that
+announces the subset. With no flag, or `--mcp-tools=full`, every byte the server sends is unchanged.
+
+A call to a tool the subset leaves out is refused (`-32602`) with the restart that enables it, and with the
+`batch` sub-query that answers it when `batch` is listed and serves that verb; `batch` keeps serving its own
+sub-verbs. The instructions text keeps only the hints whose tool is listed. An unknown name (with a near miss and
+the valid names), a repeated name or an empty name exits 1 before the server starts. `ripwire wrap AGENT
+--mcp-tools=LIST` writes the flag into the printed server command for claude, cursor, windsurf, gemini and
+opencode, and prints a note to add it by hand for codex, openclaw and hermes. Gate: `test/mcptoolsubsetcheck.sh`.
+
 ## [0.6.4] — 2026-09-25
 
 ### Added — Astro (`.astro`) frontmatter is indexed on the TypeScript grammar (#320, #67)
