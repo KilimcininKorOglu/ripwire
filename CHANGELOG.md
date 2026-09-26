@@ -15,31 +15,30 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Changed — `--for`: a symbol the task names verbatim is lifted into the head
+### Changed — the query-mention anchor lifts a symbol the task names verbatim (`--for`, `--pack-task`, MCP `for`/`pack_task`)
 
 Before this change, `--for="How does hybrid_search rank search results"` on a public Python repo served
 `hybrid_search` at r=8. Three evaluation `run()` functions that call it matched more of the question's words, and
 the query-mention anchor read only paths, dotted modules and `Type.method`. The anchor now also lifts an
-identifier the task names verbatim: a snake_case or camelCase word, `name()` call syntax (not inside pasted code),
-a backticked word, `ns::fn` or `mod.fn`.
+identifier the task names verbatim: a snake_case or camelCase word, a backticked word, `ns::fn` or `mod.fn`, or
+`name()` call syntax. Call syntax counts only when the task carries no pasted code: a ``` fence, an indented
+line or a stack trace anywhere in the task turns it off for the whole task.
 - The name must be defined in at most 3 files. Each file's best definition is lifted into the slot `Type.method`
   mentions already use, just below the top hit, so #1 is never displaced; on the example above, `hybrid_search`
-  is now r=2.
+  is now r=2. A C/C++ prototype beside its definition counts once.
 - A test or fixture definition is lifted only when the task also names its file.
-- At most two identifier lifts per task; any further ones are disclosed with `mention_syms_capped=` /
-  `mention_syms_total=`.
+- At most two symbols are lifted per task, in text order. A refused one is disclosed with
+  `mention_syms_capped=` / `mention_syms_total=` only when the lift would have moved it.
+- The first 64 distinct identifiers are read; a task naming more discloses `mention_idents_capped=` /
+  `mention_idents_total=`.
 - Plain English words that happen to be symbol names (`get`, `run`, `results`) are never lifted.
 - Output is byte-identical when the task names no such identifier.
 
-Measured on the 92-question LocBench held-out set, pre-registered, one run against v0.6.4:
-- gold file in the served head: 75 → 76
-- every gold file in the head: 55 → 56
-- gold function in the head: 51 → 52
-- mean reciprocal rank of the first gold-file row: 0.6017 → 0.6040
-- served bytes: +0.38%
-
-A first design that put named symbols above the top hit, with no paste, fixture or per-task rule, lowered the
-gold-file count (75 → 74) and was not shipped. Gate: `test/mentioncheck.sh` arm (vii).
+Measured on the pre-registered 92-question LocBench held-out set against v0.6.4: no regression inside the
+registered band (+1 gold file, +1 gold function in the served head, each a single question, so within noise;
+first-gold rank better on 3 questions and worse on 4), and the named-symbol case above is fixed. A first design
+that put named symbols above the top hit lowered the gold-file count on the same set and was not shipped.
+Gate: `test/mentioncheck.sh` arm (vii).
 
 ## [0.6.4] — 2026-09-25
 

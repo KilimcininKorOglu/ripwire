@@ -220,7 +220,33 @@ def results(rows):
 
 def rank(rows):
     return sorted(rows)
+
+def mean(xs):
+    return sum(xs) / len(xs)
 PY
+# a name defined in FOUR files: ambiguous, never lifted (the <=3-file bound); one in THREE files that already
+# ranks at the top on its own (lifting it would move nothing, so refusing one of the three is no cut)
+mkdir -p "$FIXN/lib" "$FIXN/web" "$FIXN/ext"
+# (the four-file name lives in its own fixture, FIXA, below: its forty-five callers would re-weight this one)
+FIXA="$TMP/fixa"
+mkdir -p "$FIXA/core" "$FIXA/lib" "$FIXA/web" "$FIXA/eval"
+for f in core/s1.py core/s2.py lib/s3.py web/s4.py; do printf 'def shared_ident(x):\n    return x\n' > "$FIXA/$f"; done
+cat > "$FIXA/eval/bench_top.py" <<'PY'
+def run(store, questions):
+    """Rank the search results for each question and score how the search results rank; rank search results again."""
+    return [shared_ident(shared_ident(store.search(q))) for q in questions]
+PY
+for n in $( seq -w 1 45 ); do
+cat > "$FIXA/eval/bench_$n.py" <<PY
+def run_$n(store, questions):
+    """Rank the search results for each question."""
+    return [shared_ident(store.search(q)) for q in questions]
+PY
+done
+for f in core/t1.py lib/t2.py web/t3.py; do printf 'def tri_rows_rank(x):\n    """tri rows rank"""\n    return x\n' > "$FIXN/$f"; done
+# C++: a header prototype and its definition — one named function, one lift
+printf '#pragma once\nint scale_all( int x );\n' > "$FIXN/ext/scale.h"
+printf '#include "scale.h"\nint scale_all( int x ) { return x * 2; }\n' > "$FIXN/ext/scale.cpp"
 cat > "$FIXN/core/ranking.cpp" <<'CPP'
 namespace ranking
 {
@@ -306,7 +332,7 @@ inert "a qualifier that places nothing" "does ranking::results rank the search r
 inert "fixture-tier target, file not named" "why does load_fixture_rows rank search results"
 # rule (b)'s exception: once the task names the fixture file, its named identifier lifts too — to the anchor slot,
 # the score the file anchor gives the file's lifted siblings. With the same words but no identifier it stays below.
-candOf(){ "$BIN" "$FIXN" --for="$1" --format=candidates --top-k=20 --no-cache 2>/dev/null; }
+candOf(){ "$BIN" "$FIXN" --for="$1" --format=candidates --top-k=200 --no-cache 2>/dev/null; }
 scoreOf(){ printf '%s' "$1" | grep -o "<cand r=\"[0-9]*\" s=\"[^\"]*\" n=\"$2\"" | grep -o 's="[^"]*"' | head -1; }
 FN="$( candOf "why does load_fixture_rows rank search results in tests/test_rows.py" )"
 FO="$( candOf "why does load fixture rows rank search results in tests/test_rows.py" )"
@@ -315,11 +341,44 @@ if [ -n "$( scoreOf "$FN" load_fixture_rows )" ] && [ "$( scoreOf "$FN" load_fix
    && [ "$( scoreOf "$FO" load_fixture_rows )" != "$( scoreOf "$FO" $SIB )" ]; then
     ok "vii fixture-tier target lifts to the anchor slot once the task names its file ($( scoreOf "$FN" load_fixture_rows ); without the identifier $( scoreOf "$FO" load_fixture_rows ))"
 else no "vii fixture exception: target $( scoreOf "$FN" load_fixture_rows ) vs slot $( scoreOf "$FN" $SIB ); without the identifier $( scoreOf "$FO" load_fixture_rows ) vs $( scoreOf "$FO" $SIB )"; fi
-# rule (c): at most 2 identifier lifts per task, the third disclosed
-CAP="$( headOf "does hybrid_search call merge_rankings or load_rows_fast to rank search results" )"
+# rule (c): at most 2 identifier lifts per task, the third disclosed — and the two kept are the FIRST two in task-text
+# order, whether an identifier is bare or backticked (fix round M1: the backticked one used to jump the queue)
+CAP="$( headOf "does hybrid_search call helper() or ranking::rescore to rank search results" )"
 if printf '%s' "$CAP" | grep -q 'mention_syms_capped="1" mention_syms_total="3"' && printf '%s' "$CAP" | grep -q 'mention_anchored="2"'; then
     ok "vii three named identifiers: two lift, the third is disclosed (mention_syms_capped=\"1\" mention_syms_total=\"3\")"
 else no "vii cap: expected mention_anchored=\"2\" with mention_syms_capped=\"1\" mention_syms_total=\"3\""; fi
+ORD="$( headOf 'does helper() call ranking::rescore before `hybrid_search` to rank search results' )"
+if [ -n "$( servedRank "$ORD" helper )" ] && [ -n "$( servedRank "$ORD" rescore )" ] && [ -z "$( servedRank "$ORD" hybrid_search )" ]; then
+    ok "vii cap order is task-text order: helper and rescore lift, the later backticked hybrid_search is the one refused"
+else no "vii cap order: helper r=$( servedRank "$ORD" helper ) rescore r=$( servedRank "$ORD" rescore ) hybrid_search r=$( servedRank "$ORD" hybrid_search ) (want the last absent)"; fi
+# M2: a refusal the lift would not have changed is no cut — three definitions already at the top, cap 2, no disclosure
+TRI="$( headOf "why does tri_rows_rank fail on stale search results" )"
+if [ -n "$( servedRank "$TRI" tri_rows_rank )" ] && ! printf '%s' "$TRI" | grep -q 'mention_syms_capped'; then
+    ok "vii a refused symbol that already ranks at the anchor slot is not announced as cut (no mention_syms_capped)"
+else no "vii refused-but-served: tri_rows_rank r=$( servedRank "$TRI" tri_rows_rank ), capped attr present=$( printf '%s' "$TRI" | grep -c 'mention_syms_capped' )"; fi
+# M4: the <=3-file ambiguity bound, and the trace leg of the pasted-code rule, each pinned by a control
+# the four-file control, in FIXA: shared_ident sits outside the head there, so a lift of any definition would show
+FA_ON="$( "$BIN" "$FIXA" --for="why does shared_ident rank search results" --no-cache 2>/dev/null )"
+FA_OFF="$( "$BIN" "$FIXA" --for="why does shared_ident rank search results" --no-cache --no-mention-boost 2>/dev/null )"
+if [ -n "$FA_ON" ] && [ "$FA_ON" = "$FA_OFF" ] && [ -z "$( servedRank "$FA_OFF" shared_ident )" ]; then
+    ok "vii control a name defined in four files (ambiguous): byte-identical to --no-mention-boost, and absent from the head"
+else no "vii control four-file name: the anchor moved bytes, or the fixture no longer buries it (off r=$( servedRank "$FA_OFF" shared_ident ))"; fi
+inert "call syntax inside a one-line stack trace"      'why does it rank search results Traceback (most recent call last): File "app/main.py", line 5, in main helper() TypeError: bad'
+# L3: a member call after a call, and a Windows path, name no identifier
+inert "a member call after a call (gather(x).helper())" "why is gather(x).helper() wrong for the search results"
+inert "a shaped directory inside a Windows path"       'why does D:\src\hybrid_search\x.py rank search results'
+# L2: a header prototype and its definition are one named function and spend ONE lift: naming scale_all (a
+# prototype in ext/scale.h, its definition in ext/scale.cpp) still leaves a lift for hybrid_search, with no cut
+SC="$( headOf "why does scale_all call hybrid_search to rank search results" )"
+if [ -n "$( servedRank "$SC" hybrid_search )" ] && ! printf '%s' "$SC" | grep -q 'mention_syms_capped'; then
+    ok "vii C++ prototype + definition count once: hybrid_search still lifts (r=$( servedRank "$SC" hybrid_search )), nothing refused"
+else no "vii prototype/definition: hybrid_search r=$( servedRank "$SC" hybrid_search ) (want served), capped attr present=$( printf '%s' "$SC" | grep -c 'mention_syms_capped' )"; fi
+# M3: a task naming more than kMentionMaxNamedIdents distinct identifiers reads the first 64 and discloses the rest
+MANY="why do these rank search results:$( for k in $( seq 1 70 ); do printf ' zz_ident_%d' "$k"; done )"
+MA="$( headOf "$MANY" )"
+if printf '%s' "$MA" | grep -q 'mention_idents_capped="1" mention_idents_total="70"'; then
+    ok "vii 70 distinct identifiers: the first 64 are read, the cut is disclosed (mention_idents_capped=\"1\" mention_idents_total=\"70\")"
+else no "vii identifier bound: expected mention_idents_capped=\"1\" mention_idents_total=\"70\""; fi
 D1="$( headOf "How does hybrid_search rank search results" )"; D2="$( headOf "How does hybrid_search rank search results" )"
 if [ -n "$D1" ] && [ "$D1" = "$D2" ]; then ok "vii determinism (anchored twice, byte-identical)"
 else no "vii anchored output not deterministic"; fi

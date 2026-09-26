@@ -615,8 +615,15 @@ refresh** (`make_snapshot.py --freeze --corpus src`, `--corpus` deliberately has
 
 ### Query-mention anchoring
 
-A file, dotted module, or `Type.method` named literally in the task text is lifted just below the top
-hit. It is on by default and byte-identical when the text names nothing indexed.
+A file, dotted module, `Type.method`, or a verbatim identifier (snake_case/camelCase, backticked, `ns::fn`,
+`name()` when the task carries no pasted code; defined in at most 3 files; at most 2 lifted per task) named
+literally in the task text is lifted just below the top hit. It is on by default and byte-identical when the text
+names nothing indexed.
+
+The identifier half was pre-registered and measured once on the 92-question LocBench held-out set
+(`bench/locbench/calibrate_confidence.py`'s served-head grade, v0.6.4 as base): gold file in head 75 → 76, every
+gold file 55 → 56, gold function 51 → 52, first-gold-file MRR 0.6017 → 0.6040, served bytes +0.4%. Each +1 is a
+single question, so the result is "no regression, named-symbol case fixed", not a recall gain.
 
 The reproducible in-tree ablations, both machine-generated scoreboards:
 

@@ -104,6 +104,7 @@ kMemberSpellingsShown	OUTPUT
 kMentionMaxDirectSymbols	INDEXING
 kMentionMaxFiles	INDEXING
 kMentionMaxIdentLifts	INDEXING
+kMentionMaxNamedIdents	INDEXING
 kMentionMaxNameFiles	BOUNDARY
 kMentionMaxRawTokens	INDEXING
 kMentionMaxSymbolsPerFile	INDEXING
