@@ -124,30 +124,40 @@ inline void emitPathTable( std::FILE* out, const IngestResult& ing,
     std::fputs( "</paths>", out );
 }
 
-// The OPTIONAL dense columns of a symbol-row answer — `<TAG>v0,v1,…</TAG>`, one value per row, in row order — written
-// by ONE loop: A6's 0/1 `<tested>` column and 0.6.5's `<depth>` column (--impact's hop depth per row) differ only in
-// the value, so they share the writer rather than carrying two copies of it.
-template<class ValueOf>
-inline void emitColumnarDenseColumn( std::FILE* out, std::string_view tag, const std::vector<NodeId>& rows, ValueOf&& valueOf )
+// A6: the optional dense 0/1 `<tested>` column, split out of emitColumnarSymbolRows so that function's own
+// branch count does not grow for a column three of its four callers never ask for.
+inline void emitColumnarTestedColumn( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& rows,
+                                      const std::vector<char>& testReach )
 {
-    rw::emitTo( out, "<{}>", tag );
+    std::fputs( "<tested>", out );
     for( std::size_t i = 0; i < rows.size(); ++i )
     {
         if( i )
         {
             std::fputc( ',', out );
         }
-        rw::emitTo( out, "{}", valueOf( rows[i] ) );
+        std::fputc( isTestedByReach( ing, testReach, rows[i] ) ? '1' : '0', out );
     }
-    rw::emitTo( out, "</{}>", tag );
+    std::fputs( "</tested>", out );
 }
 
-// A6: the optional dense 0/1 `<tested>` column, split out of emitColumnarSymbolRows so that function's own
-// branch count does not grow for a column three of its four callers never ask for.
-inline void emitColumnarTestedColumn( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& rows,
-                                      const std::vector<char>& testReach )
+// 0.6.5: the optional dense `<depth>` column — --impact's hop depth per row (graph.h transitiveCallersDepth), one value
+// per row in row order. Built as one string and written once: a depth is a multi-digit number, not the tested column's
+// single character.
+inline void emitColumnarDepthColumn( std::FILE* out, const std::vector<NodeId>& rows, const std::vector<std::uint32_t>& depth )
 {
-    emitColumnarDenseColumn( out, "tested", rows, [ & ]( NodeId n ) { return isTestedByReach( ing, testReach, n ) ? 1 : 0; } );
+    std::string column = "<depth>";
+    for( NodeId n : rows )
+    {
+        column += std::to_string( depth[n] );
+        column += ',';
+    }
+    if( !rows.empty() )
+    {
+        column.pop_back();   // the separator after the last value
+    }
+    column += "</depth>";
+    rw::emitTo( out, "{}", column );
 }
 
 // The optional columns a caller asked for, and the fields= suffix naming them, in ONE place: emitColumnarSymbolRows
@@ -165,7 +175,7 @@ inline void emitColumnarOptionalColumns( std::FILE* out, const IngestResult& ing
     }
     if( depth )
     {
-        emitColumnarDenseColumn( out, "depth", rows, [ & ]( NodeId n ) { return ( *depth )[n]; } );
+        emitColumnarDepthColumn( out, rows, *depth );
     }
 }
 
