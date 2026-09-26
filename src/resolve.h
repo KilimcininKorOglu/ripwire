@@ -3428,6 +3428,15 @@ private:
     // entered. Two sets naming different files is ambiguous — the directive's syntax and the consumer's resolution
     // mode would choose, and the record keeps neither — so it is counted; a set that names nothing here defers.
     // `bareIsPackage` (`imports` only): a target that is not `./…` names a package, resolved as a workspace import.
+    // Node substitutes every `*` of a pattern target with what the key's `*` matched.
+    static void substituteCapture( std::string& t, const std::string& capture )
+    {
+        for( std::size_t star = t.find( '*' ); !capture.empty() && star != std::string::npos; star = t.find( '*', star + capture.size() ) )
+        {
+            t.replace( star, 1, capture );
+        }
+    }
+
     Outcome resolveConditional( const std::string& pkgDir, const JsonNode& entry, const std::string& capture, bool bareIsPackage )
     {
         static constexpr std::string_view kImportConds[]      = { "import", "default" };
@@ -3443,10 +3452,7 @@ private:
             {
                 continue;
             }
-            for( std::size_t star = t.find( '*' ); !capture.empty() && star != std::string::npos; star = t.find( '*', star + capture.size() ) )
-            {
-                t.replace( star, 1, capture );   // Node substitutes every `*` of a pattern target
-            }
+            substituteCapture( t, capture );
             const Outcome o = t.starts_with( "./" ) ? resolveEntry( pkgDir, std::string_view( t ).substr( 2 ), /*exact=*/true ) : throughWorkspace( pkgDir, t );
             if( o.verdict == Verdict::InRepoUnresolved || ( o.decided() && agreed.decided() && o.file != agreed.file ) )
             {
