@@ -26,8 +26,9 @@ the first row shown and wherever the depth changes (a row without it has the dep
 carries `by_depth="1:n,2:n,…"`, which counts `reaches=` per depth, so a capped answer says which depth it stopped
 in. `--json` carries `"by_depth":[…]` and `"d"` on every row; `--format=columnar` a `<depth>` column. The set of
 symbols and every existing count are unchanged; with more than one depth in the reach set, which rows fill a cut
-page changes. On this repository's own answers (40-row pages) the rows and root add 24–74 B and the compact legend
-134 B; `d=` on every row instead would have cost 240 B per page. Gate: `test/impactdepthcheck.sh`.
+page changes. Measured on this repository's own answers (four symbols, blast radius 4 to 204 symbols):
+`by_depth=` adds 27–45 B and `d=` 6–24 B, and the compact legend 127 B; `d=` on every row would have cost 240 B
+per page instead. Gate: `test/impactdepthcheck.sh`.
 
 ## [0.6.4] — 2026-09-25
 
