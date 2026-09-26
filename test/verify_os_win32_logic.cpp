@@ -19,6 +19,7 @@
 #define OSWIN_TEST_HOST_WAIT_MACROS 0
 #endif
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -872,15 +873,8 @@ struct Volume
     std::vector<std::string> directories;
     bool operator()( const std::string& path ) const
     {
-        for( const std::string& d : directories )
-        {
-            if( equalsAsciiCaseless( d, path ) ) { return false; }
-        }
-        for( const std::string& f : files )
-        {
-            if( equalsAsciiCaseless( f, path ) ) { return true; }
-        }
-        return false;
+        const auto named = [ &path ]( const std::string& entry ) { return equalsAsciiCaseless( entry, path ); };
+        return std::none_of( directories.begin(), directories.end(), named ) && std::any_of( files.begin(), files.end(), named );
     }
 };
 }   // namespace fakentfs

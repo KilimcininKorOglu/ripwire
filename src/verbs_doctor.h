@@ -157,24 +157,15 @@ inline rw::os::ssize_t doctorReadFull( int fd, std::vector<char>& buf )
     return static_cast<rw::os::ssize_t>( got );
 }
 
-inline DoctorBytes doctorCompareFileBytes( const std::string& a, const std::string& b, std::string& unread )
+// The loop over two open files: 1 MiB at a time, until they differ, one ends, or a read fails.
+inline DoctorBytes doctorCompareOpenFiles( int fa, int fb, const std::string& a, const std::string& b, std::string& unread )
 {
-    EXPECTS( !a.empty() && !b.empty(), "the caller compares a resolved PATH copy with a resolved self path" );
-    const rw::pathguard::OwnedFd fa( rw::os::open( a.c_str(), O_RDONLY | O_CLOEXEC ) );
-    const int                    errA = errno;
-    const rw::pathguard::OwnedFd fb( rw::os::open( b.c_str(), O_RDONLY | O_CLOEXEC ) );
-    const int                    errB = errno;
-    if( !fa.valid() || !fb.valid() )
-    {
-        unread = fa.valid() ? b + " (" + std::strerror( errB ) + ")" : a + " (" + std::strerror( errA ) + ")";
-        return DoctorBytes::Unread;
-    }
     std::vector<char> ba( 1u << 20 ), bb( 1u << 20 );
     for( ;; )
     {
-        const rw::os::ssize_t na = doctorReadFull( fa.get(), ba );
+        const rw::os::ssize_t na    = doctorReadFull( fa, ba );
         const int             errRa = errno;
-        const rw::os::ssize_t nb = doctorReadFull( fb.get(), bb );
+        const rw::os::ssize_t nb    = doctorReadFull( fb, bb );
         if( na < 0 || nb < 0 )
         {
             unread = na < 0 ? a + " (" + std::strerror( errRa ) + ")" : b + " (" + std::strerror( errno ) + ")";
@@ -191,10 +182,23 @@ inline DoctorBytes doctorCompareFileBytes( const std::string& a, const std::stri
     }
 }
 
-inline const char* doctorBytesValue( DoctorBytes bytes )
+inline DoctorBytes doctorCompareFileBytes( const std::string& a, const std::string& b, std::string& unread )
 {
-    return bytes == DoctorBytes::Same ? "1" : bytes == DoctorBytes::Differ ? "0" : "unknown";
+    EXPECTS( !a.empty() && !b.empty(), "the caller compares a resolved PATH copy with a resolved self path" );
+    const rw::pathguard::OwnedFd fa( rw::os::open( a.c_str(), O_RDONLY | O_CLOEXEC ) );
+    const int                    errA = errno;
+    const rw::pathguard::OwnedFd fb( rw::os::open( b.c_str(), O_RDONLY | O_CLOEXEC ) );
+    const int                    errB = errno;
+    if( !fa.valid() || !fb.valid() )
+    {
+        unread = fa.valid() ? b + " (" + std::strerror( errB ) + ")" : a + " (" + std::strerror( errA ) + ")";
+        return DoctorBytes::Unread;
+    }
+    return doctorCompareOpenFiles( fa.get(), fb.get(), a, b, unread );
 }
+
+// same_bytes=: the value each answer prints, indexed by DoctorBytes.
+inline constexpr std::array<const char*, 3> kDoctorBytesValue { "1", "0", "unknown" };
 
 // Count the advisory edit-lock files under <cacheDir>/locks/<xx>/ (mcpedit.h editLockPath). They are deliberately
 // never unlinked by the process that holds them; quality.h's sweepStaleEditLocks reclaims the unheld ones older
@@ -885,7 +889,7 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
                                          : doctorCompareFileBytes( selfPath, whichPath, unread );
                 const bool        copied = bytes == DoctorBytes::Same;   // content equality, not the mtime proxy
                 ok = copied;   // this exact failure bit the LocBench round — stale PATH binary shadows a freshly built one
-                attrs += " same_bytes=\"" + std::string( doctorBytesValue( bytes ) ) + "\"";
+                attrs += " same_bytes=\"" + std::string( kDoctorBytesValue[ static_cast<std::size_t>( bytes ) ] ) + "\"";
                 attrs += " self_mtime=\""  + std::to_string( (long long)selfSt.st_mtime )  + "\"";
                 attrs += " self_size=\""   + std::to_string( (long long)selfSt.st_size )    + "\"";
                 attrs += " which_mtime=\"" + std::to_string( (long long)whichSt.st_mtime ) + "\"";

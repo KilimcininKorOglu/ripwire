@@ -1143,6 +1143,27 @@ constexpr bool extensionInList( std::string_view path, std::string_view pathext 
 // as PATHEXT spells it ("C:/Users/x/bin/ripwire.EXE"; the file system ignores case). "" when nothing resolves.
 // #334: --doctor's binary-path row used Git Bash's `which` instead. It answered from another shell's PATH, in a "/c/..."
 // spelling the C runtime could not open, so a byte-identical copy came out STALE.
+// One candidate `base` (a directory joined with the command, or the command itself): with an extension, used as given
+// if PATHEXT lists it; without one, the first `base` + PATHEXT entry that is a file. "" when neither.
+template<class IsFile>
+std::string programCandidate( std::string base, std::string_view extensions, const IsFile& isFile ) noexcept
+{
+    normalizePathArgInPlace( base.data() );
+    if( hasExtension( base ) )
+    {
+        return extensionInList( base, extensions ) && isFile( base ) ? base : std::string();
+    }
+    for( std::size_t at = 0; at <= extensions.size(); )
+    {
+        const std::string_view extension = nextPathListEntry( extensions, at );
+        if( !extension.empty() && isFile( base + std::string( extension ) ) )
+        {
+            return base + std::string( extension );
+        }
+    }
+    return {};
+}
+
 template<class IsFile>
 std::string searchProgramPath( std::string_view command, std::string_view pathList, std::string_view pathext, const IsFile& isFile ) noexcept
 {
@@ -1151,26 +1172,9 @@ std::string searchProgramPath( std::string_view command, std::string_view pathLi
         return {};
     }
     const std::string_view extensions = pathext.empty() ? std::string_view( ".COM;.EXE;.BAT;.CMD" ) : pathext;
-    const auto resolve = [ & ]( std::string base ) -> std::string
-    {
-        normalizePathArgInPlace( base.data() );
-        if( hasExtension( base ) )
-        {
-            return extensionInList( base, extensions ) && isFile( base ) ? base : std::string();
-        }
-        for( std::size_t at = 0; at <= extensions.size(); )
-        {
-            const std::string_view extension = nextPathListEntry( extensions, at );
-            if( !extension.empty() && isFile( base + std::string( extension ) ) )
-            {
-                return base + std::string( extension );
-            }
-        }
-        return {};
-    };
     if( command.find_first_of( "/\\:" ) != std::string_view::npos )
     {
-        return resolve( std::string( command ) );
+        return programCandidate( std::string( command ), extensions, isFile );
     }
     for( std::size_t at = 0; at <= pathList.size(); )
     {
@@ -1183,7 +1187,7 @@ std::string searchProgramPath( std::string_view command, std::string_view pathLi
         {
             directory.remove_suffix( 1 );
         }
-        std::string found = resolve( std::string( directory ) + "/" + std::string( command ) );
+        std::string found = programCandidate( std::string( directory ) + "/" + std::string( command ), extensions, isFile );
         if( !found.empty() )
         {
             return found;
