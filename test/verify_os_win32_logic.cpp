@@ -19,7 +19,6 @@
 #define OSWIN_TEST_HOST_WAIT_MACROS 0
 #endif
 
-#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -882,19 +881,19 @@ struct Volume
 TEST_CASE( "program search (#334): PATH order decides, as where.exe and PowerShell read it" )
 {
     const std::string_view pathext = ".COM;.EXE;.BAT;.CMD";
-    const fakentfs::Volume both { { "C:/Users/hp/AppData/Local/Programs/ripwire-0.6.4-windows-x64/ripwire.exe",
-                                    "C:/Users/hp/bin/ripwire.exe" }, {} };
+    const fakentfs::Volume both { { "D:/Apps/ripwire-0.6.4-windows-x64/ripwire.exe",
+                                    "D:/me/bin/ripwire.exe" }, {} };
     // scenario 3: the 0.6.4 directory first on the user Path -> the 0.6.4 exe, never ~/bin's
-    CHECK( searchProgramPath( "ripwire", "C:\\Users\\hp\\AppData\\Local\\Programs\\ripwire-0.6.4-windows-x64;C:\\Users\\hp\\bin", pathext, both )
-           == "C:/Users/hp/AppData/Local/Programs/ripwire-0.6.4-windows-x64/ripwire.EXE" );
+    CHECK( searchProgramPath( "ripwire", "D:\\Apps\\ripwire-0.6.4-windows-x64;D:\\me\\bin", pathext, both )
+           == "D:/Apps/ripwire-0.6.4-windows-x64/ripwire.EXE" );
     // scenario 1: the other order -> ~/bin's copy, which the row then compares (and names STALE only on evidence)
-    CHECK( searchProgramPath( "ripwire", "C:\\Users\\hp\\bin;C:\\Users\\hp\\AppData\\Local\\Programs\\ripwire-0.6.4-windows-x64", pathext, both )
-           == "C:/Users/hp/bin/ripwire.EXE" );
+    CHECK( searchProgramPath( "ripwire", "D:\\me\\bin;D:\\Apps\\ripwire-0.6.4-windows-x64", pathext, both )
+           == "D:/me/bin/ripwire.EXE" );
     // scenario 3c: the 0.6.4 directory the only one holding a ripwire -> found, whatever else PATH holds
-    const fakentfs::Volume alone { { "C:/Users/hp/AppData/Local/Programs/ripwire-0.6.4-windows-x64/ripwire.exe" }, {} };
-    CHECK( searchProgramPath( "ripwire", "C:\\Windows\\system32;C:\\Users\\hp\\bin;C:/Users/hp/AppData/Local/Programs/ripwire-0.6.4-windows-x64/", pathext, alone )
-           == "C:/Users/hp/AppData/Local/Programs/ripwire-0.6.4-windows-x64/ripwire.EXE" );
-    CHECK( searchProgramPath( "ripwire", "C:\\Windows\\system32;C:\\Users\\hp\\bin", pathext, alone ).empty() );
+    const fakentfs::Volume alone { { "D:/Apps/ripwire-0.6.4-windows-x64/ripwire.exe" }, {} };
+    CHECK( searchProgramPath( "ripwire", "C:\\Windows\\system32;D:\\me\\bin;D:/Apps/ripwire-0.6.4-windows-x64/", pathext, alone )
+           == "D:/Apps/ripwire-0.6.4-windows-x64/ripwire.EXE" );
+    CHECK( searchProgramPath( "ripwire", "C:\\Windows\\system32;D:\\me\\bin", pathext, alone ).empty() );
 }
 
 TEST_CASE( "program search (#334): the answer is a path the path layer opens, never Git Bash's /c/ spelling" )
