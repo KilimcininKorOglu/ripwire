@@ -796,13 +796,9 @@ inline void extractNamedIdentifiers( std::string_view task, std::vector<NamedIde
     }
 }
 
-// Does this symbol's language resolve its name case-insensitively? PHP's function, method, class and interface names
-// (its constants and variables are case-sensitive). Every other indexed language is case-sensitive throughout.
-inline bool symbolFoldsCase( const Symbol& s ) noexcept
-{
-    return s.lang == Lang::Php
-        && ( s.kind == SymKind::Function || s.kind == SymKind::Method || s.kind == SymKind::Class || s.kind == SymKind::Interface );
-}
+// The symbol kinds whose names PHP resolves case-insensitively (functions, methods, classes, interfaces; its constants
+// and variables are case-sensitive). Every other indexed language is case-sensitive throughout.
+inline constexpr std::array<SymKind, 4> kPhpCaseFoldedKinds = { SymKind::Function, SymKind::Method, SymKind::Class, SymKind::Interface };
 
 inline std::string asciiLower( std::string_view v )
 {
@@ -859,14 +855,6 @@ inline bool isUnnamedTestOrFixtureTarget( const IngestResult& ing, NodeId id, co
     return rankTierMultiplierOf( rootRelPath( ing, fileId ) ) < 1.0f || isTestSymbol( ing, id );
 }
 
-// A C-family prototype, an interface's abstract method, a TS `declare`: a function or method whose signature end IS
-// its end. When the same name also has a definition WITH a body among one identifier's per-file bests, the bodyless
-// rows are dropped — the definition is the place to read, and a header prototype must not spend a lift of its own.
-inline bool isBodylessCallable( const Symbol& s ) noexcept
-{
-    return ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && s.sigEndByte == s.endByte;
-}
-
 // Which (identifier index, symbol id) pairs match by name? ONE scan over the symbols, whatever the identifier count:
 // each symbol's name is looked up in the identifiers sorted by name (and, for a case-folding PHP symbol, in their
 // lower-cased spellings). Pairs come out in symbol-id order within each identifier.
@@ -900,9 +888,9 @@ inline std::vector<std::pair<std::uint32_t, NodeId>> matchNamedIdents( const Ing
         {
             matches.emplace_back( it->second, s.id );
         }
-        if( !symbolFoldsCase( s ) )
+        if( s.lang != Lang::Php || std::ranges::find( kPhpCaseFoldedKinds, s.kind ) == kPhpCaseFoldedKinds.end() )
         {
-            continue;
+            continue;   // only PHP's case-folded kinds are looked up by their lower-cased spelling
         }
         const std::string lower = asciiLower( s.name );
         for( auto it = std::lower_bound( lowered.begin(), lowered.end(), std::string_view( lower ), byName ); it != lowered.end() && it->first == lower; ++it )
@@ -918,8 +906,8 @@ inline std::vector<std::pair<std::uint32_t, NodeId>> matchNamedIdents( const Ing
 }
 
 // Resolve each identifier, in `named` order, to at most kMentionMaxNameFiles symbols — each named file's best
-// definition by (lensRank desc, id asc) — skipping an ambiguous or unmatched name, then dropping a bodyless
-// prototype beside a real definition and test/fixture-tier targets in files the task does not name (`namedFiles`:
+// definition by (lensRank desc, id asc) — skipping an ambiguous or unmatched name, then dropping a declaration
+// beside a real definition and test/fixture-tier targets in files the task does not name (`namedFiles`:
 // B8's resolved file mentions). The ambiguity bound counts EVERY definition first, fixtures and prototypes included.
 // Appends to `out`, deduplicated.
 inline void resolveNamedIdents( const IngestResult& ing, const std::vector<float>& lensRank, const std::vector<NamedIdent>& named,
@@ -954,12 +942,18 @@ inline void resolveNamedIdents( const IngestResult& ing, const std::vector<float
         {
             continue;   // unmatched, or ambiguous: precision over recall — no lift, no reordering
         }
-        const bool hasDefinition = std::ranges::any_of( perFile, [ & ]( const auto& fb )
-                                                        { const Symbol& s = ing.symbols[ fb.second ]; return ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && !isBodylessCallable( s ); } );
+        // definition over declaration (model.h isDefinitionNotDeclaration, the house test), for callables: a C-family
+        // prototype or an abstract method beside a real definition of the same name does not spend a lift of its own
+        const auto isCallableDecl = [ & ]( NodeId id, bool wantDefinition )
+        {
+            const Symbol& c = ing.symbols[id];
+            return ( c.kind == SymKind::Function || c.kind == SymKind::Method ) && isDefinitionNotDeclaration( c ) == wantDefinition;
+        };
+        const bool hasDefinition = std::ranges::any_of( perFile, [ & ]( const auto& fb ) { return isCallableDecl( fb.second, true ); } );
         std::sort( perFile.begin(), perFile.end() );   // file order, a total order on (fileId, id)
         for( const auto& fileBest : perFile )
         {
-            if( hasDefinition && isBodylessCallable( ing.symbols[ fileBest.second ] ) )
+            if( hasDefinition && isCallableDecl( fileBest.second, false ) )
             {
                 continue;
             }
