@@ -1673,6 +1673,10 @@ inline HashMap<std::uint64_t, const std::string*> rubySuperclassSites( const Ing
 // Ruby's lookup of a written base from the derived class open `derived`: `::X` absolute, else innermost-first
 // along the ENCLOSING nesting (the superclass is evaluated before the class opens), then the top level. Returns
 // the constant the tree opens, or empty when it opens none.
+// Stated floor — a QUALIFIED name is looked up whole: `class X < Mod::B` tries `<nesting>::Mod::B` innermost-first,
+// then `Mod::B`. Ruby resolves only the FIRST segment lexically and the rest strictly inside it, so where an
+// enclosing `Outer::Mod` exists without a `B`, Ruby raises NameError while this falls through to a top-level
+// `Mod::B`. That code cannot load, so the difference only shows in a tree that is already broken.
 inline std::string rubyResolveBaseConstant( const HashMap<std::string, char>& opened, const std::vector<RubyOpenRec>& opens,
                                             std::uint32_t derived, std::string_view written )
 {
