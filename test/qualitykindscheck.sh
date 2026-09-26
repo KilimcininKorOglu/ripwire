@@ -539,7 +539,7 @@ qd_has  "masking (ts)" error-masking swallow minor
 qd_has  "masking (ts)" error-masking rethrow minor
 qd_none "masking (ts)" error-masking named   "the template names the error"
 qd_none "masking (ts)" error-masking wrapped "a wrapped throw is not unchanged"
-[ "$QD_RC" = 0 ] && ok "masking (ts): report-only rows never fire exit 2" || no "masking (ts): should exit 0 (got $QD_RC)"
+if [ "$QD_RC" = 0 ]; then ok "masking (ts): report-only rows never fire exit 2"; else no "masking (ts): should exit 0 (got $QD_RC)"; fi
 if [ "$QD_OUT" = "$( cd "$WORK/mask_ts" && "$BIN" . --quality-delta --no-cache 2>/dev/null )" ]; then ok "masking (ts): byte-identical run-to-run"; else no "masking (ts): non-deterministic"; fi
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$QD_OUT" | xmllint --noout - 2>/dev/null; then ok "masking (ts): xml well-formed"; else no "masking (ts): xml malformed"; fi
@@ -739,8 +739,8 @@ qd_none "placeholder (python)" placeholder guard     "a guard for an unsupported
 qd_none "placeholder (python)" placeholder labelled  "TODO-ARM names something, it leaves nothing undone"
 qd_none "placeholder (python)" placeholder area      "an @abstractmethod raise is a contract"
 qd_none "placeholder (python)" placeholder perimeter "a bare NotImplementedError METHOD body is the abstract-by-convention interface"
-[ "$QD_RC" = 0 ] && ok "placeholder (python): placeholder rows never gate (exit 0)" || no "placeholder (python): should exit 0 (got $QD_RC)"
-printf '%s' "$QD_OUT" | grep -q 'gating="0"' && ok "placeholder (python): gating=0 on the header" || no "placeholder (python): gating should be 0"
+if [ "$QD_RC" = 0 ]; then ok "placeholder (python): placeholder rows never gate (exit 0)"; else no "placeholder (python): should exit 0 (got $QD_RC)"; fi
+if printf '%s' "$QD_OUT" | grep -q 'gating="0"'; then ok "placeholder (python): gating=0 on the header"; else no "placeholder (python): gating should be 0"; fi
 ( cd "$WORK/stub_py" && "$BIN" . --quality-delta --no-cache --legend=full 2>/dev/null ) | grep -q 'placeholder is new-symbol by construction' \
     && ok "placeholder (python): the full legend says why every placeholder row is new-symbol" \
     || no "placeholder (python): the full legend does not define the placeholder origin rule"
