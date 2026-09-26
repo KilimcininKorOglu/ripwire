@@ -648,7 +648,8 @@ importers: `--callers` hit rate 0.41 → 0.71, recall 0.32 → 0.51; `--uses` hi
 drop at that depth. `--callees` rows and default output are byte-identical to before on representative
 symbols, both on the CLI and in the MCP `calls` array. Bytes on the ranked lists are otherwise unchanged apart from the legend: the
 rows are the same set whenever nothing is cut. (Disclosed 2026-09-26: these figures rank on the graph at `60b65f02`,
-which already contains each gold commit; the forward-in-time gold below is the check measured without that.)
+which already contains each gold commit; the forward-in-time and LocBench golds below are the checks measured
+without that.)
 
 **Honesty, from an independent review.** The review re-ran this instrument with
 paired bootstrap 95% CIs and two baselines — path order (above) and a within-tier random shuffle — plus a
@@ -3839,9 +3840,10 @@ files each — while adding gold files on four of the seven (+2, +1, +3 and +6 f
 14/30 complete and 42/129 gold files named; its median bytes-to-answer is 6,348 B (5,988 B before: 10 of the 12
 `--for` questions on that instrument are thin — commit subjects with a `(#NNNN)` token, "how does A reach B" questions
 — and carry the clause; the 2 confident ones read the base again, and the 18 non-`--for` questions moved by the 2–4 B
-the git stamp moved on every verb). **Correction (2026-09-26):** both figures include q25, measured at a pin that
-already contained its graded commit; without it they are 13/30 and 38–40/129, and q25's paired win is not
-established (`docs/EVALS.md`, Graft round). Gate: `test/forwidencheck.sh` — a generated 33-file fixture whose gold file sits at
+the git stamp moved on every verb). **Correction (2026-09-26):** both figures (14/30, 42/129) include q25, measured at a
+pin that already contained its graded commit; with q25 at its pre-fix row they are 13/30 and 40/129 (38/129 if the
+q28/q29 +1s have the same cause), and q25's paired win is not established (`docs/EVALS.md`, Graft round). The
+complete@step row above rests on the same run and was not re-derived. Gate: `test/forwidencheck.sh` — a generated 33-file fixture whose gold file sits at
 page rank 13 and is absent from the default head and tail; one row per file, determinism, paging with no overlap,
 `coverage=` defined in both dialects, thin versus confident `next=`, the refusals, MCP parity — red on the pre-change
 binary. The byte pins that ride a thin `--for` header (forrankordercheck's fixture rows, forrootlegendcheck,
@@ -6265,7 +6267,9 @@ Nothing was removed — the full read is longer than before, because the summari
 A registered head-to-head against Graft 0.17.0 ran, its losses were converted into code, and it was
 re-run: 14 of 30, with the placebo arm at 13-12-5. **The stop condition fired, so no ranking claim is
 published from that round.** What shipped is the two fixes it produced — tests-to-run in evidence
-order, and `<recent>`.
+order, and `<recent>`. **Correction (2026-09-26):** both figures include q25, asked at a pin that already
+contained its graded commit; with q25 at its pre-fix row they are 13 of 30 and 12-13-5 (`docs/EVALS.md`,
+Graft round).
 
 ### Changed — CI shards its gate suite across runners
 
