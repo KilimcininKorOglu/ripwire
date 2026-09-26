@@ -5810,7 +5810,7 @@ four `--quality-delta` shapes, against 2–6 before: this lane closed `sa@key`, 
 shapes by absolute legend size and reports the fraction as INFO. A `legend<=payload` arm is
 unsatisfiable on the case these verbs exist to handle well — a clean tree's payload is near-zero by
 construction — so at 40% of a 572 B payload the whole legend would have to fit in 381 B, shorter than
-the list of the ten measured kinds. **A ≤40% relative ceiling for `--quality-delta` and ≤50% for
+the list of the ten measured kinds (eleven since 0.6.5). **A ≤40% relative ceiling for `--quality-delta` and ≤50% for
 `--safe-delete`/`--test-gate` were considered and are recorded as UNREACHABLE rather than as missed
 work**: post-fix fractions are 87.0% / 91.4% / 78.8% on the clean cases and 81.4–86.7% wherever
 the payload is real. The same reasoning `test/testgatelegendbudgetcheck.sh` recorded in 2026-08-28.
@@ -6138,12 +6138,15 @@ regenerated file. It skips (exit 0) when no reference binary is given, self-test
 and asserts it left the tree unmodified — an assertion that is itself **controlled**: a stray file is
 created on purpose, must be detected, and must then be gone.
 
-### `--quality-delta`'s ten measured failure modes
+### `--quality-delta`'s eleven kinds: ten measured failure modes and placeholder
 
 These are the exact `kind=` strings the binary emits, from `src/quality.h`:
 
 `complexity` · `verbosity` · `nesting` · `params` · `duplication` · `dead-code` · `api-surface` ·
-`error-masking` · `short-horizon-churn` · `new-clone-of-reused-helper`
+`error-masking` · `short-horizon-churn` · `new-clone-of-reused-helper` · `placeholder`
+
+The first ten each target a failure mode measured in the literature; `placeholder` (added 0.6.5) is an
+honesty check on "done" — a stub or TODO the change added — and never gates.
 
 Note that some user-facing summaries abbreviate four of these (`dup`, `dead`, `churn`,
 `clone-of-reused-helper` / `reuse-decline`). **Match against the strings above** when grepping real
@@ -6151,6 +6154,7 @@ output.
 
 The verb reports only what a change made *worse*, against git HEAD. `--quality-ack` records a
 reviewed exception; `--ack-only=KIND` scopes it.
+
 ### error-masking widened: log-only and rethrow-only (0.6.5) — hand-labelled precision, and which shapes gate
 
 `error-masking` counted only an EMPTY handler (empty braces, `pass`, `...`, a comment-only body). 0.6.5 adds
@@ -6204,6 +6208,33 @@ sample at all on this machine, and JS/TS and Go too few. The full legend says so
 each, 24 gating across the 40). This repository has no Python/JS handler of either shape and no TODO comment
 added in that window, so on upgrade its own reports are unchanged; the replay shows the widening costs no
 noise here, not that it finds anything here. The rows the shapes produce were measured on the corpus above.
+
+### placeholder (0.6.5) — what the eleventh kind counts, and a labelled sample
+
+A stub or TODO the change ADDED, counted per enclosing symbol and compared with the baseline like
+error-masking. Every row is `origin="new-symbol"` by construction and never gates. It counts: Rust
+`todo!()`/`unimplemented!()` (and a `panic!` saying "not implemented"), Kotlin `TODO()`, C#
+`NotImplementedException`, Python's bare `raise NotImplementedError` as the whole body of a FREE function,
+any throw/raise/panic/`fatalError`/`assert` whose string says "not implemented", "not yet implemented",
+"unimplemented", "implement me" or a whole-word `TODO`, and a comment line that opens with `TODO`/`FIXME`
+and names no issue (`#12`, `ABC-12`, `gh-12`, a URL). A raise whose text declares a subclass contract
+("must be implemented by subclasses", "override", "abstract") never counts, nor does an `@abstractmethod`.
+
+Two rules were narrowed by measurement before shipping, on 25-hit seeded samples of the corpus above:
+a bare "any `raise NotImplementedError`" rule was dominated by guards for unsupported cases in library
+code, and a whole-METHOD-body rule by abstract-by-convention interfaces (asyncio's event-loop ABC is dozens
+of them, undecorated). Hence free functions only for the bare form — a stated recall floor for an
+undecorated placeholder method, which still counts when its message says "not implemented".
+
+| sample (seed 20260926, 25 each, de-duplicated) | criterion | TRUE |
+| --- | --- | --- |
+| stub (653 unique hits: 616 Python, 22 Go, 13 JS, 2 Ruby) | the code declares a case or a function not implemented | 25 / 25 |
+| stub | stricter: a placeholder standing in for a whole unfinished function | 1 / 25 |
+| todo (10,855 unique hits) | a TODO/FIXME comment line naming no issue | 25 / 25 |
+
+The stricter reading is what "a stub" means in conversation, and on library code it is rare: most hits
+are declared-unimplemented BRANCHES ("… is not implemented for directed graphs"). That is still what the
+kind is for — a change that adds one has a stated gap — and it is why the kind is report-only.
 
 ### Co-change: the finding that contradicted the obvious design
 

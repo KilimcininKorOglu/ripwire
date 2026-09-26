@@ -308,7 +308,7 @@ struct Config
     bool             qualityDelta    = false;              // --quality-delta: report only code-quality regressions vs that baseline (exit 2 if any MAJOR unacked one)
     std::string_view qualityDeltaRange;                    // --quality-delta=REV|A..B (R-I): compare two COMMITTED trees instead of the working
                                                             // tree vs a baseline — the WAVE-level measurement. Same grammar --dmm= takes
-                                                            // (quality::resolveRefSpec owns it), same 10 kinds/gating/ack contract out
+                                                            // (quality::resolveRefSpec owns it), same 11 kinds/gating/ack contract out
     bool             qualityAck      = false;              // --quality-ack[=REASON]: accept the current findings into .ripwire_quality_acks (per-finding ratchet); shares qualityDelta's baseline resolution
     std::string_view qualityAckReason;                     // the reason recorded next to each acked finding
     std::string_view qualityAckOnly;                       // --ack-only=SUBSTR[,SUBSTR]: ack only findings whose kind or canonical id contains one of these (default: all)
@@ -1644,8 +1644,8 @@ inline constexpr char kHelpHead[] =
         "                               (with --quality-baseline) pin anyway: the sidecar is stamped with the dirty pin and the absorbed count, and every\n"
         "                               later --quality-delta against it carries baseline_absorbed=\"N\" — so a green exit beside that attribute reads as\n"
         "                               \"clean SINCE THE PIN\", never \"clean\". Refused alone.\n"
-        "    --quality-delta            before a PR: report ONLY what your change made worse, across 10 kinds\n"
-        "                               agent self-check before a PR (pair with --test-gate): report ONLY what a change made worse vs the baseline (10 kinds: complexity/verbosity/nesting/params/dup/dead/api-surface + error-masking/short-horizon-churn/new-clone-of-reused-helper);\n"
+        "    --quality-delta            before a PR: report ONLY what your change made worse, across 11 kinds\n"
+        "                               agent self-check before a PR (pair with --test-gate): report ONLY what a change made worse vs the baseline (11 kinds: complexity/verbosity/nesting/params/dup/dead/api-surface + error-masking/short-horizon-churn/new-clone-of-reused-helper + placeholder);\n"
         "                               every finding is classified by ORIGIN: a symbol that EXISTED at the baseline and got worse (preexisting-worse=\"N\", no attribute on the row) vs one that exists only\n"
         "                               because the code is NEW (new-symbol=\"N\", origin=\"new-symbol\" on the row). A small numeric delta is additionally sev=\"minor\". EXIT 2 ONLY on preexisting-worse AND\n"
         "                               major AND unacked — the gating=\"N\" header count. New-symbol rows are still PRINTED (they are the debt you are adding — read them), they just never gate; exit 0 means\n"
@@ -1653,6 +1653,9 @@ inline constexpr char kHelpHead[] =
         "                               by construction. LIMIT: origin is canonId (path::scope::name) identity, so a RENAMED/MOVED symbol reads as new and a regression carried in with the move will not gate.\n"
         "                               error-masking = a NEW empty/pass/comment-only handler, or log-only (a broad handler whose body only logs and never names the error) or rethrow-only (the sole\n"
         "                               handler re-throws it unchanged); those two gate only where their precision was measured (Python) and are sev=\"minor\" in every other language.\n"
+        "                               placeholder = a stub the change ADDED (todo!()/unimplemented!(), Kotlin TODO(), NotImplementedException, a bare raise NotImplementedError as a free function's body,\n"
+        "                               a throw/raise/panic/assert saying \"not implemented\") or a comment line opening with TODO/FIXME that names no issue (#12, ABC-12, a URL); new-symbol by\n"
+        "                               construction, so it never gates. Counted per enclosing symbol, like error-masking: a file-level TODO outside every definition is not counted.\n"
         "                               Test-fixture dirs + doc sections are exempt from dead-code/churn; churn needs COMMITTED thrash evidence (rewritten across recent commits AND again by this diff), never the current edit alone\n"
         // §B7.2 (CA4): the strict-sha staleness rule and — the part that matters — the fact that this verb
         // can DELETE a file in the user's tree were disclosed nowhere a user reads before running it. The
@@ -1670,15 +1673,15 @@ inline constexpr char kHelpHead[] =
         // R-I: the WAVE-level form. Its own row rather than a bracket on the one above, because the floor it
         // compares against is a different KIND of thing (a commit, not a sidecar or the working tree) and the
         // row above spends eight lines on sidecar staleness that this form never touches.
-        "    --quality-delta=REV|A..B   the same 10-kind report between two committed trees — a whole branch at once\n"
-        "                               the same 10-kind report between two COMMITTED TREES instead of the working tree vs a baseline — the WAVE-level measurement (=A..B = tree B against tree A;\n"
+        "    --quality-delta=REV|A..B   the same 11-kind report between two committed trees — a whole branch at once\n"
+        "                               the same 11-kind report between two COMMITTED TREES instead of the working tree vs a baseline — the WAVE-level measurement (=A..B = tree B against tree A;\n"
         "                               =REV = that commit against its FIRST PARENT; an EMPTY side of the range means HEAD). Same grammar --dmm= takes, and A...B is REFUSED rather than read as A..B.\n"
         "                               Use it to measure a whole integration branch at once (--quality-delta=<merge-base>..<head>): per-lane checks each compare against their own baseline and cannot\n"
         "                               see a regression the WAVE introduced. Identical output contract to the bare form — same kinds, gating=\"N\", exit 2, and the same .ripwire_quality_acks ratchet\n"
         "                               (acks are keyed root-relative, so a ledger recorded from working-tree runs applies unchanged). base_ref= and target_ref= disclose the two RESOLVED shas.\n"
         "                               No sidecar is read, written or deleted by this form, and at= is omitted: the two refs ARE the anchor. A==B is a legal, empty, exit-0 comparison.\n"
         "                               ONE KIND CANNOT BE MEASURED HERE and says so as churn=\"unavailable\": short-horizon-churn needs git history at the tree being judged, and both trees are\n"
-        "                               materialized OUT of the repo into temp dirs. The other 9 kinds are computed exactly as the bare form computes them.\n"
+        "                               materialized OUT of the repo into temp dirs. The other 10 kinds are computed exactly as the bare form computes them.\n"
         "    --dmm[=REV|A..B]           score a change as ONE number in [0,1], so quality trends across commits\n"
         "                               the DELTA MAINTAINABILITY MODEL scalar: ONE comparable number in [0,1] for a change, so quality becomes TRENDABLE across commits instead of a per-kind list (di Biase, Rastogi, Bruntink and van Deursen, TechDebt 2019; thresholds and arithmetic from PyDriller's deltamaintainability reference implementation). Bare = the WORKING TREE vs git HEAD (what --quality-delta compares); =REV = that commit vs its FIRST PARENT (the per-commit scalar); =A..B = tree B vs tree A.\n"
         "                               A UNIT is a function/method definition with a body; its VOLUME is its line span. Per property a unit is LOW risk iff size: loc<=15, complexity: cyclomatic<=5, interfacing: params<=2. good = low-risk volume ADDED plus high-risk volume REMOVED; bad = low-risk REMOVED plus high-risk ADDED; dmm = good/(good+bad). So DELETING a god function scores 1.000 and GROWING one scores 0.000.\n"

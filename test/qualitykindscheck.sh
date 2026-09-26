@@ -5,7 +5,8 @@
 #                              TIMESTAMPS vs HEAD's epoch, NOT wall-clock) that this diff rewrites again
 #   new-clone-of-reused-helper — a NEW clone of an existing helper with fan-in ≥ 3 (reuse-connectivity decline)
 # plus (§5) error-masking's two widened shapes, log-only and rethrow-only, per language — gating in Python,
-# report-only (sev="minor") elsewhere.
+# report-only (sev="minor") elsewhere — and (§6) the eleventh kind, placeholder (an added stub or TODO),
+# which is new-symbol by construction and never gates.
 #
 # Each kind must fire ONLY on a regression vs baseline (never on pre-existing debt) and preserve the
 # quality-delta exit-2 contract. Uses git-init fixtures + the auto-vs-HEAD baseline path (same idiom as
@@ -672,6 +673,155 @@ void routed() { try { risky(); } catch( const Oops& ) { throw; } catch( ... ) { 
 '
 qd_has  "masking (c++)" error-masking rethrow minor
 qd_none "masking (c++)" error-masking routed "a re-throw ahead of a catch-all sibling routes, it is not redundant"
+
+# ── 6) PLACEHOLDER — the eleventh kind: a stub or TODO the change ADDED ───────────────────────────────────
+#   Never gates: every row is origin="new-symbol" by construction, including one that lands in a symbol that
+#   existed at the baseline (other() below). The near-misses are the ones the kind must not count: a TODO
+#   naming an issue, an @abstractmethod raise, a bare NotImplementedError as a METHOD body (the abstract-by-
+#   convention interface), a guard `raise NotImplementedError( "... not supported" )`, a TODO-ARM label, and a
+#   pre-existing TODO in an untouched function.
+PHB='import abc
+
+def other():
+    return 1
+
+def untouched():
+    # TODO: already here before the change
+    return 2
+
+class Base(abc.ABC):
+    def keep(self):
+        return 0
+'
+PHE='import abc
+
+def other():
+    # TODO: wire this up
+    return 1
+
+def untouched():
+    # TODO: already here before the change
+    return 2
+
+def later():
+    raise NotImplementedError
+
+def tracked():
+    # TODO(#123): tracked upstream
+    return 3
+
+def guard(x):
+    if x:
+        raise NotImplementedError("sharding is not supported")
+    return x
+
+def labelled():
+    # TODO-ARM: a label, not a todo
+    return 4
+
+class Base(abc.ABC):
+    def keep(self):
+        return 0
+
+    @abc.abstractmethod
+    def area(self):
+        raise NotImplementedError
+
+    def perimeter(self):
+        raise NotImplementedError
+'
+qd_pair stub_py a.py "$PHB" "$PHE"
+qd_has  "placeholder (python)" placeholder other new-symbol
+qd_has  "placeholder (python)" placeholder later new-symbol
+qd_none "placeholder (python)" placeholder untouched "a TODO the change did not add"
+qd_none "placeholder (python)" placeholder tracked   "the TODO names an issue"
+qd_none "placeholder (python)" placeholder guard     "a guard for an unsupported case is not a stub"
+qd_none "placeholder (python)" placeholder labelled  "TODO-ARM names something, it leaves nothing undone"
+qd_none "placeholder (python)" placeholder area      "an @abstractmethod raise is a contract"
+qd_none "placeholder (python)" placeholder perimeter "a bare NotImplementedError METHOD body is the abstract-by-convention interface"
+[ "$QD_RC" = 0 ] && ok "placeholder (python): placeholder rows never gate (exit 0)" || no "placeholder (python): should exit 0 (got $QD_RC)"
+printf '%s' "$QD_OUT" | grep -q 'gating="0"' && ok "placeholder (python): gating=0 on the header" || no "placeholder (python): gating should be 0"
+( cd "$WORK/stub_py" && "$BIN" . --quality-delta --no-cache --legend=full 2>/dev/null ) | grep -q 'placeholder is new-symbol by construction' \
+    && ok "placeholder (python): the full legend says why every placeholder row is new-symbol" \
+    || no "placeholder (python): the full legend does not define the placeholder origin rule"
+
+# 6b) the other spellings, one fixture each: every row new-symbol, exit 0.
+qd_pair stub_rs a.rs 'fn keep() -> i32 { 1 }
+' 'fn keep() -> i32 { 1 }
+fn later() -> i32 { todo!() }
+fn never() { unimplemented!("soon") }
+'
+qd_has "placeholder (rust)" placeholder later new-symbol
+qd_has "placeholder (rust)" placeholder never new-symbol
+
+qd_pair stub_ts a.ts 'export function keep(): number { return 1; }
+' 'export function keep(): number { return 1; }
+export function later(): number { throw new Error("Method not implemented."); }
+export function guard(x: number): number { if (x) { throw new Error("negative input"); } return x; }
+'
+qd_has  "placeholder (ts)" placeholder later new-symbol
+qd_none "placeholder (ts)" placeholder guard "a throw that says nothing about implementation"
+
+qd_pair stub_cs A.cs 'class A { int Keep() { return 1; } }
+' 'class A { int Keep() { return 1; }
+ int Later() { throw new NotImplementedException(); }
+ int Guard() { throw new NotSupportedException(); } }
+'
+qd_has  "placeholder (c#)" placeholder Later new-symbol
+qd_none "placeholder (c#)" placeholder Guard "NotSupportedException is the deliberate refusal, not the stub"
+
+qd_pair stub_kt a.kt 'fun keep(): Int = 1
+' 'fun keep(): Int = 1
+fun later(): Int { return TODO("wire it") }
+'
+qd_has "placeholder (kotlin)" placeholder later new-symbol
+
+qd_pair stub_go a.go 'package p
+
+func keep() int { return 1 }
+' 'package p
+
+func keep() int { return 1 }
+
+func later() int { panic("not implemented") }
+
+func guard(x int) int {
+	if x < 0 {
+		panic("negative")
+	}
+	return x
+}
+'
+qd_has  "placeholder (go)" placeholder later new-symbol
+qd_none "placeholder (go)" placeholder guard "a panic that says nothing about implementation"
+
+qd_pair stub_java A.java 'class A { int keep() { return 1; } }
+' 'class A { int keep() { return 1; }
+ int later() { throw new UnsupportedOperationException("not implemented yet"); }
+ java.util.List<Integer> frozen() { throw new UnsupportedOperationException(); } }
+'
+qd_has  "placeholder (java)" placeholder later new-symbol
+qd_none "placeholder (java)" placeholder frozen "a bare UnsupportedOperationException is the immutable-collection refusal"
+
+qd_pair stub_cpp a.cpp 'int keep() { return 1; }
+' 'int keep() { return 1; }
+int later() { throw std::logic_error( "not implemented" ); }
+int never() { assert( false && "not implemented" ); return 0; }
+int unreachable() { assert( false && "unreachable" ); return 0; }
+'
+qd_has  "placeholder (c++)" placeholder later new-symbol
+qd_has  "placeholder (c++)" placeholder never new-symbol
+qd_none "placeholder (c++)" placeholder unreachable "assert(false) for an unreachable path is not a stub"
+
+# 6c) the kind costs no bytes where it has nothing to say: a diff that adds no stub and no TODO carries no
+#     placeholder row and no placeholder attribute anywhere in the document.
+qd_pair stub_none a.py 'def keep():
+    return 1
+' 'def keep():
+    return 2
+'
+printf '%s' "$QD_OUT" | grep -q 'placeholder' && no "placeholder: a stub-free diff mentions placeholder: $QD_OUT" \
+    || ok "placeholder: a stub-free diff carries no placeholder row or attribute"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

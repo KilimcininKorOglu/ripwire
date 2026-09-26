@@ -1,6 +1,6 @@
 #pragma once
 
-// handlershape.h — structural shapes read off ONE parsed tree, for --quality-delta:
+// handlershape.h — two structural shape families read off ONE parsed tree, for --quality-delta:
 //
 //   ERROR-MASKING, widened (kind error-masking; the empty/pass/comment-only rows stay in lintrules.h's
 //   kErrorMaskRules query table):
@@ -13,6 +13,11 @@
 //                   that does nothing. Sole handler, because `catch( Specific e ) { throw e; }` ahead of a
 //                   `catch( Exception e )` sibling is the idiom that routes one type PAST the broad
 //                   handler, and that is not redundant.
+//   PLACEHOLDER (kind placeholder):
+//     stub          raise NotImplementedError, todo!()/unimplemented!(), Kotlin TODO(), throw new
+//                   NotImplementedException(), and any throw/raise/panic/fatalError/assert whose string
+//                   says "not implemented" / "unimplemented" / "implement me" / TODO.
+//     todo          a comment LINE that starts with TODO or FIXME and names no issue (#123, ABC-123, a URL).
 //
 // WHY A WALK AND NOT A QUERY. Each shape is a question about ALL of a block's statements ("every statement
 // is a log call") or about a name NOT occurring below a node ("the caught identifier is never read"), and
@@ -40,15 +45,17 @@
 namespace rw::hshape
 {
 
-// The two tags a hit carries; lintrules.h counts both under error-masking.
+// The four tags a hit carries. lintrules.h routes the first two to error-masking, the last two to placeholder.
 inline constexpr std::string_view kLogOnly     = "log-only";
 inline constexpr std::string_view kRethrowOnly = "rethrow-only";
+inline constexpr std::string_view kStub        = "stub";
+inline constexpr std::string_view kTodo        = "todo";
 
 struct ShapeSpan
 {
     std::uint32_t    startByte = 0;
     std::uint32_t    endByte   = 0;
-    std::string_view tag;   // one of the two constants above — static storage, never a view into the file
+    std::string_view tag;   // one of the four constants above — static storage, never a view into the file
 };
 
 // ── small readers ─────────────────────────────────────────────────────────────────────────────────────
@@ -531,6 +538,223 @@ inline std::string_view goLogOnlyShape( TSNode n, std::string_view src, std::vec
     return mentionsError( body, src, nodeText( left, src ) ) ? std::string_view() : kLogOnly;
 }
 
+// ── placeholders ──────────────────────────────────────────────────────────────────────────────────────
+
+// Case-insensitive search for one of the stub phrases in a string literal's text. "TODO" is matched
+// case-SENSITIVELY and as a whole word, because "todo" in lower case is ordinary English ("todo list").
+inline bool saysNotImplemented( std::string_view s ) noexcept
+{
+    constexpr std::string_view kPhrases[] = { "not implemented", "not yet implemented", "unimplemented", "implement me" };
+    for( std::string_view p : kPhrases )
+    {
+        for( std::size_t i = 0; i + p.size() <= s.size(); ++i )
+        {
+            if( iequalsAscii( s.substr( i, p.size() ), p ) )
+            {
+                return true;
+            }
+        }
+    }
+    for( std::size_t at = s.find( "TODO" ); at != std::string_view::npos; at = s.find( "TODO", at + 1 ) )
+    {
+        const bool leftOk  = at == 0 || !( std::isalnum( static_cast<unsigned char>( s[at - 1] ) ) || s[at - 1] == '_' );
+        const bool rightOk = at + 4 >= s.size() || !( std::isalnum( static_cast<unsigned char>( s[at + 4] ) ) || s[at + 4] == '_' );
+        if( leftOk && rightOk )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Any string literal below n that says "not implemented" (or one of its spellings).
+inline bool hasStubMessage( TSNode n, std::string_view src )
+{
+    return anyChildBelow( n, 6, true, [ & ]( TSNode c )
+                          { return std::strstr( ts_node_type( c ), "string" ) != nullptr && saysNotImplemented( nodeText( c, src ) ); } );
+}
+
+// Python: is this raise inside a method decorated @abstractmethod (the language's declared "subclass
+// implements this")? Such a raise is a contract, not a placeholder.
+inline bool insideAbstractMethod( TSNode n, std::string_view src )
+{
+    for( TSNode p = ts_node_parent( n ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        if( typeIs( p, "function_definition" ) )
+        {
+            const TSNode        deco = ts_node_parent( p );
+            const std::uint32_t a    = ts_node_start_byte( deco ), b = ts_node_start_byte( p );
+            return typeIs( deco, "decorated_definition" ) && a < b && b <= src.size() && src.substr( a, b - a ).find( "abstract" ) != std::string_view::npos;
+        }
+    }
+    return false;
+}
+
+// A raise/throw whose text declares a CONTRACT for subclasses ("must be implemented by subclasses",
+// "override this", "abstract") is the language's abstract-method idiom, not a placeholder.
+inline bool declaresAbstractContract( std::string_view t ) noexcept
+{
+    constexpr std::string_view kWords[] = { "subclass", "override", "abstract", "implemented by", "must implement", "should implement" };
+    for( std::string_view w : kWords )
+    {
+        for( std::size_t i = 0; i + w.size() <= t.size(); ++i )
+        {
+            if( iequalsAscii( t.substr( i, w.size() ), w ) )
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Is `n` the WHOLE body of the function (or method) around it — the only statement, a leading docstring
+// and comments aside? That is what a stub is; a raise inside an `if` is a guard for an unsupported case.
+inline bool isWholeFunctionBody( TSNode n )
+{
+    const TSNode block = ts_node_parent( n );
+    const TSNode fn    = ts_node_is_null( block ) ? block : ts_node_parent( block );
+    if( !( typeIs( block, "block" ) && typeIs( fn, "function_definition" ) ) && !( typeIs( block, "body_statement" ) && typeIs( fn, "method" ) ) )
+    {
+        return false;
+    }
+    std::vector<TSNode> stmts;
+    statementsOf( block, stmts );
+    std::size_t first = 0;
+    if( stmts.size() > 1 && typeIs( statementExpression( stmts[0] ), "string" ) )
+    {
+        first = 1;   // the docstring
+    }
+    return stmts.size() == first + 1 && ts_node_eq( stmts[first], n );
+}
+
+// Is n inside a class body — Python's class_definition, or Ruby's class/module? (Python's ROOT node is
+// also called `module`, so the Ruby spellings are asked only of a Ruby tree.)
+inline bool insideClass( TSNode n, Lang lang )
+{
+    for( TSNode p = ts_node_parent( n ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        if( typeIs( p, "class_definition" ) || ( lang == Lang::Ruby && ( typeIs( p, "class" ) || typeIs( p, "module" ) ) ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Python's (and Ruby's) bare NotImplementedError is overwhelmingly NOT a placeholder, measured twice on
+// 25-hit samples: in library code it is a GUARD for an unsupported case (`if sharding: raise
+// NotImplementedError( "... not supported" )`), and as a whole METHOD body it is the abstract-by-convention
+// interface (asyncio's AbstractEventLoop is dozens of them, no decorator). So the bare form is a stub only as
+// the whole body of a FREE function; anywhere else it counts only when its message itself says "not
+// implemented" / TODO (hasStubMessage) — a recall floor, stated, for an undecorated placeholder method.
+inline bool isNotImplementedErrorRaise( TSNode n, std::string_view src )
+{
+    TSNode what = namedChild( n, 0 );
+    if( typeIs( what, "call" ) )
+    {
+        what = field( what, "function" );
+    }
+    return typeIs( what, "identifier" ) && nodeText( what, src ) == "NotImplementedError" && isWholeFunctionBody( n ) && !insideClass( n, Lang::Python )
+        && !insideAbstractMethod( n, src );
+}
+
+inline bool isStubCall( TSNode n, std::string_view src, Lang lang )
+{
+    std::string_view       recv;
+    const std::string_view verb = calleeText( n, src, recv );
+    if( lang == Lang::Kotlin && recv.empty() && verb == "TODO" )
+    {
+        return true;
+    }
+    if( lang == Lang::Ruby && recv.empty() && verb == "raise" )
+    {
+        return ( nodeText( n, src ).find( "NotImplementedError" ) != std::string_view::npos && isWholeFunctionBody( n ) && !insideClass( n, Lang::Ruby ) ) || hasStubMessage( n, src );
+    }
+    const bool stopper = recv.empty() && ( verb == "panic" || verb == "fatalError" || verb == "preconditionFailure" || verb == "assert" );
+    return stopper && hasStubMessage( n, src );
+}
+
+inline bool isStubNode( TSNode n, const char* type, std::string_view src, Lang lang )
+{
+    if( std::strcmp( type, "macro_invocation" ) == 0 )
+    {
+        const std::string_view m = nodeText( field( n, "macro" ), src );
+        return m == "todo" || m == "unimplemented" || ( m == "panic" && hasStubMessage( n, src ) );
+    }
+    if( std::strcmp( type, "raise_statement" ) == 0 )
+    {
+        return isNotImplementedErrorRaise( n, src ) || hasStubMessage( n, src );
+    }
+    if( std::strcmp( type, "throw_statement" ) == 0 || std::strcmp( type, "throw_expression" ) == 0 )
+    {
+        const std::string_view t = nodeText( n, src );
+        return t.find( "NotImplementedException" ) != std::string_view::npos || hasStubMessage( n, src );
+    }
+    if( std::strcmp( type, "jump_expression" ) == 0 )
+    {
+        return nodeText( n, src ).starts_with( "throw" ) && hasStubMessage( n, src );
+    }
+    if( std::strcmp( type, "call_expression" ) == 0 || std::strcmp( type, "call" ) == 0 )
+    {
+        return isStubCall( n, src, lang );
+    }
+    return false;
+}
+
+// Does this comment text name an issue? `#123`, `ABC-123` (a tracker key), `gh-123`, or any URL.
+inline bool namesIssue( std::string_view c ) noexcept
+{
+    for( std::size_t i = 0; i + 1 < c.size(); ++i )
+    {
+        const bool digitNext = c[i + 1] >= '0' && c[i + 1] <= '9';
+        if( ( c[i] == '#' && digitNext ) || ( c[i] == ':' && c.substr( i, 3 ) == "://" ) )
+        {
+            return true;
+        }
+        if( c[i] == '-' && digitNext && i >= 2 && c[i - 1] >= 'A' && c[i - 1] <= 'Z' && c[i - 2] >= 'A' && c[i - 2] <= 'Z' )
+        {
+            return true;
+        }
+        if( c[i] == '-' && digitNext && i >= 2 && iequalsAscii( c.substr( i - 2, 2 ), "gh" ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Does some LINE of this comment START with TODO or FIXME, once the comment punctuation is stripped?
+// Line-initial only: a comment that mentions "the TODO list" mid-sentence is prose about a TODO, not one.
+inline bool opensWithTodo( std::string_view c ) noexcept
+{
+    std::size_t at = 0;
+    while( at < c.size() )
+    {
+        std::size_t nl = c.find( '\n', at );
+        if( nl == std::string_view::npos )
+        {
+            nl = c.size();
+        }
+        std::string_view line = c.substr( at, nl - at );
+        while( !line.empty() && std::strchr( " \t\r/*#-!<;", line.front() ) != nullptr )
+        {
+            line.remove_prefix( 1 );
+        }
+        for( std::string_view word : { std::string_view( "TODO" ), std::string_view( "FIXME" ) } )
+        {
+            // Accepts the word alone, a colon, an (owner) and a following space; refuses TODO-ARM, TODOS
+            // and TODO_LIST, which name something rather than leave it undone.
+            if( line.starts_with( word ) && ( line.size() == word.size() || ( line[word.size()] != '\0' && std::strchr( ":( \t\r.,", line[word.size()] ) != nullptr ) ) )
+            {
+                return true;
+            }
+        }
+        at = nl + 1;
+    }
+    return false;
+}
+
 // ── the walk ──────────────────────────────────────────────────────────────────────────────────────────
 
 inline const HandlerReader* handlerReaderFor( Lang lang, const char* type ) noexcept
@@ -543,6 +767,12 @@ inline const HandlerReader* handlerReaderFor( Lang lang, const char* type ) noex
         }
     }
     return nullptr;
+}
+
+// A stub, and not an abstract-method contract (declaresAbstractContract) — the one test for every spelling.
+inline bool isPlaceholderStub( TSNode n, const char* type, std::string_view src, Lang lang )
+{
+    return isStubNode( n, type, src, lang ) && !declaresAbstractContract( nodeText( n, src ) );
 }
 
 // The tag this ONE node carries, if any — empty for almost every node.
@@ -559,12 +789,17 @@ inline std::string_view shapeOfNode( TSNode n, std::string_view src, Lang lang, 
     {
         return goLogOnlyShape( n, src, stmts );
     }
-    return {};
+    if( isCommentNode( n ) )
+    {
+        const std::string_view c = nodeText( n, src );
+        return ( opensWithTodo( c ) && !namesIssue( c ) ) ? kTodo : std::string_view();
+    }
+    return isPlaceholderStub( n, type, src, lang ) ? kStub : std::string_view();
 }
 
 // Every hit in one file's tree, in document (DFS pre-) order. Explicit stack with the same pathological-depth
 // guard the unreachable-code walk uses; a node that is a hit is still descended into (a stub inside a
-// log-only handler is still read on its own).
+// log-only handler is two facts, one per kind).
 inline void walkHandlerShapes( TSNode root, std::string_view src, Lang lang, std::vector<ShapeSpan>& out )
 {
     struct Frame { TSNode node; std::uint16_t depth; };
@@ -586,7 +821,7 @@ inline void walkHandlerShapes( TSNode root, std::string_view src, Lang lang, std
             const std::string_view tag = shapeOfNode( frame.node, src, lang, stmts );
             if( !tag.empty() )
             {
-                ASSUME( tag == kLogOnly || tag == kRethrowOnly, "shapeOfNode answers one of the two tags or none" );
+                ASSUME( tag == kLogOnly || tag == kRethrowOnly || tag == kStub || tag == kTodo, "shapeOfNode answers one of the four tags or none" );
                 out.push_back( { ts_node_start_byte( frame.node ), ts_node_end_byte( frame.node ), tag } );
             }
         }

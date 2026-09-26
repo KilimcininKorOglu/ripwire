@@ -34,7 +34,7 @@
 #include "docparse.h"           // detail::readWholeFile — THE canonical whole-file byte read; never re-rolled
 #include "infra/namesplit.h"   // namesplit::stripQuotePair — THE canonical quote-strip; never re-rolled
 #include "infra/Diagnostics.h"  // DISCLOSE (no-op in release; the fprintf below is the visible line)
-#include "handlershape.h"        // hshape:: the handler shape tags the AstWalk::HandlerShapes group emits
+#include "handlershape.h"        // hshape:: the handler/placeholder shape tags the AstWalk::HandlerShapes group emits
 
 namespace rw
 {
@@ -1291,7 +1291,8 @@ inline bool errorMaskConfirmOnDisk( const IngestResult& ing, const AstMatch& m,
 
 // One error-masking hit: the suppressing block's file + start byte (so a caller can attribute it to the
 // enclosing symbol by span containment), the 1-based line, and the rule id. Shaped for span attribution,
-// not for direct emission — quality.h owns the delta accounting.
+// not for direct emission — quality.h owns the delta accounting. The same shape carries a PLACEHOLDER hit
+// (id "stub" or "todo"), which quality.h counts under its own kind.
 struct ErrorMaskHit
 {
     std::uint32_t fileId    = 0;
@@ -1336,11 +1337,13 @@ inline bool errorMaskHitGates( std::string_view id, Lang lang ) noexcept
     return !( id == hshape::kLogOnly || id == hshape::kRethrowOnly ) || handlerShapeGates( id, lang );
 }
 
-// What --quality-delta counts per symbol from ONE read and parse of the tree: the error-masking hits (the
-// kErrorMaskRules query rows plus the log-only / rethrow-only walk shapes), in (file path, startByte, id) order.
+// Both families --quality-delta counts per symbol, from ONE read and parse of the tree: the error-masking
+// hits (the kErrorMaskRules query rows plus the log-only / rethrow-only walk shapes) and the placeholder
+// hits (stub / todo). Each list is in (file path, startByte, id) order.
 struct QualityConstructHits
 {
     std::vector<ErrorMaskHit> mask;
+    std::vector<ErrorMaskHit> placeholder;
 };
 
 // The rule index a query row was tagged with (its position in kErrorMaskRules), or kErrorMaskRules.size()
@@ -1405,10 +1408,10 @@ inline void sortConstructHits( const IngestResult& ing, std::vector<ErrorMaskHit
                } );
 }
 
-// Run the built-in error-masking table AND the handler-shape walk over the tree, in ONE shared read
+// Run the built-in error-masking table AND the handler/placeholder walk over the tree, in ONE shared read
 // and parse (astQueryGrouped: a spec group and an AstWalk::HandlerShapes group). The walk group's budget is
 // unbounded on purpose: a per-tag cap truncates a PATH-sorted list, so the two sides of a delta would be cut
-// at different files and a hit past the cap would read as added or removed. Never throws (astQuery
+// at different files and a TODO past the cap would read as added or removed. Never throws (astQuery
 // degrades per file internally).
 inline QualityConstructHits findQualityConstructs( const IngestResult& ing )
 {
@@ -1429,9 +1432,11 @@ inline QualityConstructHits findQualityConstructs( const IngestResult& ing )
     keepErrorMaskQueryRows( ing, groups[0], out.mask );
     for( const AstMatch& m : groups[1] )
     {
-        out.mask.push_back( { m.fileId, m.startByte, m.line, m.tag } );
+        const bool isPlaceholder = m.tag == hshape::kStub || m.tag == hshape::kTodo;
+        ( isPlaceholder ? out.placeholder : out.mask ).push_back( { m.fileId, m.startByte, m.line, m.tag } );
     }
     sortConstructHits( ing, out.mask );
+    sortConstructHits( ing, out.placeholder );
     return out;
 }
 

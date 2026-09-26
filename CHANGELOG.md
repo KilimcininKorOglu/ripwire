@@ -27,6 +27,15 @@ Python, where a hand-labelled sample measured precision 0.976 (40 of 41) and 1.0
 other language the row is printed as `sev="minor"` and never fires exit 2 (`kHandlerShapeGates`,
 `src/lintrules.h`; method and table in `docs/EVALS.md`). `kQSnapCacheScheme` 14 → 15.
 
+### Added — `--quality-delta` placeholder kind (the eleventh): stubs and TODOs a change adds
+
+A new kind, `placeholder`, lists the stubs and TODO comments a change added, per symbol: `todo!()` /
+`unimplemented!()`, Kotlin `TODO()`, `NotImplementedException`, a bare `raise NotImplementedError` as a free
+function's whole body, a throw/raise/panic/assert whose message says "not implemented", and a comment line
+opening with `TODO`/`FIXME` that names no issue. Every row is `origin="new-symbol"` and never gates; a
+change with no stub prints nothing new. `--help`, the MCP `quality_delta` description and the full legend
+now say eleven kinds.
+
 ## [0.6.4] — 2026-09-25
 
 ### Added — Astro (`.astro`) frontmatter is indexed on the TypeScript grammar (#320, #67)

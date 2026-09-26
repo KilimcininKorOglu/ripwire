@@ -740,8 +740,9 @@ firing on the same function is corroboration rather than one metric counted twic
 
 That matters most for code an agent wrote. Empty-catch error masking is **+47%** more common in
 AI-authored commits, a function rewritten again inside two weeks **+15%** more likely, and reuse is
-*declining* as AI's share of commits grows (GitClear, *AI Copilot Code Quality*, 2026). Each of
-`--quality-delta`'s 10 kinds targets one measured mode like those, and it reports **only what your
+*declining* as AI's share of commits grows (GitClear, *AI Copilot Code Quality*, 2026). Ten of
+`--quality-delta`'s 11 kinds each target one measured mode like those (the eleventh, `placeholder`,
+lists the stubs and TODOs a change adds, and never gates), and it reports **only what your
 change made worse** — then `--exemplar` shows the pattern in your own repo to copy, and `--test-gate`
 names the tests that must run before "done."
 
