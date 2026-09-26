@@ -628,4 +628,58 @@ grep -q 'tsconfig_unread="1" graph_partial="1"' "$TMP/p2p.deps" \
     && ok "#220 (P2-P) an unparseable owning tsconfig: tsconfig_unread=\"1\" graph_partial=\"1\" (never a silent 'no alias')" \
     || no "#220 (P2-P) an unparseable tsconfig was read as declaring nothing — $( root_of "$TMP/p2p.deps" )"
 
+# ── fix round (semantic review of part 2): each arm is RED on b40256cc ─────────────────────────────────────────────────
+# (P2-Q) package.json `imports` (`#…`, Node's PACKAGE_IMPORTS_RESOLVE): `#lib/*` → ./src/lib/*.ts through the nearest
+# package.json, with a `node`/`default` pair that agrees; a#lib/b <-> b is a cycle. A `#` specifier no key answers is the
+# package's own and missing, so it is counted — never external (b40256cc: External, "(acyclic)").
+D="$TMP/p2-imports"
+w220 "$D/package.json" '{ "name": "app", "type": "module", "imports": { "#lib/*": "./src/lib/*.ts", "#cfg": { "node": "./src/cfg.ts", "default": "./src/cfg.ts" } } }\n'
+w220 "$D/tsconfig.json" '{ "compilerOptions": { "module": "nodenext", "moduleResolution": "nodenext" } }\n'
+w220 "$D/src/a.ts" "import { b } from '#lib/b';\nimport { c } from '#cfg';\nexport function a() { return b() + c; }\n"
+w220 "$D/src/lib/b.ts" "import { a } from '../a';\nexport function b() { return typeof a; }\n"; w220 "$D/src/cfg.ts" "export const c = 1;\n"
+d220 "$D" >"$TMP/p2q.deps"
+{ [ "$( ncyc "$TMP/p2q.deps" )" = 1 ] && grep -q '<f p="src/cfg.ts" afferent="1"/>' "$TMP/p2q.deps" && ! grep -q 'imports_unresolved=\|graph_partial=' "$TMP/p2q.deps"; } \
+    && ok "#220 (P2-Q) package.json imports: #lib/b resolves (a <-> b cycle), #cfg through node/default" \
+    || no "#220 (P2-Q) package.json imports not resolved — $( ncyc "$TMP/p2q.deps" ) cycle(s), $( root_of "$TMP/p2q.deps" )"
+w220 "$D/src/a.ts" "import { b } from '#lib/b';\nimport { z } from '#nokey';\nexport function a() { return b() + z; }\n"
+d220 "$D" >"$TMP/p2q2.deps"
+grep -q 'imports_unresolved="1" graph_partial="1"' "$TMP/p2q2.deps" \
+    && ok "#220 (P2-Q) a # specifier no imports key answers is counted (1), never external" \
+    || no "#220 (P2-Q) an unanswered # specifier went uncounted — $( root_of "$TMP/p2q2.deps" )"
+
+# (P2-R) references, a file in a program only BY IMPORT (create-vite + src/foo.ts importing ../lib/util): lib/util.ts is
+# held by no project's include, yet the app program compiles it with its `@/*`, so util -> foo is an edge and
+# foo <-> util a cycle (b40256cc: the solution config's empty scope, no edge, "(acyclic)").
+D="$TMP/p2-byimport"; mkvite "$D"
+w220 "$D/src/foo.ts" "import { u } from '../lib/util';\nexport const foo = u;\n"
+w220 "$D/lib/util.ts" "import { foo } from '@/foo';\nexport const u = () => foo;\n"
+d220 "$D" >"$TMP/p2r.deps"
+{ grep -q '<cycle size="2"[^>]*><f p="src/foo.ts"/><f p="lib/util.ts"/>\|<cycle size="2"[^>]*><f p="lib/util.ts"/><f p="src/foo.ts"/>' "$TMP/p2r.deps" \
+  && ! grep -q 'imports_unresolved=\|graph_partial=' "$TMP/p2r.deps"; } \
+    && ok "#220 (P2-R) references by import: lib/util.ts resolves @/foo under the app project (foo <-> util cycle)" \
+    || no "#220 (P2-R) a file in a program by import got no aliases — $( ncyc "$TMP/p2r.deps" ) cycle(s), $( root_of "$TMP/p2r.deps" )"
+
+# (P2-S) `exports` conditions: a `node`/`default` split names two files; Node (node16/nodenext) takes `node`, a bundler
+# `default`. The record cannot say which consumer is meant, so it is ambiguous and counted (b40256cc: a silent edge to
+# the `default` file).
+D="$TMP/p2-conds"
+w220 "$D/pnpm-workspace.yaml" "packages:\n  - 'packages/*'\n  - 'apps/*'\n"
+w220 "$D/packages/lib/package.json" '{ "name": "@acme/lib", "exports": { ".": { "node": "./src/node.ts", "default": "./src/browser.ts" } } }\n'
+w220 "$D/packages/lib/src/node.ts" "export const impl = 1;\n"; w220 "$D/packages/lib/src/browser.ts" "export const impl = 2;\n"
+w220 "$D/apps/server/package.json" '{ "name": "server" }\n'; w220 "$D/apps/server/src/main.ts" "import { impl } from '@acme/lib';\nexport const x = impl;\n"
+d220 "$D" >"$TMP/p2s.deps"
+{ grep -q 'imports_unresolved="1" graph_partial="1"' "$TMP/p2s.deps" && ! grep -q 'p="packages/lib/src/browser.ts"\|p="packages/lib/src/node.ts"' "$TMP/p2s.deps"; } \
+    && ok "#220 (P2-S) exports node/default naming two files: ambiguous, counted (1), no edge to either" \
+    || no "#220 (P2-S) a node/default split was guessed — $( root_of "$TMP/p2s.deps" )"
+
+# (P2-T) a MATCHED `paths` key whose targets all fail stops there: tsc never tries `baseUrl` after it, so a stale
+# lib/thing.ts at the root is not the answer — unresolved and counted (b40256cc: a false edge to it).
+D="$TMP/p2-pathsstop"
+w220 "$D/tsconfig.json" '{ "compilerOptions": { "baseUrl": ".", "paths": { "lib/*": ["src/lib/*"] } } }\n'
+w220 "$D/src/main.ts" "import { t } from 'lib/thing';\nexport const m = t;\n"; w220 "$D/lib/thing.ts" "export const t = 1;\n"; w220 "$D/src/lib/other.ts" "export const o = 1;\n"
+d220 "$D" >"$TMP/p2t.deps"
+{ grep -q 'imports_unresolved="1" graph_partial="1"' "$TMP/p2t.deps" && ! grep -q 'p="lib/thing.ts"' "$TMP/p2t.deps"; } \
+    && ok "#220 (P2-T) a matched paths key that fails does not fall through to baseUrl: counted (1), no edge" \
+    || no "#220 (P2-T) a failed paths match fell through to baseUrl — $( root_of "$TMP/p2t.deps" )"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

@@ -1897,18 +1897,21 @@ inline void recordLazyPair( HashMap<std::uint64_t, char>& lazyPairs, std::uint32
 //   1. `paths` of the config that owns the importer — the nearest tsconfig.json (else jsconfig.json) walking up from
 //      its directory; when that config does not hold the file (`files`/`include`/`exclude`, inherited through
 //      `extends`) and names `references` (a solution-style config: create-vite's `files: []`), the referenced projects
-//      that hold it, through nested references — two that answer differently are ambiguous. tsc's matchPatternOrExact picks ONE key: an exact key first, else the wildcard key with the
+//      that hold it, through nested references — two that answer differently are ambiguous. A file no project holds
+//      is in a program only by import: every reached project is asked, and those that place it must agree. tsc's matchPatternOrExact picks ONE key: an exact key first, else the wildcard key with the
 //      longest prefix. Its targets are tried IN ORDER from `baseUrl` when set, else from the directory of the config
 //      that declared `paths`; the first target that names a file wins. A key with two `*` is not a pattern.
-//   2. `<baseUrl>/<specifier>`, when `paths` did not answer.
+//   2. `<baseUrl>/<specifier>`, when no `paths` key matched (a matched key that answers nothing stops here, as in tsc).
+//   2b. a `#x` specifier: the `imports` map of the nearest package.json at or above the importer (Node's
+//      PACKAGE_IMPORTS_RESOLVE, same key and condition rules as `exports` below); one nothing answers is counted.
 //   3. a workspace package: members are the package.json files whose directory a `workspaces` glob (root
 //      package.json: an array, or `{ "packages": [...] }`) or a pnpm-workspace.yaml `packages:` glob (block or flow list) admits, relative to
 //      the declaring file (`*`, `**`, `!` negation). Only an importer UNDER the declaring directory sees them (it is
 //      that directory's node_modules the package manager links them into). The specifier's package name (`@s/n` or
 //      `n`) picks the member; two members declaring one name are ambiguous and resolve to neither. Inside the member:
 //      `exports` (the `.` entry or a subpath, exact key before the longest-prefix `*` pattern; conditions in the
-//      object's own order, `import`+`default` and `require`+`default` both evaluated — two different files is
-//      ambiguous; `types` never selected), else `module` then `main`, else the package's `index`. A target spelling
+//      object's own order, `import`/`require` each with and without `node`, plus `default`, all evaluated — two
+//      different files is ambiguous; `types` never selected), else `module` then `main`, else the package's `index`. A target spelling
 //      the package's EMITTED output (`./dist/index.js`) is mapped back to its source through that package's own
 //      tsconfig `outDir` → `rootDir` first (tsc's tryLoadInputFileForPath), then tried as written.
 // Each candidate path is probed in tsc's order with the house's unique-or-degrade discipline per tier: the exact
@@ -2260,6 +2263,14 @@ inline std::vector<PathPattern> readPathPatterns( const JsonNode& ps )
             {
                 pp.targets.push_back( t.str );
             }
+        }
+        // a repeated key keeps its first position and its LAST value, as JSON.parse does
+        const auto same = std::find_if( out.begin(), out.end(), [ & ]( const PathPattern& q )
+                                        { return q.wild == pp.wild && q.prefix == pp.prefix && q.suffix == pp.suffix; } );
+        if( same != out.end() )
+        {
+            same->targets = std::move( pp.targets );
+            continue;
         }
         out.push_back( std::move( pp ) );
     }
@@ -2651,11 +2662,23 @@ inline ExportsHit exportsTarget( const JsonNode& n, std::span<const std::string_
 // The `exports` entry a subpath selects (Node's PACKAGE_EXPORTS_RESOLVE): the whole value when it is not a subpath map
 // (only `.` is exported then), else the exact key, else the one-`*` key with the longest prefix (the longer key on a
 // tie) whose capture is non-empty; `capture` receives what the `*` matched.
+inline const JsonNode* patternMapEntry( const JsonNode& ex, const std::string& sub, std::string& capture );
 inline const JsonNode* exportsEntry( const JsonNode& ex, const std::string& sub, std::string& capture )
 {
     if( ex.kind != JsonNode::Kind::Obj || ex.keys.empty() || !ex.keys.front().starts_with( '.' ) )
     {
         return sub == "." ? &ex : nullptr;
+    }
+    return patternMapEntry( ex, sub, capture );
+}
+
+// Node's PATTERN_KEY_COMPARE over one subpath map (an `exports` subpath object, or `imports`): the exact key, else
+// the one-`*` key with the longest prefix whose capture is non-empty.
+inline const JsonNode* patternMapEntry( const JsonNode& ex, const std::string& sub, std::string& capture )
+{
+    if( ex.kind != JsonNode::Kind::Obj )
+    {
+        return nullptr;
     }
     if( const JsonNode* exact = ex.get( sub ) )
     {
@@ -2695,6 +2718,14 @@ inline bool parseJsonObject( const std::string& bytes, JsonNode& out )
 }
 
 
+// Which project configs own one importer (ConfigScopes::ownersFor): scope indices, sorted; `byImport` when no
+// referenced project holds the file by `files`/`include`, so each reached project is only a candidate.
+struct ConfigOwners
+{
+    std::vector<int> scopes;
+    bool             byImport = false;
+};
+
 // The project configs that own importers: one AliasScope per tsconfig/jsconfig read (its `extends` chain folded in),
 // the directory → nearest-config memo, `references` ownership, and the configs whose unread base or reference could
 // have changed an answer (tsconfig_unread=). ImportResolver asks it; it never resolves a specifier itself.
@@ -2722,35 +2753,43 @@ public:
 
     // The configs that own `importer`: the nearest one (scopeForDir), unless it does not hold the file and names
     // `references` (a solution-style tsconfig.json such as create-vite's `files: []` beside tsconfig.app.json and
-    // tsconfig.node.json). Then every referenced project that holds it, searched through nested references; none
-    // holding it keeps the nearest. -1 alone = no config above it. Sorted, so the answer is order-free.
-    std::vector<int> ownersFor( std::string_view importer, const std::string& dir )
+    // tsconfig.node.json). Then every referenced project that holds it, searched through nested references. When none
+    // holds it by `files`/`include`, the file is in a program only because a held file imports it (tsc compiles it
+    // there with that program's aliases), so `byImport` asks every referenced project and the solution config, and
+    // ImportResolver::resolveOwned keeps the answer the projects that resolve it agree on. -1 alone = no config above
+    // it. Sorted, so the answer is order-free.
+    ConfigOwners ownersFor( std::string_view importer, const std::string& dir )
     {
         std::string key( importer );
         if( const auto it = owners_.find( key ); it != owners_.end() )
         {
             return it->second;
         }
-        std::vector<int> owners;
-        const int        c = scopeForDir( dir );
+        ConfigOwners out;
+        const int    c = scopeForDir( dir );
         if( c >= 0 && !scopes_[ std::size_t( c ) ].references.empty() && !scopes_[ std::size_t( c ) ].holds( importer ) )
         {
             std::vector<int> seen{ c };
-            collectOwners( c, importer, owners, seen );
+            collectOwners( c, importer, out.scopes, seen );
             if( scopes_[ std::size_t( c ) ].unreadReference )
             {
                 unreadConfigs_.emplace( scopeConfig_[ std::size_t( c ) ], 1 );   // an unread project could hold it too
             }
+            out.byImport = out.scopes.empty();
+            if( out.byImport )
+            {
+                out.scopes = std::move( seen );   // every project the search reached, the solution config included
+            }
         }
-        if( owners.empty() )
+        if( out.scopes.empty() )
         {
-            owners.push_back( c );
+            out.scopes.push_back( c );
         }
-        std::sort( owners.begin(), owners.end() );
-        owners.erase( std::unique( owners.begin(), owners.end() ), owners.end() );
-        ENSURES( !owners.empty() );
-        owners_.emplace( std::move( key ), owners );
-        return owners;
+        std::sort( out.scopes.begin(), out.scopes.end() );
+        out.scopes.erase( std::unique( out.scopes.begin(), out.scopes.end() ), out.scopes.end() );
+        ENSURES( !out.scopes.empty() );
+        owners_.emplace( std::move( key ), out );
+        return out;
     }
 
     // The config that owns `dir`: the nearest tsconfig.json, else jsconfig.json, walking up to the crawl root.
@@ -2998,7 +3037,7 @@ private:
     std::vector<AliasScope>                    scopes_;
     std::vector<std::string>                   scopeConfig_;    // scopes_[i]'s config path
     HashMap<std::string, char>                 unreadConfigs_;
-    HashMap<std::string, std::vector<int>>     owners_;         // importer path → its owning scopes (ownersFor)
+    HashMap<std::string, ConfigOwners>         owners_;         // importer path → its owning scopes (ownersFor)
 };
 
 // The resolver. One per adjacency build that met a bare TS/JS specifier its relative branch could not place; every
@@ -3022,9 +3061,9 @@ public:
         }
         spec = spec.substr( 0, spec.find( '?' ) );
         const std::string      dir( includerDir( importer ) );
-        const std::vector<int> owners = configs_.ownersFor( importer, dir );
-        std::string            key    = dir + '\x1f' + std::string( spec );
-        for( const int si : owners )   // the owning configs are part of the question when `references` chose them
+        const ConfigOwners owners = configs_.ownersFor( importer, dir );
+        std::string        key    = dir + '\x1f' + std::string( spec ) + ( owners.byImport ? "\x1fi" : "" );
+        for( const int si : owners.scopes )   // the owning configs are part of the question when `references` chose them
         {
             key += '\x1f';
             key += std::to_string( si );
@@ -3068,21 +3107,33 @@ private:
     HashMap<std::string, std::vector<std::size_t>>  membersByName_;
     ConfigScopes                                    configs_;
     HashMap<std::string, Outcome>                   memo_;
+    std::vector<std::pair<std::string, JsonNode>>   scopePackages_;  // (directory, package.json) — `imports` scopes
+    HashMap<std::string, int>                       dirPackage_;     // directory → index into scopePackages_, -1 = none
 
     // Several owning projects (a file two `references` include) answer as one only when they agree: the edit a user
-    // makes compiles under each, and the record cannot say which build the reader means.
-    Outcome resolveOwned( const std::string& dir, const std::vector<int>& owners, std::string_view spec )
+    // makes compiles under each, and the record cannot say which build the reader means. By import only, a project
+    // that finds nothing (External) is not the program compiling the file, so only the projects that DO place the
+    // specifier must agree; none placing it is External, as it is for tsc in every one of them.
+    Outcome resolveOwned( const std::string& dir, const ConfigOwners& owners, std::string_view spec )
     {
-        EXPECTS( !owners.empty() );
-        const Outcome first = resolveUncached( dir, owners.front(), spec );
-        for( std::size_t k = 1; k < owners.size(); ++k )
+        EXPECTS( !owners.scopes.empty() );
+        Outcome agreed;
+        bool    first = true;
+        for( const int si : owners.scopes )
         {
-            if( const Outcome o = resolveUncached( dir, owners[k], spec ); o.verdict != first.verdict || o.file != first.file )
+            const Outcome o = resolveUncached( dir, si, spec );
+            if( owners.byImport && !o.decided() )
+            {
+                continue;
+            }
+            if( !first && ( o.verdict != agreed.verdict || o.file != agreed.file ) )
             {
                 return { kNoFile, Verdict::InRepoUnresolved };
             }
+            agreed = o;
+            first  = false;
         }
-        return first;
+        return agreed;
     }
 
     Outcome resolveUncached( const std::string& dir, const int si, std::string_view spec )
@@ -3091,11 +3142,12 @@ private:
         if( si >= 0 )
         {
             configs_.noteUnreadIfMatters( si );
-            if( const Outcome o = throughPaths( configs_.scope( si ), spec, inRepo ); o.decided() )
+            bool matched = false;
+            if( const Outcome o = throughPaths( configs_.scope( si ), spec, inRepo, matched ); o.decided() )
             {
                 return o;
             }
-            if( const AliasScope& sc = configs_.scope( si ); sc.hasBaseUrl )
+            if( const AliasScope& sc = configs_.scope( si ); sc.hasBaseUrl && !matched )
             {
                 if( const Outcome o = probeInOrder( candidateAt( sc.baseDir, spec ) ); o.decided() )
                 {
@@ -3103,11 +3155,57 @@ private:
                 }
             }
         }
+        if( spec.starts_with( '#' ) )
+        {
+            return throughImports( dir, spec );   // a package-internal import: never another package's name
+        }
         if( const Outcome o = throughWorkspace( dir, spec ); o.decided() )
         {
             return o;
         }
         return { kNoFile, inRepo ? Verdict::InRepoUnresolved : Verdict::External };
+    }
+
+    // Node's PACKAGE_IMPORTS_RESOLVE: `#x` through the `imports` map of the nearest package.json at or above the
+    // importer (its package scope). A `#` specifier names nothing outside that package, so one that no in-tree file
+    // answers — no package.json, no `imports`, no key, or a target that is not here — is counted, never external.
+    Outcome throughImports( const std::string& dir, std::string_view spec )
+    {
+        const int pi = nearestPackage( dir );
+        if( pi >= 0 )
+        {
+            const auto& [ pkgDir, pj ] = scopePackages_[ std::size_t( pi ) ];
+            std::string     capture;
+            const JsonNode* imports = pj.get( "imports" );
+            const JsonNode* entry   = imports != nullptr ? patternMapEntry( *imports, std::string( spec ), capture ) : nullptr;
+            if( const Outcome o = entry != nullptr ? resolveConditional( pkgDir, *entry, capture, /*bareIsPackage=*/true ) : Outcome{}; o.decided() )
+            {
+                return o;
+            }
+        }
+        return { kNoFile, Verdict::InRepoUnresolved };
+    }
+
+    // The package scope of `dir`: the nearest indexed package.json at or above it that parses (-1 = none), memoized.
+    int nearestPackage( const std::string& dir )
+    {
+        if( const auto it = dirPackage_.find( dir ); it != dirPackage_.end() )
+        {
+            return it->second;
+        }
+        int      r = -1;
+        JsonNode pj;
+        if( const std::uint32_t f = joinNormalizeLookup( dir, "package.json", fileIndex_ ); f != kNoFile && parseJsonObject( readConfigBytes( diskPath( ing_, f ) ), pj ) )
+        {
+            scopePackages_.emplace_back( dir, std::move( pj ) );
+            r = int( scopePackages_.size() - 1 );
+        }
+        else if( !dir.empty() )
+        {
+            r = nearestPackage( std::string( includerDir( dir ) ) );
+        }
+        dirPackage_.emplace( dir, r );
+        return r;
     }
 
     static std::vector<std::string> candidateAt( std::string_view base, std::string_view rel )
@@ -3137,9 +3235,12 @@ private:
     // Rule 1: the one `paths` key tsc would pick, its targets in order. A literal key (non-empty prefix, or exact)
     // with a target that stays in the tree places the specifier here even when no target answers (`inRepo`); a
     // catch-all matches every package there is, so only an answer from it means anything.
-    Outcome throughPaths( const AliasScope& sc, std::string_view spec, bool& inRepo ) const
+    // tsc stops at a matched key even when no target answers (`matched`): `baseUrl` is never tried after it, only the
+    // package steps (tryLoadModuleUsingOptionalResolutionSettings returns the failed match).
+    Outcome throughPaths( const AliasScope& sc, std::string_view spec, bool& inRepo, bool& matched ) const
     {
         const PathPattern* pp = sc.hasPaths ? bestPathsKey( sc.paths, spec ) : nullptr;
+        matched               = pp != nullptr;
         if( pp == nullptr )
         {
             return {};
@@ -3314,23 +3415,31 @@ private:
         return {};
     }
 
-    // `exports`: the entry the subpath selects, under both directive dialects. Two different files is ambiguous (the
-    // directive's own syntax would choose, and the record does not keep it); one that names nothing here defers.
+    // `exports`: the entry the subpath selects, resolved under every condition set (resolveConditional).
     Outcome throughExports( const std::string& pkgDir, const JsonNode& ex, const std::string& sub )
     {
-        static constexpr std::string_view kImportConds[]  = { "import", "default" };
-        static constexpr std::string_view kRequireConds[] = { "require", "default" };
-        std::string                       capture;
-        const JsonNode*                   entry = exportsEntry( ex, sub, capture );
-        if( entry == nullptr )
-        {
-            return {};
-        }
-        Outcome agreed;
-        for( const std::span<const std::string_view> conds : { std::span<const std::string_view>( kImportConds ), std::span<const std::string_view>( kRequireConds ) } )
+        std::string     capture;
+        const JsonNode* entry = exportsEntry( ex, sub, capture );
+        return entry == nullptr ? Outcome{} : resolveConditional( pkgDir, *entry, capture, /*bareIsPackage=*/false );
+    }
+
+    // One `exports`/`imports` entry under each condition set a consumer of this tree could run: ESM and CJS, each
+    // with and without Node's `node` condition (node16/nodenext enter it; a bundler does not). `types` is never
+    // entered. Two sets naming different files is ambiguous — the directive's syntax and the consumer's resolution
+    // mode would choose, and the record keeps neither — so it is counted; a set that names nothing here defers.
+    // `bareIsPackage` (`imports` only): a target that is not `./…` names a package, resolved as a workspace import.
+    Outcome resolveConditional( const std::string& pkgDir, const JsonNode& entry, const std::string& capture, bool bareIsPackage )
+    {
+        static constexpr std::string_view kImportConds[]      = { "import", "default" };
+        static constexpr std::string_view kRequireConds[]     = { "require", "default" };
+        static constexpr std::string_view kNodeImportConds[]  = { "node", "import", "default" };
+        static constexpr std::string_view kNodeRequireConds[] = { "node", "require", "default" };
+        Outcome                           agreed;
+        for( const std::span<const std::string_view> conds : { std::span<const std::string_view>( kImportConds ), std::span<const std::string_view>( kRequireConds ),
+                                                               std::span<const std::string_view>( kNodeImportConds ), std::span<const std::string_view>( kNodeRequireConds ) } )
         {
             std::string t;
-            if( exportsTarget( *entry, conds, t ) != ExportsHit::Found || !t.starts_with( "./" ) )
+            if( exportsTarget( entry, conds, t ) != ExportsHit::Found || ( !bareIsPackage && !t.starts_with( "./" ) ) )
             {
                 continue;
             }
@@ -3338,7 +3447,7 @@ private:
             {
                 t.replace( star, 1, capture );   // Node substitutes every `*` of a pattern target
             }
-            const Outcome o = resolveEntry( pkgDir, std::string_view( t ).substr( 2 ), /*exact=*/true );
+            const Outcome o = t.starts_with( "./" ) ? resolveEntry( pkgDir, std::string_view( t ).substr( 2 ), /*exact=*/true ) : throughWorkspace( pkgDir, t );
             if( o.verdict == Verdict::InRepoUnresolved || ( o.decided() && agreed.decided() && o.file != agreed.file ) )
             {
                 return { kNoFile, Verdict::InRepoUnresolved };
