@@ -13,6 +13,41 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Fixed — `--test-gate` spells `node --test` only where Node can start it (CodeRabbit review of #336)
+
+Each refusal below used to get a `run=` command that fails before any test runs, and is now `run_unknown="1"`.
+The version reading also gives a command to two ranges it used to refuse (`^16.17.0`, `>=16.17 <17 || >=18.1`).
+
+- **The module kind.** A `.js` or `.ts` test file with a static ES `import`/`export` runs as an ES module only
+  as `.mjs`/`.mts`, under `"type": "module"` in its nearest `package.json`, or on a Node with default
+  module-syntax detection (22.7 and later, 20.19 on the 20.x line) that `engines.node` proves. An explicit
+  `"type": "commonjs"`, or a `.cjs`/`.cts` file, turns detection off. With no `engines.node` at all, a
+  TypeScript file keeps the stated type-stripping assumption and a `.js` file gets no command.
+- **Modules the test reaches.** The exact-path import check now covers every local TypeScript module the test
+  file reaches, not only the test file's own imports. The walk stops at 64 modules, and a cut walk gets no
+  command.
+- **Syntax type stripping cannot erase.** On the same walk: an `enum`, a `namespace` with runtime code, a
+  constructor parameter property, an import alias or a decorator, outside any `declare`.
+- **Node versions.** The `--test` flag exists from Node 18.1 and, by backport, 16.17, but not on 17.x or 18.0.
+  Stripping is on by default from 22.18 and 23.6, but not on 23.0–23.5. Each `engines.node` alternative is now
+  read for its upper bound as well as its floor, so `^16.17.0` and `>=18.1` get a command, `>=16.17` and `>=18`
+  do not, and `>=22.18` keeps `--experimental-strip-types` where `^22.18.0` gets the bare form.
+
+### Fixed — hooks and doctor
+
+- The nudge hook's SessionStart primer and the tool-call route hook no longer act on a git repository named
+  by an inherited `GIT_DIR`. With `GIT_DIR` exported, `git -C <cwd>` answered for that repository, so the
+  primer fired in a non-git directory, the meter tagged the call with the other repository's name, and the
+  tool-call hook recommended where it should abstain. Both hooks now clear git's repository-selection
+  variables first, as the two prompt route hooks already did.
+- `--doctor --agent=codex` and `--agent=claude` count a `ripwire-*` skill directory as live only when it holds
+  a `SKILL.md`. An empty directory, as 0.6.3's installer could leave on Git Bash, no longer reads as parity.
+- The `--help` footer's determinism recipe quotes `"$t/a"` and `"$t/b"`, like every other copy.
+
+---
+
 ## [0.6.4] — 2026-09-25
 
 ### Added — Astro (`.astro`) frontmatter is indexed on the TypeScript grammar (#320, #67)
@@ -143,9 +178,12 @@ not resolved (that is part 2); they are now counted. A tree without one is byte-
   for each one, wrote all of them to the manifest and announced them as active. It now checks each link by
   its result (a symlink whose `SKILL.md` reads back). When the link did not take, it copies the skill and
   prints `copied`. When the copy fails too, it prints `FAILED`, leaves the skill out of the count and the
-  manifest, and exits 1. The prune step recognises its own copies (a marker file, an empty leftover
-  directory, or a name its last manifest listed) and leaves any other `ripwire-*` directory alone; before,
-  a user's own `ripwire-*` directory made the installer stop with `rm: … is a directory`.
+  manifest, and exits 1. The installer removes or replaces a real `ripwire-*` directory only when it can
+  show the directory is its own copy: its copy marker names that skill, it holds no files at any depth (an
+  empty leftover, nested or not), or its files are byte-identical to the skill it ships under that name. A
+  name listed in the previous manifest is not proof on its own, so a user's own directory under a shipped
+  name is kept too. Every other `ripwire-*` directory is kept with a `kept … (your own directory)` line;
+  before, a user's own `ripwire-*` directory made the installer stop with `rm: … is a directory`.
 - A cache blob written by a different ripwire build is now refused with both numbers on the line:
   `format-version — not used; … rewrites it (blob format 24, this binary 25: another ripwire build wrote
   it; …)`. The
