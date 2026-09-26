@@ -760,6 +760,10 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
     {
         return false; // has at least one caller
     }
+    if( i < g.gateDeclinedTarget.size() && g.gateDeclinedTarget[ i ] != 0 )
+    {
+        return false; // a builtin-name call the resolver declined could have meant it (graph.h BuiltinMethodGate)
+    }
     if( std::binary_search( topLevelCallees.begin(), topLevelCallees.end(), fnv1a64( s.name ) ) )
     {
         return false; // W1-S2: invoked from file scope (a top-level script statement) — a use the CSR drops

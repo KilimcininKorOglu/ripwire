@@ -116,7 +116,8 @@ struct Graph
                                                      // edge, never counted in ambOut/unresolvedOut. Serialized as the
                                                      // header `external=N` / JSON "external":N, absent when 0.
     // Tier 3's DECLINES: a call whose candidates are two or more same-language definitions, none in the caller's file or directory, that no qualifier or
-    // receiver rule pinned. Still no edge — the ladder refuses to guess — but no longer silent. declinedOut is per CALLER, like ambOut: summed it is the header
+    // receiver rule pinned — and the builtin-method name gate's (BuiltinMethodGate: a builtin-type method name whose definitions' classes the caller's
+    // file never names, one definition or several). Still no edge — the ladder refuses to guess — but no longer silent. declinedOut is per CALLER, like ambOut: summed it is the header
     // `declined=N` (JSON "declined":N, absent when 0), and over one selector's definitions it is the callees answer's declined_calls=. The declinedList* triple
     // stores what those calls could equally have meant ONCE PER DISTINCT candidate list (internDeclinedList): list k is declinedListCand[ off[k], off[k+1] ),
     // named by declinedListCallCount[k] calls — what the callers and impact answers read to count, once per call, the declines that could have meant THEIR symbols.
@@ -124,6 +125,11 @@ struct Graph
     std::vector<std::uint32_t> declinedListOff{ 0u };   // the leading offset lives here, so a default Graph is already a valid zero-list CSR
     std::vector<NodeId>        declinedListCand;
     std::vector<std::size_t>   declinedListCallCount;
+    // 1 for a definition some call the builtin-method name gate DECLINED could have meant (BuiltinMethodGate below); empty
+    // on a corpus with no such decline. Read by the dead-code predicate (quality.h isDeadCandidate): a definition a
+    // declined `pool.get( k )` could have meant is not provably uncalled, which is what it was before the gate, when
+    // that call bound to it by name.
+    std::vector<char>          gateDeclinedTarget;
     // Every call reference's disposition (pincensus.h CallDisposition), one bucket per reference. Read by buildGraph's
     // unaccounted alert and copied into pinCensus when a census is armed; its external/unresolved/declined buckets
     // equal those header gauges by construction.
@@ -1831,6 +1837,244 @@ struct ExternalVeto
     }
 };
 
+// ── THE BUILTIN-METHOD NAME GATE (test/builtinbindcheck.sh; the tables and their provenance are in externalnames.h) ──
+// A call whose NAME is a method of its language's builtin map, list, set or string type, and which no qualifier, SCIP
+// site, ES import binding or receiver rule (1, the base walk, 2, 2c, 2b, 2d) resolved, reaches the name ladder with its
+// spelling as the only evidence. `d.get( k )` on a dict then bound to the repository's ONE method called `get`: on a
+// real Python corpus a lone `ConnectionPool.get` collected 611 callers, nearly all of them `dict.get`, became the map's
+// first symbol and inflated every --callers, --impact and --test-gate answer that reached it. Rule 3's include narrow did
+// the same one step earlier: a caller file that transitively imports the class's module says nothing about whether THIS
+// receiver is an instance of it, so the gate runs in its place for these names.
+//
+// The gate keeps a candidate only when the caller's FILE gives evidence that the receiver can be an instance of it:
+//   * a METHOD — a definition some class owns (Symbol::scope when that names a class, else the innermost class whose
+//     span contains it, which is how the scope-less TS/JS defs are owned): kept iff the caller's file names that class or
+//     a class in its inheritance cone (ChaConeMemo, the cone CHA-lite prunes by) — defines it, imports it, constructs
+//     it, annotates with it, extends it, uses it as a receiver or qualifier, or binds a variable to it. A class defined
+//     in the caller's file is evidence for every call there, so a self call inside the class keeps its edge;
+//   * a FREE definition (no owning class): kept unless the call is a member access the extractor classified (a named,
+//     field or literal receiver, or self), which can never reach a free function — except `mod.get()` through a Python
+//     module alias, which an import binding of the receiver name (and no local of that name) keeps.
+// Nothing kept means the call is DECLINED, as tier 3 declines: no edge, counted on the caller (the header's declined=),
+// and its whole candidate list recorded, so --callers and --impact of the definition it could have meant say
+// declined_calls=. Something kept means the ladder runs on exactly those candidates, unchanged. A name outside the
+// tables never reaches this gate: the list decides WHEN evidence is required, never what the target is.
+//
+// Why FILE grain: in Python and TypeScript a class a file uses by name must be imported, defined or constructed there, and
+// a TS parameter annotated with the class needs that import too — so a file-level fact carries the typed-parameter case
+// the extractor has no per-parameter record of in TS. A function-grain rule would drop those edges.
+// STATED FLOORS, each measured or probed on the lane that added this:
+//   (1) the evidence is a class NAME, as CHA-lite's is: two same-named classes share it;
+//   (2) a builtin call in a file that also works with the in-repo class still binds to it (the file grain above);
+//   (3) a JS/TS member call carries no receiver shape (ingest_binds.h receiverOf: RecvKind::None), so a FREE
+//       candidate is kept for it — `m.get()` still reaches a lone exported function `get`;
+//   (4) an object handed to the caller with no mention of its class in the file (an unannotated parameter) no longer
+//       reaches the in-repo method by name; the call is declined and counted, which is the honest answer;
+//   (5) languages without a table keep the ladder unchanged, each for the reason externalnames.h records: Go (builtin
+//       types have no methods); Java, Kotlin, C#, Swift and Rust (the extractor records no declared parameter or local
+//       type there, so a gate would decline typed true edges it cannot tell from the false ones — probed: `void f( Pool
+//       p ) { p.get( k ); }` binds by name alone today); C, C++ and ObjC (declared-type evidence already exists, so the
+//       fix there is an evidence-AGAINST rule for a receiver of a std or builtin type, not a name list).
+struct BuiltinMethodGate
+{
+    static constexpr std::uint32_t kNoClass = 0xFFFFFFFFu;
+
+    const IngestResult&                     ing;
+    const ExternalVeto&                     veto;          // hasLocal / importVerdict: is a Python receiver a module alias?
+    HashMap<std::string, std::uint32_t>     classId;       // every class-like definition NAME in the corpus → a dense id
+    std::vector<std::string>                className;     // dense id → name (ChaConeMemo::contains takes a std::string)
+    std::vector<std::vector<std::uint32_t>> fileClasses;   // fileId → the sorted class ids that file names (gated files only)
+    SymbolsByFile                           containersByFile; // fileId → class-like and function-like symbol ids (ownerOf)
+    mutable HashMap<NodeId, std::uint32_t>  ownerMemo;     // candidate → owning class id, or kNoClass for a free definition
+    bool                                    active = false;
+
+    static bool isClassLike( const Symbol& s ) noexcept
+    {
+        return s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface
+            || ( s.lang == Lang::Ruby && s.kind == SymKind::Other );   // a Ruby module, as classNameSet counts it
+    }
+
+    // The committed table for a caller's language; empty for every language this gate deliberately leaves alone.
+    static std::span<const std::string_view> tableFor( Lang lang ) noexcept
+    {
+        switch( lang )
+        {
+            case Lang::Python:     return externalnames::kPythonBuiltinMethodNames;
+            case Lang::JavaScript:
+            case Lang::TypeScript: return externalnames::kJsBuiltinMethodNames;
+            case Lang::Ruby:       return externalnames::kRubyBuiltinMethodNames;
+            default:               return {};
+        }
+    }
+
+    // Whether the call is one the gate decides. The caller has already established that nothing more specific (SCIP, a
+    // qualifier, an import binding, a receiver rule) resolved it; super() never reaches here (its miss is a veto).
+    bool appliesTo( const Reference& r ) const
+    {
+        return active && r.role == RefRole::Call && r.qualifier.empty() && r.recv != RecvKind::SuperObj
+            && externalnames::tableHasName( tableFor( r.lang ), r.calleeName );
+    }
+
+    // The class that owns definition `c`, or kNoClass for a free definition. The innermost definition whose span contains
+    // `c` decides first: a class owns it; a FUNCTION means `c` is a nested local function, which no member access can
+    // reach (a Python `def decode( node )` inside a method carries the class as its Symbol::scope, and treating it as the
+    // class's method let every `raw.decode( "utf-8" )` in that file bind to the closure). With no container, a scope that
+    // names a class (a C++ out-of-line member, a reopened Ruby class) owns it. Memoised: a common name's candidate list
+    // is walked once per call site, and the containment scan is per file.
+    std::uint32_t ownerOf( NodeId c ) const
+    {
+        EXPECTS( c < ing.symbols.size(), "a candidate is a byName entry, and byName holds symbol ids" );
+        const auto [ memo, fresh ] = ownerMemo.try_emplace( c, kNoClass );
+        if( !fresh )
+        {
+            return memo->second;
+        }
+        const Symbol& s         = ing.symbols[ c ];
+        const Symbol* innermost = nullptr;
+        if( s.fileId < containersByFile.size() )
+        {
+            for( const NodeId tid : containersByFile[ s.fileId ] )
+            {
+                const Symbol& t = ing.symbols[ tid ];
+                if( tid != c && t.sigStartByte <= s.sigStartByte && s.endByte <= t.endByte
+                    && ( innermost == nullptr || t.sigStartByte > innermost->sigStartByte ) )
+                {
+                    innermost = &t;   // the deepest container wins, as buildJavaTypeMembers decides it
+                }
+            }
+        }
+        std::uint32_t owner = kNoClass;
+        if( innermost != nullptr )
+        {
+            if( isClassLike( *innermost ) )
+            {
+                owner = classId.find( innermost->name )->second;   // every class-like name was given an id at build
+            }
+        }
+        else if( const auto sit = classId.find( s.scope ); !s.scope.empty() && sit != classId.end() )
+        {
+            owner = sit->second;
+        }
+        ENSURES( owner == kNoClass || owner < className.size() );
+        memo->second = owner;   // nothing was inserted since try_emplace, so its iterator is still valid
+        return owner;
+    }
+
+    // Does the caller's file name `owner` or a class in its inheritance cone?
+    bool fileNames( std::uint32_t fileId, std::uint32_t owner, ChaConeMemo& cones ) const
+    {
+        EXPECTS( owner < className.size(), "ownerOf returns a class id or kNoClass, and admits() handles kNoClass first" );
+        if( fileId >= fileClasses.size() )
+        {
+            return false;
+        }
+        const std::vector<std::uint32_t>& named = fileClasses[ fileId ];
+        if( std::binary_search( named.begin(), named.end(), owner ) )
+        {
+            return true;
+        }
+        const ChaConeMemo::Cone cone = cones.coneFor( className[ owner ] );
+        return std::ranges::any_of( named, [ & ]( std::uint32_t k ) { return cones.contains( cone, className[ owner ], className[ k ] ); } );
+    }
+
+    // A member access the extractor classified, whose receiver is not a Python module alias.
+    bool isObjectMemberCall( const Reference& r ) const
+    {
+        const bool member = r.recv == RecvKind::NamedVar || r.recv == RecvKind::FieldOfThis || r.recv == RecvKind::FieldOfVar
+                         || r.recv == RecvKind::ThisObj || isJsTsLitRecv( r.recv );
+        if( !member )
+        {
+            return false;
+        }
+        const bool moduleAlias = r.lang == Lang::Python && !r.recvVar.empty() && ( r.recv == RecvKind::NamedVar || r.recv == RecvKind::FieldOfVar )
+                              && veto.importVerdict( r, r.recvVar ) != '\0' && !veto.hasLocal( r, r.recvVar );
+        return !moduleAlias;
+    }
+
+    bool admits( const Reference& r, NodeId c, ChaConeMemo& cones ) const
+    {
+        const std::uint32_t owner = ownerOf( c );
+        if( owner == kNoClass )
+        {
+            return !isObjectMemberCall( r );
+        }
+        return fileNames( r.fileId, owner, cones );
+    }
+};
+
+// The gate's evidence, built once per graph. Deterministic: class ids follow symbol-id order, and each file's list is
+// sorted and deduplicated before any lookup. Files with no symbol in a gated language get no list (their calls are
+// never gated), which keeps a mostly-C++ corpus from paying for a Python corner of it.
+inline BuiltinMethodGate buildBuiltinMethodGate( const IngestResult& ing, const ExternalVeto& veto )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: builtin-method name gate" );
+    BuiltinMethodGate gate{ ing, veto, {}, {}, {}, {}, {}, false };
+    std::vector<char> fileGated( ing.files.size(), 0 );
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.fileId < fileGated.size() && !BuiltinMethodGate::tableFor( s.lang ).empty() )
+        {
+            fileGated[ s.fileId ] = 1;
+            gate.active = true;
+        }
+    }
+    if( !gate.active )
+    {
+        return gate;
+    }
+    for( const Symbol& s : ing.symbols )
+    {
+        if( BuiltinMethodGate::isClassLike( s ) && gate.classId.try_emplace( s.name, std::uint32_t( gate.className.size() ) ).second )
+        {
+            gate.className.push_back( s.name );
+        }
+    }
+    // Containers only in gated files: a gated call's candidates are language-compatible with it, so they live there too.
+    gate.containersByFile = symbolsByFileInIdOrder( ing, [ & ]( const Symbol& s )
+        { return fileGated[ s.fileId ] != 0 && ( BuiltinMethodGate::isClassLike( s ) || s.kind == SymKind::Function || s.kind == SymKind::Method ); } );
+    gate.fileClasses.assign( ing.files.size(), {} );
+    const auto note = [ & ]( std::uint32_t fileId, const std::string& name )
+    {
+        if( fileId >= fileGated.size() || fileGated[ fileId ] == 0 || name.empty() )
+        {
+            return;
+        }
+        if( const auto it = gate.classId.find( name ); it != gate.classId.end() )
+        {
+            gate.fileClasses[ fileId ].push_back( it->second );
+        }
+    };
+    for( const Symbol& s : ing.symbols )
+    {
+        if( BuiltinMethodGate::isClassLike( s ) )
+        {
+            note( s.fileId, s.name );   // defined here: every call in the file may be on an instance of it
+        }
+    }
+    for( const Reference& r : ing.references )
+    {
+        if( r.isDocLink )
+        {
+            continue;   // a backtick mention in prose is not code evidence
+        }
+        note( r.fileId, r.calleeName );
+        note( r.fileId, r.recvVar );
+        note( r.fileId, r.qualifier );
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        note( b.fileId, b.typeName );
+        note( b.fileId, b.var );
+        note( b.fileId, b.importedName );
+    }
+    for( std::vector<std::uint32_t>& named : gate.fileClasses )
+    {
+        std::sort( named.begin(), named.end() );
+        named.erase( std::unique( named.begin(), named.end() ), named.end() );
+    }
+    return gate;
+}
+
 // L3: the candidate DEF ids for a bound function name — a qualified target (`ns::alpha`, `Cls::alpha`)
 // tries the canonical scope::name map on its LAST TWO segments first (Symbol::scope is a final segment),
 // then degrades to the bare final segment against byName. `key` is the caller's reused buffer. The caller
@@ -2454,6 +2698,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // ExternalVeto above buildGraph; `vetoExternal` is the refusal: no edge, one header count, one `C external`
     // census row with no target.
     const ExternalVeto externalVeto{ ing, canonByName, fieldNarrow.localNameSet, extVeto };
+    // The builtin-method name gate (BuiltinMethodGate above): decides, in Rule 3's place, the calls whose name is a
+    // method of the caller language's builtin map/list/set/string type. Inert (active=false) on a corpus with no
+    // symbol in a gated language.
+    const BuiltinMethodGate builtinGate = buildBuiltinMethodGate( ing, externalVeto );
+    std::vector<NodeId>     gatedAll;   // reused: a gated call's lang/root-compatible candidates, the list a decline records
     const auto vetoExternal = [ & ]( const Reference& ref ) -> CallDisposition
     {
         ++g.externalCalls;
@@ -3027,7 +3276,12 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // include graph and keeps a SUBSET of the bare `byName` candidates, so it can never invent an edge. Fires
         // only on an unambiguous single-included-file match with NO same-file candidate (that is the name-based fallback's job);
         // otherwise degrades to the name-based fallback. Skipped when already pinned canonically / by Rule 1 / Rule 2 (more specific).
-        if( !scipPinned && !canonical && !narrowed && it != byName.end() )
+        // The builtin-method name gate (BuiltinMethodGate): a call whose name is a builtin type's method and that no rule
+        // above resolved is decided by the gate INSTEAD of Rule 3 — a transitive import of the class's module is evidence
+        // about the file, never about this receiver. Computed here; applied in the name fill below.
+        const bool builtinGated = !scipPinned && !canonical && !narrowed && it != byName.end() && builtinGate.appliesTo( r );
+        gatedAll.clear();
+        if( !scipPinned && !canonical && !narrowed && it != byName.end() && !builtinGated )
         {
             if( narrower.rule3IncludeFile( it->second, r.fileId, rule3Out ) )
             {
@@ -3071,17 +3325,26 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 for( NodeId c : it->second )
                 {
-                    if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    if( !langCompatible( ing.symbols[c].lang, r.lang ) || !sameRoot( c, r.fileId ) )
                     {
-                        cand.push_back( c ); // same lang, or ObjC↔C++ bridge; same ROOT (A10)
+                        continue;
                     }
+                    if( builtinGated )
+                    {
+                        gatedAll.push_back( c );   // what the call could have meant, whether or not the gate admits it
+                        if( !builtinGate.admits( r, c, chaCones ) )
+                        {
+                            continue;
+                        }
+                    }
+                    cand.push_back( c ); // same lang, or ObjC↔C++ bridge; same ROOT (A10)
                 }
                 // §3.1 cross-root EVIDENCE channel for a name with NO same-root def: admit another root's
                 // def ONLY when the caller's file has a path-resolved (transitive) include/import reaching
                 // that def's file — the SameInclude evidence tier, never a bare-name guess. (K≥2 mixed-root
                 // names take the Rule-3 path above instead; this covers the unique-cross-root case Rule 3's
                 // K≥2 gate cannot reach.) The tier ladder below still applies its unique-or-drop gate.
-                if( multiRoot && cand.empty() )
+                if( multiRoot && cand.empty() && gatedAll.empty() )   // gatedAll non-empty: a same-root def exists, the gate refused it
                 {
                     for( NodeId c : it->second )
                     {
@@ -3094,12 +3357,36 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                             continue;
                         }
                         const std::vector<NodeId>& inc = fileIncludes[ r.fileId ];
-                        if( std::binary_search( inc.begin(), inc.end(), symFileId[c] ) )
+                        if( !std::binary_search( inc.begin(), inc.end(), symFileId[c] ) )
                         {
-                            cand.push_back( c );
+                            continue;
                         }
+                        if( builtinGated )
+                        {
+                            gatedAll.push_back( c );
+                            if( !builtinGate.admits( r, c, chaCones ) )
+                            {
+                                continue;
+                            }
+                        }
+                        cand.push_back( c );
                     }
                 }
+            }
+            // The gate admitted none of the candidates the call could have meant: DECLINED, as tier 3 declines — no edge,
+            // counted on the caller, and the whole list recorded for the callers and impact answers of every definition in
+            // it. An FFI alias (bindingTier) still gets its fallback below, as it does for any call with no local candidate.
+            if( builtinGated && cand.empty() && !gatedAll.empty() && bindingTier.empty() )
+            {
+                ++g.declinedOut[ r.fromSymbol ];
+                internDeclinedList( g, declinedListsByHash, gatedAll );
+                g.gateDeclinedTarget.resize( N, 0 );   // no-op after the first decline
+                for( const NodeId c : gatedAll )
+                {
+                    g.gateDeclinedTarget[ c ] = 1;
+                }
+                disposition = CallDisposition::Declined;
+                continue;
             }
         }
 
@@ -7476,11 +7763,12 @@ inline std::string graphCountFloorAttrJson( const Graph& g )
 //
 // DEGRADE: the offsets are uint32. A new list that would carry the candidate array past UINT32_MAX entries is not recorded:
 // the call stays counted on its caller (declinedOut, the header's declined=), and declined_calls= on the callers and impact
-// answers can under-count, as the counts_floor="1" those answers carry already allows. A declined set holds two or more
-// candidates, so the list count stays under half the entry count and the uint32 list numbers cannot wrap first.
+// answers can under-count, as the counts_floor="1" those answers carry already allows. A declined set holds at least one
+// candidate — tier 3's two or more, or the ONE lone method the builtin-method name gate (BuiltinMethodGate) refused to
+// bind by name — so the list count never exceeds the entry count and the uint32 list numbers cannot wrap first.
 inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
 {
-    ASSUME( cand.size() >= 2 );   // tier 3 declines only a set it could not narrow to one
+    EXPECTS( !cand.empty(), "tier 3 declines a set it could not narrow to one; the builtin-method gate a non-empty set it admitted none of" );
     std::uint64_t     hash  = 14695981039346656037ull;   // the FNV-1a 64-bit offset basis
     const char* const bytes = reinterpret_cast<const char*>( cand.data() );
     for( std::size_t byteIndex = 0; byteIndex < cand.size_bytes(); ++byteIndex )

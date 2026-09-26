@@ -553,13 +553,15 @@ inline const char* capLegendClause( bool active ) noexcept
 
 // ── TIER-3 DECLINES — declined_calls= on the callers, callees and impact answers (test/declinecheck.sh) ────
 // A call whose candidates are two or more same-language definitions, none in the caller's file or directory,
-// and that no qualifier or receiver rule pinned, gets NO edge: the resolver declines to guess. Until this
+// and that no qualifier or receiver rule pinned, gets NO edge: the resolver declines to guess. So does a call the
+// builtin-method name gate refused (graph.h BuiltinMethodGate: `d.get( k )` on a receiver of unproven type, where the
+// caller's file names the class of no `get` definition), whatever the number of definitions. Until this
 // clause the decline was also SILENT, so count="0" read as "no caller exists" about a call the resolver had
 // seen. One sentence for the three answers and their MCP twins, emitted exactly when the attribute is:
 // declinedCallsLegend( bool ) takes the emitter's own attribute-present condition, never a re-derivation. No
 // double hyphen anywhere, because it lands inside an XML comment.
 inline constexpr const char* kDeclinedCallsLegend =
-    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge exists and no count or row here includes them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
+    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one; or it is a method name of the language's builtin map, list, set or string type and the caller's file names the class of none of its definitions. No edge exists and no count or row here includes them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
 inline const char* declinedCallsLegend( bool on ) noexcept { return on ? kDeclinedCallsLegend : ""; }
 
 // ONE absent-at-zero count attribute: ` name="N"`, or nothing at all when count is 0. declined_calls= below and

@@ -2086,13 +2086,15 @@ inline constexpr const char* kIgnoredLegend =
     "<!-- hdr:ignored_files=files-git's-own-ignore-rules-covered(exact;would-otherwise-be-indexed;the-no-ignore-flag-restores-them)"
     " hdr:ignored_dirs=SUBTREES-those-rules-pruned(walk-stopped-there:contents-UNKNOWN-not-zero;the-skipped-verb-rows-both) -->";
 
-// Tier 3's declines: the header's declined= and the answers' declined_calls=. Charged to the map that carries
+// Tier 3's declines, and the builtin-method name gate's (graph.h BuiltinMethodGate): the header's declined= and the
+// answers' declined_calls=. Charged to the map that carries
 // declined= (kIgnoredLegend's rule), because an always-on entry measured +177 B and +70 est_tokens on
 // test/fixture, a map that cannot carry the attribute. No '>' anywhere: gates read these comments with a
 // [^>]* pattern, and one '>' inside the text silently empties what they read (lpincheck arm F found it).
 inline constexpr const char* kDeclinedMapLegend =
     "<!-- hdr:declined=calls-tier-3-declined(two-or-more-same-language-defs,none-in-the-callers-file-or-dir,"
-    "none-pinned-by-a-qualifier/receiver/include;no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->";
+    "none-pinned-by-a-qualifier/receiver/include;or-a-builtin-type-method-name-whose-defs-classes-the-callers-file-never-names;"
+    "no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->";
 
 // #157: the default map's own nest-refused disclosure — before this, a refused file's absence carried no signal
 // on the map's own header at all, only in the skipped verb's own report (if a reader thought to ask). Charged

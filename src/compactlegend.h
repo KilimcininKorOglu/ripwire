@@ -316,7 +316,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // first two at once.
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
-    { "declined_calls",    "declined_calls=K: K call sites left unbound (several defs, none chosen), in no count or row" },
+    { "declined_calls",    "declined_calls=K: K call sites left unbound (several defs, none chosen; or a builtin-type method name with no class evidence), in no count or row" },
     // #220 part 1: the FILE graph's gauge (graphlegend.h importsUnresolvedAttrXml), absent at zero, on the --deps/--arch/
     // --impact roots and the MCP impact twin. What it means for the numbers is the reading BESIDE it, never this row:
     // graph_partial= on --deps/--arch (next row), counts_floor= on --impact (its own row above; importers= only rises).
@@ -402,7 +402,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // The map HEADER's absent-at-zero gauges: `<!-- files=` is kept as data while the `<!-- hdr:` clauses that define
     // these fields go (kDeclinedMapLegend, kIgnoredLegend, kExtentSuspectHdrLegend, kMacroBlankedHdrLegend, the absent-if-0
     // half of the always-on legend, kMaxTokensFitLegend). Header-ONLY: several are quoted attributes elsewhere.
-    { "declined",          "declined=K: K calls left unbound (several defs, none chosen)", false, {}, MapHeaderRead::Only },
+    { "declined",          "declined=K: K calls left unbound (several defs, none chosen; or a builtin-type method name with no class evidence)", false, {}, MapHeaderRead::Only },
     { "external",          "external=K: K calls taken as outside the tree, no edge", false, {}, MapHeaderRead::Only },
     { "locality_pinned",   "locality_pinned=K: K calls pinned by locality alone (a guess)", false, {}, MapHeaderRead::Only },
     { "extent_suspect_syms", "extent_suspect_syms=K: K defs failed containment, corpus-wide", false, {}, MapHeaderRead::Only },
