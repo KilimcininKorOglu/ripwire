@@ -1696,6 +1696,30 @@ inline std::string rubyResolveBaseConstant( const HashMap<std::string, char>& op
     return isOpened( top ) ? top : std::string{};
 }
 
+// Joins each Ruby inherit reference to the superclass directive at its derived class's open and records the
+// resolved base constant in `sc.baseFqn`. A reference the join cannot place is left out — the byName rule stands.
+inline void rubyScopeBaseReferences( RubyBaseScope& sc, const IngestResult& ing )
+{
+    const HashMap<std::uint64_t, const std::string*> sites = rubySuperclassSites( ing, sc.ix );
+    for( std::size_t i = 0; i < ing.references.size(); ++i )
+    {
+        const Reference& r = ing.references[ i ];
+        if( !r.isInherit || r.lang != Lang::Ruby || r.fileId >= sc.ix.opensByFile.size() )
+        {
+            continue;
+        }
+        const std::vector<RubyOpenRec>& opens   = sc.ix.opensByFile[ r.fileId ];
+        const std::uint32_t             derived = rubyInnermostOpen( opens, r.startByte );
+        const auto                      site    = ( derived == kNoFile ) ? sites.end() : sites.find( ( std::uint64_t( r.fileId ) << 32 ) | opens[ derived ].startByte );
+        if( site == sites.end() )
+        {
+            DEGRADED_PATH_ALERT( "Ruby inherit reference with no superclass directive at its class open: base left on the byName rule" );
+            continue;
+        }
+        sc.baseFqn.emplace( std::uint32_t( i ), rubyResolveBaseConstant( sc.opened, opens, derived, *site->second ) );
+    }
+}
+
 inline RubyBaseScope buildRubyBaseScope( const IngestResult& ing )
 {
     RubyBaseScope sc;
@@ -1721,24 +1745,7 @@ inline RubyBaseScope buildRubyBaseScope( const IngestResult& ing )
             sc.classesByFqn[ *fqn ].push_back( s.id );   // ids ascending → each list is in id order
         }
     }
-    const HashMap<std::uint64_t, const std::string*> sites = rubySuperclassSites( ing, sc.ix );
-    for( std::size_t i = 0; i < ing.references.size(); ++i )
-    {
-        const Reference& r = ing.references[ i ];
-        if( !isRubyBase( r ) || r.fileId >= sc.ix.opensByFile.size() )
-        {
-            continue;
-        }
-        const std::vector<RubyOpenRec>& opens   = sc.ix.opensByFile[ r.fileId ];
-        const std::uint32_t             derived = rubyInnermostOpen( opens, r.startByte );
-        const auto                      site    = ( derived == kNoFile ) ? sites.end() : sites.find( ( std::uint64_t( r.fileId ) << 32 ) | opens[ derived ].startByte );
-        if( site == sites.end() )
-        {
-            DEGRADED_PATH_ALERT( "Ruby inherit reference with no superclass directive at its class open: base left on the byName rule" );
-            continue;
-        }
-        sc.baseFqn.emplace( std::uint32_t( i ), rubyResolveBaseConstant( sc.opened, opens, derived, *site->second ) );
-    }
+    rubyScopeBaseReferences( sc, ing );
     return sc;
 }
 
