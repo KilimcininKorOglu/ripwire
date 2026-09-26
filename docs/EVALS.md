@@ -6175,9 +6175,10 @@ not "what changes together", and the tool uses different machinery for each.
 
 **Measured at HEAD (disclosed 2026-09-26).** Every commit above was ranked on the index, bodies and graph at the
 corpus's HEAD, which already contain that commit's change, and gold keeps only files still present at HEAD
-(`src/eval.h`). The absolute recall values are therefore upper bounds, PageRank's 3.8% included, so the
-lexical-over-PageRank ordering would reverse only if lexical recall fell more than tenfold at the parent revisions;
-that has not been measured. The corpus is private and cannot be re-measured from this tree.
+(`src/eval.h`). The absolute recall values, PageRank's 3.8% included, are therefore most likely upper bounds; not
+proven, since the HEAD index also holds files added after each commit, which compete for the top-k and push recall
+down. The lexical-over-PageRank ordering would reverse only if lexical recall fell more than tenfold relative to
+PageRank's at the parent revisions; that has not been measured. The corpus is private and cannot be re-measured from this tree.
 
 ### End-to-end agent A/B
 
@@ -13044,7 +13045,7 @@ figures are 10/30 and 32/129 (30/129 if the q28/q29 +1s have the same cause), S5
 re-measured at q25's parent revision; the arithmetic re-derives from `results_post*.json` with q25/q28/q29 set to
 their `results.json` rows. Without q25 the paired rows against graft-ask, graft-expert and `rg` equal the pre-fix
 column (5/20/5, 7/20/3, 8/8/14) and S5 is back to its pre-fix 0/6, so "measurably better on the two axes the losses
-named" above is established for L2 only, not for L3.
+named" above survives the q25 correction for L2 only, not for L3.
 
 ### The CHECK axis — "I have a change in my working tree, which tests must run?" (N = 6, `check_axis.py`)
 

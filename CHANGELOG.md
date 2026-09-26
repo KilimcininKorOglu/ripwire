@@ -3843,7 +3843,7 @@ files each — while adding gold files on four of the seven (+2, +1, +3 and +6 f
 the git stamp moved on every verb). **Correction (2026-09-26):** both figures (14/30, 42/129) include q25, measured at a
 pin that already contained its graded commit; with q25 at its pre-fix row they are 13/30 and 40/129 (38/129 if the
 q28/q29 +1s have the same cause), and q25's paired win is not established (`docs/EVALS.md`, Graft round). The
-complete@step row above rests on the same run and was not re-derived. Gate: `test/forwidencheck.sh` — a generated 33-file fixture whose gold file sits at
+complete@step row above rests on the same 30 questions at the same pin and was not re-derived. Gate: `test/forwidencheck.sh` — a generated 33-file fixture whose gold file sits at
 page rank 13 and is absent from the default head and tail; one row per file, determinism, paging with no overlap,
 `coverage=` defined in both dialects, thin versus confident `next=`, the refusals, MCP parity — red on the pre-change
 binary. The byte pins that ride a thin `--for` header (forrankordercheck's fixture rows, forrootlegendcheck,
