@@ -1948,9 +1948,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>649 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>650 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **649 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **650 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2448,6 +2448,13 @@ The server is a standard input and output MCP process. The complete configuratio
   }
 }
 ```
+
+To list fewer tools, add `--mcp-tools=` to the server's arguments: a comma list of tool names and/or the `core`
+profile (explore, batch, from_trace, impact, uses, fetch_body, edit_check, quality_delta, the loop the server's own
+instructions teach). A client that loads every tool schema at session start then pays for 8 tools instead of 33
+(`tools/list` measured at 13,834 bytes instead of 46,368). A call to a tool that is not listed is refused with the
+flag that enables it, and `batch` still answers its own sub-verbs. `ripwire wrap AGENT --mcp-tools=core` writes the flag
+into the recipe it prints. The default stays the full catalog.
 
 For a socket instead of standard input and output, run `ripwire --listen=HOST:PORT`. A non-loopback
 bind requires `--mcp-token`. The three edit verbs are disabled on a remote bind unless you pass

@@ -29,6 +29,8 @@
 #include <iostream>        // no longer used HERE (R4 retired the std::cin getline) — kept because downstream
                            // translation units have long picked <iostream> up through this header
 #include <string>
+#include <algorithm>       // std::find — the --mcp-tools duplicate check and the batch-served lookup
+#include <bit>             // std::popcount — the --mcp-tools profile check
 #include <cstdlib>         // ::realpath — the workspace-pin canonicalization (mcpCanonRoot)
 #include <climits>         // PATH_MAX
 #include "infra/os.h"      // rw::os::getcwd — R2a: the launch-cwd assumed root (resolved once at startup)
@@ -116,6 +118,93 @@ inline constexpr std::size_t kMcpVerbCount = 33;   // +1 lane/tc-sliceat: the `s
                                                    // `rank_by` and `affected` — the two --rank-by/--affected MCP twins
 static_assert( sizeof( kMcpVerbTable ) / sizeof( kMcpVerbTable[0] ) == kMcpVerbCount,
                "kMcpVerbTable size drifted from kMcpVerbCount — update both together (A4-S2)" );
+
+// ─── Tool subsets: `--mcp-tools=SPEC` ────────────────────────────────────────────────────────────────────
+// The full tools/list is ~46 KB (~11.6K tokens) for 33 tools, and a client that loads schemas eagerly pays it
+// at every session start whether a tool is ever called or not. `--mcp-tools=SPEC` lists fewer: SPEC is a comma
+// list of tool names and/or profile names (`core`, `full`), unioned. The DEFAULT stays the full catalog, and
+// `--mcp-tools=full` is the default spelled out: every byte the server sends is unchanged for either.
+//
+// A subset is a DISCOVERABILITY and byte decision, never a silent one: a tools/call naming a tool this server
+// does not list is REFUSED with the flag that enables it (mcpHiddenToolRefusal), and `initialize` says the
+// subset is in force (mcpToolSubsetNote). `batch` keeps answering its own sub-verbs whether or not they are
+// listed here — its description names them as ITS sub-verbs, and that stays true.
+//
+// Bit i of a mask is kMcpVerbTable[ i ].
+using McpToolMask = std::uint64_t;
+static_assert( kMcpVerbCount < 64, "McpToolMask holds one bit per kMcpVerbTable row" );
+inline constexpr McpToolMask kMcpAllToolsMask = ( McpToolMask{ 1 } << kMcpVerbCount ) - 1;
+
+// kMcpVerbTable's row for `name`, or kMcpVerbCount when the name is not an advertised tool.
+constexpr std::size_t mcpToolIndex( std::string_view name ) noexcept
+{
+    for( std::size_t toolIndex = 0; toolIndex < kMcpVerbCount; ++toolIndex )
+    {
+        if( name == kMcpVerbTable[ toolIndex ].name )
+        {
+            return toolIndex;
+        }
+    }
+    return kMcpVerbCount;
+}
+
+// The named profiles. `members` is a comma list of tool names; "" means every tool.
+//
+// `core` is the loop the server's own `instructions` teach (kMcpServerInstructions names exactly seven tools:
+// explore, from_trace, impact, uses, edit_check, quality_delta, batch) plus fetch_body, the step its "Fetch bodies
+// only after ranked retrieval" sentence describes. With all seven listed the instructions text is unchanged.
+// grep, for, callers/callees and the other batch-served reads stay reachable as batch sub-queries.
+struct McpToolProfile
+{
+    std::string_view name;
+    std::string_view members;
+};
+inline constexpr McpToolProfile kMcpToolProfiles[] = {
+    { "core", "explore,batch,from_trace,impact,uses,fetch_body,edit_check,quality_delta" },
+    { "full", "" },
+};
+
+// The mask a profile's `members` list names (each name must be a tool: checked below at compile time).
+constexpr McpToolMask mcpProfileMask( std::string_view members ) noexcept
+{
+    if( members.empty() )
+    {
+        return kMcpAllToolsMask;
+    }
+    McpToolMask mask = 0;
+    while( !members.empty() )
+    {
+        const std::size_t      comma = members.find( ',' );
+        const std::string_view tool  = members.substr( 0, comma );
+        const std::size_t      toolIndex = mcpToolIndex( tool );
+        if( toolIndex < kMcpVerbCount )
+        {
+            mask |= McpToolMask{ 1 } << toolIndex;
+        }
+        members = ( comma == std::string_view::npos ) ? std::string_view{} : members.substr( comma + 1 );
+    }
+    return mask;
+}
+
+consteval bool mcpProfilesNameOnlyTools() noexcept
+{
+    for( const McpToolProfile& profile : kMcpToolProfiles )
+    {
+        std::size_t memberCount = profile.members.empty() ? kMcpVerbCount : 1;
+        for( const char c : profile.members )
+        {
+            memberCount += ( c == ',' ) ? 1 : 0;
+        }
+        if( static_cast<std::size_t>( std::popcount( mcpProfileMask( profile.members ) ) ) != memberCount
+            || mcpToolIndex( profile.name ) != kMcpVerbCount )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert( mcpProfilesNameOnlyTools(),
+               "a kMcpToolProfiles row names a tool kMcpVerbTable does not have, names one twice, or a profile is named like a tool" );
 
 // The @FILE:LINE line-seed sentence, SPLICED into every stanza whose selector resolves it (the
 // kExemplarSelectionRule pattern: one constant, nine descriptions, zero drift). This is the no-name
@@ -265,6 +354,98 @@ inline std::string mcpBatchServedVerbsList( bool gitVerbsOmitted )
     return out;
 }
 
+// "core, full (profiles); analyze, rank_by, … (tools)" — every name --mcp-tools accepts, in table order, for the
+// refusal that has to say what WOULD have been accepted.
+inline std::string mcpToolSpecNames()
+{
+    std::string names;
+    for( const McpToolProfile& profile : kMcpToolProfiles )
+    {
+        names += names.empty() ? "" : ", ";
+        names += profile.name;
+    }
+    names += " (profiles); ";
+    for( std::size_t toolIndex = 0; toolIndex < kMcpVerbCount; ++toolIndex )
+    {
+        names += toolIndex == 0 ? "" : ", ";
+        names += kMcpVerbTable[ toolIndex ].name;
+    }
+    return names + " (tools)";
+}
+
+// A parsed `--mcp-tools=SPEC`: the mask it names, or why it was refused ("" = accepted).
+struct McpToolSpec
+{
+    McpToolMask mask = 0;
+    std::string refusal;
+};
+
+// One name out of SPEC: a profile's mask, one tool's bit, or 0 for a name that is neither.
+inline McpToolMask mcpToolSpecTokenMask( std::string_view token ) noexcept
+{
+    for( const McpToolProfile& profile : kMcpToolProfiles )
+    {
+        if( token == profile.name )
+        {
+            return mcpProfileMask( profile.members );
+        }
+    }
+    const std::size_t toolIndex = mcpToolIndex( token );
+    return toolIndex < kMcpVerbCount ? McpToolMask{ 1 } << toolIndex : 0;
+}
+
+// Parse SPEC (argv — external input, so every rule is a VALIDATE, and a refusal names the fix). Names are unioned
+// (`core,slice` is core plus slice); a name typed twice, an empty name and an unknown name are each refused.
+inline McpToolSpec mcpParseToolSpec( std::string_view spec )
+{
+    McpToolSpec                   out;
+    std::vector<std::string_view> seen;
+    std::string_view              rest = spec;
+    for( bool more = true; more; )
+    {
+        const std::size_t      comma = rest.find( ',' );
+        const std::string_view token = rest.substr( 0, comma );
+        more = comma != std::string_view::npos;
+        rest = more ? rest.substr( comma + 1 ) : std::string_view{};
+
+        const McpToolMask tokenMask = mcpToolSpecTokenMask( token );
+        if( !VALIDATE( !token.empty(), "argv: a --mcp-tools list has a name between every pair of commas" ) )
+        {
+            out.refusal = "--mcp-tools=" + mcprefuse::cappedEcho( spec ) + " has an empty name (a stray comma); name tools or profiles: "
+                        + mcpToolSpecNames();
+        }
+        else if( !VALIDATE( std::find( seen.begin(), seen.end(), token ) == seen.end(), "argv: each --mcp-tools name is given once" ) )
+        {
+            out.refusal = "--mcp-tools names '" + mcprefuse::cappedEcho( token ) + "' twice; name each tool or profile once";
+        }
+        else if( !VALIDATE( tokenMask != 0, "argv: every --mcp-tools name is a profile or a tool" ) )
+        {
+            std::vector<std::string_view> known;
+            known.reserve( std::size( kMcpToolProfiles ) + kMcpVerbCount );
+            for( const McpToolProfile& profile : kMcpToolProfiles )
+            {
+                known.push_back( profile.name );
+            }
+            for( const McpVerbInfo& verb : kMcpVerbTable )
+            {
+                known.push_back( verb.name );
+            }
+            const std::string near = mcprefuse::nearestName( known, token );
+            out.refusal = "--mcp-tools: unknown tool '" + mcprefuse::cappedEcho( token ) + "'"
+                        + ( near.empty() ? std::string{} : " (did you mean '" + near + "'?)" ) + "; valid names: " + mcpToolSpecNames();
+        }
+        if( !out.refusal.empty() )
+        {
+            out.mask = 0;
+            return out;
+        }
+        seen.push_back( token );
+        out.mask |= tokenMask;
+    }
+    ENSURES( out.mask != 0 && ( out.mask & ~kMcpAllToolsMask ) == 0, "an accepted spec names at least one tool, and only tools" );
+    return out;
+}
+
 // ─── Protocol versions ───────────────────────────────────────────────────────────────────────
 inline constexpr std::string_view kMcpLatestProtocolVersion = "2025-11-25";
 inline constexpr std::string_view kMcpHttpFallbackProtocolVersion = "2025-03-26";
@@ -352,6 +533,10 @@ struct McpDispatchPolicy
     // time); the HTTP transport passes none, so every answer there keeps its legend inline and the resource read that
     // switches a stdio session to legend="ref" only serves text. See legenddict.h.
     legenddict::LegendSession* legendSession = nullptr;
+    // --mcp-tools: bit i = kMcpVerbTable[ i ] is listed and callable. The whole catalog unless the flag narrowed it;
+    // toolSpec is the flag's value as typed, rendered only under a subset (the refusal and the instructions note).
+    McpToolMask toolMask = kMcpAllToolsMask;
+    std::string toolSpec;
 };
 
 // canonicalize a root path for the workspace-pin comparison: realpath when it resolves, else the string
@@ -560,6 +745,228 @@ static_assert( mcpEditVerbCount() >= 3,
 inline bool mcpOmitsGitVerbs( const McpDispatchPolicy& policy ) noexcept
 {
     return !policy.pinnedRoot.empty() && !policy.pinnedRootHasGit;
+}
+
+// ── --mcp-tools: the subset this server lists, and the three places a subset must speak for itself ─────────────
+// A subset is in force iff the mask is not the whole catalog: `--mcp-tools=full` and no flag at all are the same
+// server, byte for byte.
+inline bool mcpToolSubsetActive( const McpDispatchPolicy& policy ) noexcept
+{
+    return policy.toolMask != kMcpAllToolsMask;
+}
+
+// Is `name` (a tool, or a dispatch alias such as pack_task) enabled by --mcp-tools? Independent of the git-only
+// omission (mcpOmitsGitVerbs): that one only hides verbs that could not answer, and they still dispatch.
+inline bool mcpToolEnabled( const McpDispatchPolicy& policy, std::string_view name ) noexcept
+{
+    for( const mcprefuse::McpVerbAlias& alias : mcprefuse::kMcpVerbAliases )
+    {
+        if( name == alias.alias )
+        {
+            name = alias.target;
+        }
+    }
+    const std::size_t toolIndex = mcpToolIndex( name );
+    return toolIndex < kMcpVerbCount && ( ( policy.toolMask >> toolIndex ) & 1u ) != 0;
+}
+
+// How many tools tools/list carries: the subset, less any git-only verb a pinned non-git listener omits.
+// Without a subset this is kMcpVerbCount, the number every unknown-tool refusal has always printed.
+inline std::size_t mcpAdvertisedToolCount( const McpDispatchPolicy& policy ) noexcept
+{
+    if( !mcpToolSubsetActive( policy ) )
+    {
+        return kMcpVerbCount;
+    }
+    std::size_t listedCount = 0;
+    for( const McpVerbInfo& verb : kMcpVerbTable )
+    {
+        const bool gitOmitted = mcpOmitsGitVerbs( policy ) && mcpIsGitOnlyVerb( verb.name );
+        listedCount += ( mcpToolEnabled( policy, verb.name ) && !gitOmitted ) ? 1 : 0;
+    }
+    ENSURES( listedCount <= kMcpVerbCount );
+    return listedCount;
+}
+
+// ── --mcp-tools: the instructions a subset serves ─────────────────────────────────────────────────────────────
+// kMcpServerInstructions tells an agent to call seven tools by name. Under a subset that leaves one out, that text
+// would send the agent to a tool this server refuses, so a subset serves the SAME text rebuilt from the sentences
+// below, keeping only the ones whose tool is listed. When every tool it names is listed (the `core` profile, and
+// `full`), the text is kMcpServerInstructions byte for byte.
+struct McpInstructionHint
+{
+    std::string_view tool;
+    std::string_view sentence;
+};
+inline constexpr McpInstructionHint kMcpInstructionHints[] = {
+    { "explore",       "Start a new task with explore." },
+    { "from_trace",    "Use from_trace for an error." },
+    { "impact",        "Use impact before changing a symbol." },
+    { "uses",          "Use uses to see its read/write/import sites." },
+    { "edit_check",    "Run edit_check after an edit." },
+    { "quality_delta", "Run quality_delta before declaring work done." },
+    { "batch",         "Use batch for several independent read queries in one turn." },
+};
+// The text around the tool-naming middle, cut out of the constant itself so the two can never disagree.
+inline constexpr std::size_t      kMcpInstructionsMiddleAt = kMcpServerInstructions.find( " Start a new task with explore;" );
+inline constexpr std::size_t      kMcpInstructionsTailAt   = kMcpServerInstructions.find( "Fetch bodies only after ranked retrieval." );
+static_assert( kMcpInstructionsMiddleAt != std::string_view::npos && kMcpInstructionsTailAt != std::string_view::npos
+                   && kMcpInstructionsMiddleAt < kMcpInstructionsTailAt,
+               "kMcpServerInstructions changed shape: re-cut kMcpInstructionsMiddleAt/TailAt and re-check kMcpInstructionHints" );
+
+// Every tool the instructions' middle names has a hint row, and every hint row's tool is a real tool: the subset
+// text drops exactly the sentences whose tool is hidden, so a tool named in the middle with no row would survive.
+consteval bool mcpInstructionHintsCoverTheMiddle() noexcept
+{
+    const std::string_view middle = kMcpServerInstructions.substr( kMcpInstructionsMiddleAt, kMcpInstructionsTailAt - kMcpInstructionsMiddleAt );
+    for( const McpVerbInfo& verb : kMcpVerbTable )
+    {
+        const std::string_view name = verb.name;
+        if( name == "for" )
+        {
+            continue;   // the English preposition: the text uses it as a word ("for an error"), never as the tool
+        }
+        bool named = false;
+        for( std::size_t at = middle.find( name ); at != std::string_view::npos; at = middle.find( name, at + 1 ) )
+        {
+            const char before = at == 0 ? ' ' : middle[ at - 1 ];
+            const char after  = at + name.size() < middle.size() ? middle[ at + name.size() ] : ' ';
+            const auto isWordChar = []( char c ) { return ( c >= 'a' && c <= 'z' ) || c == '_'; };
+            named = named || ( !isWordChar( before ) && !isWordChar( after ) );
+        }
+        bool hinted = false;
+        for( const McpInstructionHint& hint : kMcpInstructionHints )
+        {
+            hinted = hinted || hint.tool == name;
+        }
+        if( named != hinted )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert( mcpInstructionHintsCoverTheMiddle(),
+               "kMcpInstructionHints must have one row for each tool kMcpServerInstructions names, and no other" );
+
+inline std::string mcpInstructionsText( const McpDispatchPolicy& policy )
+{
+    bool everyHintListed = true;
+    for( const McpInstructionHint& hint : kMcpInstructionHints )
+    {
+        everyHintListed = everyHintListed && mcpToolEnabled( policy, hint.tool );
+    }
+    if( everyHintListed )
+    {
+        return std::string( kMcpServerInstructions );
+    }
+    std::string text( kMcpServerInstructions.substr( 0, kMcpInstructionsMiddleAt ) );
+    for( const McpInstructionHint& hint : kMcpInstructionHints )
+    {
+        if( mcpToolEnabled( policy, hint.tool ) )
+        {
+            text += " ";
+            text += hint.sentence;
+        }
+    }
+    text += " ";
+    text += kMcpServerInstructions.substr( kMcpInstructionsTailAt );
+    return text;
+}
+
+// The subset announces itself in `instructions` ("" without one): how many tools are listed, the flag that chose
+// them, and what a description naming an unlisted tool means. Descriptions are written for the full catalog (a
+// cross-reference, and batch's "other N advertised verbs" count, read against all of it), and this sentence is
+// what keeps them true under a subset.
+inline std::string mcpToolSubsetNote( const McpDispatchPolicy& policy )
+{
+    if( !mcpToolSubsetActive( policy ) )
+    {
+        return {};
+    }
+    return " TOOL SUBSET: this server lists " + std::to_string( mcpAdvertisedToolCount( policy ) ) + " of "
+         + std::to_string( kMcpVerbCount ) + " tools (--mcp-tools=" + policy.toolSpec
+         + "). Descriptions are written for all " + std::to_string( kMcpVerbCount )
+         + "; calling a tool not listed here is refused with the flag that enables it"
+         + ( mcpToolEnabled( policy, "batch" ) ? ", and batch still serves its own sub-verbs." : "." );
+}
+
+// The tools/call refusal for a tool the subset leaves out ("" when the tool is enabled, or is not a tool at all —
+// the unknown-tool refusal owns that). Names the restart that enables it, and the batch sub-query that answers it
+// now when batch is listed and serves that verb.
+inline std::string mcpHiddenToolRefusal( const McpDispatchPolicy& policy, std::string_view name )
+{
+    if( name.empty() || mcpToolEnabled( policy, name ) )
+    {
+        return {};
+    }
+    std::string_view tool = name;
+    for( const mcprefuse::McpVerbAlias& alias : mcprefuse::kMcpVerbAliases )
+    {
+        tool = ( name == alias.alias ) ? std::string_view( alias.target ) : tool;
+    }
+    if( mcpToolIndex( tool ) == kMcpVerbCount )
+    {
+        return {};
+    }
+    const bool batchServesIt = mcpToolEnabled( policy, "batch" )
+                            && std::find( std::begin( kBatchServedVerbs ), std::end( kBatchServedVerbs ), tool ) != std::end( kBatchServedVerbs );
+    return "tool '" + std::string( name ) + "' is not enabled on this server: it lists " + std::to_string( mcpAdvertisedToolCount( policy ) )
+         + " of " + std::to_string( kMcpVerbCount ) + " tools (--mcp-tools=" + policy.toolSpec + "). Restart it with --mcp-tools="
+         + policy.toolSpec + "," + std::string( tool ) + " or --mcp-tools=full"
+         + ( batchServesIt ? ", or ask for it now as a batch sub-query: queries=[{\"verb\":\"" + std::string( tool ) + "\",…}]" : std::string{} );
+}
+
+// tools/list under a subset: the full catalog's JSON with the unlisted stanzas removed. A FILTER over the one
+// place tools/list writes its tools (gitOnlyStanza's posture), so a subset never carries a second copy of a
+// description that could drift. Returns `resp` untouched without a subset — the default's bytes are the default's.
+//
+// Every stanza is an object `{"name":"…",…}` written by this file, so the scan needs only brace depth and string
+// state, and each object's name is its first field.
+inline std::string mcpFilterToolsList( std::string resp, const McpDispatchPolicy& policy )
+{
+    static constexpr std::string_view kToolsOpen = "\"tools\":[";
+    static constexpr std::string_view kNameOpen  = "{\"name\":\"";
+    const std::size_t                 open       = resp.find( kToolsOpen );
+    if( !mcpToolSubsetActive( policy ) || open == std::string::npos )
+    {
+        return resp;
+    }
+    const std::size_t arrayAt = open + kToolsOpen.size();
+    std::string       kept;
+    std::size_t       objectAt = arrayAt;
+    std::size_t       at       = arrayAt;
+    int               depth    = 0;
+    bool              inString = false;
+    for( ; at < resp.size() && !( depth == 0 && !inString && resp[ at ] == ']' ); ++at )
+    {
+        const char c = resp[ at ];
+        if( inString )
+        {
+            at += ( c == '\\' ) ? 1 : 0;
+            inString = c != '"';
+            continue;
+        }
+        inString = c == '"';
+        depth += ( c == '{' ) ? 1 : ( c == '}' ) ? -1 : 0;
+        if( c == '{' && depth == 1 )
+        {
+            objectAt = at;
+        }
+        if( c == '}' && depth == 0 )
+        {
+            const std::string_view object( resp.data() + objectAt, at + 1 - objectAt );
+            const bool opensWithName = object.starts_with( kNameOpen );
+            ASSUME( opensWithName, "every tools/list stanza this file writes opens with its name" );
+            const std::size_t nameEnd = object.find( '"', kNameOpen.size() );
+            if( mcpToolEnabled( policy, object.substr( kNameOpen.size(), nameEnd - kNameOpen.size() ) ) )
+            {
+                kept += kept.empty() ? "" : ",";
+                kept += object;
+            }
+        }
+    }
+    return resp.substr( 0, arrayAt ) + kept + resp.substr( at );
 }
 
 // ── r2-LO: the legend session's two MCP surfaces ─────────────────────────────────────────────────────────────
@@ -790,9 +1197,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 resp = "{\"jsonrpc\":\"2.0\",\"id\":" + id +
                        ",\"result\":{\"protocolVersion\":\"" + std::string( negotiatedVersion ) +
                        "\",\"serverInfo\":{\"name\":\"ripwire\",\"version\":\"1.0\"},\"capabilities\":{\"tools\":{},\"resources\":{}},"
-                       "\"instructions\":\"" + mcpdetail::jsonEscape( std::string( kMcpServerInstructions )   // V3/F4: the
+                       "\"instructions\":\"" + mcpdetail::jsonEscape( mcpInstructionsText( policy )   // V3/F4: the; --mcp-tools: only hints for listed tools
                                                     + mcpLegendPointer( policy )   // r2-LO: the session dictionary, where a session exists
-                                                    + mcprefuse::gitOnlyOmissionNote( omitGitVerbs, policy.pinnedRootIsGitDir ) ) + "\"}}";  // omission announces itself, finding #7: qualified by which cause it is
+                                                    + mcpToolSubsetNote( policy )   // --mcp-tools: a subset announces itself
+                                                    + mcprefuse::gitOnlyOmissionNote( omitGitVerbs, policy.pinnedRootIsGitDir,
+                                                                                      [ & ]( std::string_view verb ) { return mcpToolEnabled( policy, verb ); } ) ) + "\"}}";  // omission announces itself, finding #7: qualified by which cause it is
             }
         }
         else if( method == "tools/list" )
@@ -927,6 +1336,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    "{\"name\":\"batch\",\"description\":\"ONE-TURN CONTEXT SWEEP: answer up to 16 heterogeneous READ sub-queries in a single call (the deterministic $0 counterpart of a parallel-search agent). queries = array over the SAME path, in EITHER grammar: {verb, ...args} objects, or the CLI --batch file's own \\\"verb:arg\\\" strings (queries=[\\\"for:parse the config\\\",\\\"callers:escapeXml\\\"]) - one grammar, both front doors; each verb is one of " + mcpBatchServedVerbsList( omitGitVerbs ) + " (plus the ALIASES callers=find_referencing_symbols and callees=find_symbol) with that verb's own args. The other " + std::to_string( batchExcluded ) + " advertised verbs are NOT batchable: side effects (the 3 edit verbs, quality_baseline), a heavy both-trees pass (quality_delta), no nesting (batch), whole-repo / cross-branch scope (situational_awareness, memory_recall, connect, explore — and its alias pack_task — from_trace, " + mcprefuse::batchGitOnlyExcludedNames( omitGitVerbs ) + "flags, doc_drift), and rank_by/affected (not yet swept into batch). Result is one <batch> of <q i verb ok> elements IN ORDER, each sub-answer verbatim in CDATA; a failing sub-query is an inline ok=0 err= entry and never fails the batch; identical payloads dedup; over 16 caps honestly.\","
                    + mcprefuse::toolMetadataFor( "batch", pathIsRequired ) + "}"
                    "]}}";
+            resp = mcpFilterToolsList( std::move( resp ), policy );   // --mcp-tools: the subset (unchanged without one)
             }
             catch( ... )
             {
@@ -1246,7 +1656,16 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // A11: the additive `paths` array — 2+ roots resolve to a registered
             // workspace key that REPLACES `path` for this request; a 1-element array degrades to that path.
             // `path` and `paths` together is a usage error. Single `path` requests are untouched (back-compat).
-            bool pathsUsageError = false;
+            // --mcp-tools: a tool this server does not list is refused FIRST, naming the flag that enables it — its
+            // arguments are not judged for a tool the caller cannot use here. Never dispatched, no getIndex().
+            const std::string hiddenToolRefusal = mcpHiddenToolRefusal( policy, name );
+            if( !hiddenToolRefusal.empty() )
+            {
+                DISCLOSE( Diagnostics::answerRefused, "a tools/call of a tool --mcp-tools left out answers an MCP error naming the flag that enables it" );
+                resp = errResultMsg( -32602, hiddenToolRefusal );
+            }
+            bool pathsUsageError = !hiddenToolRefusal.empty();
+            if( !pathsUsageError )
             {
                 // W3FIX M8: through the guarded ARRAY reader. `paths:5` used to read as absent, so the request
                 // fell through to `path` and was refused with "missing required field: path" — a field the
@@ -2212,7 +2631,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         // W3FIX M4: the callable ALIASES join the near-miss pool (a `packtask` typo should land
                         // on `pack_task`, which this server answers) — the printed COUNT below stays the
                         // advertised one, which is what "call tools/list for the N available tools" promises.
-                        const std::size_t advertisedCount = knownVerbs.size();
+                        const std::size_t advertisedCount = mcpAdvertisedToolCount( policy );   // --mcp-tools: the listed count
                         for( const mcprefuse::McpVerbAlias& alias : mcprefuse::kMcpVerbAliases )
                         {
                             knownVerbs.push_back( alias.alias );
@@ -2283,7 +2702,8 @@ inline void emitMcpStdioLineOverflowRefusal()
 // own `path` exactly as before. `root` mirrors `McpHttpConfig::root`; `roots` mirrors `::roots` — same
 // plumbing as runMcpHttp(), just building McpDispatchPolicy::defaultRoot instead of ::pinnedRoot (D3/D4).
 inline int runMcp( int topK, bool stable = false, bool noRedact = false,
-                   const std::string& root = std::string(), const std::vector<std::string>& roots = {} )
+                   const std::string& root = std::string(), const std::vector<std::string>& roots = {},
+                   McpToolMask toolMask = kMcpAllToolsMask, std::string toolSpec = {} )
 {
     // MEASURE-FIRST instrumentation (RIPWIRE_MCP_TIMINGS, off by default → byte-identical + silent server, same
     // discipline as ingest.cpp's RIPWIRE_CACHE_STATS). When set, emit ONE stderr TSV line per handled request:
@@ -2315,6 +2735,8 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
     // stdio: no HARD workspace pinning (pinnedRoot stays ""), edit verbs allowed; r2-LO: this process's one legend session
     McpDispatchPolicy policy{ .legendSession = &mcpStdioLegendSession() };
     policy.defaultRoot = defaultRoot;   // "" unless a startup root was given — see the comment above
+    policy.toolMask    = toolMask;      // --mcp-tools (validated by main.cpp); the whole catalog by default
+    policy.toolSpec    = std::move( toolSpec );
 
     // R2a (the 2026-08-12 usage mine): with NO startup root, resolve the launch cwd ONCE as the softest
     // default — see McpDispatchPolicy::assumedRoot for the full contract and mcpResolveAssumedRoot for

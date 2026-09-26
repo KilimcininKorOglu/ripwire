@@ -4149,6 +4149,19 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
 
     if( cfg.mcp )
     {
+        // --mcp-tools: validated here, against mcp.h's tool table (cli.h does not include it) — before either
+        // transport starts, so a bad name is an exit 1 with the valid names, never a server with a surprise catalog.
+        McpToolSpec tools{ .mask = kMcpAllToolsMask };
+        if( !cfg.mcpTools.empty() )
+        {
+            tools = mcpParseToolSpec( cfg.mcpTools );
+        }
+        if( !tools.refusal.empty() )
+        {
+            DISCLOSE( Diagnostics::answerRefused, "a bad --mcp-tools list exits 1 with the reason and the valid names on stderr; no server starts" );
+            rw::emitTo( stderr, "ripwire: {}\n", tools.refusal );
+            return 1;
+        }
         // --listen picks the remote Streamable-HTTP transport; otherwise stdio. Both
         // route every request through the SAME shared handler (mcp.h dispatchMcpLine) — byte-identical payloads.
         if( !cfg.listen.empty() )
@@ -4172,6 +4185,8 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             hc.stable           = cfg.stable;
             hc.noRedact         = cfg.noRedact;
             hc.allowRemoteEdits = cfg.allowRemoteEdits;
+            hc.toolMask         = tools.mask;
+            hc.toolSpec         = std::string( cfg.mcpTools );
             return runMcpHttp( hc );
         }
         // X7 (D3/D4): thread the SAME positional-root plumbing the HTTP branch above uses into the stdio
@@ -4182,7 +4197,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         {
             mcpRoots.emplace_back( r );
         }
-        return runMcp( cfg.topK, cfg.stable, cfg.noRedact, std::string( cfg.rootPath ), mcpRoots );   // P2-C: --mcp turns --stable on by default (set in parseArgs); A3-F3: the server redacts by default like the CLI
+        return runMcp( cfg.topK, cfg.stable, cfg.noRedact, std::string( cfg.rootPath ), mcpRoots, tools.mask, std::string( cfg.mcpTools ) );   // P2-C: --mcp turns --stable on by default (set in parseArgs); A3-F3: the server redacts by default like the CLI
     }
 
     // ── multi-root workspace refusals: each cut verb refuses with ONE clear stderr
