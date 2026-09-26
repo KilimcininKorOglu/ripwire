@@ -480,6 +480,14 @@ enum class AstWalk : std::uint8_t
     // is the read, the parse and the newline index — the whole point of riding this walk instead of
     // opening the corpus a second time. Its programs come from AstQueryGroup::patternPrograms.
     Pattern,
+
+    // ---- --quality-delta's structural shapes (src/handlershape.h) ----
+    // The widened error-masking shapes (log-only, rethrow-only) and the placeholder shapes (stub, todo).
+    // A WALK for the reason the other two are: "every statement of this handler is a log call" and "the
+    // caught name is never read below here" are questions about ALL of a node's children, which no
+    // tree-sitter pattern can ask. Each hit's tag is the shape name; the group is per-FILE-language, so the
+    // walk is handed the file's Lang alongside its tree.
+    HandlerShapes,
 };
 
 // src/pattern.h owns the compiled form; ingest.h only ever holds a BORROWED pointer to it, so this

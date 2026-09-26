@@ -710,6 +710,13 @@ inline constexpr const char* kQdRowLegend =
     "Every row the header's gating= counter counts also carries a gating attribute "
     "set to 1 — marked positively, never by the ABSENCE of sev or origin. ";
 
+// Emitted only when an error-masking row is sev="minor" — the one way that kind is ever minor, so the
+// sentence explains a state the reader is looking at and costs nothing on any other report.
+inline constexpr const char* kQdMaskReportOnlyLegend =
+    "An error-masking row is sev=\"minor\" when every construct it added is a widened shape that does not "
+    "gate in that language yet: log-only (a broad handler whose body only logs and never names the error) "
+    "or rethrow-only (the sole handler re-throws the error unchanged). ";
+
 // Emitted only when a clone-family row (duplication / new-clone-of-reused-helper) is in the document,
 // which is what puts members=, tokens= and idiom= on a first screen. A clean tree has none.
 inline constexpr const char* kQdCloneLegend =
@@ -796,6 +803,10 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
         }
         return false;
     };
+    const auto anyMinorMaskRow = [] ( const std::vector<rw::quality::Regression>& v )
+    {
+        return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "error-masking" && r.isMinor; } );
+    };
 
     std::fputs( kQdLegendCore, stdout );
 
@@ -865,6 +876,10 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
         if( anyCloneRow( p.rows ) || anyCloneRow( p.disclosedRows ) )
         {
             std::fputs( kQdCloneLegend, stdout );
+        }
+        if( anyMinorMaskRow( p.rows ) || anyMinorMaskRow( p.disclosedRows ) )
+        {
+            rw::emitRaw( stdout, kQdMaskReportOnlyLegend );
         }
     }
 

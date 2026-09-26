@@ -6151,6 +6151,59 @@ output.
 
 The verb reports only what a change made *worse*, against git HEAD. `--quality-ack` records a
 reviewed exception; `--ack-only=KIND` scopes it.
+### error-masking widened: log-only and rethrow-only (0.6.5) — hand-labelled precision, and which shapes gate
+
+`error-masking` counted only an EMPTY handler (empty braces, `pass`, `...`, a comment-only body). 0.6.5 adds
+two shapes from `src/handlershape.h`, walked over the same parse the query rows use:
+
+- **log-only** — a BROAD handler (catches everything, or the root error type: `Exception`, `Throwable`,
+  `StandardError`, a bare `except:`/`rescue`, any JS/TS `catch`) whose body is only logging/print calls and
+  never names the caught error. `logger.exception`, `exc_info=`, `traceback.format_exc()` and Ruby's `$!`
+  count as naming it; a narrow handler never counts (its type states the cause). Go: `if err != nil { … }`
+  with no `else` and a body of non-fatal log calls that never read `err`.
+- **rethrow-only** — the ONLY handler of its try re-raises the error it caught, unchanged (bare `raise` /
+  `throw;`, or `raise e` / `throw e` of the caught name; `raise … from …` and a wrapped throw are not
+  unchanged). Sole handler, because `catch( Specific e ) { throw e; }` ahead of a broader sibling routes one
+  type past it and is not redundant.
+
+**Labelling rule, fixed before labelling.** A hit is TRUE when the shape as specified is really there: for
+log-only, an error is caught, its identity (type, message, traceback) is not carried by anything the handler
+does, and execution continues past the handler; for rethrow-only, deleting the handler (keeping any `else`
+/ `finally`) changes nothing observable. A deliberate best-effort fallback is TRUE — it is the shape, the
+same way an intentional empty `catch {}` is an empty catch; whether to keep it is the reviewer's call. FALSE
+is anything else: the error is carried or checked some other way, or the code does not continue.
+
+**Corpus.** Every hit, de-duplicated by its text, from source already on the measuring machine and read
+in place: the three peer checkouts the idea came from (shallow, one commit each — they cannot be replayed),
+the CPython 3.13 standard library, the Python packages in a local package-manager cache, the Go 1.24
+standard library and module cache, the npm CLI with its bundled dependencies, and Homebrew's Ruby. No
+repository was fetched for this.
+
+| shape | language | hits labelled | TRUE | FALSE | precision | gates? |
+| --- | --- | --- | --- | --- | --- | --- |
+| log-only | Python | 41 | 40 | 1 | **0.976** | **yes** |
+| log-only | JS / TS | 7 | 7 | 0 | 1.000 | no — n < 20 |
+| log-only | Go | 3 | 2 | 1 | 0.667 | no — n < 20 |
+| rethrow-only | Python | 33 | 33 | 0 | **1.000** | **yes** |
+| rethrow-only | JS | 1 | 1 | 0 | — | no — n < 20 |
+
+The two FALSE rows: a Go `if err != nil { fmt.Printf( … ) }` whose `err` is passed to `check( err )` on the
+next line (the error is handled after all — the Go walk cannot see past its own block), and a Python
+`except BaseException: print( previous_tb )` that prints the traceback of the error being reported and exits
+right after. Two of the TRUE rethrow-only rows carry the ecosystem's own linter suppression for this exact
+shape (`# noqa: TRY203`, `// eslint-disable-next-line no-useless-catch`).
+
+**The gate rule** (`kHandlerShapeGates`, `src/lintrules.h`): a (shape, language) pair gates only at precision
+≥ 0.8 on ≥ 20 labelled hits. That admits Python for both shapes and nothing else. Every other language
+still gets the row, as `sev="minor"`, which never fires exit 2 — Java, C#, Kotlin, Ruby and C++ had no
+sample at all on this machine, and JS/TS and Go too few. The full legend says so on the row's report.
+
+**Replay on this repo's history.** `--quality-delta=C` for the last 40 first-parent commits of `main`
+(each one a merged train or lane, `3ddbfe85`..`b343b988`), with the 0.6.4 binary and with this one:
+**+0 rows** in either kind, and all 40 `--json` documents byte-identical between the two binaries (626 rows
+each, 24 gating across the 40). This repository has no Python/JS handler of either shape and no TODO comment
+added in that window, so on upgrade its own reports are unchanged; the replay shows the widening costs no
+noise here, not that it finds anything here. The rows the shapes produce were measured on the corpus above.
 
 ### Co-change: the finding that contradicted the obvious design
 

@@ -1651,6 +1651,8 @@ inline constexpr char kHelpHead[] =
         "                               major AND unacked — the gating=\"N\" header count. New-symbol rows are still PRINTED (they are the debt you are adding — read them), they just never gate; exit 0 means\n"
         "                               \"nothing that already existed got worse\", not \"clean\". Clone kinds classify by member set (new-symbol only if EVERY member is new); short-horizon-churn is preexisting\n"
         "                               by construction. LIMIT: origin is canonId (path::scope::name) identity, so a RENAMED/MOVED symbol reads as new and a regression carried in with the move will not gate.\n"
+        "                               error-masking = a NEW empty/pass/comment-only handler, or log-only (a broad handler whose body only logs and never names the error) or rethrow-only (the sole\n"
+        "                               handler re-throws it unchanged); those two gate only where their precision was measured (Python) and are sev=\"minor\" in every other language.\n"
         "                               Test-fixture dirs + doc sections are exempt from dead-code/churn; churn needs COMMITTED thrash evidence (rewritten across recent commits AND again by this diff), never the current edit alone\n"
         // §B7.2 (CA4): the strict-sha staleness rule and — the part that matters — the fact that this verb
         // can DELETE a file in the user's tree were disclosed nowhere a user reads before running it. The

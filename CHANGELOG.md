@@ -13,6 +13,20 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Changed — `--quality-delta` error-masking also counts log-only and rethrow-only handlers
+
+`error-masking` counted only an empty handler (empty braces, `pass`, `...`, a comment-only body). It now also
+counts two shapes read off the same parse: **log-only**, a broad handler (one that catches everything or the
+root error type) whose body only logs or prints and never names the caught error, and **rethrow-only**, the
+only handler of its try re-throwing the error unchanged. Both are conservative: a log that names the error
+(`logger.exception`, `exc_info=`, the variable itself), a narrow handler, a wrapped re-throw, a re-throw
+ahead of a broader sibling handler and a C# `when` filter are not counted. The two shapes gate only in
+Python, where a hand-labelled sample measured precision 0.976 (40 of 41) and 1.000 (33 of 33); in every
+other language the row is printed as `sev="minor"` and never fires exit 2 (`kHandlerShapeGates`,
+`src/lintrules.h`; method and table in `docs/EVALS.md`). `kQSnapCacheScheme` 14 → 15.
+
 ## [0.6.4] — 2026-09-25
 
 ### Added — Astro (`.astro`) frontmatter is indexed on the TypeScript grammar (#320, #67)

@@ -254,7 +254,7 @@ Thresholds/definitions are the catalog in [`quality-metrics.md`](quality-metrics
 | `duplication` | `--clones` | reuse the existing body — Rule of Three; wrong abstraction beats two honest copies |
 | `dead-code` | — | delete what you orphaned, or wire the caller you forgot |
 | `api-surface` (new public symbol) | `--callers=SYM` | intentional? keep it. Accidental? narrow it (should've been file-local) |
-| `error-masking` (empty catch / bare `except: pass` / swallowed `.catch`) | `--expand=SYM` | handle, log, or rethrow — AI code adds these +47% vs human (GitClear 2026) |
+| `error-masking` (empty catch / bare `except: pass` / swallowed `.catch`; a broad handler that only logs and never names the error; a sole handler that re-throws it unchanged) | `--expand=SYM` | handle it, log the error itself, or drop the try — AI code adds these +47% vs human (GitClear 2026). The two widened shapes gate only in Python (measured precision); elsewhere `sev="minor"` |
 | `short-horizon-churn` | `--hotspots` · `git log -p <file>` | rewritten again inside 2 weeks (+15% AI) — is the design unsettled? consolidate |
 | `new-clone-of-reused-helper` | `--clones` · `--callers=HELPER` | call the existing well-reused helper — reuse is declining in AI code (GitClear) |
 

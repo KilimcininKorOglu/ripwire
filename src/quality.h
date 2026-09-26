@@ -24,7 +24,7 @@
 #include "graph.h"
 #include "clones.h"
 #include "cloneidiom.h"         // idiom-class demotion — the closed 3-idiom shape classifier that turns an idiom-COLLISION clone group into a minor row instead of a gating one
-#include "lintrules.h"          // findErrorMasking — the built-in error-masking rule table (GitClear +47% kind)
+#include "lintrules.h"          // findQualityConstructs — the built-in error-masking rule table (GitClear +47% kind)
 #include "arch.h"               // fnv1a64
 #include "pathguard.h"          // CWE-59/367: rw::pathguard::openNoFollowTruncate — writeBaseline truncates, so its open must refuse a link atomically
 #include "gitmine.h"            // shSingleQuote + gitFileCommitCountsInDayWindow — short-horizon-churn window mining
@@ -259,6 +259,7 @@ struct Snapshot
     gtl::btree_map<std::uint64_t, std::uint32_t> paramsBySym; // Q1 erosion    — hash(canonId) → MAX parameter count
     gtl::btree_map<std::uint64_t, std::uint32_t> defsBySym;   // hash(canonId) → COUNT of definitions sharing the id (an overload set's CARDINALITY, deliberately NOT a MAX — see computeSnapshot)
     gtl::btree_map<std::uint64_t, std::uint32_t> maskBySym;   // §D#4 error-masking — hash(canonId) → COUNT of error-masking constructs in the symbol (SUM over overloads, see computeSnapshot)
+    gtl::btree_map<std::uint64_t, std::uint32_t> maskReportBySym; // the REPORT-ONLY part of maskBySym's count: widened handler shapes that do not gate in the symbol's language (kHandlerShapeGates); absent = 0
     gtl::btree_map<std::uint64_t, std::uint64_t> bodyHashBySym; // §D#4 short-horizon-churn — pathQualifiedKey(path,scope,name) → fnv1a64 of the RAW body bytes (change detection; literal-only edits move NO metric, so metrics can't detect them). Path-qualified since v6: a bare canonId key folded every scope-less same-named symbol ACROSS FILES into one join identity (the W1-S2 cross-file churn misattribution)
     std::vector<std::uint64_t>             cloneGroups; // sorted hash(sorted member canonIds)
     std::vector<std::uint64_t>             dead;        // sorted hash(canonId) of dead-candidate symbols
@@ -855,20 +856,50 @@ inline std::uint64_t pathQualifiedKey( std::string_view relPath, const Symbol& s
     return pathQualifiedKey( relPath, s.scope, s.lang == Lang::Elixir ? elixirBaseName( s.name ) : std::string_view( s.name ) );
 }
 
-// §D#4 error-masking — attribute each error-masking hit (findErrorMasking) to its ENCLOSING symbol by byte-span
-// containment, then COUNT hits per baseline canonId. A symbol contains a hit iff the hit's start byte lies in
-// the symbol's full def span [sigStartByte, endByte) in the same file. Overloads sharing a canonId SUM (the
-// count is a magnitude, not a max — two overloads each masking once = 2 masks under that id, and the delta then
-// fires when the total grows). Deterministic: findErrorMasking is deterministic and the fold is a pure sum.
+// §D#4 error-masking — attribute each hit (findQualityConstructs) to its ENCLOSING symbol by
+// byte-span containment, then COUNT hits per baseline canonId. A symbol contains a hit iff the hit's start byte
+// lies in the symbol's full def span [sigStartByte, endByte) in the same file. Overloads sharing a canonId SUM
+// (the count is a magnitude, not a max — two overloads each masking once = 2 masks under that id, and the delta
+// then fires when the total grows). Deterministic: findQualityConstructs is deterministic and the fold is a
+// pure sum.
 //
 // Attribution is O(hits · symbols-per-file) via a per-file symbol index; a hit inside no def (file-scope) is
-// dropped (no owning symbol → nothing to attribute a regression to). Byte-span containment mirrors how ingest
-// attributes References to their enclosing definition, so the same-file, same-span discipline is consistent.
-inline gtl::btree_map<std::uint64_t, std::uint32_t> errorMaskCountsBySym( const IngestResult& ing, std::string_view root )
+// dropped (no owning symbol → nothing to attribute a regression to). Byte-span containment mirrors how ingest attributes References to
+// their enclosing definition, so the same-file, same-span discipline is consistent.
+struct ConstructCounts
 {
-    gtl::btree_map<std::uint64_t, std::uint32_t> counts;
-    const std::vector<ErrorMaskHit> hits = findErrorMasking( ing );
-    if( hits.empty() )
+    gtl::btree_map<std::uint64_t, std::uint32_t> mask;         // every error-masking hit (→ Snapshot::maskBySym)
+    gtl::btree_map<std::uint64_t, std::uint32_t> maskReport;   // the REPORT-ONLY subset of `mask` (→ maskReportBySym): widened shapes whose (shape, language) is not in kHandlerShapeGates
+};
+
+// The innermost def whose span holds `startByte` in file `fileId`, or kNoNode. Smallest enclosing def wins
+// (a nested lambda/method inside a method), so a count lands on the innermost owning symbol.
+inline NodeId enclosingDefOf( const IngestResult& ing, const SymbolsByFile& byFile, std::uint32_t fileId, std::uint32_t startByte )
+{
+    if( fileId >= byFile.size() )
+    {
+        return kNoNode;
+    }
+    NodeId        owner   = kNoNode;
+    std::uint32_t bestLen = UINT32_MAX;
+    for( NodeId i : byFile[ fileId ] )
+    {
+        const Symbol& s = ing.symbols[i];
+        if( startByte >= s.sigStartByte && startByte < s.endByte && s.endByte - s.sigStartByte < bestLen )
+        {
+            bestLen = s.endByte - s.sigStartByte;
+            owner   = i;
+        }
+    }
+    ENSURES( owner == kNoNode || owner < ing.symbols.size(), "an owner is a def id taken from byFile, which indexes ing.symbols" );
+    return owner;
+}
+
+inline ConstructCounts constructCountsBySym( const IngestResult& ing, std::string_view root )
+{
+    ConstructCounts            counts;
+    const QualityConstructHits hits = findQualityConstructs( ing );
+    if( hits.mask.empty() )
     {
         return counts;
     }
@@ -876,33 +907,24 @@ inline gtl::btree_map<std::uint64_t, std::uint32_t> errorMaskCountsBySym( const 
     // per-file symbol id list (only real-body defs can enclose a masking block). `symbols[i].id == i`, so
     // the shared bucket-and-sort's `s.id` is the same value the hand-written loop pushed as `i`.
     const SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s ) { return s.endByte > s.sigStartByte; } );
-    for( const ErrorMaskHit& h : hits )
+    // pathQualifiedKey, via the SAME rule maskBySym is stored under (see qualityKey). These counts are compared
+    // against that map key-for-key, so a scheme that differs by one byte silently reports every construct as new.
+    const auto keyOf = [ & ]( NodeId owner ) { return pathQualifiedKey( relForHash( ing.files[ing.symbols[owner].fileId], root ), ing.symbols[owner] ); };
+    for( const ErrorMaskHit& h : hits.mask )
     {
-        if( h.fileId >= byFile.size() )
+        const NodeId owner = enclosingDefOf( ing, byFile, h.fileId, h.startByte );
+        if( owner == kNoNode )
         {
             continue;
         }
-        // smallest enclosing def wins (a nested lambda/method inside a method) — pick the tightest [start,end)
-        // that contains the hit so the count lands on the innermost owning symbol. Linear per file is fine.
-        NodeId        owner   = kNoNode;
-        std::uint32_t bestLen = UINT32_MAX;
-        for( NodeId i : byFile[ h.fileId ] )
+        const std::uint64_t key = keyOf( owner );
+        ++counts.mask[ key ];
+        if( !errorMaskHitGates( h.id, ing.symbols[owner].lang ) )
         {
-            const Symbol& s = ing.symbols[i];
-            if( h.startByte >= s.sigStartByte && h.startByte < s.endByte )
-            {
-                const std::uint32_t len = s.endByte - s.sigStartByte;
-                if( len < bestLen ) { bestLen = len; owner = i; }
-            }
-        }
-        if( owner != kNoNode )
-        {
-            // pathQualifiedKey, via the SAME rule maskBySym is stored under (see qualityKey). These counts are
-            // compared against that map key-for-key, so a scheme that differs by one byte silently reports every
-            // masking construct as new.
-            ++counts[ pathQualifiedKey( relForHash( ing.files[ing.symbols[owner].fileId], root ), ing.symbols[owner] ) ];
+            ++counts.maskReport[ key ];
         }
     }
+    ENSURES( counts.maskReport.size() <= counts.mask.size(), "every report-only hit was also counted in the total, under the same key" );
     return counts;
 }
 
@@ -962,7 +984,7 @@ inline std::uint64_t qualityKey( const IngestResult& ing, NodeId i, std::string_
 template<class Fn>
 inline void forEachSymbolBody( const IngestResult& ing, Fn&& visit )
 {
-    // per-file def ids with a real body (see errorMaskCountsBySym above on `symbols[i].id == i`).
+    // per-file def ids with a real body (see constructCountsBySym above on `symbols[i].id == i`).
     const SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s ) { return s.endByte > s.sigStartByte; } );
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
@@ -3087,7 +3109,12 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // resolution, and so two builds that resolve differently served each other's dead set (see producerIdentity).
 // Since v14 a bump is no longer what keeps two builds' blobs apart — any source change renames every blob — so
 // a semantics change that lands without one leaves this history incomplete, not a wrong answer across builds.
-constexpr std::uint32_t kQSnapCacheScheme = 14;
+// v15 (2026-09-26, the 0.6.5 masking round) — the blob gained a per-symbol count map after maskBySym
+// (maskReportBySym), and maskBySym itself now counts the widened handler shapes (log-only, rethrow-only): a
+// BLOB SHAPE change and a change to what a cached Snapshot's mask counts mean. A v14 blob is short a map and
+// its mask counts are low, so served here it would read every widened shape
+// as newly added. Bumped by the v4/v5 rule.
+constexpr std::uint32_t kQSnapCacheScheme = 15;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -3211,6 +3238,7 @@ inline std::string serializeSnapshot( const Snapshot& s, const std::string& head
     putValMap( s.paramsBySym );
     putValMap( s.defsBySym );
     putValMap( s.maskBySym );
+    putValMap( s.maskReportBySym );
     putHashMap( s.bodyHashBySym );
     putVec( s.cloneGroups );
     putVec( s.dead );
@@ -3338,7 +3366,7 @@ inline bool deserializeSnapshot( const std::string& blob, const std::string& hea
         return true;
     };
 
-    if( !getValMap( s.ccxBySym ) || !getValMap( s.locBySym ) || !getValMap( s.nestBySym ) || !getValMap( s.paramsBySym ) || !getValMap( s.defsBySym ) || !getValMap( s.maskBySym ) || !getHashMap( s.bodyHashBySym ) || !getVec( s.cloneGroups ) || !getVec( s.dead ) || !getVec( s.publicApi ) )
+    if( !getValMap( s.ccxBySym ) || !getValMap( s.locBySym ) || !getValMap( s.nestBySym ) || !getValMap( s.paramsBySym ) || !getValMap( s.defsBySym ) || !getValMap( s.maskBySym ) || !getValMap( s.maskReportBySym ) || !getHashMap( s.bodyHashBySym ) || !getVec( s.cloneGroups ) || !getVec( s.dead ) || !getVec( s.publicApi ) )
     {
         return false;
     }
@@ -4131,7 +4159,7 @@ inline bool cloneGroupIsInBaseline( const CloneGroup& cg, const IngestResult& in
     return true;
 }
 
-// errorMaskCountsBySym and bodyHashesBySym walk EVERY symbol, so the membership filter reaches their results
+// constructCountsBySym and bodyHashesBySym walk EVERY symbol, so the membership filter reaches their results
 // here, on their keys. The key space is path-qualified (qualityKey), so a key belongs to exactly ONE file:
 // dropping a non-baseline file's key can never take a baseline file's record with it.
 inline void dropNonBaselineKeys( Snapshot& snap, const IngestResult& ing, std::string_view root,
@@ -4152,9 +4180,12 @@ inline void dropNonBaselineKeys( Snapshot& snap, const IngestResult& ing, std::s
     std::sort( dropKeys.begin(), dropKeys.end() );
     const auto dropped = [ & ]( std::uint64_t k ) noexcept
     { return std::binary_search( dropKeys.begin(), dropKeys.end(), k ); };
-    for( auto it = snap.maskBySym.begin(); it != snap.maskBySym.end(); )
+    for( gtl::btree_map<std::uint64_t, std::uint32_t>* m : { &snap.maskBySym, &snap.maskReportBySym } )
     {
-        it = dropped( it->first ) ? snap.maskBySym.erase( it ) : std::next( it );
+        for( auto it = m->begin(); it != m->end(); )
+        {
+            it = dropped( it->first ) ? m->erase( it ) : std::next( it );
+        }
     }
     for( auto it = snap.bodyHashBySym.begin(); it != snap.bodyHashBySym.end(); )
     {
@@ -4226,8 +4257,12 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
     }
     snap.cloneGroups = baselineCloneGroupHashes( ing, root, fileInBaseline );
 
-    // §D#4 error-masking baseline: per-canonId count of error-masking constructs (the SUM the delta compares).
-    snap.maskBySym = errorMaskCountsBySym( ing, root );
+    // §D#4 error-masking baseline: per-canonId counts (the SUMs the delta compares), from one pass.
+    {
+        ConstructCounts counts = constructCountsBySym( ing, root );
+        snap.maskBySym         = std::move( counts.mask );
+        snap.maskReportBySym   = std::move( counts.maskReport );
+    }
 
     // §D#4 short-horizon-churn baseline: per-canonId RAW-body hash so the delta detects a rewrite that moved no
     // metric (a literal-only edit). Compared, never bar-checked — presence-or-difference IS the rewrite signal.
@@ -4610,6 +4645,10 @@ inline bool writeBaseline( const Snapshot& s, const std::string& path, std::stri
     {
         f << "mask " << std::hex << h << std::dec << ' ' << v << '\n'; // §D#4 error-masking count
     }
+    for( const auto& [h, v] : s.maskReportBySym )
+    {
+        f << "maskr " << std::hex << h << std::dec << ' ' << v << '\n'; // the report-only part of that count
+    }
     for( const auto& [h, v] : s.defsBySym )
     {
         f << "defs " << std::hex << h << std::dec << ' ' << v << '\n'; // overload-set CARDINALITY (a count, not a max)
@@ -4771,7 +4810,7 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         { std::uint64_t h = 0, v = 0; is >> std::hex >> h >> v;
           if( is.fail() ) { DISCLOSE( stats, BaselineReadStats::DisclosureWhy::MalformedLine ); return; } m[h] = v; };
 
-        if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs"
+        if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "maskr" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs"
          || kind == "producer" )
         {
             ++recognizedLineCount;                                    // structure seen — this file IS a baseline
@@ -4796,6 +4835,10 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         else if( kind == "mask" )
         {
             readValMap( out.maskBySym );
+        }
+        else if( kind == "maskr" )
+        {
+            readValMap( out.maskReportBySym );
         }
         else if( kind == "defs" )
         {
@@ -6800,6 +6843,7 @@ inline std::size_t remapSnapshotIdentity( Snapshot& base, const IdentityAliases&
     healMap( base.paramsBySym );
     healMap( base.defsBySym );
     healMap( base.maskBySym );
+    healMap( base.maskReportBySym );
     healMap( base.bodyHashBySym );
 
     // the two SORTED SETS — same add-never-overwrite rule, then restore the sorted invariant every
@@ -7126,7 +7170,7 @@ inline std::size_t applyAckRatchet( std::vector<Regression>& regs, const gtl::bt
 //   dead-code / api-surface — locBySym for existence, membership in the current `dead` / `publicApi` set
 //     for whether the state the finding named is still true right now.
 //   error-masking — locBySym for existence, `maskBySym[key] > 0` for whether a masking construct is still
-//     there (maskBySym only carries symbols with at least one hit — see errorMaskCountsBySym — so absence
+//     there (maskBySym only carries symbols with at least one hit — see constructCountsBySym — so absence
 //     IS zero, not "unknown").
 //   duplication / new-clone-of-reused-helper — the ack key IS a member-set hash (cloneGroupHash), not a
 //     single symbol's key, so there is no one "target" to test existence of; only whether that EXACT group
@@ -7210,14 +7254,16 @@ inline std::optional<StaleAckWhy> staleForSetMembership( std::uint64_t key, cons
     return std::binary_search( liveSet.begin(), liveSet.end(), key ) ? std::nullopt : std::optional<StaleAckWhy>( StaleAckWhy::FindingGone );
 }
 
-inline std::optional<StaleAckWhy> staleForErrorMasking( std::uint64_t key, const Snapshot& snap )
+// error-masking: locBySym for existence, then the kind's per-symbol COUNT map (maskBySym, carrying only
+// symbols with at least one hit, so absence IS zero).
+inline std::optional<StaleAckWhy> staleForConstructCount( std::uint64_t key, const Snapshot& snap, const gtl::btree_map<std::uint64_t, std::uint32_t>& counts )
 {
     if( snap.locBySym.find( key ) == snap.locBySym.end() )
     {
         return StaleAckWhy::TargetGone;
     }
-    const auto it = snap.maskBySym.find( key );   // absent or zero — maskBySym only carries symbols with >=1 hit
-    return ( it == snap.maskBySym.end() || it->second == 0 ) ? std::optional<StaleAckWhy>( StaleAckWhy::FindingGone ) : std::nullopt;
+    const auto it = counts.find( key );
+    return ( it == counts.end() || it->second == 0 ) ? std::optional<StaleAckWhy>( StaleAckWhy::FindingGone ) : std::nullopt;
 }
 
 // duplication / new-clone-of-reused-helper: the key IS a member-set hash, not one symbol's key, so a miss
@@ -7264,7 +7310,7 @@ inline std::vector<StaleAck> computeStaleAcks( const gtl::btree_map<std::string,
         }
         else if( base == "error-masking" )
         {
-            why = staleForErrorMasking( rec.key, snap );
+            why = staleForConstructCount( rec.key, snap, snap.maskBySym );
         }
         else if( base == "duplication" || base == "new-clone-of-reused-helper" )
         {
@@ -7621,7 +7667,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // THE ORACLE is `base.locBySym` — computeSnapshot populates it for EVERY symbol that has a canonId
     // (public or not, body or not), so "is this canonId in locBySym" is the one clean, kind-independent
     // "existed at the baseline" test. It generalizes the api-surface kind's own isNewSymbol tier (B10.2e),
-    // which used exactly this map, to all ten kinds rather than adding a parallel mechanism.
+    // which used exactly this map, to every kind rather than adding a parallel mechanism.
     //
     // PER-KIND RULE (the ambiguous kinds decided deliberately, not by default):
     //   complexity / verbosity / nesting / params / api-surface / error-masking — the finding IS a symbol:
@@ -8148,12 +8194,23 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
 
     // ── §D#4-1 error-masking (GitClear +47%) ──────────────────────────────────────────────────────────────
     // NEW error-masking constructs vs baseline, per symbol: aggregate the current side to a per-canonId COUNT
-    // (SUM over overloads, mirroring computeSnapshot's errorMaskCountsBySym), and flag a symbol whose count
+    // (SUM over overloads, mirroring computeSnapshot's constructCountsBySym), and flag a symbol whose count
     // GREW vs the baseline count (was 0 for a symbol/mask absent from the baseline). No bar — any NEW masking
     // construct is the regression; the count magnitude is the was/now signal. A pre-existing empty catch in an
     // UNTOUCHED symbol keeps the same count on both sides → not flagged (the quality-delta contract).
+    //
+    // REPORT-ONLY SHAPES (noise control). The widened handler shapes (log-only / rethrow-only) gate only in a
+    // language kHandlerShapeGates lists; elsewhere they are counted in maskReportBySym as well. A row whose
+    // growth is entirely report-only shapes — the GATING part of the count (total minus report-only) did not
+    // grow — is still printed, as sev="minor", so it never fires exit 2. One row per symbol either way, so the
+    // ack identity (kind, key) and the magnitude it ratchets on stay what they were.
     {
-        const gtl::btree_map<std::uint64_t, std::uint32_t> nowMask = errorMaskCountsBySym( ing, root );
+        const ConstructCounts nowCounts = constructCountsBySym( ing, root );
+        const auto countIn = []( const gtl::btree_map<std::uint64_t, std::uint32_t>& m, std::uint64_t key )
+        {
+            const auto it = m.find( key );
+            return ( it == m.end() ) ? 0u : it->second;
+        };
         // report each canonId once, at its first defining symbol (a mask count is a per-canonId magnitude).
         ScratchMap<std::uint8_t> maskSeen( ing.symbols.size() );
         for( NodeId i = 0; i < ing.symbols.size(); ++i )
@@ -8162,22 +8219,18 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             {
                 continue;
             }
-            const std::uint64_t key = keyByNode[i];
-            const auto          nit = nowMask.find( key );
-            if( nit == nowMask.end() )
+            const std::uint64_t key     = keyByNode[i];
+            const std::uint32_t nowMask = countIn( nowCounts.mask, key );
+            if( nowMask == 0 || !insertScratchSeen( maskSeen, key ) )
             {
-                continue; // this symbol masks no errors now
+                continue; // nothing here now, or already reported at an earlier overload of this id
             }
-            if( !insertScratchSeen( maskSeen, key ) )
+            const std::uint32_t wasMask = countIn( base.maskBySym, key );
+            if( nowMask > wasMask )
             {
-                continue; // already reported at an earlier overload of this id
-            }
-            const std::uint32_t now = nit->second;
-            const auto          bit = base.maskBySym.find( key );
-            const std::uint32_t was = ( bit == base.maskBySym.end() ) ? 0u : bit->second;
-            if( now > was )
-            {
-                regs.push_back( { "error-masking", g.canonId[i], was, now, key, false, {}, !existedAtBaseline( key ) } );
+                const std::uint32_t nowGating = nowMask - std::min( nowMask, countIn( nowCounts.maskReport, key ) );
+                const std::uint32_t wasGating = wasMask - std::min( wasMask, countIn( base.maskReportBySym, key ) );
+                regs.push_back( { "error-masking", g.canonId[i], wasMask, nowMask, key, nowGating <= wasGating, {}, !existedAtBaseline( key ) } );
                 stampLoc( i );
             }
         }
