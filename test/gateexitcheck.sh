@@ -304,6 +304,7 @@ FAILFAST = {
     "communitylabelcheck.sh":   ( "verdict is a TRAILING python3 heredoc; its rc IS the script's",       1 ),
     "connectcorecheck.sh":      ( "compile-and-run harness; `echo FAIL; exit 2` at the ASan run",        2 ),
     "deadprecisioncheck.sh":    ( "verdict is a TRAILING python3 heredoc; its rc IS the script's",       1 ),
+    "impactdepthcheck.sh":      ( "verdict is a TRAILING python3 heredoc; its rc IS the script's",       1 ),
     "isolateprovenancecheck.sh":( "verdict is a TRAILING python3 heredoc; its rc IS the script's",       1 ),
     "lintprecisioncheck.sh":    ( "verdict is a TRAILING python3 heredoc; its rc IS the script's",       1 ),
     "mcpattrparitycheck.sh":    ( "python3 heredoc's rc captured into `rc` and re-exited; FORCED by breaking one RENAME entry, rc read, not inferred", 1 ),

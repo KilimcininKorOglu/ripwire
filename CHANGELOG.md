@@ -13,6 +13,22 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Changed — `--impact` lists the blast radius nearest first, with its hop depth
+
+`--impact=SYM` (and the MCP `impact` twin) used to list the reach set in PageRank order with no depth, so a
+direct caller and a four-hop dependent looked alike, and the page window (40 rows by default) cut across every
+depth at once: a well-ranked distant dependent could push a direct caller off the page. Rows now run by hop
+depth first (1 = calls SYM directly), in the previous PageRank order within a depth, and the order is applied
+before the window cuts, so a cut drops the deepest rows first. Each XML row states its depth as `d=`, printed on
+the first row shown and wherever the depth changes (a row without it has the depth of the row above); the root
+carries `by_depth="1:n,2:n,…"`, which counts `reaches=` per depth, so a capped answer says which depth it stopped
+in. `--json` carries `"by_depth":[…]` and `"d"` on every row; `--format=columnar` a `<depth>` column. The set of
+symbols and every existing count are unchanged; with more than one depth in the reach set, which rows fill a cut
+page changes. On this repository's own answers (40-row pages) the rows and root add 24–74 B and the compact legend
+134 B; `d=` on every row instead would have cost 240 B per page. Gate: `test/impactdepthcheck.sh`.
+
 ## [0.6.4] — 2026-09-25
 
 ### Added — Astro (`.astro`) frontmatter is indexed on the TypeScript grammar (#320, #67)

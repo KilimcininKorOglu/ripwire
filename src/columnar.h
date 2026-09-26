@@ -141,6 +141,18 @@ inline void emitColumnarTestedColumn( std::FILE* out, const IngestResult& ing, c
     std::fputs( "</tested>", out );
 }
 
+// 0.6.5: the optional dense `<depth>` column (--impact's hop depth per row), split out for the same reason as the
+// tested column above: the one caller that asks for it pays for it.
+inline void emitColumnarDepthColumn( std::FILE* out, const std::vector<NodeId>& rows, const std::vector<std::uint32_t>& depth )
+{
+    std::fputs( "<depth>", out );
+    for( std::size_t i = 0; i < rows.size(); ++i )
+    {
+        rw::emitTo( out, "{}{}", i ? "," : "", depth[ rows[i] ] );
+    }
+    std::fputs( "</depth>", out );
+}
+
 // COLUMNAR form of a symbol-row verb (--callers/--callees/--impact/--pr-context symbols). `wrapperTag` is the
 // element name ("callers"), `wrapperAttrs` the already-formatted attribute string ("of=\"X\" count=\"17\"").
 // `rows` are the symbol node ids in the caller's already-sorted order. Emits:
@@ -149,10 +161,13 @@ inline void emitColumnarTestedColumn( std::FILE* out, const IngestResult& ing, c
 // A6: `testReach` is optional — when given, "tested" joins fields= and a fifth dense `<tested>0,1,..</tested>`
 // column rides alongside (a parallel array cannot omit a false entry the way an XML attribute can; the
 // column itself is present only when a caller passed the lens, so a caller with no test data pays 0 bytes).
+// 0.6.5: `depth` (optional, --impact only) adds a dense `<depth>` column — transitiveCallersDepth's hop per row — and
+// names it in fields=; a caller that passes none pays 0 bytes, like the tested column.
 inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
                                     const char* wrapperTag, const std::string& wrapperAttrs,
                                     const std::vector<NodeId>& rows, std::string_view rootPrefix = {},
-                                    const std::vector<char>* testReach = nullptr )
+                                    const std::vector<char>* testReach = nullptr,
+                                    const std::vector<std::uint32_t>* depth = nullptr )
 {
     std::vector<char> esc;
 
@@ -167,7 +182,7 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
     std::fputs( kColumnarLegend, out );   // §B1.5: once per output, before the element it describes
     rw::emitTo( out, "<{} {} format=\"columnar\">", wrapperTag, wrapperAttrs.c_str() );
     emitPathTable( out, ing, uniqueFiles, esc, rootPrefix );
-    rw::emitTo( out, "<cols n=\"{}\" fields=\"path,name,line,kind{}\">", rows.size(), testReach ? ",tested" : "" );
+    rw::emitTo( out, "<cols n=\"{}\" fields=\"path,name,line,kind{}{}\">", rows.size(), testReach ? ",tested" : "", depth ? ",depth" : "" );
 
     // path index array
     std::fputs( "<path>", out );
@@ -219,6 +234,10 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
     if( testReach )
     {
         emitColumnarTestedColumn( out, ing, rows, *testReach );
+    }
+    if( depth )
+    {
+        emitColumnarDepthColumn( out, rows, *depth );
     }
 
     rw::emitTo( out, "</cols></{}>", wrapperTag );

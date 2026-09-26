@@ -6645,6 +6645,63 @@ inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<con
 }
 inline std::vector<NodeId> transitiveCallers( const Graph& g, std::span<const NodeId> seeds ) { return transitiveCallersDepth( g, seeds, nullptr ); }
 
+// ── Depth-labelled --impact (0.6.5) — the hop depth the walk above already records, put on the listing ──────
+// A flat blast radius cannot tell a direct caller from a four-hop dependent, and a page window cut over a
+// PageRank-only order drops rows of every depth at once, so a capped answer had no clean boundary. Both
+// helpers read transitiveCallersDepth's depthOut; neither walks the graph again.
+//
+// The ORDER: hop depth first (1 = calls a seed directly), then the order the listing always had within a depth
+// (PageRank descending, node id ascending). Ranked BEFORE the page window cuts (docs/METHODOLOGY.md §9.1), so a
+// cut drops the deepest rows first and a capped answer is complete through every depth its rows pass.
+inline void orderByDepthThenRank( std::vector<NodeId>& show, const std::vector<std::uint32_t>& depth, const std::vector<float>& rank )
+{
+    EXPECTS( depth.size() == rank.size(), "depth and rank are both indexed by node id" );
+    std::sort( show.begin(), show.end(), [ & ]( NodeId a, NodeId b )
+               {
+                   if( depth[a] != depth[b] )
+                   {
+                       return depth[a] < depth[b];
+                   }
+                   return rank[a] != rank[b] ? rank[a] > rank[b] : a < b;
+               } );
+}
+
+// The per-depth counts over the FULL reach set (never the page): element k is the number of reached nodes first
+// reached at hop k+1. A BFS reaches hop k only through a node at hop k-1, so every element is non-zero and the
+// elements sum to reach.size() — the root's by_depth= therefore partitions reaches= exactly.
+inline std::vector<std::uint32_t> depthCounts( std::span<const NodeId> reach, const std::vector<std::uint32_t>& depth )
+{
+    std::vector<std::uint32_t> counts;
+    for( NodeId n : reach )
+    {
+        const std::uint32_t d = depth[n];
+        ASSUME( d >= 1, "transitiveCallersDepth: a returned node is never a seed, so its depth is at least 1" );
+        if( counts.size() < d )
+        {
+            counts.resize( d, 0 );
+        }
+        ++counts[d - 1];
+    }
+    ENSURES( std::all_of( counts.begin(), counts.end(), []( std::uint32_t c ) { return c != 0; } ), "BFS depths are contiguous from 1" );
+    return counts;
+}
+
+// The XML row's d=, RUN-LENGTH: printed on the first row of the emitted window and on every row whose depth differs from
+// the row before it; empty otherwise (the legend: a row without d= has the depth of the row above it). Measured on this
+// repo's own --impact answers (0.6.5 lane report): d= on every row cost 240 B on a 40-row page (+4.9..5.9%), the run form
+// 6..24 B (one per depth shown), and the depth is still unambiguous because the rows are emitted in depth order. The JSON
+// and columnar dialects carry it on every row / as a dense column: a JSON object and a parallel array are read per entry.
+inline std::string depthRunAttrXml( std::span<const NodeId> show, const std::vector<std::uint32_t>& depth, std::size_t rowIndex, std::size_t windowBegin )
+{
+    EXPECTS( rowIndex < show.size() && windowBegin <= rowIndex );
+    const std::uint32_t d = depth[ show[ rowIndex ] ];
+    if( rowIndex != windowBegin && depth[ show[ rowIndex - 1 ] ] == d )
+    {
+        return {};
+    }
+    return " d=\"" + std::to_string( d ) + "\"";
+}
+
 // symbols transitively reachable FROM `seeds` via OUT-edges (everything the seeds call, transitively) — the
 // forward dual of transitiveCallers. Returns a per-node mask (seeds included). Used by --seams as testReach:
 // a cross-module edge u→v is exercised by a test iff testReach[u] (a test transitively reaches the caller).

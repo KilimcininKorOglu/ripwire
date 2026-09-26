@@ -1125,6 +1125,8 @@ inline constexpr char kHelpHead[] =
         "                               call edges in TRUE direction (finds the shared-caller join a directed --path can't)   [--connect-radius=N (1..12, default 6)]\n"
         "    --impact=SYM               show everything that reaches SYM — the transitive blast radius before a change\n"
         "                               transitive blast radius — the indexed symbols that reach SYM (a floor, see counts_floor). file:name disambiguates like --callers\n"
+        "                               rows run nearest first: d= is the hop depth (1 = a direct caller; printed where it changes), PageRank\n"
+        "                               order within a depth; by_depth=k:n on the root counts reaches= per depth, so a cut drops the deepest first\n"
         "                               importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM,\n"
         "                               emitted as <f via=\"import\" lazy=\"0|1\"> rows (format=columnar carries the count only; --limit sizes it). NEVER added to reaches= —\n"
         "                               files and symbols are different units, and an importer may use a different symbol from that file, or none at all.\n"

@@ -141,7 +141,9 @@ for name in seed_names:
     # t= is captured (not just matched) so the loop below can single out t="modscope" — #324's <file-scope>
     # exclusion — without changing what THIS list counts: reaches= still counts every caller row, module
     # scope included, so len(rows) == reaches stays the row-count invariance it always was.
-    rows = re.findall(r'<s t="(\w+)" n="([^"]+)" p="([^"]+)"( tested="1")?/>', doc)
+    # 0.6.5 (depth-labelled --impact): a row may carry d= (its hop depth, run-length) between p= and tested=; the
+    # row COUNT this invariance reads is unchanged by it (test/impactdepthcheck.sh gates the depths themselves).
+    rows = re.findall(r'<s t="(\w+)" n="([^"]+)" p="([^"]+)"(?: d="\d+")?( tested="1")?/>', doc)
     reaches = int(attrs.get("reaches", "-1"))
     if len(rows) != reaches:
         row_count_ok = False

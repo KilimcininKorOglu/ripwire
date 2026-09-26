@@ -509,6 +509,13 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // root's attribute; a <d> signature row's tested= is the next row's. No earlier sweep saw it because the gate fixture holds
     // no test (compactlegendcheck (D31) builds the smallest tree that prints one).
     { "tested",            "<s tested=1>: a non-test row an indexed test transitively reaches (absent otherwise, never 0)", true, "s" },
+    // DEPTH-LABELLED --impact (0.6.5): graph.h transitiveCallersDepth's hop per row. The <s> row prints d= run-length
+    // (graph.h depthRunAttrXml: the window's first row and each depth change), the columnar form a dense <depth> column, and
+    // the root by_depth= (graphlegend.h byDepthAttrXml) partitions reaches= by depth; all three are absent at reaches="0".
+    // onKey impact: the only answer that prints them (full clause: graphlegend.h kImpactDepthLegend).
+    { "d",                 "<s d=N>: hops to of= (1 = direct caller), set where it changes", true, "s", MapHeaderRead::No, {}, "impact" },
+    { "fields",            "<depth> column: hops to of= (1 = direct caller)", true, "cols", MapHeaderRead::No, "depth", "impact" },
+    { "by_depth",          "by_depth=k:n: n of reaches= at depth k, shallowest rows first", false, {}, MapHeaderRead::No, {}, "impact" },
     // The same lens on the signature rows (2026-09-12, the follow-up): serialize.h's two <d> row writers print tested="1" from
     // computeQMetrics' tested[] column, which the same isTestedByReach fills, and never a literal 0. main.cpp computes that column
     // only under --metrics, --for or --exemplar, so the reading rides the answers that computed it (--pack-task --metrics; --for
