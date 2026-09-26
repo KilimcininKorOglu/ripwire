@@ -958,6 +958,27 @@ inline bool isTsModulePath( std::string_view path ) noexcept
     return path.ends_with( ".ts" ) || path.ends_with( ".mts" ) || path.ends_with( ".cts" );
 }
 
+/// rv-nodetest-runner-60 F2: the file a relative specifier `spec`, written in a module in `dir`, loads under type
+/// stripping — or nothing, when Node would not find it. Node's resolver there never probes an extension and never maps
+/// a `.js` specifier onto a `.ts` source, so an extensionless specifier, or one whose exact spelled path is not a real
+/// file, finds nothing.
+inline std::optional<std::filesystem::path> resolveExactSpecifier( const std::filesystem::path& dir, std::string_view spec )
+{
+    const std::size_t      lastSlash = spec.rfind( '/' );
+    const std::string_view lastSeg   = ( lastSlash == std::string_view::npos ) ? spec : spec.substr( lastSlash + 1 );
+    if( lastSeg.find( '.' ) == std::string_view::npos )
+    {
+        return std::nullopt;   // extensionless: never probed for
+    }
+    std::filesystem::path target = ( dir / std::filesystem::path( std::string( spec ) ) ).lexically_normal();
+    std::error_code       ec;
+    if( !std::filesystem::is_regular_file( std::filesystem::status( target, ec ) ) )
+    {
+        return std::nullopt;   // the exact spelled path is not a real file — no probing, no .js -> .ts mapping
+    }
+    return target;
+}
+
 /// rv-nodetest-runner-60 F2, extended by train20-cr C9 and C10: whether Node, under type stripping, can
 /// LOAD the test file (already scanned as `testScan`, on disk at `diskPath`) and every local TypeScript
 /// module it reaches. Node's resolver under type stripping never probes an extension and never maps a `.js`
@@ -990,19 +1011,12 @@ inline bool tsModuleGraphLoadable( const detail::ModuleScan& testScan, std::stri
         const fs::path dir = module.disk.parent_path();
         for( const std::string& spec : module.scan.relativeSpecs )
         {
-            const std::size_t      lastSlash = spec.rfind( '/' );
-            const std::string_view lastSeg   = ( lastSlash == std::string::npos ) ? std::string_view( spec ) : std::string_view( spec ).substr( lastSlash + 1 );
-            if( lastSeg.find( '.' ) == std::string_view::npos )
+            const std::optional<fs::path> target = resolveExactSpecifier( dir, spec );
+            if( !target )
             {
-                return false;   // extensionless: Node's resolver under type stripping never probes for one
+                return false;   // Node's resolver under type stripping would not find it
             }
-            const fs::path  target = ( dir / spec ).lexically_normal();
-            std::error_code ec;
-            if( !fs::is_regular_file( fs::status( target, ec ) ) )
-            {
-                return false;   // the exact spelled path is not a real file — no probing, no .js -> .ts mapping
-            }
-            const std::string key = target.string();
+            const std::string key = target->string();
             if( !isTsModulePath( key ) || std::find( visited.begin(), visited.end(), key ) != visited.end() )
             {
                 continue;
@@ -1017,7 +1031,7 @@ inline bool tsModuleGraphLoadable( const detail::ModuleScan& testScan, std::stri
             {
                 return false;   // unreadable: its imports and syntax are unknown, so the command is too
             }
-            pending.push_back( { target, detail::scanModule( *bytes, key ) } );
+            pending.push_back( { *target, detail::scanModule( *bytes, key ) } );
         }
     }
     ENSURES( visited.size() <= kMaxTsModulesWalked, "the walk never reads past its bound" );
@@ -1091,6 +1105,32 @@ inline void readVersion( std::string_view text, std::size_t& p, long long& major
     }
 }
 
+/// The first major an upper bound in `rest` (the clause text after its floor) no longer reaches, or `kNoCeiling`: a
+/// `<X[.Y[.Z]]` comparator excludes X itself unless a minor or patch past zero lets X in, `<=X…` includes X, and a
+/// hyphen range's upper end (`A - B`) is inclusive.
+inline long long upperBoundCeilMajor( std::string_view rest ) noexcept
+{
+    const std::size_t lt   = rest.find( '<' );
+    const std::size_t dash = lt == std::string_view::npos ? rest.find( " - " ) : std::string_view::npos;
+    if( lt == std::string_view::npos && dash == std::string_view::npos )
+    {
+        return kNoCeiling;
+    }
+    std::size_t q         = lt != std::string_view::npos ? lt + 1 : dash + 3;
+    const bool  inclusive = lt == std::string_view::npos || ( q < rest.size() && rest[q] == '=' );
+    while( q < rest.size() && !( rest[q] >= '0' && rest[q] <= '9' ) )
+    {
+        ++q;
+    }
+    long long major = -1, minor = -1, patch = -1;
+    readVersion( rest, q, major, minor, patch );
+    if( major < 0 )
+    {
+        return kNoCeiling;   // no version after the comparator: no bound this reader can use
+    }
+    return ( inclusive || minor > 0 || patch > 0 ) ? major + 1 : major;
+}
+
 inline EngineClause engineClause( std::string_view clause ) noexcept
 {
     std::size_t p = 0;
@@ -1114,52 +1154,43 @@ inline EngineClause engineClause( std::string_view clause ) noexcept
     {
         return {};   // no version number found at all: unparseable, read as "admits anything"
     }
+    const bool   sameMajor = op.empty() || op == "=" || op == "v" || op == "=v" || op == "^" || op == "~";
     EngineClause out;
-    out.floor = nodeVersion( major, minor < 0 ? 0 : minor );
-    if( op.empty() || op == "=" || op == "v" || op == "=v" || op == "^" || op == "~" )
-    {
-        out.ceilMajor = major + 1;
-    }
-    const std::string_view rest = clause.substr( p );
-    if( const std::size_t lt = rest.find( '<' ); lt != std::string_view::npos )
-    {
-        std::size_t q = lt + 1;
-        const bool inclusive = q < rest.size() && rest[q] == '=';
-        while( q < rest.size() && !( rest[q] >= '0' && rest[q] <= '9' ) )
-        {
-            ++q;
-        }
-        long long uMajor = -1, uMinor = -1, uPatch = -1;
-        readVersion( rest, q, uMajor, uMinor, uPatch );
-        if( uMajor >= 0 )
-        {
-            const long long ceil = ( inclusive || uMinor > 0 || uPatch > 0 ) ? uMajor + 1 : uMajor;
-            out.ceilMajor = std::min( out.ceilMajor, ceil );
-        }
-    }
-    else if( const std::size_t dash = rest.find( " - " ); dash != std::string_view::npos )
-    {
-        std::size_t q = dash + 3;
-        while( q < rest.size() && !( rest[q] >= '0' && rest[q] <= '9' ) )
-        {
-            ++q;
-        }
-        long long uMajor = -1, uMinor = -1, uPatch = -1;
-        readVersion( rest, q, uMajor, uMinor, uPatch );
-        if( uMajor >= 0 )
-        {
-            out.ceilMajor = std::min( out.ceilMajor, uMajor + 1 );   // a hyphen range's upper end is inclusive
-        }
-    }
+    out.floor     = nodeVersion( major, minor < 0 ? 0 : minor );
+    out.ceilMajor = std::min( sameMajor ? major + 1 : kNoCeiling, upperBoundCeilMajor( clause.substr( p ) ) );
     ENSURES( out.floor >= 0 && out.ceilMajor > 0, "a floor is a version and a ceiling is a major past zero" );
     return out;
 }
 
-/// Whether EVERY `||` alternative of a non-empty `range` passes `admits` — a compound range admits whichever
-/// alternative a reader's Node satisfies, so each one must pass on its own (`">=24 || ^20"` is decided by
-/// `^20`, not by `>=24`).
-template<class Admits>
-inline bool everyClause( std::string_view range, Admits admits )
+/// A set of Node versions as the decisions below need it: every version from `floor` on, plus an older release
+/// line that got the feature by backport, from `backportFloor` up to (not including) major `backportCeilMajor`.
+struct VersionSet
+{
+    long long floor;
+    long long backportFloor;
+    long long backportCeilMajor;
+};
+
+// The version facts the decisions below read. `--test` (the CLI flag, not only the `node:test` module) was added in
+// Node 18.1 and backported to 16.17; 17.x never had it, and 18.0 has the module but not the flag.
+// `--experimental-strip-types` exists from 22.6 (an older Node refuses to start with it at all); stripping is on by
+// default — the flag a harmless no-op — from 23.6, and on the 22.x line from its 22.18 backport, so 23.0-23.5 do not
+// have it. Module-syntax detection (an ES-syntax file with no `"type"` runs as ESM) is on by default from 22.7,
+// backported to 20.19; 21.x and 22.0-22.6 need a flag for it.
+constexpr VersionSet kHasTestFlag         { nodeVersion( 18, 1 ), nodeVersion( 16, 17 ), 17 };
+constexpr VersionSet kHasStripFlag        { nodeVersion( 22, 6 ), nodeVersion( 22, 6 ), kNoCeiling };
+constexpr VersionSet kStripsByDefault     { nodeVersion( 23, 6 ), nodeVersion( 22, 18 ), 23 };
+constexpr VersionSet kDetectsModuleSyntax { nodeVersion( 22, 7 ), nodeVersion( 20, 19 ), 21 };
+
+/// Whether every Node one `engines.node` alternative admits is in `set`.
+constexpr bool clauseWithin( EngineClause c, VersionSet set ) noexcept
+{
+    return c.floor >= set.floor || ( c.floor >= set.backportFloor && c.ceilMajor <= set.backportCeilMajor );
+}
+
+/// Whether every Node a non-empty `range` admits is in `set` — a compound range admits whichever alternative a
+/// reader's Node satisfies, so each `||` alternative must pass on its own (`">=24 || ^20"` is decided by `^20`).
+inline bool rangeWithin( std::string_view range, VersionSet set ) noexcept
 {
     EXPECTS( !range.empty(), "an absent engines.node is each caller's own decision" );
     std::size_t start = 0;
@@ -1167,7 +1198,7 @@ inline bool everyClause( std::string_view range, Admits admits )
     {
         const std::size_t      pos    = range.find( "||", start );
         const std::string_view clause = range.substr( start, pos == std::string_view::npos ? range.size() - start : pos - start );
-        if( !admits( engineClause( clause ) ) )
+        if( !clauseWithin( engineClause( clause ), set ) )
         {
             return false;
         }
@@ -1177,32 +1208,6 @@ inline bool everyClause( std::string_view range, Admits admits )
         }
         start = pos + 2;
     }
-}
-
-// The version facts the decisions below read. `--test` (the CLI flag, not only the `node:test` module) was
-// added in Node 18.1 and backported to 16.17; 17.x never had it, and 18.0 has the module but not the flag.
-// `--experimental-strip-types` exists from 22.6 (an older Node refuses to start with it at all); stripping is
-// on by default — the flag a harmless no-op — from 23.6, and on the 22.x line from its 22.18 backport, so
-// 23.0-23.5 do not have it. Module-syntax detection (an ES-syntax file with no `"type"` runs as ESM) is on by
-// default from 22.7, backported to 20.19; 21.x and 22.0-22.6 need a flag for it.
-inline bool clauseHasTestFlag( EngineClause c ) noexcept
-{
-    return c.floor >= nodeVersion( 18, 1 ) || ( c.floor >= nodeVersion( 16, 17 ) && c.ceilMajor <= 17 );
-}
-
-inline bool clauseHasStripFlag( EngineClause c ) noexcept
-{
-    return c.floor >= nodeVersion( 22, 6 );
-}
-
-inline bool clauseStripsByDefault( EngineClause c ) noexcept
-{
-    return c.floor >= nodeVersion( 23, 6 ) || ( c.floor >= nodeVersion( 22, 18 ) && c.ceilMajor <= 23 );
-}
-
-inline bool clauseDetectsModuleSyntax( EngineClause c ) noexcept
-{
-    return c.floor >= nodeVersion( 22, 7 ) || ( c.floor >= nodeVersion( 20, 19 ) && c.ceilMajor <= 21 );
 }
 
 } // namespace detail
@@ -1221,11 +1226,11 @@ inline StripDecision typeStrippingDecision( std::string_view range )
     {
         return StripDecision::Flagged;
     }
-    if( !detail::everyClause( range, detail::clauseHasStripFlag ) )
+    if( !detail::rangeWithin( range, detail::kHasStripFlag ) )
     {
         return StripDecision::Unknown;   // admits a Node where the flag itself is a fatal "bad option"
     }
-    return detail::everyClause( range, detail::clauseStripsByDefault ) ? StripDecision::Bare : StripDecision::Flagged;
+    return detail::rangeWithin( range, detail::kStripsByDefault ) ? StripDecision::Bare : StripDecision::Flagged;
 }
 
 /// train20-cr C8: whether Node will read the test file at `path` (scanned as `scan`) as the module kind its
@@ -1261,12 +1266,12 @@ inline bool moduleSyntaxLoadable( std::string_view path, const detail::ModuleSca
     {
         return false;   // ES syntax in a file Node must evaluate as CommonJS: an explicit type turns detection off
     }
-    return range.empty() ? absentAssumed : detail::everyClause( range, detail::clauseDetectsModuleSyntax );
+    return range.empty() ? absentAssumed : detail::rangeWithin( range, detail::kDetectsModuleSyntax );
 }
 
 /// rv-nodetest-runner-60: the command for node's own built-in test runner at `path`, on disk at `diskPath`
-/// with source bytes `source`, under the nearest package.json's `"type"` (`moduleType`) and the evidence
-/// manifest `packageJson` — decided ENTIRELY from evidence this repo actually carries, never a guess at the
+/// with source bytes `source`, from the evidence manifest (`manifests.evidence`, for `engines.node`) and the nearest
+/// package.json's `"type"` (`moduleTypeOf( manifests )`) — decided ENTIRELY from evidence this repo actually carries, never a guess at the
 /// Node version or the module graph that will actually run it. Returns `nullptr` for `run_unknown="1"`, the
 /// SAME "no command" contract every other evidence miss in this file already uses:
 ///  * F1 — `.tsx`/`.jsx` can never be spelled: type stripping does not cover `.tsx`, and plain `node`
@@ -1279,15 +1284,16 @@ inline bool moduleSyntaxLoadable( std::string_view path, const detail::ModuleSca
 ///  * F3 — a `.ts`/`.mts`/`.cts` command's flag comes from `typeStrippingDecision` over `engines.node`.
 /// The test file is parsed once (`detail::scanModule`), and every fact above that needs its bytes reads
 /// that one scan.
-inline const char* nodeTestVerb( std::string_view path, std::string_view packageJson, std::string_view moduleType, std::string_view source,
-                                 std::string_view diskPath )
+inline const char* nodeTestVerb( std::string_view path, const PackageManifests& manifests, std::string_view source, std::string_view diskPath )
 {
+    const std::string_view packageJson = manifests.evidence;
+    const std::string      moduleType  = moduleTypeOf( manifests );
     if( path.ends_with( ".tsx" ) || path.ends_with( ".jsx" ) )
     {
         return nullptr;   // F1: never runnable, with or without a flag, on any Node
     }
     const std::string range = enginesNode( packageJson );
-    if( !range.empty() && !detail::everyClause( range, detail::clauseHasTestFlag ) )
+    if( !range.empty() && !detail::rangeWithin( range, detail::kHasTestFlag ) )
     {
         return nullptr;   // admits a Node where `--test` itself is a fatal "bad option"
     }
