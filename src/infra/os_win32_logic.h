@@ -21,6 +21,7 @@
 //      the st_mode a stat reports.
 //   6. Time, wait-status and socket-timeout conversions, and the socket-descriptor range.
 //   7. The shell choice: which bash may run a command (never a WSL launcher, never a relative PATH entry).
+//      And the program search os::which does: PATH in order, PATHEXT, absolute entries only.
 //   8. The PATH remedy --doctor prints when no copy of this program is on PATH, in PowerShell's spelling.
 //
 // Nothing here reads errno, the environment or the file system; every input is a parameter. Every function is noexcept
@@ -1130,6 +1131,65 @@ constexpr bool extensionInList( std::string_view path, std::string_view pathext 
         }
     }
     return false;
+}
+
+// searchProgramPath: the program Windows itself starts for `command` (os::which on Windows), as pure logic over the PATH
+// and PATHEXT strings. The one filesystem fact it needs, "is this a file and not a directory?", comes from `isFile`, so
+// the search runs and is tested on every platform. A `command` holding a separator or a drive colon is resolved alone.
+// Otherwise PATH is read in order. An entry that is empty or not absolute is never searched: ".", "bin", and Git Bash's
+// "/c/..." spelling, which Win32 cannot open. A name without an extension is tried with each PATHEXT entry, in PATHEXT's
+// order, one directory at a time; a name with an extension is used only if PATHEXT lists it. An empty `pathext` means
+// Windows' own default. The answer is in the program's spelling: '/' separators, an upper-case drive, and the extension
+// as PATHEXT spells it ("C:/Users/x/bin/ripwire.EXE"; the file system ignores case). "" when nothing resolves.
+// #334: --doctor's binary-path row used Git Bash's `which` instead. It answered from another shell's PATH, in a "/c/..."
+// spelling the C runtime could not open, so a byte-identical copy came out STALE.
+template<class IsFile>
+std::string searchProgramPath( std::string_view command, std::string_view pathList, std::string_view pathext, const IsFile& isFile ) noexcept
+{
+    if( command.empty() || command.find( '\0' ) != std::string_view::npos )
+    {
+        return {};
+    }
+    const std::string_view extensions = pathext.empty() ? std::string_view( ".COM;.EXE;.BAT;.CMD" ) : pathext;
+    const auto resolve = [ & ]( std::string base ) -> std::string
+    {
+        normalizePathArgInPlace( base.data() );
+        if( hasExtension( base ) )
+        {
+            return extensionInList( base, extensions ) && isFile( base ) ? base : std::string();
+        }
+        for( std::size_t at = 0; at <= extensions.size(); )
+        {
+            const std::string_view extension = nextPathListEntry( extensions, at );
+            if( !extension.empty() && isFile( base + std::string( extension ) ) )
+            {
+                return base + std::string( extension );
+            }
+        }
+        return {};
+    };
+    if( command.find_first_of( "/\\:" ) != std::string_view::npos )
+    {
+        return resolve( std::string( command ) );
+    }
+    for( std::size_t at = 0; at <= pathList.size(); )
+    {
+        std::string_view directory = nextPathListEntry( pathList, at );
+        if( directory.empty() || !isAbsoluteNativePath( directory ) )
+        {
+            continue;
+        }
+        while( directory.size() > 3 && ( directory.back() == '/' || directory.back() == '\\' ) )
+        {
+            directory.remove_suffix( 1 );
+        }
+        std::string found = resolve( std::string( directory ) + "/" + std::string( command ) );
+        if( !found.empty() )
+        {
+            return found;
+        }
+    }
+    return {};
 }
 
 // ── 8. The PATH remedy, in PowerShell's spelling ──────────────────────────────────────────────────────────────────
