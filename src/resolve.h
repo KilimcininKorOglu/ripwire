@@ -48,7 +48,7 @@
 #include "model.h"
 #include "arch.h"        // §B1.3: relForHash — the root-relative path segment canonicalIdRelTo keys on
 #include "smallvec.h"
-#include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey), a `using Base<T>::m;` qualifier (buildUsingReexports); stripQuotePair (pnpmWorkspaceGlobs)
+#include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey), a `using Base<T>::m;` qualifier (buildUsingReexports)
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 #include "infra/Diagnostics.h"   // ASSUME — buildScopedRecvDecls' index-range precondition
@@ -2297,7 +2297,11 @@ inline std::vector<std::string> pnpmWorkspaceGlobs( std::string_view y )
             inList = ( line == "packages:" );   // any other key ends the block
             continue;
         }
-        const std::string_view v = namesplit::stripQuotePair( trimWs( line.substr( 1 ) ) );   // the one matched-quote strip
+        std::string_view v = trimWs( line.substr( 1 ) );
+        if( v.size() >= 2 && ( v.front() == '\'' || v.front() == '"' ) && v.back() == v.front() )
+        {
+            v = v.substr( 1, v.size() - 2 );
+        }
         if( !v.empty() )
         {
             out.emplace_back( v );
