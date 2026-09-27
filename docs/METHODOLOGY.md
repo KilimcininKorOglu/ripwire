@@ -329,7 +329,8 @@ research branches, not on main; each names its branch.
    `--situ` and `--test-gate` were path-sorted, which put a hit at row ~60 of 127; ordering by
    `changed=1`, then `partner=1`, then `hops=N` took one question from 6,233 to 2,073 bytes for 281 bytes of legend
    (EVALS Graft head-to-head, "Losses, bucketed" L2 and the post-fix run, `7dae6522`). `--rank-by=churn-decay` ordered `<recent>` by decayed weight and
-   missed the gold; newest-first found it (L3, `c7688421`). `--slice=SYM:VAR` emitted seed rows in source order;
+   missed the gold; newest-first found it (L3, `c7688421`; that rests on q25 alone, which was asked at a pin that
+   already contained its graded commit, so it is not established: EVALS, Graft round correction). `--slice=SYM:VAR` emitted seed rows in source order;
    def-use coverage order (`order="defuse"`) scores MRR 0.628 against 0.602 for a random-order control and 0.525
    for source order on 478 pairs from 173 Python instances, Δ = +0.026 with a 95% CI of [0.004, 0.049] — better on
    182 pairs, worse on 227, tied on 69, in-sample and Python only (EVALS "`--slice=SYM:VAR` def-use row order",

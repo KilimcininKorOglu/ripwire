@@ -6188,6 +6188,13 @@ Private C++ corpus, 1,574 files.
 The result is published because it constrains the design: the graph answers "what is load-bearing",
 not "what changes together", and the tool uses different machinery for each.
 
+**Measured at HEAD (disclosed 2026-09-26).** Every commit above was ranked on the index, bodies and graph at the
+corpus's HEAD, which already contain that commit's change, and gold keeps only files still present at HEAD
+(`src/eval.h`). The absolute recall values, PageRank's 3.8% included, are therefore most likely upper bounds; not
+proven, since the HEAD index also holds files added after each commit, which compete for the top-k and push recall
+down. The lexical-over-PageRank ordering would reverse only if lexical recall fell more than tenfold relative to
+PageRank's at the parent revisions; that has not been measured. The corpus is private and cannot be re-measured from this tree.
+
 ### End-to-end agent A/B
 
 Two injected bugs, two arms, scored by whether the release test build exits 0 in isolated worktrees:
@@ -12751,6 +12758,13 @@ arm-vs-arm table says."* **ripwire beats the random-rank placebo on 6 of 30 ques
 required. The consequence is therefore honoured here: the table below is published because the losses are the
 result, and **no claim of ranking superiority over any arm is made or implied by it.**
 
+**Disclosed 2026-09-26: every question was asked at the one corpus pin, which already contains all 30 graded
+commits** (`derive_questions.py` asserts HEAD == pin). So every arm's index holds each graded change, S5's
+`--rank-by=churn-decay` read history that includes it in every run, and from the post-fix run on so did S2's
+`--situ` co-change. No ranking claim rests on this instrument. Its per-shape and before/after figures, here and in
+the Graft round below, were measured at a pin that already contained the graded change (the Graft CHECK axis, run
+at `c~1`, is not affected).
+
 All five registered arms plus the placebo ran on all 30 questions; nothing is absent, and codanna stayed out.
 The harness is committed at `bench/roundc-h2h/` — `scorer.py` is the single metric implementation every arm is
 scored through, and `derive_questions.py` re-derives the frozen question table from the corpus (it reproduces
@@ -12991,7 +13005,8 @@ reproduces Round C's published value exactly and re-ran stable on the four rows 
   days at HEAD's clock, from the same mining pass the teleport already ran. The first cut ordered rows by
   decayed weight and named none of the S5 gold; the age analysis showed q25's gold at 9 days and the
   weight-first 40th row at 21 days, so the order became newest-first — and q25 completes at 4,562 B where it
-  was 37,845 B incomplete. The other five S5 rows carry gold aged 26–484 days (the questions are
+  was 35,238 B incomplete (corrected 2026-09-26 from 37,845 B, which matches no committed results file; that
+  completion is not established, see the 2026-09-26 correction under the post-fix result). The other five S5 rows carry gold aged 26–484 days (the questions are
   stride-sampled from a 1,200-commit window, so their "recently" is not recent): no recency verb can serve
   them, the placebo wins three of them on budget alone, and that is the honest shape.
 - **L4 — "where is `<commit subject>` implemented" (S1: 1/6 ripwire, 0/6 graft-ask, 4/6 floor) and "how
@@ -12999,7 +13014,7 @@ reproduces Round C's published value exactly and re-ran stable on the four rows 
   serves `sigs shown="4" total="40"` — four signatures for a 21-file gold (q21) — and `--for` returns a set,
   not a path. Question-shape losses; registered as follow-ups (raise the compact sig quota under the same
   budget; a file-level `--path`). Not fixed here.
-- **L5 — the placebo (post-fix 11 / 14 / 5).** Fourteen mutually-incomplete ties and five placebo wins
+- **L5 — the placebo (post-fix 11 / 14 / 5; 10 / 15 / 5 without q25, see the 2026-09-26 correction below).** Fourteen mutually-incomplete ties and five placebo wins
   (q08, q20 and three S5 rows) on the rows where ripwire's byte budget is largest. The stop condition stands.
 
 Graft's own losses, for the record: `graft-expert`'s `callers <PascalCase(stem)>` emitted **0 bytes** on q02,
@@ -13030,12 +13045,22 @@ tier" resolves no cross-file call for them.
 Per shape, complete / gold named, post-fix: S1 ripwire 1/6 · 7/43 (graft-ask 0/6 · 3/43) · S2 4/6 · 5/14
 (2/6 · 3/14) · S3 **4/6 · 9/11** (2/6 · 2/11) · S4 1/6 · 7/31 (1/6 · 5/31) · S5 **1/6 · 6/30** (0/6 · 5/30).
 The rows that flipped: q10 (S3, the stem partner, 1,814 B incomplete → 2,095 B complete), q25 (S5, `<recent>`,
-37,845 B incomplete → 4,562 B complete); q12 went 6,233 → 2,073 B. The cost: +281 B of legend on every
+35,238 B incomplete → 4,562 B complete; `results.json`, corrected 2026-09-26 from 37,845 B); q12 went 6,233 → 2,073 B. The cost: +281 B of legend on every
 rows-bearing `--affected`/`--situ`/`--test-gate` document (`testgatelegendbudgetcheck` re-pinned 2260 → 2540
 with the measurement), and +2.6 KB on every `--rank-by=churn-decay` map for the 40 `<rc>` rows.
 
 **The stop condition still fires (11 < 16) and no ranking claim is published.** The tool is measurably
 better on the two axes the losses named and it does not clear the bar the registration set.
+
+**Correction (2026-09-26): q25's completion and its paired win are not established.** q25 was asked at a pin
+that already contained its graded commit (see the Round C disclosure), and `<recent>` lists the newest commits'
+files at that pin, so the 9-day age that put q25's gold into it is most likely the graded commit's own touch. Without q25 the post-fix
+figures are 10/30 and 32/129 (30/129 if the q28/q29 +1s have the same cause), S5 0/6, paired 5/20/5 · 7/20/3 ·
+8/8/14 · 10/15/5; lane 2 below becomes 13/30 and 38–40/129, paired 8/17/5 · 10/17/3 · 10/8/12 · 12/13/5. Not yet
+re-measured at q25's parent revision; the arithmetic re-derives from `results_post*.json` with q25/q28/q29 set to
+their `results.json` rows. Without q25 the paired rows against graft-ask, graft-expert and `rg` equal the pre-fix
+column (5/20/5, 7/20/3, 8/8/14) and S5 is back to its pre-fix 0/6, so "measurably better on the two axes the losses
+named" above survives the q25 correction for L2 only, not for L3.
 
 ### The CHECK axis — "I have a change in my working tree, which tests must run?" (N = 6, `check_axis.py`)
 
@@ -13099,7 +13124,8 @@ trimmed surface files enter the tail. One row moved the other way: q24 (18-file 
 the tail's 24 slots now being taken by higher-ranked trimmed files. The five byte losses against graft-ask are
 untouched by design (they are the legend). **The stop condition still fires — 13 of 30 against a required 16
 — and no ranking claim is published.** The remaining tied rows are the shapes named above: stride-sampled S5
-gold, multi-file S4/S1 proxies, and two S3 graph-recall misses.
+gold, multi-file S4/S1 proxies, and two S3 graph-recall misses. The lane 2 column carries q25 unchanged, so the
+2026-09-26 correction above applies to it: 13/30 and 38–40/129 without q25.
 
 ### Registered follow-ups (not funded here)
 
