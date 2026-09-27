@@ -324,9 +324,12 @@ inline std::string doctorBinaryPathVerdictAttr( const std::string& selfPath, con
     const std::string& olderName  = selfIsOlder ? selfName : whichName;
     const std::string& newerName  = selfIsOlder ? whichName : selfName;
     const std::string& newerPath  = selfIsOlder ? whichPath : selfPath;
+    // Unread here means the release numbers differ (order != 0): that, not the bytes, is the evidence, so say it.
+    const std::string  evidence   = unread.empty() ? std::string( " and their contents differ" )
+                                  : " and they state different release numbers (could not read " + std::string( unread ) + ", so no bytes were compared)";
     return out + " hint=\"" + std::string( rw::escapeXml( std::string_view(
-                  "STALE: " + olderName + " is older than " + newerName
-                + " and their contents differ — rebuild/reinstall so PATH points at the newer one, or invoke "
+                  "STALE: " + olderName + " is older than " + newerName + evidence
+                + " — rebuild/reinstall so PATH points at the newer one, or invoke "
                 + newerPath + " directly" ), esc ) ) + "\"";
 }
 

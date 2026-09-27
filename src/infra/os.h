@@ -230,8 +230,11 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
         return executable( path ) ? path : std::string();
     }
     const char* pathEnv = std::getenv( "PATH" );
-    std::string_view remaining = pathEnv ? std::string_view( pathEnv ) : std::string_view();
-    while( !remaining.empty() )
+    if( pathEnv == nullptr ) { return {}; }
+    // Every entry is visited, an empty one included wherever it sits ("/usr/bin:/bin:" ends in one): sh and which(1)
+    // read it as the current directory, so a loop that stops when the rest is empty would drop the trailing one.
+    std::string_view remaining( pathEnv );
+    for( ;; )
     {
         const std::size_t split = remaining.find( ':' );
         const std::string_view dir = remaining.substr( 0, split );
