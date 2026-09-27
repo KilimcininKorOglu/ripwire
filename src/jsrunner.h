@@ -824,28 +824,12 @@ inline bool isTypeOnlyStatement( TSNode stmt ) noexcept
     return false;
 }
 
-/// Whether `node` is an `export = x` assignment: an `export_statement` whose anonymous `=` token the grammar keeps as
-/// a child (a plain `export default x` has none).
-inline bool isExportAssignment( TSNode node ) noexcept
-{
-    const std::uint32_t count = ts_node_child_count( node );
-    for( std::uint32_t i = 0; i < count; ++i )
-    {
-        const TSNode child = ts_node_child( node, i );
-        if( !ts_node_is_named( child ) && rw::kindIs( ts_node_type( child ), "=" ) )
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 /// train20-cr C10: whether `node` (outside any `declare`) is TypeScript syntax that type stripping cannot
 /// erase: Node's own list (an `enum`, a `namespace` with runtime code, a parameter property, an import alias
 /// `import A = B.C` / `import x = require(…)`), plus what strip-only mode also rejects (review R2, each run under
 /// Node 26.9): `export =`, an angle-bracket assertion `<T>x`, the legacy `module M {}` keyword even with a type-only
 /// body, and a decorator (a parse error). Each fails before a single test runs, so a hit means the command would fail.
-inline bool nodeIsNonErasable( TSNode node ) noexcept
+inline bool nodeIsNonErasable( TSNode node )   // not noexcept: firstChildOfKind's cursor allocates (tschildren.h A4-F25)
 {
     const char* kind = ts_node_type( node );
     if( rw::kindIs( kind, "enum_declaration" ) || rw::kindIs( kind, "import_alias" ) || rw::kindIs( kind, "import_require_clause" )
@@ -855,7 +839,7 @@ inline bool nodeIsNonErasable( TSNode node ) noexcept
     }
     if( rw::kindIs( kind, "export_statement" ) )
     {
-        return isExportAssignment( node );
+        return !ts_node_is_null( rw::firstChildOfKind( node, /*namedOnly=*/false, { "=" } ) );   // `export = x` keeps its `=` token
     }
     if( rw::kindIs( kind, "internal_module" ) )
     {
@@ -864,27 +848,15 @@ inline bool nodeIsNonErasable( TSNode node ) noexcept
         {
             return false;
         }
-        const std::uint32_t count = ts_node_named_child_count( body );
-        for( std::uint32_t i = 0; i < count; ++i )
-        {
-            if( !isTypeOnlyStatement( ts_node_named_child( body, i ) ) )
-            {
-                return true;
-            }
-        }
-        return false;
+        bool            runtime = false;
+        rw::ChildCursor cursor( body );
+        rw::forEachNamedChild( body, cursor.cur, [ & ]( TSNode stmt ) { runtime = !isTypeOnlyStatement( stmt ); return !runtime; } );
+        return runtime;
     }
     if( rw::kindIs( kind, "required_parameter" ) || rw::kindIs( kind, "optional_parameter" ) )
     {
-        const std::uint32_t count = ts_node_child_count( node );   // `readonly` is an anonymous token: every child, not only named ones
-        for( std::uint32_t i = 0; i < count; ++i )
-        {
-            const char* part = ts_node_type( ts_node_child( node, i ) );
-            if( rw::kindIs( part, "accessibility_modifier" ) || rw::kindIs( part, "override_modifier" ) || rw::kindIs( part, "readonly" ) )
-            {
-                return true;   // a parameter property: TS rewrites it into a constructor assignment
-            }
-        }
+        // a parameter property: TS rewrites it into a constructor assignment (`readonly` is an anonymous token, so all children)
+        return !ts_node_is_null( rw::firstChildOfKind( node, /*namedOnly=*/false, { "accessibility_modifier", "override_modifier", "readonly" } ) );
     }
     return false;
 }
