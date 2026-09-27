@@ -568,6 +568,10 @@ inline constexpr const char* kDeclinedCallsGateClause =
     "It also counts a call named like a builtin-type method (dict.get, list.append) whose bound definitions' classes the caller's file never names. ";
 inline const char* declinedCallsLegend( bool on ) noexcept { return on ? kDeclinedCallsLegend : ""; }
 inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDeclinedCallsGateClause : ""; }
+// --test-gate's own short form: the same attribute and unit, sized for a verb whose legend has an absolute byte budget
+// (test/testgatelegendbudgetcheck.sh), so it defines the one form it emits rather than all three.
+inline constexpr const char* kDeclinedCallsTestGateLegend =
+    "declined_calls=K (absent when 0): K call SITES the resolver declined to bind that could have reached the change or its radius (the map's declined=); a test behind one is in no row here. ";
 // The clause and, where the gate declined in this graph, its gate sentence — the one spelling every declined_calls= emitter uses.
 inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined ) { return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ); }
 
