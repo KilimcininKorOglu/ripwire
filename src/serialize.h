@@ -1630,11 +1630,11 @@ struct DefGroupStat
     NodeId        anchor  = kNoNode;   // lowest-NodeId bodied member (the row bodyless decls fold into)
 };
 
-inline OverloadRows perDefinitionRows( const IngestResult& ing, const std::vector<NodeId>& bucket )
+// Pass 1 of perDefinitionRows: each bucket member's (kind,id) group, and per group its member/body counts and anchor.
+inline void tallyDefGroups( const IngestResult& ing, const std::vector<NodeId>& bucket,
+                            std::vector<DefGroupStat>& groups, std::vector<std::size_t>& memberGroup )
 {
     rw::HashMap<std::string, std::size_t> groupOf;
-    std::vector<DefGroupStat>             groups;
-    std::vector<std::size_t>              memberGroup;
     memberGroup.reserve( bucket.size() );
     for( NodeId nodeId : bucket )
     {
@@ -1651,6 +1651,13 @@ inline OverloadRows perDefinitionRows( const IngestResult& ing, const std::vecto
         }
         memberGroup.push_back( it->second );
     }
+}
+
+inline OverloadRows perDefinitionRows( const IngestResult& ing, const std::vector<NodeId>& bucket )
+{
+    std::vector<DefGroupStat> groups;
+    std::vector<std::size_t>  memberGroup;
+    tallyDefGroups( ing, bucket, groups, memberGroup );
     OverloadRows                    out;
     std::vector<std::size_t>        rowOfGroup( groups.size(), SIZE_MAX );
     for( std::size_t i = 0; i < bucket.size(); ++i )
@@ -1698,6 +1705,11 @@ inline OverloadRows overloadRowsFor( const IngestResult& ing, const std::vector<
 inline std::string splitLineAttr( const OverloadRows& rows, std::size_t i, const Symbol& s )
 {
     return rows.split[i] ? " l=\"" + std::to_string( s.line ) + "\"" : std::string();
+}
+
+inline std::string splitLineJson( const OverloadRows& rows, std::size_t i, const Symbol& s )
+{
+    return rows.split[i] ? ",\"l\":" + std::to_string( s.line ) : std::string();
 }
 
 // the shared "n > floor ? PREFIX+n+SUFFIX : empty" idiom behind every economy-of-attributes disclosure in
@@ -8574,8 +8586,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
 
                 if( rows.overloads[ rowIndex ] > 1 )
                 { rw::formatTo( num, sizeof( num ), ",\"overloads\":{}", rows.overloads[ rowIndex ] );  w.write( num ); }
-                if( rows.split[ rowIndex ] )   // the XML l= twin: a --metrics row split out of a same-name group
-                { rw::formatTo( num, sizeof( num ), ",\"l\":{}", s.line );  w.write( num ); }
+                w.write( splitLineJson( rows, rowIndex, s ) );   // the XML l= twin: a --metrics row split out of a same-name group
 
                 if( bind && id < bind->size() && !(*bind)[id].empty() )
                 { w.write( ",\"bind\":" );  writeJsonStr( w, (*bind)[id], esc ); }
