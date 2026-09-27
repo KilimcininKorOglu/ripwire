@@ -307,6 +307,51 @@ WGOTPATH="$( PATH="/usr/bin:/bin" bash "$WEVALSCRIPT" 2>/dev/null )"
     && ok "(G2) no side effect from evaluating the pasted line (a broken quote would let \` or \$() run)" \
     || no "(G2) a marker file exists — the pasted line ran something"
 
+# ── (G3) CodeRabbit 4109273959, second comment: a user pastes the hint from the command to its END, so nothing may
+#     follow the command. The hint used to end "... :"$PATH" (and put that line in your shell rc file)", and pasting
+#     that made bash and sh refuse the whole line (syntax error near `(`) and zsh fail ("number expected"), so PATH
+#     never changed. Evaluate everything from `export PATH=` to the end of the hint in each shell present, and require
+#     exit 0 with the literal directory first on PATH. RED on 0.6.4's trailing guidance.
+WTAIL="$( printf '%s' "$WHINT_UNESC" | sed -e 's/^hint="//' -e 's/"$//' | sed -n 's/.*\(export PATH=\)/\1/p' )"
+[ -n "$WTAIL" ] || no "(G3) no 'export PATH=' in the not-on-PATH hint: $WHINT"
+for g3sh in bash sh zsh; do
+    command -v "$g3sh" >/dev/null 2>&1 || continue
+    printf '%s\nprintf "%%s" "${PATH%%%%:*}"\n' "$WTAIL" >"$TMP/g3-$g3sh.sh"
+    G3OUT="$( PATH="/usr/bin:/bin" "$g3sh" "$TMP/g3-$g3sh.sh" 2>"$TMP/g3-$g3sh.err" )"; G3RC=$?
+    [ "$G3RC" -eq 0 ] && [ "$G3OUT" = "$WEIRDDIR_REAL" ] \
+        && ok "(G3) $g3sh: pasting the hint from 'export PATH=' to its end runs and puts the directory first on PATH" \
+        || no "(G3) $g3sh: pasting the hint's tail failed (rc=$G3RC, PATH head [$G3OUT], stderr [$( head -c 120 "$TMP/g3-$g3sh.err" )]): [$WTAIL]"
+done
+
+# ── (G4) review R4 of the CodeRabbit 4109273959 follow-up: the hint ATTRIBUTE is XML-escaped (&apos; &quot;) like every
+#     attribute, so the bytes a terminal shows do not paste into any shell. With ripwire not on PATH, --doctor also prints
+#     the remedy UNESCAPED on stderr, the command alone on the last line. Paste that raw last line, byte for byte, into
+#     each shell present: exit 0 and the literal $/`/'/space directory first on PATH. stdout stays one well-formed
+#     document. RED on 0.6.4, which printed nothing on stderr.
+WERR="$TMP/g4-doctor.err"
+PATH="/usr/bin:/bin" TMPDIR="$WEIRDCACHE" "$WEIRDDIR/ripwire" "$REPO" --doctor --no-cache >"$TMP/g4-doctor.out" 2>"$WERR"
+xmllint --noout "$TMP/g4-doctor.out" 2>/dev/null \
+    && ok "(G4) stdout is still one well-formed XML document when the remedy is also on stderr" \
+    || no "(G4) --doctor stdout is not well-formed XML"
+G4LINE="$( tail -n 1 "$WERR" )"
+case "$G4LINE" in
+    export\ PATH=*) ok "(G4) stderr's last line is the bare command: [$G4LINE]" ;;
+    *)              no "(G4) stderr's last line is not the command (nothing pasteable unescaped): [$G4LINE]" ;;
+esac
+for g4sh in bash sh dash zsh; do
+    command -v "$g4sh" >/dev/null 2>&1 || continue
+    printf '%s\nprintf "%%s" "${PATH%%%%:*}"\n' "$G4LINE" >"$TMP/g4-$g4sh.sh"
+    G4OUT="$( PATH="/usr/bin:/bin" "$g4sh" "$TMP/g4-$g4sh.sh" 2>"$TMP/g4-$g4sh.err" )"; G4RC=$?
+    [ "$G4RC" -eq 0 ] && [ "$G4OUT" = "$WEIRDDIR_REAL" ] && [ ! -e "$MARKER" ] \
+        && ok "(G4) $g4sh: the raw stderr line pastes as-is and puts the directory first on PATH" \
+        || no "(G4) $g4sh: the raw stderr line did not paste (rc=$G4RC, PATH head [$G4OUT], stderr [$( head -c 120 "$TMP/g4-$g4sh.err" )])"
+done
+# control: with ripwire on PATH, --doctor says nothing on stderr about PATH
+PATH="$WEIRDDIR:/usr/bin:/bin" TMPDIR="$WEIRDCACHE" "$WEIRDDIR/ripwire" "$REPO" --doctor --no-cache >/dev/null 2>"$TMP/g4-onpath.err"
+grep -q 'no ripwire resolves from PATH' "$TMP/g4-onpath.err" \
+    && no "(G4) control: stderr carries the PATH remedy even with ripwire on PATH" \
+    || ok "(G4) control: with ripwire on PATH, stderr carries no PATH remedy"
+
 # §P11 doctor item: binary-path's ok="0" row names which of self=/which= is the STALE (older) one.
 echo "$SOUT" | grep -oE '<c n="binary-path" ok="0"[^<]*/>' | grep -q 'hint="STALE:' \
     && ok "genuine-stale binary -> binary-path row carries hint=\"STALE: ...\"" \

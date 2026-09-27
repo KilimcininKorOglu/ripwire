@@ -1201,7 +1201,8 @@ struct TreeGuard
 // An `.astro` file is `---`-fenced frontmatter (TypeScript) followed by a template the TypeScript
 // grammar cannot read. Parsing one WHOLESALE was MEASURED before this code existed (issue #67 STEP 0,
 // 1902 real .astro files over withastro/{docs,astro,starlight}, astrowind, astro-paper and two private
-// sites): EVERY file came back degraded, median ERROR-byte ratio 0.33-1.00 per corpus. `.metal` ships at
+// sites): 1878 of 1902 files came back degraded, median ERROR-byte ratio 0.33-1.00 per corpus (the count
+// docs/ARCHITECTURE.md#astro-extraction publishes). `.metal` ships at
 // 0.0081 and the C grammar was REJECTED for CUDA at 0.123, so wholesale is 27x-120x worse than the
 // option this project already turned down. The parse is therefore restricted to the frontmatter and the
 // template is a DISCLOSED blind spot (README, docs/ARCHITECTURE.md#astro-extraction) rather than a

@@ -813,6 +813,8 @@ TEST_CASE( "doctor PATH remedy: PowerShell's assignment, native separators, neve
     CHECK( h.starts_with( "$env:Path = 'C:\\Program Files\\ripwire tools\\ripwire-0.6.4-windows-x64;' + $env:Path" ) );
     CHECK( h.find( "export PATH" ) == std::string::npos );
     CHECK( h.find( '/' ) == std::string::npos );
+    CHECK( h.ends_with( " + $env:Path" ) );   // the command ONLY: guidance after it made a complete paste fail (CodeRabbit 4109273959)
+    CHECK( kPowerShellPathPrependScope.find( "user Path" ) != std::string_view::npos );
     CHECK( powerShellPathPrependHint( "//server/share/bin" ).starts_with( "$env:Path = '\\\\server\\share\\bin;' + $env:Path" ) );   // UNC
 }
 
@@ -823,8 +825,7 @@ TEST_CASE( "doctor PATH remedy: a directory with $, a backtick, a quote and a sp
 {
     const std::string h = powerShellPathPrependHint( "C:/tools/$env:UserProfile `whoami` it'is weird/bin" );
     // '/' -> '\\', then the whole (dir + ";") is single-quoted; an embedded ' doubles to ''.
-    CHECK( h == "$env:Path = 'C:\\tools\\$env:UserProfile `whoami` it''is weird\\bin;' + $env:Path"
-                " in PowerShell (this window; add the directory to your user Path for new ones)" );
+    CHECK( h == "$env:Path = 'C:\\tools\\$env:UserProfile `whoami` it''is weird\\bin;' + $env:Path" );
 }
 
 // PowerShell's tokenizer also closes a single-quoted literal on the typographic quotes U+2018..U+201B, so a directory
@@ -833,8 +834,7 @@ TEST_CASE( "doctor PATH remedy: a directory with $, a backtick, a quote and a sp
 TEST_CASE( "doctor PATH remedy: PowerShell's typographic single quotes are doubled too" )
 {
     CHECK( powerShellPathPrependHint( "C:/O\xE2\x80\x99" "Brien/bin" )
-           == "$env:Path = 'C:\\O\xE2\x80\x99\xE2\x80\x99" "Brien\\bin;' + $env:Path"
-              " in PowerShell (this window; add the directory to your user Path for new ones)" );
+           == "$env:Path = 'C:\\O\xE2\x80\x99\xE2\x80\x99" "Brien\\bin;' + $env:Path" );
     CHECK( powerShellSingleQuote( "\xE2\x80\x98|\xE2\x80\x9A|\xE2\x80\x9B" )
            == "'\xE2\x80\x98\xE2\x80\x98|\xE2\x80\x9A\xE2\x80\x9A|\xE2\x80\x9B\xE2\x80\x9B'" );
     // neighbours of the range, and a truncated sequence at the end, are not quotes and pass through once

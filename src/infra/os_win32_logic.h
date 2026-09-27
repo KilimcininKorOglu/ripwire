@@ -1172,12 +1172,14 @@ inline std::string powerShellSingleQuote( std::string_view s ) noexcept
 // separated), for this window, and the pointer to the user Path that new windows read (README's Windows install sets it).
 // The directory (plus the trailing ';') is one PowerShell single-quoted literal (powerShellSingleQuote, above);
 // `$env:Path` is appended outside the quotes so it still expands to the existing Path.
+// The hint is the assignment ONLY, so pasting all of it runs (CodeRabbit 4109273959, second comment); the guidance that
+// used to trail it is kPowerShellPathPrependScope, which the caller prints before the command.
 inline std::string powerShellPathPrependHint( std::string_view programDir ) noexcept
 {
     std::string dir( programDir );
     std::replace( dir.begin(), dir.end(), '/', '\\' );
-    return "$env:Path = " + powerShellSingleQuote( dir + ";" ) + " + $env:Path"
-           " in PowerShell (this window; add the directory to your user Path for new ones)";
+    return "$env:Path = " + powerShellSingleQuote( dir + ";" ) + " + $env:Path";
 }
+inline constexpr std::string_view kPowerShellPathPrependScope = "in PowerShell, for this window; add the directory to your user Path for new ones";
 
 }   // namespace rw::oswin

@@ -98,6 +98,7 @@ kMaxSkipRowsPerClass	OUTPUT
 kMaxSliceDepth	BOUNDARY
 kMaxStructsPerRef	OUTPUT
 kMaxStructsShown	OUTPUT
+kMaxTsModulesWalked	BOUNDARY
 kMaxUniqueQueryTerms	INDEXING
 kMeasuredDigitsPricedWidth	OUTPUT
 kMemberSpellingsShown	OUTPUT
