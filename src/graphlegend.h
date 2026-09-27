@@ -553,14 +553,27 @@ inline const char* capLegendClause( bool active ) noexcept
 
 // ── TIER-3 DECLINES — declined_calls= on the callers, callees and impact answers (test/declinecheck.sh) ────
 // A call whose candidates are two or more same-language definitions, none in the caller's file or directory,
-// and that no qualifier or receiver rule pinned, gets NO edge: the resolver declines to guess. Until this
+// and that no qualifier or receiver rule pinned, gets NO edge: the resolver declines to guess. So does a call the
+// builtin-method name gate refused (graph.h BuiltinMethodGate), whatever the number of definitions. Until this
 // clause the decline was also SILENT, so count="0" read as "no caller exists" about a call the resolver had
 // seen. One sentence for the three answers and their MCP twins, emitted exactly when the attribute is:
 // declinedCallsLegend( bool ) takes the emitter's own attribute-present condition, never a re-derivation. No
 // double hyphen anywhere, because it lands inside an XML comment.
 inline constexpr const char* kDeclinedCallsLegend =
     "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge exists and no count or row here includes them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
+// The builtin-method name gate's declines (graph.h BuiltinMethodGate) ride the same count with ONE definition possible;
+// this clause is charged only where the gate declined at least one call in the graph (Graph::gateDeclinedCalls), so an
+// answer on a tree the gate never touched keeps its bytes.
+inline constexpr const char* kDeclinedCallsGateClause =
+    "It also counts a call named like a builtin-type method (dict.get, list.append) whose bound definitions' classes the caller's file never names. ";
 inline const char* declinedCallsLegend( bool on ) noexcept { return on ? kDeclinedCallsLegend : ""; }
+inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDeclinedCallsGateClause : ""; }
+// --test-gate's own short form: the same attribute and unit, sized for a verb whose legend has an absolute byte budget
+// (test/testgatelegendbudgetcheck.sh), so it defines the one form it emits rather than all three.
+inline constexpr const char* kDeclinedCallsTestGateLegend =
+    "declined_calls=K (absent when 0): K call SITES the resolver declined to bind that could have reached the change or its radius (the map's declined=); a test behind one is in no row here. ";
+// The clause and, where the gate declined in this graph, its gate sentence — the one spelling every declined_calls= emitter uses.
+inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined ) { return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ); }
 
 // ONE absent-at-zero count attribute: ` name="N"`, or nothing at all when count is 0. declined_calls= below and
 // --skipped's extent_suspect_files=/macro_blanked_files= (root) and extent_suspect_syms=/macro_blanked= (<h> rows)
@@ -611,22 +624,67 @@ inline std::string importsUnresolvedKeyJson( std::uint64_t importsUnresolved )
 {
     return countFieldOrEmpty( "imports_unresolved", std::size_t( importsUnresolved ), /*json=*/true );
 }
-inline constexpr const char* kGraphPartialAttrXml = " graph_partial=\"1\"";
-inline std::string importsUnresolvedPartialAttrXml( std::uint64_t importsUnresolved )
-{
-    return importsUnresolved > 0 ? importsUnresolvedAttrXml( importsUnresolved ) + kGraphPartialAttrXml : std::string();
-}
+inline constexpr const char* kGraphPartialAttrXml = " graph_partial=\"1\""; // tsImportRootAttrXml below composes it
 // graph_partial='s reading is ONE sentence, spelled identically in both full legends below and in the compact term
 // (compactlegend.h); test/depsprecisecheck.sh's #220 (I) arms pin it in all three, so the wordings cannot fork.
 inline constexpr const char* kDepsImportsUnresolvedLegend =
-    "imports_unresolved=N graph_partial=1 (root, absent at 0): N TS/JS imports name this tree (a tsconfig/jsconfig paths alias, a baseUrl path, a workspace package) yet drew no edge, so every value here is measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios (an absent cycles element is no proof of none); afferent=/transitive=/ccd/acd/nccd can only rise. ";
+    "imports_unresolved=N graph_partial=1 (root, absent at 0): N TS/JS imports name this tree (a tsconfig/jsconfig paths alias, a baseUrl path, a workspace package, a package.json imports entry, an @/ or ~ specifier no registry can publish; asset imports never count) yet drew no edge, so every value here is measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios (an absent cycles element is no proof of none); afferent=/transitive=/ccd/acd/nccd can only rise. ";
 inline constexpr const char* kArchImportsUnresolvedLegend =
-    " imports_unresolved=N graph_partial=1 (absent at 0): N TS/JS imports name this tree (a paths alias, a baseUrl path, a workspace package) yet drew no edge, so an edge through one was never judged: violations= can only rise, and the metrics are measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios.";
+    " imports_unresolved=N graph_partial=1 (absent at 0): N TS/JS imports name this tree (a paths alias, a baseUrl path, a workspace package, a package.json imports entry, an @/ or ~ specifier; asset imports never count) yet drew no edge, so an edge through one was never judged: violations= can only rise, and the metrics are measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios.";
 inline constexpr const char* kImpactImportsUnresolvedLegend =
-    "imports_unresolved=N (absent at 0): N TS/JS imports name this tree (a tsconfig/jsconfig paths alias, a baseUrl path, a workspace package) yet drew no edge, so importers= is a floor. ";
+    "imports_unresolved=N (absent at 0): N TS/JS imports name this tree (a tsconfig/jsconfig paths alias, a baseUrl path, a workspace package, a package.json imports entry, an @/ or ~ specifier no registry can publish; asset imports never count) yet drew no edge, so importers= is a floor. ";
+// #220 part 2 — the resolver's two further disclosures, beside imports_unresolved= and absent at zero like it:
+// imports_dts= counts the edges that land only on a declaration file (types, not source — every count includes them),
+// tsconfig_unread= the owning configs whose `extends` base or `references` project is not in the tree and could have
+// declared an alias (or, for a reference, owned the importer). An
+// alias nobody read is an import that drew no edge, so tsconfig_unread= makes the root partial exactly as
+// imports_unresolved= does: graph_partial="1", never counts_floor (the part-1 reasoning above holds unchanged). One
+// composer for the --deps and --arch roots, so the attribute order is fixed: a root that carries only
+// imports_unresolved= is byte-identical to part 1's. Each legend clause defines graph_partial= itself, so a root with
+// tsconfig_unread= and no imports_unresolved= still has its reading defined.
+// The three counts one --deps/--arch root discloses (packDeps' parameter; graph.h StructuralIncludeAdj fills them).
+struct TsImportRootCounts
+{
+    std::uint64_t unresolved = 0; // imports_unresolved=
+    std::uint64_t dts = 0; // imports_dts=
+    std::uint64_t unread = 0; // tsconfig_unread=
+};
+inline std::string tsImportRootAttrXml( std::uint64_t importsUnresolved, std::uint64_t importsDts, std::uint64_t tsconfigUnread )
+{
+    std::string s = importsUnresolvedAttrXml( importsUnresolved ) + countAttrXmlOrEmpty( "imports_dts", std::size_t( importsDts ) ) + countAttrXmlOrEmpty( "tsconfig_unread", std::size_t( tsconfigUnread ) );
+    return importsUnresolved > 0 || tsconfigUnread > 0 ? s + kGraphPartialAttrXml : s;
+}
+inline constexpr const char* kDepsImportsDtsLegend =
+    "imports_dts=N (root, absent at 0): N TS/JS imports resolved through a paths alias, a baseUrl path or a workspace package only to a .d.ts declaration, not to source; their edges are in every count. ";
+inline constexpr const char* kDepsTsconfigUnreadLegend =
+    "tsconfig_unread=N graph_partial=1 (root, absent at 0): N config files that could declare an alias or a workspace package were not read (an extends base or referenced project not in the tree, one that does not parse, or a tsconfig/jsconfig/workspace root above the crawl root, looked for up to the git top-level), so every value here is measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios. ";
+inline constexpr const char* kArchImportsDtsLegend = " imports_dts=N (absent at 0): N TS/JS imports resolved only to a .d.ts declaration.";
+inline constexpr const char* kArchTsconfigUnreadLegend =
+    " tsconfig_unread=N graph_partial=1 (absent at 0): N config files that could declare an alias or a workspace package were not read (an extends base or referenced project not in the tree, one that does not parse, or a tsconfig/jsconfig/workspace root above the crawl root, looked for up to the git top-level), so an edge through one was never judged: violations= can only rise, and the metrics are measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios.";
+// Two legend clauses, each exactly when its count is non-zero (the #220 composers below all have this shape).
+inline std::string clausesForCounts( std::uint64_t countA, const char* clauseA, std::uint64_t countB, const char* clauseB )
+{
+    return std::string( countA > 0 ? clauseA : "" ) + ( countB > 0 ? clauseB : "" );
+}
+inline std::string depsTsImportExtrasLegend( std::uint64_t importsDts, std::uint64_t tsconfigUnread )
+{
+    return clausesForCounts( importsDts, kDepsImportsDtsLegend, tsconfigUnread, kDepsTsconfigUnreadLegend );
+}
+inline std::string archTsImportExtrasLegend( std::uint64_t importsDts, std::uint64_t tsconfigUnread )
+{
+    return clausesForCounts( importsDts, kArchImportsDtsLegend, tsconfigUnread, kArchTsconfigUnreadLegend );
+}
 inline const char* depsImportsUnresolvedLegend( bool on ) noexcept { return on ? kDepsImportsUnresolvedLegend : ""; }
 inline const char* archImportsUnresolvedLegend( bool on ) noexcept { return on ? kArchImportsUnresolvedLegend : ""; }
-inline const char* impactImportsUnresolvedLegend( bool on ) noexcept { return on ? kImpactImportsUnresolvedLegend : ""; }
+// --impact's import tier (CLI and MCP twin): imports_unresolved='s clause, then tsconfig_unread='s, each exactly when
+// the root carries its attribute. An unread config makes importers= a floor for the same reason (an alias nobody read
+// drew no edge; importers= only rises as edges are added).
+inline constexpr const char* kImpactTsconfigUnreadLegend =
+    "tsconfig_unread=N (absent at 0): N config files that could declare an alias or a workspace package were not read (an extends base or referenced project not in the tree, one that does not parse, or a tsconfig/jsconfig/workspace root above the crawl root, looked for up to the git top-level), so importers= is a floor. ";
+inline std::string impactTsImportLegend( std::uint64_t importsUnresolved, std::uint64_t tsconfigUnread )
+{
+    return clausesForCounts( importsUnresolved, kImpactImportsUnresolvedLegend, tsconfigUnread, kImpactTsconfigUnreadLegend );
+}
 
 // ── THE DECL→DEF RESIDUE — unproven_defs= on the callers/callees answers (test/decltodefcheck.sh arm E2) ──
 // H1's fix (graph.h::declToDefFollowThrough) stopped a `file:name` selector from answering with same-named

@@ -148,8 +148,14 @@ ROWS="$TMP/rows.txt"
 python3 - "$CRAWL" > "$ROWS" <<'PYROWS'
 import re, sys
 src = open( sys.argv[1] ).read()
-rows = re.findall( r'\{\s*"(\.[A-Za-z0-9_]+)"\s*,\s*Lang::\w+\s*,\s*&(tree_sitter_[A-Za-z0-9_]+)\s*,', src )
-for ext, fn in rows:
+# a row may spell its extension through a named constant (`kAstroExt`, so the row and its other reader cannot
+# drift); resolve it from the header rather than drop the row, and refuse a name the header never defines
+names = dict( re.findall( r'constexpr\s+std::string_view\s+(\w+)\s*=\s*"(\.[A-Za-z0-9_]+)"\s*;', src ) )
+rows = re.findall( r'\{\s*(?:"(\.[A-Za-z0-9_]+)"|(k[A-Za-z0-9_]+))\s*,\s*Lang::\w+\s*,\s*&(tree_sitter_[A-Za-z0-9_]+)\s*,', src )
+for ext, name, fn in rows:
+    if name:
+        if name not in names: sys.exit( "kLangTable row names %s, which the header defines as no extension literal" % name )
+        ext = names[ name ]
     print( "%s\t%s" % ( ext, fn ) )
 PYROWS
 NROWS="$( wc -l < "$ROWS" | tr -d ' ' )"

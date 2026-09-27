@@ -119,6 +119,8 @@ for i, rel in enumerate(("test/scipfix/index.scip", "test/scipjoinfix/index.scip
     seed("scip", "fixture%d" % i, read(os.path.join(ROOT, rel)))
 seed("resolvecfg", "tsconfig", b"\x00" + read(os.path.join(ROOT, "test/multirootfix/cli/tsconfig.json")))
 seed("resolvecfg", "gomod", b"\x01" + read(os.path.join(ROOT, "test/multirootfix/cli/go.mod")))
+seed("resolvecfg", "globbomb", b"\x02" + b"packages:\n  - '" + b"/".join([b"**"] * 14) + b"/zz'\n")   # #220: the ** matcher stays polynomial
+seed("resolvecfg", "includebomb", b"\x03" + b'{ "include": ["' + b"/".join([b"**"] * 14) + b'/zz.ts"] }\n')
 for p in sorted(glob.glob(os.path.join(ROOT, "test/lintrulesfix/**/*.yml"), recursive=True))[:4]:
     seed("lintrules", os.path.basename(p).replace(".", "_"), read(p))
 seed("docparse", "ipynb", b"\x00" + read(os.path.join(ROOT, "test/docfix/notebook.ipynb")))

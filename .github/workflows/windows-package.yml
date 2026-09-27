@@ -218,10 +218,11 @@ jobs:
           fi
 
       # --doctor with the unzipped directory on PATH, under the conditions a PowerShell user has (no TMPDIR, no
-      # XDG_CACHE_HOME). Every row must pass. binary-path stays DISCLOSED as degraded on Windows
-      # (degrade_reason="win32-which-spelling": Git Bash's `which` never prints ".exe", src/verbs_doctor.h), but since
-      # #334 it retries the ".exe" spelling, so the unzipped exe first on PATH must read ok="1" same_file="1". Then a
-      # fake older `ripwire` put first on PATH must fail the row on identity and be named by its own --version line.
+      # XDG_CACHE_HOME). Every row must pass. binary-path finds ripwire with the native PATH + PATHEXT search
+      # (os::which; #334: Git Bash's `which` answered from another PATH, in a "/c/..." spelling the byte compare could
+      # not open), so the unzipped exe first on PATH must read ok="1" same_file="1" with no degraded= disclosure. A
+      # byte-identical copy first on PATH must read ok="1" copied="1" (the tester's false "STALE … contents differ").
+      # Then a fake older ripwire.cmd first on PATH must fail the row on identity and be named by its --version line.
       # The cache directory (#326) must be the user's temp directory's ripwire-<uid>, under %LOCALAPPDATA% — compared
       # in long form, the runner's TEMP is 8.3 (RUNNER~1).
       - name: "--doctor passes, and the cache directory is under %LOCALAPPDATA% (#326)"
@@ -238,17 +239,25 @@ jobs:
           [ -z "$bad" ] || { echo "windows-package: --doctor rows failed (rc=$rc): $bad" >&2; exit 1; }
           bp="$( grep -o '<c n="binary-path"[^>]*>' doctor.xml )"
           case "$bp" in
+            *degraded=*) echo "windows-package: binary-path still carries a degraded= disclosure: $bp" >&2; exit 1 ;;
             *' ok="1"'*' same_file="1"'*) echo "binary-path ok, the unzipped exe itself: $bp" ;;
             *) echo "windows-package: binary-path does not resolve the unzipped ripwire.exe on PATH as this binary: $bp" >&2; exit 1 ;;
           esac
+          copied="$( cygpath -u "$RUNNER_TEMP" )/rw-copied-ripwire"; mkdir -p "$copied"; cp "$pkgdir/ripwire.exe" "$copied/ripwire.exe"
+          PATH="$copied:$PATH" "$pkgdir/ripwire.exe" "$( cygpath -w "$GITHUB_WORKSPACE" )" --doctor > doctor-copy.xml || true
+          cp_row="$( grep -o '<c n="binary-path"[^>]*>' doctor-copy.xml )"
+          echo "with a byte-identical copy first on PATH: $cp_row"
+          case "$cp_row" in
+            *' ok="1"'*' same_file="0"'*' same_bytes="1"'*' copied="1"'*) ;;
+            *) echo "windows-package: a byte-identical copy first on PATH did not read ok=\"1\" copied=\"1\" (#334)" >&2; exit 1 ;;
+          esac
           fake="$( cygpath -u "$RUNNER_TEMP" )/rw-older-ripwire"; mkdir -p "$fake"
-          printf '%s\n' '#!/bin/sh' 'echo "ripwire 0.6.2 (Release, fake, emit=std::print, built_from=0000000f334)"' > "$fake/ripwire"
-          chmod +x "$fake/ripwire"
+          printf '%s\r\n' '@echo ripwire 0.6.2 (Release, fake, emit=std::print, built_from=0000000f334)' > "$fake/ripwire.cmd"   # PATHEXT finds a .cmd, as PowerShell would
           PATH="$fake:$PATH" "$pkgdir/ripwire.exe" "$( cygpath -w "$GITHUB_WORKSPACE" )" --doctor > doctor-stale.xml || true   # the real exe, by path: `ripwire` is the fake now
           sp="$( grep -o '<c n="binary-path"[^>]*>' doctor-stale.xml )"
           echo "with an older ripwire first on PATH: $sp"
           case "$sp" in
-            *' ok="0"'*' same_file="0"'*'which_version="ripwire 0.6.2 (Release, fake'*'hint="STALE: '*'rw-older-ripwire/ripwire (ripwire 0.6.2'*) ;;
+            *' ok="0"'*' same_file="0"'*'which_version="ripwire 0.6.2 (Release, fake'*'hint="STALE: '*'rw-older-ripwire/ripwire.'[Cc][Mm][Dd]' (ripwire 0.6.2'*) ;;
             *) echo "windows-package: an older ripwire first on PATH was not reported as the stale 0.6.2" >&2; exit 1 ;;
           esac
           dir="$( grep -o '<c n="cache-dir"[^>]*>' doctor.xml | sed -n 's/.* dir="\([^"]*\)".*/\1/p' )"

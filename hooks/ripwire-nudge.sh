@@ -303,9 +303,18 @@ meter_dest()
 #      than part of it, so the fallback re-asks for the toplevel alone — otherwise an old git would
 #      turn every call into "not a repo" and silently stop the tag AND the nudge gate together. The
 #      fallback costs a second fork only where the first form failed: outside a repo, or on an old git.
+#
+#      It is the first git call on both paths (PreToolUse and --session-start), so it also clears git's
+#      repository-selection variables inherited from the caller, for the rest of the hook, as the two route
+#      hooks do (git's own list, plus GIT_DIR/GIT_WORK_TREE if git cannot print it). The hook answers for the
+#      JSON cwd: with GIT_DIR exported, `git -C "$dir"` answers for THAT repository, `--show-toplevel`
+#      prints a non-git cwd as its own top level, and `--is-inside-work-tree` prints `true` there, so a
+#      nudge, the primer and the meter's repo tag all went to a directory that is not a repository.
 meter_isrepo=0
 meter_set_repo()
 {
+    # shellcheck disable=SC2046 # word splitting is intended: one variable name per word
+    unset $( git rev-parse --local-env-vars 2>/dev/null ) GIT_DIR GIT_WORK_TREE
     meter_repo=""
     meter_tag=""
     meter_isrepo=0
@@ -1163,6 +1172,7 @@ then
     # The answer must be `true`, not only exit 0: a bare repository, or a cwd inside a `.git` directory,
     # prints `false` with status 0 (the #327 shape fixed in the two route hooks, 1cd00d4d) — this primer
     # would otherwise fire there too and walk git's own metadata for `ripwire wrap`.
+    # git's inherited repository-selection variables were already cleared by meter_set_repo above.
     insideWorkTree="$( git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null )" || exit 0
     [ "$insideWorkTree" = true ] || exit 0
 

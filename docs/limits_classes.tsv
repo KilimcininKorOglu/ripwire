@@ -98,11 +98,15 @@ kMaxSkipRowsPerClass	OUTPUT
 kMaxSliceDepth	BOUNDARY
 kMaxStructsPerRef	OUTPUT
 kMaxStructsShown	OUTPUT
+kMaxTsModulesWalked	BOUNDARY
 kMaxUniqueQueryTerms	INDEXING
 kMeasuredDigitsPricedWidth	OUTPUT
 kMemberSpellingsShown	OUTPUT
 kMentionMaxDirectSymbols	INDEXING
 kMentionMaxFiles	INDEXING
+kMentionMaxIdentLifts	INDEXING
+kMentionMaxNamedIdents	INDEXING
+kMentionMaxNameFiles	BOUNDARY
 kMentionMaxRawTokens	INDEXING
 kMentionMaxSymbolsPerFile	INDEXING
 kMinIdentLen	BOUNDARY
