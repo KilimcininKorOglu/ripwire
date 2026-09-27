@@ -840,9 +840,9 @@ Full retrieval tables — including the MRR figures behind the router numbers ab
 ## What it answers
 
 <details>
-<summary><b>183 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
+<summary><b>184 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
 
-Around the core sit 183 long flags advertised in `--help`, across seven families — plus an MCP
+Around the core sit 184 long flags advertised in `--help`, across seven families — plus an MCP
 server, so a coding agent can call any of them mid-task instead of grepping and reading whole files.
 `--help` prints one line per flag (~4.5K tokens); `--help=--FLAG` prints that flag's full entry with
 every caveat, `--help=SECTION` one family, and `--help=all` the whole catalog.
@@ -2451,7 +2451,7 @@ The server is a standard input and output MCP process. The complete configuratio
 
 To list fewer tools, add `--mcp-tools=` to the server's arguments: a comma list of tool names and/or the `core`
 profile (explore, batch, from_trace, impact, uses, fetch_body, edit_check, quality_delta, the loop the server's own
-instructions teach). A client that loads every tool schema at session start then pays for 8 tools instead of 33
+instructions teach). A client that loads every tool schema at session start then pays for 8 schemas instead of 33
 (`tools/list` measured at 13,834 bytes instead of 46,368). A call to a tool that is not listed is refused with the
 flag that enables it, and `batch` still answers its own sub-verbs. `ripwire wrap AGENT --mcp-tools=core` writes the flag
 into the recipe it prints. The default stays the full catalog.
@@ -2510,7 +2510,7 @@ identity of the index, and says which one is at fault.
 
 ### 5. Command families
 
-The `--help` output groups 183 long flags advertised in `--help` into seven families. The `--help=`
+The `--help` output groups 184 long flags advertised in `--help` into seven families. The `--help=`
 column below is the argument that prints one family: `ripwire --help=navigate`. `ripwire
 --help=--FLAG` prints one flag's full text — the caveats, the units, what it refuses and why.
 `ripwire --help=all` is the whole catalog, about 46,000 tokens.
