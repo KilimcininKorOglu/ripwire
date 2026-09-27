@@ -740,16 +740,11 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
                              const std::vector<std::uint64_t>& topLevelCallees,
                              const std::vector<NodeId>& registeredMacroIds,
                              const std::vector<NodeId>& pythonDispatchIds,
-                             bool* exemptedByRegisterMacro = nullptr,
-                             bool* exemptedByDeclinedCall  = nullptr ) noexcept   // set iff ONLY the declined-call exemption kept it out
+                             bool* exemptedByRegisterMacro = nullptr ) noexcept
 {
     if( exemptedByRegisterMacro )
     {
         *exemptedByRegisterMacro = false;
-    }
-    if( exemptedByDeclinedCall )
-    {
-        *exemptedByDeclinedCall = false;
     }
     const Symbol& s = ing.symbols[i];
     if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
@@ -794,15 +789,17 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
         }
         return false; // P2.2: self-registers via a static initializer the call graph cannot see
     }
-    if( i < g.gateDeclinedTarget.size() && g.gateDeclinedTarget[ i ] != 0 )
-    {
-        if( exemptedByDeclinedCall )
-        {
-            *exemptedByDeclinedCall = true;   // LAST, so the flag means "dead but for this" — the count the delta discloses
-        }
-        return false; // a builtin-name call the resolver declined could have meant it (graph.h BuiltinMethodGate)
-    }
     return true;
+}
+
+// The dead-code kind's one exemption beyond isDeadCandidate: a call the builtin-method name gate DECLINED could have
+// meant this definition (graph.h BuiltinMethodGate, Graph::gateDeclinedTarget), so it is not provably uncalled — which
+// is what it was before the gate, when that call bound to it by name. Both dead-set readers (the snapshot and the
+// delta) apply it after isDeadCandidate, so a symbol it exempts is exactly one that would otherwise be dead, and the
+// delta counts those as declined-call-excluded=.
+inline bool declinedCallMayReach( const Graph& g, NodeId i ) noexcept
+{
+    return i < g.gateDeclinedTarget.size() && g.gateDeclinedTarget[ i ] != 0;
 }
 
 // ONE clone group of the CURRENT tree, reduced to the two facts an ack row can be healed from: the
@@ -4232,7 +4229,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
         // (editcheck.h). A COUNT is overload-collision-proof for the opposite reason a MAX is: it is the one
         // number a collision cannot hide. (maskBySym is the other non-MAX kind; it sums for its own reason.)
         { std::uint32_t& slot = snap.defsBySym[ key ];    slot += 1; }
-        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch ) )
+        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch ) && !declinedCallMayReach( g, i ) )
         {
             snap.dead.push_back( key );
         }
@@ -7598,7 +7595,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                                              std::size_t* registerMacroExcludedOut = nullptr,   // P2.2: honest disclosure count, additive+optional — see isDeadCandidate
                                              std::size_t* apiNewSurfaceOut = nullptr,          // Q-DIAL-4: the api-surface new-symbol COUNT that replaced N never-gating rows
                                              std::vector<CloneIdiomFact>* cloneIdiomsOut = nullptr,   // every CURRENT-tree clone group's (hash, idiom), for the legacy-ack backfill
-                                             std::size_t* declinedCallExcludedOut = nullptr )         // symbols kept out of dead-code ONLY by a declined call (isDeadCandidate)
+                                             std::size_t* declinedCallExcludedOut = nullptr )         // symbols kept out of dead-code ONLY by a declined call (declinedCallMayReach)
 {
     if( declinedCallExcludedOut )
     {
@@ -8034,15 +8031,18 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
         {
             continue;
         }
-        bool macroExempt    = false;
-        bool declinedExempt = false;
-        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch, &macroExempt, &declinedExempt ) )
+        bool macroExempt = false;
+        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch, &macroExempt ) )
         {
             if( macroExempt && registerMacroExcludedOut )
             {
                 ++( *registerMacroExcludedOut );   // P2.2: would be dead-code but for the macro exemption — disclosed count
             }
-            if( declinedExempt && declinedCallExcludedOut )
+            continue;
+        }
+        if( declinedCallMayReach( g, i ) )
+        {
+            if( declinedCallExcludedOut )
             {
                 ++( *declinedCallExcludedOut );    // would be dead-code but for a declined call that may reach it — disclosed count
             }
