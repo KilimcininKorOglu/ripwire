@@ -860,6 +860,78 @@ TEST_CASE( "executables: extension detection and PATHEXT membership" )
     CHECK( extensionInList( "a.exe", ";;.exe;" ) );
 }
 
+// #334, @elsRobin's Windows 10 re-check of --doctor's binary-path row. The row used Git Bash's `which`, run in a child
+// shell: its answer was a "/c/..." path, taken from that shell's PATH order, not the order where.exe and PowerShell
+// use. So the row named ~/bin's copy while PowerShell ran the 0.6.4 install. The row now asks os::which, whose search
+// is this function. A fake NTFS answers isFile: files are listed, a lookup ignores case, and directories are not files.
+namespace fakentfs
+{
+struct Volume
+{
+    std::vector<std::string> files;
+    std::vector<std::string> directories;
+    bool operator()( const std::string& path ) const
+    {
+        const auto named = [ &path ]( const std::string& entry ) { return equalsAsciiCaseless( entry, path ); };
+        return std::none_of( directories.begin(), directories.end(), named ) && std::any_of( files.begin(), files.end(), named );
+    }
+};
+}   // namespace fakentfs
+
+TEST_CASE( "program search (#334): PATH order decides, as where.exe and PowerShell read it" )
+{
+    const std::string_view pathext = ".COM;.EXE;.BAT;.CMD";
+    const fakentfs::Volume both { { "D:/Apps/ripwire-0.6.4-windows-x64/ripwire.exe",
+                                    "D:/me/bin/ripwire.exe" }, {} };
+    // scenario 3: the 0.6.4 directory first on the user Path -> the 0.6.4 exe, never ~/bin's
+    CHECK( searchProgramPath( "ripwire", "D:\\Apps\\ripwire-0.6.4-windows-x64;D:\\me\\bin", pathext, both )
+           == "D:/Apps/ripwire-0.6.4-windows-x64/ripwire.EXE" );
+    // scenario 1: the other order -> ~/bin's copy, which the row then compares (and names STALE only on evidence)
+    CHECK( searchProgramPath( "ripwire", "D:\\me\\bin;D:\\Apps\\ripwire-0.6.4-windows-x64", pathext, both )
+           == "D:/me/bin/ripwire.EXE" );
+    // scenario 3c: the 0.6.4 directory the only one holding a ripwire -> found, whatever else PATH holds
+    const fakentfs::Volume alone { { "D:/Apps/ripwire-0.6.4-windows-x64/ripwire.exe" }, {} };
+    CHECK( searchProgramPath( "ripwire", "C:\\Windows\\system32;D:\\me\\bin;D:/Apps/ripwire-0.6.4-windows-x64/", pathext, alone )
+           == "D:/Apps/ripwire-0.6.4-windows-x64/ripwire.EXE" );
+    CHECK( searchProgramPath( "ripwire", "C:\\Windows\\system32;D:\\me\\bin", pathext, alone ).empty() );
+}
+
+TEST_CASE( "program search (#334): the answer is a path the path layer opens, never Git Bash's /c/ spelling" )
+{
+    const fakentfs::Volume v { { "D:/a/_temp/rw test dir/pkg/ripwire.exe", "C:/msys/ripwire.exe" }, {} };
+    const std::string found = searchProgramPath( "ripwire", "d:\\a\\_temp\\rw test dir\\pkg\\", ".EXE", v );
+    CHECK( found == "D:/a/_temp/rw test dir/pkg/ripwire.EXE" );
+    CHECK( isAbsoluteNativePath( found ) );
+    CHECK( found.find( '\\' ) == std::string::npos );
+    // a "/c/..." entry is not a Windows path: CreateProcess cannot use it, so it is not searched either
+    CHECK( searchProgramPath( "ripwire", "/c/msys", ".EXE", v ).empty() );
+}
+
+TEST_CASE( "program search: PATHEXT, relative entries, directories, and an explicit path" )
+{
+    const std::string_view pathext = ".COM;.EXE;.BAT;.CMD";
+    // an extensionless POSIX script is not a Windows program; the next directory's .cmd is (CI's fake older ripwire)
+    const fakentfs::Volume fake { { "C:/fake/ripwire", "C:/older/ripwire.cmd", "C:/real/ripwire.exe" }, {} };
+    CHECK( searchProgramPath( "ripwire", "C:\\fake;C:\\older;C:\\real", pathext, fake ) == "C:/older/ripwire.CMD" );
+    // within one directory PATHEXT's order decides: .EXE before .CMD
+    const fakentfs::Volume twoKinds { { "C:/bin/ripwire.cmd", "C:/bin/ripwire.exe" }, {} };
+    CHECK( searchProgramPath( "ripwire", "C:\\bin", pathext, twoKinds ) == "C:/bin/ripwire.EXE" );
+    // empty and relative entries are skipped even when they would answer (a checkout's own copy must not)
+    const fakentfs::Volume rel { { "./ripwire.exe", "bin/ripwire.exe", "C:/ok/ripwire.exe" }, {} };
+    CHECK( searchProgramPath( "ripwire", ";.;bin;C:\\ok", pathext, rel ) == "C:/ok/ripwire.EXE" );
+    // a directory named like the program is not the program
+    const fakentfs::Volume dir { { "C:/b/ripwire.exe" }, { "C:/a/ripwire.exe" } };
+    CHECK( searchProgramPath( "ripwire", "C:\\a;C:\\b", pathext, dir ) == "C:/b/ripwire.EXE" );
+    // a name with an extension is used only when PATHEXT lists it; an empty PATHEXT means Windows' default
+    CHECK( searchProgramPath( "ripwire.exe", "C:\\b", pathext, dir ) == "C:/b/ripwire.exe" );
+    CHECK( searchProgramPath( "ripwire.exe", "C:\\b", "", dir ) == "C:/b/ripwire.exe" );
+    CHECK( searchProgramPath( "ripwire.py", "C:\\b", pathext, fakentfs::Volume { { "C:/b/ripwire.py" }, {} } ).empty() );
+    // a command naming a path is resolved alone, PATH not consulted
+    CHECK( searchProgramPath( "c:\\b\\ripwire", "C:\\a", pathext, dir ) == "C:/b/ripwire.EXE" );
+    CHECK( searchProgramPath( "", "C:\\b", pathext, dir ).empty() );
+    CHECK( searchProgramPath( std::string_view( "rip\0wire", 8 ), "C:\\b", pathext, dir ).empty() );
+}
+
 TEST_CASE( "shell: PATH entries split on ';', keep empties for the caller to skip, and unquote" )
 {
     const std::string_view list = "C:\\Git\\bin;;\"C:\\odd;dir\";relative;D:/x";

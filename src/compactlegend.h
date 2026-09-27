@@ -1079,7 +1079,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "self", "self=/which=: this binary's path and the one which ripwire finds on PATH; which_version= is the version line that one prints when they differ", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines which= which_version=
     { "on_path", "on_path=0|1: whether a ripwire is on PATH; 0 fails the row and hint= carries the export line", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "same_file", "same_file=1: the PATH copy is this very file (same device and inode)", true, "c", MapHeaderRead::No, {}, "doctor" },
-    { "same_bytes", "same_bytes=1: a different file with identical content, a copied install (ok); 0 fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "same_bytes", "same_bytes=1: a different file with identical content, a copied install (ok); 0 fails the row; unknown: a file was unreadable; the row fails unverified (hint= names it)", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "self_mtime", "self_mtime=/self_size=/which_mtime=/which_size=: epoch mtime and byte size of each binary", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines self_size= which_mtime= which_size=
     { "hint", "hint=: the row's verdict and fix in plain text (which binary is stale, what to run)", true, "c", MapHeaderRead::No, {}, "doctor" },
     // pack-task partition=N: src/partition.h (partitionSummaryAttrs, the <bundle> header) + src/packtask.h (the inner ctx root)

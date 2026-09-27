@@ -87,6 +87,25 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
   automatic cache file, which only a hand copy can put there, the advice reads "an automatic cache file holds
   it only when copied in by hand" instead.
 
+### Fixed — `--doctor` `binary-path` on Windows: the native PATH lookup, and no STALE without evidence (#334)
+
+A Windows 10 re-check of 0.6.4 found that the row could not pass on Windows. It asked Git Bash's `which` in a
+child shell, so `which=` came from that shell's PATH order, in a `/c/...` spelling. The byte comparison then
+opened that spelling with `std::fopen`, which cannot read it, and counted the failed open as "contents differ".
+A byte-identical copy first on PATH was reported `STALE … their contents differ`. Our 0.6.4 reply on #334 said
+the row would read `ok="1"` there; it did not.
+
+- The row now finds `ripwire` with `os::which`, this process's own PATH search (on Windows PATH in order, then
+  PATHEXT). That search moved into `os_win32_logic.h` as `searchProgramPath`, so its logic is tested on every
+  platform (`oswin32logiccheck`). The `degraded="1" degrade_reason="win32-which-spelling"` disclosure is gone.
+- Both files are read through `os::open`/`os::read`. A file that cannot be read gives `same_bytes="unknown"`
+  and an `UNVERIFIED:` hint naming it and the reason. It is called STALE only when the two state different
+  release numbers.
+- On POSIX, `os::which` now skips a directory named like the program, as which(1) and execvp do. The row names
+  the same file which(1) names on the shapes `doctorcheck` (F6) tries.
+- The Windows CI job adds a byte-identical copy first on PATH (must read `ok="1" copied="1"`). Its fake older
+  ripwire is now a `.cmd`, which a PATHEXT search finds.
+
 ### Documented — the 0.6.4 skills-installer entry states the ownership rule that release shipped
 
 - The 0.6.4 entry said the prune step treats a name its last manifest listed as its own copy. It does not: the
@@ -95,6 +114,14 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
   files are byte-identical to the skill it ships under that name. A name listed in the previous manifest is not
   proof on its own, so a user's own directory under a shipped name is kept too. Every other `ripwire-*`
   directory is kept with a `kept … (your own directory)` line. (The released 0.6.4 section is left as published.)
+
+### Documented — the uninstall in INSTALL.md also removes empty `ripwire-*` leftovers (#334)
+
+The installer counts a `ripwire-*` directory holding no files at any depth as its own (what a symlink that did
+not take leaves behind) and prunes it. The documented uninstall kept it. The page now removes it too; a
+directory `find` cannot fully read is kept. `skillinstallcheck` (U) runs the page's own block. The README's
+Windows notes also say what `RIPWIRE_CACHE_STATS=1` reports, and that `warm_growths=` varies from run to run by
+design.
 
 ## [0.6.4] — 2026-09-25
 

@@ -576,4 +576,33 @@ J_RC=$?
     && ok "(I-old) a nameless-marker directory under a name this checkout does not ship is kept, never pruned" \
     || no "(I-old) a nameless-marker directory under an unshipped name was pruned: $( grep -E 'router-mine|retired-old' "$J.out" )"
 
+# ── (U) #334: INSTALL.md's documented uninstall (step 2) removes what the installer counts as its own, and nothing else.
+#    The page is run as written: its first ```bash block after "**2. Skills.**". A tester found it kept an EMPTY
+#    markerless ripwire-* directory, the shape a symlink that did not take leaves, which the installer prunes.
+#    Here: marked copies (the #334 ln shim forces them), a flat and a nested empty leftover (both removed), a user's
+#    directory holding a file, a markerless byte copy of a shipped skill (both kept), and another skill (untouched).
+U="$TMP/uninstall"; UD="$U/claude/skills"; mkdir -p "$UD" "$U/home"
+PATH="$F/shim:$PATH" bash "$SK/install.sh" "$UD" >/dev/null 2>&1
+mkdir -p "$UD/ripwire-legacy-gone" "$UD/ripwire-nested-gone/ripwire-nested-gone/deeper" "$UD/ripwire-mine" "$UD/other-skill"
+printf 'mine\n' >"$UD/ripwire-mine/NOTES.md"; printf 'x\n' >"$UD/other-skill/SKILL.md"
+cp -R "$SK/ripwire-router" "$UD/ripwire-router-bytecopy"; rm -f "$UD/ripwire-router-bytecopy/.ripwire-installed-copy"
+UNINSTALL="$( awk '/^\*\*2\. Skills\.\*\*/{s=1} s&&/^```bash$/{c=1;next} c&&/^```$/{exit} c' "$ROOT/INSTALL.md" )"
+if [ -z "$UNINSTALL" ]; then
+    no "(U) INSTALL.md has no \`\`\`bash block after \"**2. Skills.**\" — the uninstall this arm runs is gone"
+else
+    ( cd "$U" && env -u AGENTS_HOME -u CODEX_HOME -u HERMES_HOME HOME="$U/home" CLAUDE_CONFIG_DIR="$U/claude" sh -c "$UNINSTALL" ) >"$U.out" 2>&1
+    U_RC=$?
+    leftRw="$( cd "$UD" && ls -d ripwire-* 2>/dev/null | tr '\n' ' ' )"
+    { [ "$U_RC" -eq 0 ] && [ ! -e "$UD/ripwire-legacy-gone" ] && [ ! -e "$UD/ripwire-nested-gone" ]; } \
+        && ok "(U) the documented uninstall removes empty ripwire-* leftovers, flat and nested (the installer's own rule)" \
+        || no "(U) the documented uninstall kept an empty leftover: rc=$U_RC, left: $leftRw"
+    { [ "$( cat "$UD/ripwire-mine/NOTES.md" 2>/dev/null )" = "mine" ] && [ -f "$UD/ripwire-router-bytecopy/SKILL.md" ] \
+      && [ -f "$UD/other-skill/SKILL.md" ] && [ ! -e "$UD/.ripwire-manifest-v1" ]; } \
+        && ok "(U) it keeps a user's ripwire-* directory, a markerless copy and other skills; the manifest goes" \
+        || no "(U) the documented uninstall removed something that is not the installer's: left: $leftRw"
+    [ "$leftRw" = "ripwire-mine ripwire-router-bytecopy " ] \
+        && ok "(U) every marked copy the installer made is gone; only the two kept directories remain" \
+        || no "(U) after the documented uninstall these ripwire-* remain: $leftRw"
+fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

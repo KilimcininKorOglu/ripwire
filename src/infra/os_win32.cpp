@@ -1779,69 +1779,19 @@ int setenv( const char* name, const char* value, int overwrite )
     return error == 0 ? 0 : fail( error );
 }
 
-// which: the program a shell would start for `command`. PATH is ';'-separated; an entry that is empty or relative (the
-// current directory) is never searched — a checkout carrying its own copy of this program or of git.exe must not answer; a name
-// without an extension is tried with each PATHEXT extension, one with an extension as given (if PATHEXT lists it).
+// which: the program Windows starts for `command`: the search is oswin::searchProgramPath (PATH in order, PATHEXT,
+// empty or relative entries never searched, so a checkout carrying its own copy of this program or of git.exe must not
+// answer), tested on every platform. The one Windows fact it needs, "a file, not a directory", is asked here.
 // The answer is in the program's spelling.
 std::string which( std::string_view command )
 {
-    if( command.empty() || command.find( '\0' ) != std::string_view::npos )
-    {
-        return {};
-    }
-    std::string pathext = environmentUtf8( L"PATHEXT" );
-    if( pathext.empty() )
-    {
-        pathext = ".COM;.EXE;.BAT;.CMD";
-    }
     const auto isFile = []( const std::string& candidate )
     {
         const NativePath native( candidate.c_str() );
         const DWORD      attributes = native.ok() ? ::GetFileAttributesW( native.c_str() ) : INVALID_FILE_ATTRIBUTES;
         return attributes != INVALID_FILE_ATTRIBUTES && ( attributes & FILE_ATTRIBUTE_DIRECTORY ) == 0;
     };
-    const auto resolve = [ & ]( std::string base ) -> std::string
-    {
-        oswin::normalizePathArgInPlace( base.data() );
-        if( oswin::hasExtension( base ) )
-        {
-            return oswin::extensionInList( base, pathext ) && isFile( base ) ? base : std::string();
-        }
-        std::size_t at = 0;
-        while( at <= pathext.size() )
-        {
-            const std::string_view extension = oswin::nextPathListEntry( pathext, at );
-            if( !extension.empty() && isFile( base + std::string( extension ) ) )
-            {
-                return base + std::string( extension );
-            }
-        }
-        return {};
-    };
-    if( command.find_first_of( "/\\:" ) != std::string_view::npos )
-    {
-        return resolve( std::string( command ) );
-    }
-    const std::string path = environmentUtf8( L"PATH" );
-    std::size_t       at   = 0;
-    while( at <= path.size() )
-    {
-        std::string_view directory = oswin::nextPathListEntry( path, at );
-        if( directory.empty() || !oswin::isAbsoluteNativePath( directory ) )
-        {
-            continue;
-        }
-        while( directory.size() > 3 && ( directory.back() == '/' || directory.back() == '\\' ) )
-        {
-            directory.remove_suffix( 1 );
-        }
-        std::string found = resolve( std::string( directory ) + "/" + std::string( command ) );
-        if( !found.empty() )
-        {
-            return found;
-        }
-    }
-    return {};
+    return oswin::searchProgramPath( command, environmentUtf8( L"PATH" ), environmentUtf8( L"PATHEXT" ), isFile );
 }
 
 // ── process start and path intake ──────────────────────────────────────────────────────────────────────────

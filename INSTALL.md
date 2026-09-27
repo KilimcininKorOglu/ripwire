@@ -146,7 +146,9 @@ rm -rf ~/.local/share/ripwire
 
 **2. Skills.** This deletes symlinks named `ripwire-*`, the `ripwire-*` copies the installer made where a symlink
 could not be (their `.ripwire-installed-copy` marker names the directory itself, the installer's own ownership rule),
-and its manifest. It never deletes another skill, or a `ripwire-*` directory without that marker, such as your own.
+`ripwire-*` directories that hold no files at any depth (what a symlink that did not take leaves behind, which the
+installer also counts as its own), and its manifest. It never deletes another skill, or a `ripwire-*` directory that
+holds a file but not that marker, such as your own. A directory `find` cannot fully read is kept.
 
 ```bash
 for d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" "${AGENTS_HOME:-$HOME/.agents}/skills" \
@@ -155,6 +157,8 @@ for d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" "${AGENTS_HOME:-$HOME/.age
   find "$d" -maxdepth 1 -name 'ripwire-*' -type l -delete
   find "$d" -mindepth 1 -maxdepth 1 -name 'ripwire-*' -type d -exec sh -c \
     'm="$1/.ripwire-installed-copy"; [ -f "$m" ] && [ "$(cat "$m")" = "${1##*/}" ] && rm -rf "$1"' sh {} \;
+  find "$d" -mindepth 1 -maxdepth 1 -name 'ripwire-*' -type d -exec sh -c \
+    'f="$(find "$1" ! -type d)" && [ -z "$f" ] && rm -rf "$1"' sh {} \;
   rm -f "$d/.ripwire-manifest-v1"
 done
 ```
