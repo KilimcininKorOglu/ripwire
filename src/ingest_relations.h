@@ -1295,17 +1295,26 @@ inline std::string rubyAutoloadTarget( TSNode n, std::string_view src, bool& sym
     return std::string( txt );
 }
 
-// If the node's field child is a bare identifier, its text; else empty. The field-child-is-an-identifier-
-// and-give-me-its-text shape recurs across grammars (elixirTarget, elixirDirectiveTarget, elixirAliasGroup,
-// and the Ruby readers below all open with it).
-inline std::string_view fieldIdentifierText( TSNode n, NodeField field, std::string_view src ) noexcept
+// If the node's field child is of node kind `kind`, its text; else empty. The field-child-of-one-kind-and-give-
+// me-its-text shape recurs across grammars: fieldIdentifierText below is its `identifier` case, and
+// ingest_binds.h's rubyFinalConstant its `constant` case. The kind stays a literal, so kindIs keeps its
+// compile-time length.
+template< std::size_t N >
+inline std::string_view fieldChildTextOfKind( TSNode n, NodeField field, const char ( &kind )[N], std::string_view src ) noexcept
 {
     const TSNode c = fieldChild( n, field );
-    if( ts_node_is_null( c ) || !kindIs( ts_node_type( c ), "identifier" ) )
+    if( ts_node_is_null( c ) || !kindIs( ts_node_type( c ), kind ) )
     {
         return {};
     }
     return nodeTextOf( c, src );
+}
+
+// If the node's field child is a bare identifier, its text; else empty (elixirTarget, elixirDirectiveTarget,
+// elixirAliasGroup, and the Ruby readers below all open with it).
+inline std::string_view fieldIdentifierText( TSNode n, NodeField field, std::string_view src ) noexcept
+{
+    return fieldChildTextOfKind( n, field, "identifier", src );
 }
 
 // The two Ruby named-directive verb sets. `attributes` (plural) has no runtime meaning in base Rails

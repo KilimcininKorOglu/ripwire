@@ -91,12 +91,11 @@ struct RecvShape
 // or empty when the node is a (scope_resolution) whose `name:` is not a (constant). Callers have checked the kind.
 inline std::string_view rubyFinalConstant( TSNode node, std::string_view src )
 {
-    const TSNode leaf = kindIs( ts_node_type( node ), "constant" ) ? node : fieldChild( node, NodeField::Name );
-    if( ts_node_is_null( leaf ) || !kindIs( ts_node_type( leaf ), "constant" ) )
+    if( kindIs( ts_node_type( node ), "constant" ) )
     {
-        return {};
+        return pattern::nodeText( node, src );
     }
-    return pattern::nodeText( leaf, src );
+    return fieldChildTextOfKind( node, NodeField::Name, "constant", src );
 }
 
 inline bool isRubyConstantNode( TSNode node ) noexcept
