@@ -2708,32 +2708,32 @@ struct McpStdioConfig
 
 // The stdio server's dispatch policy. Same root plumbing as runMcpHttp(), building McpDispatchPolicy::defaultRoot
 // instead of ::pinnedRoot (D3/D4).
-inline McpDispatchPolicy mcpStdioPolicy( const McpStdioConfig& cfg )
+inline McpDispatchPolicy mcpStdioPolicy( const McpStdioConfig& config )
 {
     // X7 (D3/D4): resolve the SOFT stdio default root, same shape as runMcpHttp()'s pinnedRoot resolution
     // (mcpWorkspaceKey for 2+ roots, else a plain mcpCanonRoot) but never refuses to start — a malformed
     // multi-root set just leaves defaultRoot empty (falls back to the pre-X7 "every request names its own
     // path" behavior) rather than exiting, since stdio has no analogous "refuse to bind" moment.
     std::string defaultRoot;
-    if( cfg.roots.size() >= 2 )
+    if( config.roots.size() >= 2 )
     {
         std::string wsErr;
-        const std::string key = mcpWorkspaceKey( cfg.roots, wsErr );
+        const std::string key = mcpWorkspaceKey( config.roots, wsErr );
         if( !key.empty() )
         {
             defaultRoot = mcpCanonRoot( key );
         }
     }
-    else if( !cfg.root.empty() )
+    else if( !config.root.empty() )
     {
-        defaultRoot = mcpCanonRoot( cfg.root );
+        defaultRoot = mcpCanonRoot( config.root );
     }
 
     // stdio: no HARD workspace pinning (pinnedRoot stays ""), edit verbs allowed; r2-LO: this process's one legend session
     McpDispatchPolicy policy{ .legendSession = &mcpStdioLegendSession() };
     policy.defaultRoot = defaultRoot;   // "" unless a startup root was given — see the comment above
-    policy.toolMask    = cfg.toolMask;  // --mcp-tools
-    policy.toolSpec    = cfg.toolSpec;
+    policy.toolMask    = config.toolMask;  // --mcp-tools
+    policy.toolSpec    = config.toolSpec;
 
     // R2a (the 2026-08-12 usage mine): with NO startup root, resolve the launch cwd ONCE as the softest
     // default — see McpDispatchPolicy::assumedRoot for the full contract and mcpResolveAssumedRoot for
@@ -2747,7 +2747,7 @@ inline McpDispatchPolicy mcpStdioPolicy( const McpStdioConfig& cfg )
 }
 
 // stdio MCP loop: one JSON object per line. Returns the process exit code.
-inline int runMcp( const McpStdioConfig& cfg )
+inline int runMcp( const McpStdioConfig& config )
 {
     // MEASURE-FIRST instrumentation (RIPWIRE_MCP_TIMINGS, off by default → byte-identical + silent server, same
     // discipline as ingest.cpp's RIPWIRE_CACHE_STATS). When set, emit ONE stderr TSV line per handled request:
@@ -2757,7 +2757,7 @@ inline int runMcp( const McpStdioConfig& cfg )
     // round, so we use the env var instead (recorded in bench/PROFILE.md's appendix) — same zero-cost-off contract.
     const bool timingsOn = std::getenv( "RIPWIRE_MCP_TIMINGS" ) != nullptr;
 
-    const McpDispatchPolicy policy = mcpStdioPolicy( cfg );
+    const McpDispatchPolicy policy = mcpStdioPolicy( config );
 
     // R4: readByteSafeLineBounded, NOT std::getline( std::cin, ... ) — libc++'s getline narrows
     // int_type→char on every std::cin byte, so a single 0x80..0xFF request byte aborted the sanitizer
@@ -2785,7 +2785,7 @@ inline int runMcp( const McpStdioConfig& cfg )
             timingsOn ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         const std::uint64_t rebuildAtStart = timingsOn ? mcpRebuildCounter().load( std::memory_order_relaxed ) : 0;
 
-        const McpDispatchResult r = dispatchMcpLine( line, cfg.topK, cfg.stable, cfg.noRedact, policy );
+        const McpDispatchResult r = dispatchMcpLine( line, config.topK, config.stable, config.noRedact, policy );
         if( r.isNotification )
         {
             continue;
