@@ -146,7 +146,9 @@ rm -rf ~/.local/share/ripwire
 
 **2. Skills.** This deletes symlinks named `ripwire-*`, the `ripwire-*` copies the installer made where a symlink
 could not be (their `.ripwire-installed-copy` marker names the directory itself, the installer's own ownership rule),
-and its manifest. It never deletes another skill, or a `ripwire-*` directory without that marker, such as your own.
+`ripwire-*` directories that hold no files at any depth (what a symlink that did not take leaves behind, which the
+installer also counts as its own), and its manifest. It never deletes another skill, or a `ripwire-*` directory that
+holds a file but not that marker, such as your own. A directory `find` cannot fully read is kept.
 
 ```bash
 for d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" "${AGENTS_HOME:-$HOME/.agents}/skills" \
@@ -155,6 +157,8 @@ for d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" "${AGENTS_HOME:-$HOME/.age
   find "$d" -maxdepth 1 -name 'ripwire-*' -type l -delete
   find "$d" -mindepth 1 -maxdepth 1 -name 'ripwire-*' -type d -exec sh -c \
     'm="$1/.ripwire-installed-copy"; [ -f "$m" ] && [ "$(cat "$m")" = "${1##*/}" ] && rm -rf "$1"' sh {} \;
+  find "$d" -mindepth 1 -maxdepth 1 -name 'ripwire-*' -type d -exec sh -c \
+    'f="$(find "$1" ! -type d)" && [ -z "$f" ] && rm -rf "$1"' sh {} \;
   rm -f "$d/.ripwire-manifest-v1"
 done
 ```
@@ -194,7 +198,10 @@ rmdir "$h" 2>/dev/null || true
 `.windsurfrules` or `~/.openclaw/workspace/AGENTS.md`, delete that block.
 
 **6. The cache.** ripwire keeps its index cache, and any repositories it cloned, in one private directory:
-`$TMPDIR/ripwire`, else `$XDG_CACHE_HOME/ripwire`, else `/tmp/ripwire-<uid>`. Remove all three candidates:
+`$TMPDIR/ripwire`, else `$XDG_CACHE_HOME/ripwire`, else `/tmp/ripwire-<uid>`. Each tree's blobs are named for the
+tree and for the cache format of the ripwire that wrote them (`ripwire-<key>-lean-c<format>p<parser>.bin`), so two
+installed versions with different cache formats keep separate blobs. The directory is capped at 2 GiB, and blobs untouched for 30 days are deleted on
+the next cache write. Remove all three candidates:
 
 ```bash
 [ -n "${TMPDIR:-}" ] && rm -rf "${TMPDIR%/}/ripwire"

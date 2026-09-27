@@ -303,9 +303,14 @@ else
     E2RC="$( ( cd "$LG" && xargs -0 "$BIN" . --no-cache < "$TMP/e2argv.bin" >"$TMP/e2.out" 2>"$TMP/e2.err" ); echo $? )"
     if [ "$E2RC" = 0 ]; then
         E2RERUN="$( cat "$TMP/e2.out" )"
-        [ "$( attr "$E2RERUN" hosts hosts_capped )" != "1" ] \
-            && ok "E2: the pasted next= re-runs and its own --limit= now shows every host uncapped" \
-            || no "E2: the pasted next=\"$NEXTLONGVAL\" re-ran but hosts are STILL capped: $( printf '%s' "$E2RERUN" | grep -o '<hosts[^>]*>' )"
+        # the SAME 30-host report back, uncapped: an absent <hosts> (or a different flip) has no hosts_capped
+        # either, so "not capped" alone would pass on a re-run that listed nothing
+        E2HOSTS="$( printf '%s' "$E2RERUN" | grep -o '<hosts [^>]*>' | head -1 )"
+        E2ROWS="$( printf '%s' "$E2RERUN" | grep -o '<h sym="hostFn[0-9]*"' | wc -l | tr -d ' ' )"
+        { [ "$( attr "$E2RERUN" flip hosts )" = "30" ] && printf '%s' "$E2HOSTS" | grep -q ' n="30"' \
+            && [ "$( attr "$E2RERUN" hosts hosts_capped )" != "1" ] && [ "$E2ROWS" = 30 ]; } \
+            && ok "E2: the pasted next= re-runs the same flip (hosts=\"30\") and its own --limit= lists all 30 hosts uncapped" \
+            || no "E2: the pasted next=\"$NEXTLONGVAL\" re-ran without all 30 hosts uncapped: flip hosts=\"$( attr "$E2RERUN" flip hosts )\", ${E2HOSTS:-<no hosts element>}, $E2ROWS host rows"
     else
         no "E2: the pasted next=\"$NEXTLONGVAL\" exits $E2RC instead of running: $( head -c 160 "$TMP/e2.err" | tr '\n' ' ' )"
     fi

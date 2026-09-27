@@ -290,7 +290,7 @@ $ ./build/ripwire . --for="tree-sitter parse of a source file" --auto-bodies
 
 **Answers:** (with --for) skip the query-shape router and always rank by subtoken+body BM25 (with --for/--query) force plain subtoken+body BM25.
 
-Routing is now the DEFAULT: a deterministic, confidence-gated query-shape router picks name-exact BM25 when the query NAMES a symbol (identifier syntax, or every content word is a symbol name) else subtoken+body, and prints which/why in the header. It only routes with a query (the plain map is unaffected). --no-route restores the old behavior. A name-exact header also names its EVIDENCE: anchors: word(defining/file) per anchoring word, +N when N further definitions share that name, or word(syntax) when the word routed on camel/snake SHAPE and names nothing. Paths deeper than two segments print top/.../basename. Discount a one-use test helper yourself. Routing also carries the QUERY-SHAPE document demotion: when the task text parses as a stack trace, sanitizer report or compiler diagnostic, or as a pasted issue-template form, the DOCUMENT tier scores down (repo meta-prose - issue templates, CONTRIBUTING, changelogs - twice as hard) and route= names the shape, its evidence and both factors. Demotion, never exclusion, and the mention anchor still lifts a document the task NAMES. --no-route has no route= to disclose it in, so it does not demote either. route= is a CODE: name-exact(X) = the task names symbol X (the anchors: clause after it is the evidence); subtoken+body = the conceptual ranker over names and bodies; subtoken+body:broad = a one- or two-word query where plain rg may also win; subtoken+body:declined(word;N-carriers,M-defs) = a name hit refused because the word is a common name (N names carry it, M definitions); a shape demotion appends "; doc tier demoted (...)". On the rows, sc= is the enclosing scope and the full id is p::sc::n (p= of the row or its <f>) - the spelling --expand/--callers/--impact/--uses accept.
+Routing is now the DEFAULT: a deterministic, confidence-gated query-shape router picks name-exact BM25 when the query NAMES a symbol (identifier syntax, or every content word is a symbol name) else subtoken+body, and prints which/why in the header. It only routes with a query (the plain map is unaffected). --no-route restores the old behavior. A name-exact header also names its EVIDENCE: anchors: word(defining/file) per anchoring word, +N when N further definitions share that name, or word(syntax) when the word routed on camel/snake SHAPE and names nothing. Paths deeper than two segments print top/.../basename. Discount a one-use test helper yourself. Routing also carries the QUERY-SHAPE document demotion: when the task text parses as a stack trace, sanitizer report or compiler diagnostic, or as a pasted issue-template form, the DOCUMENT tier scores down (repo meta-prose - issue templates, CONTRIBUTING, changelogs - twice as hard) and route= names the shape, its evidence and both factors. Demotion, never exclusion, and the mention anchor still lifts a document the task NAMES. --no-route has no route= to disclose it in, so it does not demote either. Routing also puts CHANGE LOGS (CHANGELOG*, CHANGES*, HISTORY*, NEWS*, RELEASES*, release-notes/) and TRANSLATIONS of a default-language doc (README.zh-CN.md beside README.md, docs/ja/x.md beside docs/en/x.md) LAST in doc-mention surfacing, lifted to x0.35 of the usual height; their own match score is untouched. A task about changes (added, changed, removed, release, version...), about translation, or naming the file or its language tag keeps the usual lift; --no-route turns it off. route= is a CODE: name-exact(X) = the task names symbol X (the anchors: clause after it is the evidence); subtoken+body = the conceptual ranker over names and bodies; subtoken+body:broad = a one- or two-word query where plain rg may also win; subtoken+body:declined(word;N-carriers,M-defs) = a name hit refused because the word is a common name (N names carry it, M definitions); a shape demotion appends "; doc tier demoted (...)". On the rows, sc= is the enclosing scope and the full id is p::sc::n (p= of the row or its <f>) - the spelling --expand/--callers/--impact/--uses accept.
 
 **Try it**
 
@@ -355,9 +355,9 @@ $ ./build/ripwire . --for="tree-sitter parse of a source file" --adaptive
 
 ### `--no-mention-boost`
 
-**Answers:** (with --for) stop lifting symbols the task text names by path, module or Type.method (with --for) disable the query-mention anchor.
+**Answers:** (with --for) stop lifting what the task text names: a path, module, Type.method or identifier (with --for) disable the query-mention anchor.
 
-By DEFAULT, a file, dotted module, or Scope.symbol literally NAMED in the task text (a path, `pkg.module`, `Type.method` — even inside a URL) has its SCORE lifted to within 5% of the top score; the header says what anchored. That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1. Inert (byte-identical) when the text names nothing indexed. RIPWIRE_NO_MENTION=1 disables it everywhere (incl. MCP `for`).
+By DEFAULT, a file or dotted module literally NAMED in the task text (a path, `pkg.module` — even inside a URL) has its symbols' SCORE lifted to within 5% of the top score; the header says what anchored. That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1. A SYMBOL named directly takes the same first slot: `Type.method`, `ns::fn`, `mod.fn`, or a verbatim identifier with identifier shape (snake_case, camelCase), call syntax (`name()`; off for the WHOLE task once it carries pasted code: a ``` fence, an indented line or a stack trace) or backticks, defined in at most 3 files (each file's best definition, a prototype beside its definition counting once; test/fixture files only if the task names them). At most 2 are lifted per task, in text order, and the rest are disclosed by mention_syms_capped=. Only the first 64 identifiers are read, and the rest are disclosed by mention_idents_capped=. Plain words never qualify ("run the tests" lifts no run()). Inert (byte-identical) when the text names nothing indexed. RIPWIRE_NO_MENTION=1 disables it everywhere (incl. MCP `for`).
 
 **Try it**
 
@@ -382,7 +382,8 @@ $ ./build/ripwire . --for="why does src/lexical.h chooseForRanker pick name-exac
 **Caveats (stated by the binary):**
 
 - That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1.
-- Inert (byte-identical) when the text names nothing indexed.
+- At most 2 are lifted per task, in text order, and the rest are disclosed by mention_syms_capped=.
+- Only the first 64 identifiers are read, and the rest are disclosed by mention_idents_capped=.
 
 ### `--no-doc-mention`
 
@@ -1745,7 +1746,7 @@ $ ./build/ripwire . --metrics --top-k=10
 
 **Answers:** build the file-to-file dependency graph — god-files and cycles file->file dependency graph (god-files, cycles — validated);
 
-its nccd (Lakos) is a design heuristic, not independently outcome-validated. instab= (Martin's I=Ce/(Ca+Ce)) counts project includes ONLY -- system/third-party headers are excluded from Ce, matching stabledeps' gap= so gap == consumer's instab - provider's instab always. <health>'s ccd/acd/nccd/shape are computed over dep_files= (files whose language has #include/import syntax) not files= (the raw corpus, incl. md/json/toml/yaml, which can't participate in the graph) -- --arch's propagation_cost uses the same N. <health dep_langs=> names that language set, which is what makes a dep_files=/ccd/ acd/nccd number comparable across builds: sh, rb, lua and ex joined it at parser version 81 and every one of those numbers moved on a corpus holding them. STRUCTURE vs USE (parser version 83): a LAZY edge -- every directive of the pair written inside a closure (Ruby method/lambda/block, TS/JS function body), a Ruby autoload or rescue class -- is a use, not a load-time dependency: it is in --impact's importer tier (lazy=1) and in the row's inc t= list, NOT in afferent/instab/transitive/godfiles/ stabledeps/cycles/ccd/acd/nccd/shape. <health lazy_edges=> counts the pairs left out, a row's lazy_edges= its own; both absent when 0. A TS/JS import through a tsconfig paths alias, a baseUrl path or a workspace package draws no edge yet: the root's imports_unresolved=N graph_partial=1 counts them: numbers above are over resolved edges only
+its nccd (Lakos) is a design heuristic, not independently outcome-validated. instab= (Martin's I=Ce/(Ca+Ce)) counts project includes ONLY -- system/third-party headers are excluded from Ce, matching stabledeps' gap= so gap == consumer's instab - provider's instab always. <health>'s ccd/acd/nccd/shape are computed over dep_files= (files whose language has #include/import syntax) not files= (the raw corpus, incl. md/json/toml/yaml, which can't participate in the graph) -- --arch's propagation_cost uses the same N. <health dep_langs=> names that language set, which is what makes a dep_files=/ccd/ acd/nccd number comparable across builds: sh, rb, lua and ex joined it at parser version 81 and every one of those numbers moved on a corpus holding them. STRUCTURE vs USE (parser version 83): a LAZY edge -- every directive of the pair written inside a closure (Ruby method/lambda/block, TS/JS function body), a Ruby autoload or rescue class -- is a use, not a load-time dependency: it is in --impact's importer tier (lazy=1) and in the row's inc t= list, NOT in afferent/instab/transitive/godfiles/ stabledeps/cycles/ccd/acd/nccd/shape. <health lazy_edges=> counts the pairs left out, a row's lazy_edges= its own; both absent when 0. A TS/JS import through a tsconfig paths alias or baseUrl, a workspace package or a package.json imports entry draws its edge by tsc's and Node's rules from the configs inside the crawl root, and one that names this tree yet draws no edge is counted in the root's imports_unresolved=N graph_partial=1. Configs that were not read (above the crawl root up to the git top-level, unparseable, or an extends or references target not in the tree) are counted in tsconfig_unread=N: numbers above are then over resolved edges only. The nearest tsconfig's aliases apply to every TS/JS file below it, whether or not its include lists the file (a references project owns its own)
 
 **Try it**
 
@@ -1775,7 +1776,7 @@ $ ./build/ripwire . --deps
 **Caveats (stated by the binary):**
 
 - its nccd (Lakos) is a design heuristic, not independently outcome-validated.
-- A TS/JS import through a tsconfig paths alias, a baseUrl path or a workspace package draws no edge yet: the root's imports_unresolved=N graph_partial=1 counts them: numbers above are over resolved edges only
+- A TS/JS import through a tsconfig paths alias or baseUrl, a workspace package or a package.json imports entry draws its edge by tsc's and Node's rules from the configs inside the crawl root, and one that names this tree yet draws no edge is counted in the root's imports_unresolved=N graph_partial=1.
 
 ### `--hotspots`
 
@@ -3345,11 +3346,11 @@ $ ./build/ripwire . --slice-depth=3
 _Hold a LOCATION, not a name: the enclosing-definition chain at FILE:LINE (a compiler error, a diff hunk, a stack frame), outermost -> innermost._
 
 ```
-$ ./build/ripwire . --at=src/graph.h:4009
+$ ./build/ripwire . --at=src/graph.h:4432
 <!-- ripwire at: the ENCLOSING-DEFINITION CHAIN at one FILE:LINE seed. p= the resolved file, l= the 1-based seed line, sym= the innermost enclosing definition's name (what the same seed resolves to in a selector position), chain= the row count. Rows are INDEXED definitions only, outermost first, innermost last: n= the definition's name, t= its kind tag, l= its own start line, el= its end line (1-based, inclusive). A namespace or any construct the index does not carry is NOT a row, so an outer scope can be absent rather than misnamed; a seed line inside no indexed definition is refused, never served as an empty chain. The same seed composes into any SYM selector as @FILE:LINE (callers, callees, impact, around, expand, uses, edit-check, slice, safe-delete, path, connect) and resolves to the innermost row. -->
 <!-- root= on this element is the crawl root every p= below is RELATIVE to (single-root runs only; absent => p= is the path ingest itself used, unchanged). -->
-<at p="src/graph.h" l="4009" sym="rankGraphTeleport" chain="1" root=".">
-<s n="rankGraphTeleport" t="fn" l="4009" el="4037"/>
+<at p="src/graph.h" l="4432" sym="rankGraphTeleport" chain="1" root=".">
+<s n="rankGraphTeleport" t="fn" l="4432" el="4460"/>
 </at>
 ```
 
@@ -4388,7 +4389,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=dbc0a02944a50858 entries=723
+ripwire legend dictionary ripwire.dict/v1 dictv=19edccf52334be51 entries=726
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)

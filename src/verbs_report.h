@@ -390,7 +390,7 @@ std::optional<int> runArchViews( const MainDispatch& d )
             }
         }
         packDeps( stdout, ing, cfg.packTopN > 0 ? cfg.packTopN : 40, cycles, h.transitive, afferent, adj, rh.ccd, rh.acd, rh.nccd, sa.lazyEdgesByFile, sa.lazyEdges, cfg.pageLimit, cfg.pageOffset, avRootArg,
-                  sa.importsUnresolved );   // #220 part 1: the partial-graph disclosure, absent at 0
+                  { sa.importsUnresolved, sa.tsExtras.declarationOnly, sa.tsExtras.extendsUnread } );   // #220: the partial-graph disclosures, absent at 0
         return 0;
     }
 
@@ -424,7 +424,8 @@ std::optional<int> runArchViews( const MainDispatch& d )
         const StructuralIncludeAdj archSa            = resolveStructuralIncludeAdj( ing );
         const auto&                adj               = archSa.adj;
         const std::uint64_t        importsUnresolved = archSa.importsUnresolved;
-        const std::string          archPartialAttr   = rw::importsUnresolvedPartialAttrXml( importsUnresolved );
+        const std::string          archPartialAttr   = rw::tsImportRootAttrXml( importsUnresolved, archSa.tsExtras.declarationOnly, archSa.tsExtras.extendsUnread );
+        const std::string          archExtrasLegend  = rw::archTsImportExtrasLegend( archSa.tsExtras.declarationOnly, archSa.tsExtras.extendsUnread );
 
         // ── EVERY rule is matched against the ROOT-RELATIVE path, never the emitted one ────────────────────
         // ing.files spells each file `<ingest-root>/<relative>` verbatim, so matching a user regex or a layer
@@ -541,6 +542,11 @@ std::optional<int> runArchViews( const MainDispatch& d )
             rw::emitTo( stderr, "ripwire arch: {} TS/JS import(s) naming this tree (a paths alias, a baseUrl path or a workspace "
                                 "package) did not resolve, so an edge through them was never judged: violations= is a floor\n", importsUnresolved );
         }
+        if( archSa.tsExtras.extendsUnread != 0 )   // #220 part 2: an alias an unread `extends` base declares was never seen
+        {
+            rw::emitTo( stderr, "ripwire arch: {} tsconfig/jsconfig file(s) extend a base or reference a project that is not in the tree and could declare an "
+                                "alias, so an edge through one was never judged: violations= is a floor\n", archSa.tsExtras.extendsUnread );
+        }
 
         const std::string sidecarPath = archBaselinePath( std::string( cfg.archRules ) );
 
@@ -640,8 +646,8 @@ std::optional<int> runArchViews( const MainDispatch& d )
             rw::emitTo( stderr, "ripwire arch: baseline written ({} violation(s) accepted) → {}\n",
                           viols.size(), sidecarPath.c_str() );
             // Still emit the arch XML for reference (shows what was baselined), then exit 0.
-            rw::emitTo( stdout, "<!-- ripwire arch: baseline mode — all {} violation(s) accepted as baseline. exit=0.{}{} -->", viols.size(), kArchMatchDomain,
-                         rw::archImportsUnresolvedLegend( importsUnresolved > 0 ) );
+            rw::emitTo( stdout, "<!-- ripwire arch: baseline mode — all {} violation(s) accepted as baseline. exit=0.{}{}{} -->", viols.size(), kArchMatchDomain,
+                         rw::archImportsUnresolvedLegend( importsUnresolved > 0 ), archExtrasLegend );
             rw::emitTo( stdout, "<arch layers=\"{}\" rules=\"{}\" pathRules=\"{}\" violations=\"{}\" baselined=\"{}\" new_violations=\"0\"{}>",
                          ar.layerNames.size(), ar.rules.size(), ar.pathRules.size(), viols.size(), viols.size(), archPartialAttr );
             for( const Viol& v : viols )
@@ -668,8 +674,8 @@ std::optional<int> runArchViews( const MainDispatch& d )
             }
             rw::emitTo( stderr, "ripwire arch: baseline updated ({} hash(es) total) → {}\n",
                           hashes.size(), sidecarPath.c_str() );
-            rw::emitTo( stdout, "<!-- ripwire arch: baseline-update mode — {} violation(s) merged into baseline. exit=0.{}{} -->", viols.size(), kArchMatchDomain,
-                         rw::archImportsUnresolvedLegend( importsUnresolved > 0 ) );
+            rw::emitTo( stdout, "<!-- ripwire arch: baseline-update mode — {} violation(s) merged into baseline. exit=0.{}{}{} -->", viols.size(), kArchMatchDomain,
+                         rw::archImportsUnresolvedLegend( importsUnresolved > 0 ), archExtrasLegend );
             rw::emitTo( stdout, "<arch layers=\"{}\" rules=\"{}\" pathRules=\"{}\" violations=\"{}\" baselined=\"{}\" new_violations=\"0\"{}>",
                          ar.layerNames.size(), ar.rules.size(), ar.pathRules.size(), viols.size(), hashes.size(), archPartialAttr );
             for( const Viol& v : viols )
@@ -712,8 +718,8 @@ std::optional<int> runArchViews( const MainDispatch& d )
         static constexpr const char* kArchBaselineRefused =
             " baseline=\"symlink-refused\": the baseline sidecar is a SYMLINK, refused unopened — no violation was"
             " suppressed, so every one below counts as new; this is not the same answer as having no baseline.";
-        rw::emitTo( stdout, "<!-- ripwire arch: layering fitness function — edges that violate your declared rules (layer rules and regex path-rules). exit=2 if any NEW (un-baselined) violation. <metrics> = descriptive Martin Ca/Ce/I/A/D + reachability, never gates.{}{}{} -->",
-                     kArchMatchDomain, baselineRead.symlinkRefused ? kArchBaselineRefused : "", rw::archImportsUnresolvedLegend( importsUnresolved > 0 ) );
+        rw::emitTo( stdout, "<!-- ripwire arch: layering fitness function — edges that violate your declared rules (layer rules and regex path-rules). exit=2 if any NEW (un-baselined) violation. <metrics> = descriptive Martin Ca/Ce/I/A/D + reachability, never gates.{}{}{}{} -->",
+                     kArchMatchDomain, baselineRead.symlinkRefused ? kArchBaselineRefused : "", rw::archImportsUnresolvedLegend( importsUnresolved > 0 ), archExtrasLegend );
         rw::emitTo( stdout, "<arch layers=\"{}\" rules=\"{}\" pathRules=\"{}\" violations=\"{}\" baselined=\"{}\" new_violations=\"{}\"{}{}>",
                      ar.layerNames.size(), ar.rules.size(), ar.pathRules.size(), viols.size(), basedViols.size(), newViols.size(),
                      baselineRead.symlinkRefused ? " baseline=\"symlink-refused\"" : "", archPartialAttr );
@@ -3424,18 +3430,26 @@ std::optional<int> runStructureText( const MainDispatch& d )
 
         const std::size_t reportCycles = std::min<std::size_t>( cycles.size(), 6 );
         // #220 part 1: while in-repo TS/JS imports drew no edge, the total is measured over the resolved edges only — NOT a
-        // floor: a missing edge can merge two of these cycles into one — and an empty list is not "acyclic".
-        if( reportSa.importsUnresolved == 0 )
+        // floor: a missing edge can merge two of these cycles into one — and an empty list is not "acyclic". Part 2: an
+        // unread tsconfig `extends`/`references` hides aliases the same way, so it qualifies the line too.
+        const std::uint64_t reportUnread  = reportSa.tsExtras.extendsUnread;
+        const bool          reportPartial = reportSa.importsUnresolved != 0 || reportUnread != 0;
+        if( !reportPartial )
         {
             rw::emitTo( stdout, "\n## Dependency cycles (showing {} of {})\n", reportCycles, cycles.size() );
         }
-        else
+        else if( reportUnread == 0 )
         {
             rw::emitTo( stdout, "\n## Dependency cycles (showing {} of {}; measured over resolved edges: {} imports unresolved)\n", reportCycles, cycles.size(), reportSa.importsUnresolved );
         }
+        else
+        {
+            rw::emitTo( stdout, "\n## Dependency cycles (showing {} of {}; measured over resolved edges: {} imports unresolved, {} tsconfig files unread)\n",
+                         reportCycles, cycles.size(), reportSa.importsUnresolved, reportUnread );
+        }
         if( cycles.empty() )
         {
-            rw::emitTo( stdout, "{}", reportSa.importsUnresolved == 0 ? "- none (acyclic)\n" : "- none found over the resolved edges\n" );
+            rw::emitTo( stdout, "{}", reportPartial ? "- none found over the resolved edges\n" : "- none (acyclic)\n" );
         }
         else
         {

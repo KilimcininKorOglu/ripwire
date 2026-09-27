@@ -34,6 +34,20 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-27, train 21 (#220 part 2 + builtin-bind merged): RE-DERIVED on the merged tree with UPDATE_GOLDEN=1 — the
+#   hash is c451a79f1c…40c2cf, unchanged from #220's entry below: builtin-bind's kQSnapCacheScheme 14 -> 15 and its
+#   declinedCallMayReach exemption move no hashed declaration, and #220's kParserVer 124 is already in the pin.
+# 2026-09-26 (#220 part 2): RE-DERIVED with UPDATE_GOLDEN=1 (hash c451a79f1c…40c2cf). kParserVer 122 -> 124 (a
+#   TS/JS re-export `export … from` is now an Include; 123 stays reserved for #325). Only the extraction-identity
+#   declaration moves — kCacheVersion stays 25, kQSnapCacheScheme stays 14 — so no cached Snapshot MEANING changes.
+# 2026-09-26, lane/builtin-bind-065 fix round: RE-DERIVED with UPDATE_GOLDEN=1. isDeadCandidate is back to its base text;
+#   the declined-call exemption moved into quality::declinedCallMayReach, applied by both dead-set readers after it (and
+#   counted by computeDelta as declined-call-excluded=). The exemption is the same v15 meaning, never released at 15
+#   before this, so no second scheme bump.
+# 2026-09-26, lane/builtin-bind-065: RE-DERIVED with UPDATE_GOLDEN=1. isDeadCandidate gains one exemption — a
+#   definition some call the builtin-method name gate declined could have meant (graph.h BuiltinMethodGate) is
+#   not dead, as it was not before the gate, when that call bound to it by name. The dead SET's meaning moved, so
+#   kQSnapCacheScheme 14 -> 15 in the same commit. kParserVer stays 122 and kCacheVersion stays 25.
 # 2026-09-25 (PR #320/#67, Astro frontmatter, merged in train 20 after #310): RE-DERIVED with UPDATE_GOLDEN=1
 #   (hash 98afcd66a2…c2123ebfc64). kParserVer 121 -> 122 (.astro joins kLangTable, parsed through one included
 #   range over its `---` frontmatter; the PR carried 120, which #150 took first, and #310 took 121). Only the

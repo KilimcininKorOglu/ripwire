@@ -22,7 +22,10 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir "$TMP/cache"
+# quality::cacheDirLadder reads TMPDIR before XDG_CACHE_HOME, so both point inside $TMP, or the cached runs
+# below leave their blobs in the shared $TMPDIR/ripwire that the trap never removes (as cacheidentitycheck does).
 export XDG_CACHE_HOME="$TMP/cache"
+export TMPDIR="$TMP/cache"
 cp -R "$ROOT/test/astrofix" "$TMP/fix"
 # THE UNTERMINATED FENCE IS BUILT HERE, NOT COMMITTED. Extracting it DISCLOSES (guardrail 3), and the
 # disclosure writes a degrade trace to stderr on a plain build — so a committed copy would put that line

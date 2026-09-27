@@ -316,14 +316,18 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // first two at once.
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
-    { "declined_calls",    "declined_calls=K: K call sites left unbound (several defs, none chosen), in no count or row" },
+    { "declined_calls",    "declined_calls=K: K call sites left unbound (no evidence chose one def), in no count or row" },
     // #220 part 1: the FILE graph's gauge (graphlegend.h importsUnresolvedAttrXml), absent at zero, on the --deps/--arch/
     // --impact roots and the MCP impact twin. What it means for the numbers is the reading BESIDE it, never this row:
     // graph_partial= on --deps/--arch (next row), counts_floor= on --impact (its own row above; importers= only rises).
-    { "imports_unresolved", "imports_unresolved=N: N TS/JS imports naming this tree (paths alias, baseUrl path, workspace package) drew no edge" },
+    { "imports_unresolved", "imports_unresolved=N: N TS/JS imports naming this tree (alias, workspace or imports entry; assets never) drew no edge" },
     // Its reading on --deps/--arch, the same sentence both full legends carry (graphlegend.h kGraphPartialAttrXml): not a
     // floor, because a missing edge can merge two cycles into one and moves a ratio either way.
     { "graph_partial",     "graph_partial=1: measured over resolved edges; unresolved imports could add, merge or remove cycles and change ratios" },
+    // #220 part 2: the resolver's other two root gauges (graphlegend.h tsImportRootAttrXml), absent at zero, --deps/--arch;
+    // tsconfig_unread= makes the root partial exactly as imports_unresolved= does (graph_partial= above is its reading).
+    { "imports_dts",       "imports_dts=N: N TS/JS imports resolved only to a .d.ts declaration, not source" },
+    { "tsconfig_unread",   "tsconfig_unread=N: N configs not read (not in the tree, unparseable, above the root) could declare aliases; edges may be missing" },
     // #60: <bodies bodyless=N> — requested symbols with no body BY CONSTRUCTION (a module-scope owner), so
     // capped= stays 0. Absent at zero, like every term here.
     { "bodyless",          "bodyless=N of total=: requested symbols with NO body by construction (t=modscope), never in shown=, never raising capped=", true },
@@ -402,7 +406,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // The map HEADER's absent-at-zero gauges: `<!-- files=` is kept as data while the `<!-- hdr:` clauses that define
     // these fields go (kDeclinedMapLegend, kIgnoredLegend, kExtentSuspectHdrLegend, kMacroBlankedHdrLegend, the absent-if-0
     // half of the always-on legend, kMaxTokensFitLegend). Header-ONLY: several are quoted attributes elsewhere.
-    { "declined",          "declined=K: K calls left unbound (several defs, none chosen)", false, {}, MapHeaderRead::Only },
+    { "declined",          "declined=K: K calls left unbound (no evidence chose one def)", false, {}, MapHeaderRead::Only },
     { "external",          "external=K: K calls taken as outside the tree, no edge", false, {}, MapHeaderRead::Only },
     { "locality_pinned",   "locality_pinned=K: K calls pinned by locality alone (a guess)", false, {}, MapHeaderRead::Only },
     { "extent_suspect_syms", "extent_suspect_syms=K: K defs failed containment, corpus-wide", false, {}, MapHeaderRead::Only },
@@ -652,6 +656,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "preexisting-worse", "preexisting-worse=N: regressions on symbols that existed at baseline; only these gate (when major)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "new-symbol", "new-symbol=N: regressions on NEW code; never gate, but the debt is yours: read them", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "register-macro-excluded", "register-macro-excluded=N: symbols kept out of dead-code as self-registering test/bench macros; a floor", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "declined-call-excluded", "declined-call-excluded=N: symbols kept out of dead-code only because a declined call may mean them; a floor", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "api-new-surface", "api-new-surface=N: new PUBLIC symbols; a count, never gates, not in regressions=", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "renames", "renames=/rename_window_commits=: git rename pairs read over that many commits, to re-file baseline and acks", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },   // also defines rename_window_commits=
     { "acked_by_rename", "acked_by_rename=/acked_by_content=: acked= suppressions matched via git renames / an equal body hash", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },   // also defines acked_by_content=
@@ -1079,7 +1084,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "self", "self=/which=: this binary's path and the one which ripwire finds on PATH; which_version= is the version line that one prints when they differ", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines which= which_version=
     { "on_path", "on_path=0|1: whether a ripwire is on PATH; 0 fails the row and hint= carries the export line", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "same_file", "same_file=1: the PATH copy is this very file (same device and inode)", true, "c", MapHeaderRead::No, {}, "doctor" },
-    { "same_bytes", "same_bytes=1: a different file with identical content, a copied install (ok); 0 fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "same_bytes", "same_bytes=1: a different file with identical content, a copied install (ok); 0 fails the row; unknown: a file was unreadable; the row fails unverified (hint= names it)", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "self_mtime", "self_mtime=/self_size=/which_mtime=/which_size=: epoch mtime and byte size of each binary", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines self_size= which_mtime= which_size=
     { "hint", "hint=: the row's verdict and fix in plain text (which binary is stale, what to run)", true, "c", MapHeaderRead::No, {}, "doctor" },
     // pack-task partition=N: src/partition.h (partitionSummaryAttrs, the <bundle> header) + src/packtask.h (the inner ctx root)

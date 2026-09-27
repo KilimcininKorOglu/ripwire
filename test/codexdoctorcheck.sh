@@ -96,10 +96,25 @@ printf '%s' "$SOUT" | grep -q 'skills/install.sh --codex' \
     && ok "skill failure names the exact repair command" || no "skill failure omitted repair command"
 mv "$TMP/$declared" "$AGENTS_FAKE/skills/$declared"
 mkdir "$AGENTS_FAKE/skills/ripwire-undocumented"
+printf -- '---\nname: ripwire-undocumented\n---\n' >"$AGENTS_FAKE/skills/ripwire-undocumented/SKILL.md"
 SOUT="$( run_doctor )"
 printf '%s' "$SOUT" | grep -q '<c n="codex-skills" ok="0"' \
     && ok "undeclared live skill fails parity" || no "undeclared live skill did not fail parity"
-rmdir "$AGENTS_FAKE/skills/ripwire-undocumented"
+rm -rf "$AGENTS_FAKE/skills/ripwire-undocumented"
+# A declared name that is only an EMPTY directory (0.6.3's Git Bash `ln -sfn` leftover, #334) loads no skill, so
+# it is not live and parity fails. RED on 0.6.4, which counted any `ripwire-*` directory as live.
+mv "$AGENTS_FAKE/skills/$declared" "$TMP/$declared"
+mkdir "$AGENTS_FAKE/skills/$declared"
+EOUT="$( run_doctor )"; ERC=$?
+[ "$ERC" -eq 1 ] && printf '%s' "$EOUT" | grep -q '<c n="codex-skills" ok="0"' \
+    && ok "a declared skill left as an empty directory fails parity (no SKILL.md, not live)" \
+    || no "a declared skill left as an empty directory still passed parity (exit $ERC): $( printf '%s' "$EOUT" | grep -o '<c n="codex-skills"[^>]*>' )"
+rmdir "$AGENTS_FAKE/skills/$declared"
+mv "$TMP/$declared" "$AGENTS_FAKE/skills/$declared"
+EOUT="$( run_doctor )"
+printf '%s' "$EOUT" | grep -q '<c n="codex-skills" ok="1"' \
+    && ok "restoring the skill restores parity (the empty-directory arm above can pass)" \
+    || no "parity did not come back after restoring $declared: $( printf '%s' "$EOUT" | grep -o '<c n="codex-skills"[^>]*>' )"
 
 chmod -x "$HOOKDIR/ripwire-codex-route.sh"
 HOUT="$( run_doctor )"; HRC=$?
