@@ -621,8 +621,9 @@ literally in the task text is lifted just below the top hit. It is on by default
 names nothing indexed.
 
 The identifier half was pre-registered and measured once on the 92-question LocBench held-out set
-(`bench/locbench/calibrate_confidence.py`'s served-head grade, v0.6.4 as base): gold file in head 75 → 76, every
-gold file 55 → 56, gold function 51 → 52, first-gold-file MRR 0.6017 → 0.6040, served bytes +0.4%. Each +1 is a
+(the served-head grade of `bench/locbench/calibrate_confidence.py`, which lives on the `lane/served-syms-result`
+branch and is not on main; v0.6.4 as base): gold file in head 75 → 76, every gold file 55 → 56, gold function
+51 → 52, first-gold-file MRR 0.6017 → 0.6040, served bytes +0.4%. Each +1 is a
 single question, so the result is "no regression, named-symbol case fixed", not a recall gain.
 
 The reproducible in-tree ablations, both machine-generated scoreboards:
@@ -1439,8 +1440,10 @@ then another build's blobs of the root being written, never this build's blobs o
 pass retires a format nobody runs. Where one root's blobs from two formats do not fit the 2 GiB budget
 together (llvm-project, 1.76 GB per build), the other format's blobs of that root are evicted once every
 other root's are gone, and that build re-parses on its next run: the pre-tag cost, now paid only in that
-regime. An upgrade adds new blobs beside the old ones, so near the budget it can also cost one other root
-its cache once. Gates: `test/cacheidentitycheck.sh` (D3), `test/evictioncheck.sh` (h2, h3).
+regime. An upgrade adds new blobs beside the old ones, and the old version's blobs of the root being written are
+tier 1, so near the budget every other root's blob goes before them. Measured by review on 2026-09-26: an
+llvm-sized upgrade beside five newer 50 MB roots evicted all five; the untiered order of a079f26c kept all
+five, and the pre-tag in-place rewrite never swept. Gates: `test/cacheidentitycheck.sh` (D3), `test/evictioncheck.sh` (h2, h3).
 
 ### `.gitignore` honoured by default, `--no-ignore` to override — PRE-REGISTERED 2026-09-03 (owner decision 1-B)
 

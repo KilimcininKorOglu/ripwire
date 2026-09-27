@@ -141,7 +141,9 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
 - **Upgrading costs one cold run per tree and verb class** — the map (lean), `--for`-class verbs (rich) and
   the MCP index each re-parse once — because the names changed. The old untagged blobs stay until the budget
   or the 30-day rule removes them. Near the 2 GiB budget, the new blobs written beside the old ones can push
-  the directory over it, so one other tree may lose its cache once.
+  the directory over it. The sweep then evicts other trees' blobs, oldest first, before the old untagged blobs
+  of the tree in use, until the directory is back under 1792 MiB; after an upgrade on a tree as large as
+  llvm-project, that can be every other tree's cache, once.
 - **A `parser-version` refusal no longer blames another build for this build's other verb class.** One
   `--cache` file used by both a lean verb (the map) and a rich verb (`--for`) used to read "another ripwire
   build wrote it". It now reads "this build's lean verb class writes that number, or another ripwire build

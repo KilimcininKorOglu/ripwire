@@ -2827,6 +2827,10 @@ inline std::vector<RankedBlob> rankBlobsForEviction( const std::vector<CacheBlob
 // remains: where one root's blobs from two builds do not fit the budget together (llvm-project, 1.76 GB per build),
 // the other build's blobs of it are evicted and that build re-parses on its next run — the pre-tag cost, paid now
 // only in that regime, and after every other root's blob was spent first.
+// The same tier also holds the version upgraded FROM: on the first save after an upgrade its blobs of this root outrank
+// every other root's, current-format ones included, so near the budget one upgrade can cost every other root a cold run.
+// Name and mtime cannot tell that version from a live one: a "superseded by this build's newer blob of the class" rule
+// fixes the upgrade case but brings the alternation thrash back (both measured by review).
 inline std::vector<CacheBlobStat> evictBySizeBudget( std::vector<CacheBlobStat>& mine, const std::string& dir,
                                                      const std::string& keepPath, std::uintmax_t maxTotalBytes )
 {

@@ -357,7 +357,7 @@ $ ./build/ripwire . --for="tree-sitter parse of a source file" --adaptive
 
 **Answers:** (with --for) stop lifting what the task text names: a path, module, Type.method or identifier (with --for) disable the query-mention anchor.
 
-By DEFAULT, a file or dotted module literally NAMED in the task text (a path, `pkg.module` — even inside a URL) has its symbols' SCORE lifted to within 5% of the top score; the header says what anchored. That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1. A SYMBOL named directly takes the same first slot: `Type.method`, `ns::fn`, `mod.fn`, or a verbatim identifier with identifier shape (snake_case, camelCase), call syntax (`name()`; off for the WHOLE task once it carries pasted code: a ``` fence, an indented line or a stack trace) or backticks, defined in at most 3 files (each file's best definition, a prototype beside its definition counting once; test/fixture files only if the task names them; at most 2 lifted per task, in text order, the rest disclosed by mention_syms_capped=; the first 64 identifiers read, the rest disclosed by mention_idents_capped=). Plain words never qualify ("run the tests" lifts no run()). Inert (byte-identical) when the text names nothing indexed. RIPWIRE_NO_MENTION=1 disables it everywhere (incl. MCP `for`).
+By DEFAULT, a file or dotted module literally NAMED in the task text (a path, `pkg.module` — even inside a URL) has its symbols' SCORE lifted to within 5% of the top score; the header says what anchored. That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1. A SYMBOL named directly takes the same first slot: `Type.method`, `ns::fn`, `mod.fn`, or a verbatim identifier with identifier shape (snake_case, camelCase), call syntax (`name()`; off for the WHOLE task once it carries pasted code: a ``` fence, an indented line or a stack trace) or backticks, defined in at most 3 files (each file's best definition, a prototype beside its definition counting once; test/fixture files only if the task names them). At most 2 are lifted per task, in text order, and the rest are disclosed by mention_syms_capped=. Only the first 64 identifiers are read, and the rest are disclosed by mention_idents_capped=. Plain words never qualify ("run the tests" lifts no run()). Inert (byte-identical) when the text names nothing indexed. RIPWIRE_NO_MENTION=1 disables it everywhere (incl. MCP `for`).
 
 **Try it**
 
@@ -382,8 +382,8 @@ $ ./build/ripwire . --for="why does src/lexical.h chooseForRanker pick name-exac
 **Caveats (stated by the binary):**
 
 - That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1.
-- at most 2 lifted per task, in text order, the rest disclosed by mention_syms_capped=;
-- the first 64 identifiers read, the rest disclosed by mention_idents_capped=).
+- At most 2 are lifted per task, in text order, and the rest are disclosed by mention_syms_capped=.
+- Only the first 64 identifiers are read, and the rest are disclosed by mention_idents_capped=.
 
 ### `--no-doc-mention`
 
@@ -4389,7 +4389,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=12682cb668421f7a entries=723
+ripwire legend dictionary ripwire.dict/v1 dictv=19edccf52334be51 entries=726
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)

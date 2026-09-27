@@ -526,7 +526,11 @@ d220 "$D" >"$TMP/p2j.deps"
 # (P2-K) determinism: warm == cold == --no-cache on the issue tree; well-formed.
 "$BIN" "$I2A" --deps --cache="$TMP/c220b.bin" >"$TMP/p2a.cold" 2>/dev/null
 "$BIN" "$I2A" --deps --cache="$TMP/c220b.bin" >"$TMP/p2a.warm" 2>/dev/null
-{ cmp -s "$TMP/p2a.cold" "$TMP/p2a.warm" && cmp -s "$TMP/p2a.cold" "$TMP/p2a.deps"; } && ok "#220 (P2-K) deterministic, warm == cold" || no "#220 (P2-K) warm != cold"
+if cmp -s "$TMP/p2a.cold" "$TMP/p2a.warm" && cmp -s "$TMP/p2a.cold" "$TMP/p2a.deps"; then
+    ok "#220 (P2-K) deterministic, warm == cold"
+else
+    no "#220 (P2-K) warm != cold"
+fi
 command -v xmllint >/dev/null 2>&1 \
   && { xmllint --noout "$TMP/p2a.deps" "$TMP/p2g2.deps" "$TMP/p2j.deps" 2>/dev/null && ok "#220 (P2-K) xml well-formed" || no "#220 (P2-K) xml malformed"; } \
   || ok "#220 (P2-K) xml well-formed (xmllint absent — skipped)"
@@ -767,7 +771,11 @@ for TOOL in lerna rush; do
     w220 "$D/packages/a/package.json" '{ "name": "@acme/a", "main": "src/index.ts" }\n'; w220 "$D/packages/a/src/index.ts" "import { b } from '@acme/b';\nexport const a = b;\n"
     w220 "$D/packages/b/package.json" '{ "name": "@acme/b", "main": "src/index.ts" }\n'; w220 "$D/packages/b/src/index.ts" "import { a } from '@acme/a';\nexport const b = a;\n"
     d220 "$D" >"$TMP/p2x-$TOOL.deps"
-    [ "$( ncyc "$TMP/p2x-$TOOL.deps" )" = 1 ] && ok "#220 (P2-X) $TOOL members resolve: a <-> b" || no "#220 (P2-X) $TOOL members not read — $( root_of "$TMP/p2x-$TOOL.deps" )"
+    if [ "$( ncyc "$TMP/p2x-$TOOL.deps" )" = 1 ]; then
+        ok "#220 (P2-X) $TOOL members resolve: a <-> b"
+    else
+        no "#220 (P2-X) $TOOL members not read — $( root_of "$TMP/p2x-$TOOL.deps" )"
+    fi
 done
 D="$TMP/p2-vitealias"
 w220 "$D/package.json" '{ "name": "web", "private": true }\n'
