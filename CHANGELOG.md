@@ -22,25 +22,42 @@ A member call whose receiver's type no rule proved — `d.get( k )` on a dict, `
 Python repository one `ConnectionPool.get` collected 611 callers, 5 of them real, and was the default map's first
 symbol; `--impact` on it reached 3,930 symbols.
 
-The resolver now requires evidence for a call whose name is a method of the language's builtin map, list, set or
-string type (generated tables for Python, JavaScript/TypeScript and Ruby, each with the command that regenerates it).
-A method is kept as a target only when the caller's file names its class or a class in its inheritance cone
-(imports, constructs, annotates, subclasses or binds it); a free function only when the call is not a member access
-on an object, and a nested local function is never taken for a method. A call with no such evidence gets no edge and
-is counted, never guessed: the map header's `declined=`, `declined_calls=` on `--callers` and `--impact` (and their
-MCP twins) for every definition it could have meant, and on `--callees` of the caller. Such a definition is also not
-reported as dead code. Names outside the tables resolve exactly as before, and the include narrow still chooses between two
-admitted free functions.
+For a call whose name is a method of the language's builtin map, list, set or string type (generated tables for
+Python, JavaScript/TypeScript and Ruby, each with the command that regenerates it), the resolver now checks the edge
+its unchanged ladder chose. The edge stays when the caller's file names the class of one of its targets, or a class
+in that class's inheritance cone (imports it, constructs it, annotates with it, subclasses it, or binds an ES
+import to it). A free function also counts as named when the call is not a member access on an object: a Python
+member call reaches one only through the module that defines it, and a JavaScript call only through the caller's
+own file, a module it imports or requires directly, or an import of the name. When no target is named, the edge is
+removed and the call is counted. It counts under the map header's `declined=` when a target lacked evidence. It
+counts under `external=` when no target is reachable at all, such as a closure or a free function behind a member
+call. The check only removes edges. A call the ladder left unbound stays unbound, and a kept call keeps exactly its
+targets, including a split.
 
-On that repository: `ConnectionPool.get` falls from rank 1 to rank 147 with 9 callers (the 5 real ones and 4 calls
-inside its own module) and `declined_calls="1487"`; `--impact` reaches 551 symbols; the map is 27,663 bytes
-(was 29,816), `declined=` 2,995 (was 502).
+Every verb that reads callers now says how many declined calls could have meant its definition, with
+`declined_calls=` (absent at zero). This covers `--callers`, `--callees`, `--impact`, `--edit-check`,
+`--safe-delete` (beside `risk=`), `--uses FILE:SYM` and `--test-gate`, and their MCP twins. A definition such a
+call could have meant is not reported as dead code, and `--quality-delta` counts those as `declined-call-excluded=`.
+Names outside the tables resolve exactly as before.
 
-Go, Java, Kotlin, C#, Swift, Rust, C, C++ and ObjC resolve the same construct by name too and are unchanged here, each
-for a reason stated beside the gate: Go's builtin types have no methods; the extractor records no declared parameter
-or local type for Java, Kotlin, C#, Swift or Rust, so a gate would drop typed true edges with the false ones; C, C++
-and ObjC carry declared-type evidence already and want a rule that uses it. Graph-time only: `kParserVer` stays 122
-and `kCacheVersion` stays 25. Gate: `test/builtinbindcheck.sh`.
+On that repository, `ConnectionPool.get` falls from rank 1 to rank 147 with 9 callers: the 5 real ones and 4 calls
+inside its own module. It carries `declined_calls="1487"`, and `--impact` reaches 551 symbols.
+
+Stated limits:
+- An aliased Python class import (`from m import Pool as P`) is not evidence, because the extractor keeps no
+  original name.
+- A TypeScript namespace import and a renamed CommonJS `require` are not evidence either.
+- An object passed in without its class being named in the file (dependency injection, an unannotated parameter)
+  is declined, and the decline is disclosed.
+
+Go, Java, Kotlin, C#, Swift, Rust, C, C++ and ObjC resolve the same construct by name too and are unchanged here,
+each for a reason stated beside the check:
+- Java, Kotlin, C#, Swift, Rust and ObjC: the extractor records no declared parameter or local type.
+- Go: its builtin types have no methods, and its stdlib-type receivers need the same missing evidence.
+- C and C++: they already carry declared-type evidence and want a rule that uses it.
+
+Graph-time only: `kParserVer` stays 122 and `kCacheVersion` stays 25. `kQSnapCacheScheme` goes from 14 to 15,
+because the dead-code set changed. Gate: `test/builtinbindcheck.sh`.
 
 ## [0.6.4] — 2026-09-25
 
