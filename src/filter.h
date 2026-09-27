@@ -7,6 +7,7 @@
 #include "docparse.h"     // lowerExtOf / isDocExtension — the single source of truth for "this file is a DOCUMENT"
 #include "queryshape.h"   // the QUERY half of the shape-conditional document demotion below
 #include "infra/namesplit.h"   // isIdentChar — the word byte the doc-mention cue matcher bounds on
+#include "infra/sortutil.h"    // svLess — string_view order without libstdc++'s length subtraction (portablebuildcheck #6)
 
 #include <algorithm>
 #include <cstdint>
@@ -816,8 +817,8 @@ inline void markTranslations( const ProseFiles& prose, std::string_view lowerTas
     {
         sortedLower.push_back( prose.lowerOf[f] );
     }
-    std::sort( sortedLower.begin(), sortedLower.end() );
-    const auto has = [ & ]( const std::string& p ) { return std::binary_search( sortedLower.begin(), sortedLower.end(), std::string_view( p ) ); };
+    std::sort( sortedLower.begin(), sortedLower.end(), rw::sortutil::svLess );
+    const auto has = [ & ]( const std::string& p ) { return std::binary_search( sortedLower.begin(), sortedLower.end(), std::string_view( p ), rw::sortutil::svLess ); };
 
     std::vector<RemovalTwin> removal;
     for( const std::uint32_t f : prose.ids )

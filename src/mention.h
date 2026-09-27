@@ -38,6 +38,7 @@
 #include "filter.h"   // rankTierMultiplierOf / isTestSymbol — the §P4 test/fixture tier a named identifier may not lift (rule b);
                       // queryshape::classify — the shipped trace classifier (rule a)
 #include "infra/namesplit.h"   // isIdentChar — the ONE ASCII identifier-character predicate
+#include "infra/sortutil.h"    // svLess — string_view order without libstdc++'s length subtraction (portablebuildcheck #6)
 #include "graph.h"   // R5: applyDocMentionBoost reads g.mentions (the doc->code backtick edges the
                       // --mentions=SYM verb already exposes) — same header gitmine.h already pulls in for
                       // an analogous "read one more Graph field" reason.
@@ -874,18 +875,22 @@ inline std::vector<std::pair<std::uint32_t, NodeId>> matchNamedIdents( const Ing
     {
         lowered.emplace_back( lowerStore[k], k );
     }
-    std::sort( exact.begin(), exact.end() );
-    std::sort( lowered.begin(), lowered.end() );
+    // pair<string_view, index> order spelled with svLess: the default operator< compares the views through
+    // char_traits, which the Linux sanitizer leg reports as an unsigned overflow on two lengths (sortutil.h).
+    const auto pairLess = []( const std::pair<std::string_view, std::uint32_t>& a, const std::pair<std::string_view, std::uint32_t>& b )
+    { return rw::sortutil::svLess( a.first, b.first ) || ( a.first == b.first && a.second < b.second ); };
+    std::sort( exact.begin(), exact.end(), pairLess );
+    std::sort( lowered.begin(), lowered.end(), pairLess );
 
     std::vector<std::pair<std::uint32_t, NodeId>> matches;
-    const auto byName = []( const std::pair<std::string_view, std::uint32_t>& e, std::string_view v ) { return e.first < v; };
+    const auto nameLess = []( const std::pair<std::string_view, std::uint32_t>& e, std::string_view v ) { return rw::sortutil::svLess( e.first, v ); };
     for( const Symbol& s : ing.symbols )
     {
         if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
         {
             continue;
         }
-        for( auto it = std::lower_bound( exact.begin(), exact.end(), std::string_view( s.name ), byName ); it != exact.end() && it->first == s.name; ++it )
+        for( auto it = std::lower_bound( exact.begin(), exact.end(), std::string_view( s.name ), nameLess ); it != exact.end() && it->first == s.name; ++it )
         {
             matches.emplace_back( it->second, s.id );
         }
@@ -894,7 +899,7 @@ inline std::vector<std::pair<std::uint32_t, NodeId>> matchNamedIdents( const Ing
             continue;   // only PHP's case-folded kinds are looked up by their lower-cased spelling
         }
         const std::string lower = asciiLower( s.name );
-        for( auto it = std::lower_bound( lowered.begin(), lowered.end(), std::string_view( lower ), byName ); it != lowered.end() && it->first == lower; ++it )
+        for( auto it = std::lower_bound( lowered.begin(), lowered.end(), std::string_view( lower ), nameLess ); it != lowered.end() && it->first == lower; ++it )
         {
             if( named[ it->second ].name != s.name )   // an exact spelling was already paired above
             {

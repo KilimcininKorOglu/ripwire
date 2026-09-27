@@ -132,6 +132,9 @@ enum class DoctorBytes : std::uint8_t
     Differ,
     Unread,   // `unread` says which file and why; the row makes no claim about the contents
 };
+inline constexpr std::size_t kDoctorBytesCount = static_cast<std::size_t>( DoctorBytes::Unread ) + 1;
+// Unread must stay the LAST value: move the count with any append. (rw::enumCountIsExact cannot prove it here: an enum
+// in main.cpp's unnamed namespace prints as "(anonymous namespace)::…" in __PRETTY_FUNCTION__, which its probe reads as a cast.)
 
 // Fill `buf` from `fd` until it is full or the file ends, retrying EINTR. The byte count, or -1 on a read error.
 inline rw::os::ssize_t doctorReadFull( int fd, std::vector<char>& buf )
@@ -198,7 +201,7 @@ inline DoctorBytes doctorCompareFileBytes( const std::string& a, const std::stri
 }
 
 // same_bytes=: the value each answer prints, indexed by DoctorBytes.
-inline constexpr std::array<const char*, 3> kDoctorBytesValue { "1", "0", "unknown" };
+inline constexpr std::array<const char*, kDoctorBytesCount> kDoctorBytesValue { "1", "0", "unknown" };
 
 // Count the advisory edit-lock files under <cacheDir>/locks/<xx>/ (mcpedit.h editLockPath). They are deliberately
 // never unlinked by the process that holds them; quality.h's sweepStaleEditLocks reclaims the unheld ones older

@@ -1140,7 +1140,7 @@ constexpr bool extensionInList( std::string_view path, std::string_view pathext 
 // "/c/..." spelling, which Win32 cannot open. A name without an extension is tried with each PATHEXT entry, in PATHEXT's
 // order, one directory at a time; a name with an extension is used only if PATHEXT lists it. An empty `pathext` means
 // Windows' own default. The answer is in the program's spelling: '/' separators, an upper-case drive, and the extension
-// as PATHEXT spells it ("C:/tools/bin/ripwire.EXE"; the file system ignores case). "" when nothing resolves.
+// as PATHEXT spells it ("C:/tools/bin/tool.EXE"; the file system ignores case). "" when nothing resolves.
 // #334: --doctor's binary-path row used Git Bash's `which` instead. It answered from another shell's PATH, in a "/c/..."
 // spelling the C runtime could not open, so a byte-identical copy came out STALE.
 // One candidate `base` (a directory joined with the command, or the command itself): with an extension, used as given
