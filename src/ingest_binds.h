@@ -144,27 +144,109 @@ inline std::optional<std::string_view> rspecGroupArgument( TSNode call, std::str
     return isRubyConstantNode( first ) ? rubyFinalConstant( first, src ) : std::string_view {};
 }
 
-// True when the file REDEFINES `described_class` — `let( :described_class )`, `def described_class`, or a local
-// `described_class = …` — so the name means what that assigns, which the rule below does not read. Such a file's
-// sites decline (floor (e)). Conservative on purpose: any `:described_class`, or an `=` after the name, counts.
-inline bool rubyRedefinesDescribedClass( std::string_view src ) noexcept
+// True when the file defines a METHOD named described_class — any `:described_class` symbol (`let( :described_class )`,
+// `subject( :described_class )`, `define_method( :described_class )`) or `def described_class` / `def self.described_class`.
+// A method reaches every example in its group, so the file's sites decline (floor (e)). Conservative on purpose, but a
+// whole word: `:described_class_name` and `my_described_class` are other names.
+inline bool rubyDefinesDescribedClassMethod( std::string_view src ) noexcept
 {
     static constexpr std::string_view kName = "described_class";
     for( std::size_t at = src.find( kName ); at != std::string_view::npos; at = src.find( kName, at + kName.size() ) )
     {
+        const std::size_t end = at + kName.size();
+        if( end < src.size() && ( namesplit::isIdentChar( src[ end ] ) || src[ end ] == '?' || src[ end ] == '!' ) )
+        {
+            continue;   // `described_class_name`, `described_class?` — another name
+        }
         const std::string_view before = src.substr( 0, at );
-        if( before.ends_with( ':' ) || before.ends_with( "def " ) )
+        if( before.ends_with( ':' ) || before.ends_with( "def " ) || before.ends_with( "def self." ) )
         {
             return true;
         }
-        std::size_t k = at + kName.size();
-        while( k < src.size() && src[ k ] == ' ' )
-        {
-            ++k;
-        }
-        if( k + 1 < src.size() && src[ k ] == '=' && src[ k + 1 ] != '=' && src[ k + 1 ] != '~' && src[ k + 1 ] != '>' )
+    }
+    return false;
+}
+
+// True when `n` itself BINDS the local described_class: a parameter list or parameter naming it, or an assignment
+// (`=`, `||=`, a multiple assignment's target list) whose target it is.
+inline bool rubyNodeBindsDescribedClass( TSNode n, std::string_view src )
+{
+    const auto named = [ & ]( TSNode c ) { return !ts_node_is_null( c ) && kindIs( ts_node_type( c ), "identifier" ) && pattern::nodeText( c, src ) == "described_class"; };
+    const char* t = ts_node_type( n );
+    if( kindIs( t, "assignment" ) || kindIs( t, "operator_assignment" ) )
+    {
+        return named( fieldChild( n, NodeField::Left ) );
+    }
+    if( kindIs( t, "optional_parameter" ) || kindIs( t, "keyword_parameter" ) )
+    {
+        return named( fieldChild( n, NodeField::Name ) );
+    }
+    if( !kindIs( t, "block_parameters" ) && !kindIs( t, "method_parameters" ) && !kindIs( t, "lambda_parameters" ) && !kindIs( t, "left_assignment_list" )
+        && !kindIs( t, "destructured_left_assignment" ) && !kindIs( t, "rest_assignment" ) && !kindIs( t, "destructured_parameter" )
+        && !kindIs( t, "splat_parameter" ) && !kindIs( t, "hash_splat_parameter" ) && !kindIs( t, "block_parameter" ) && !kindIs( t, "exception_variable" ) )
+    {
+        return false;
+    }
+    const std::uint32_t cc = ts_node_named_child_count( n );
+    for( std::uint32_t i = 0; i < cc; ++i )
+    {
+        if( named( ts_node_named_child( n, i ) ) )
         {
             return true;
+        }
+    }
+    return false;
+}
+
+// A node whose locals never leak out (a block, a lambda), or that sees no outer local at all (a def, a class, a module).
+inline bool isRubyLocalScope( const char* t ) noexcept
+{
+    return kindIs( t, "block" ) || kindIs( t, "do_block" ) || kindIs( t, "lambda" ) || kindIs( t, "method" ) || kindIs( t, "singleton_method" )
+        || kindIs( t, "class" ) || kindIs( t, "singleton_class" ) || kindIs( t, "module" );
+}
+
+// True when the (identifier) `site` reads a LOCAL named described_class, not RSpec's method — Ruby's own rule: a local
+// is visible after its binding, in its own scope and in the blocks nested inside it. So the walk climbs from the site;
+// at each enclosing node it searches the children that END before the site (earlier statements, a block's or a def's
+// parameters) without entering a nested block, def, class or module; and it stops after the first def, class or
+// module, which sees no outer local. Floor (e).
+inline bool rubyDescribedClassIsLocal( TSNode site, std::string_view src )
+{
+    const std::uint32_t at = ts_node_start_byte( site );
+    std::vector<TSNode> stack;
+    for( TSNode n = ts_node_parent( site ); !ts_node_is_null( n ); n = ts_node_parent( n ) )
+    {
+        if( rubyNodeBindsDescribedClass( n, src ) )
+        {
+            return true;   // `described_class = described_class.m` — the right side already reads the local
+        }
+        const std::uint32_t cc = ts_node_named_child_count( n );
+        for( std::uint32_t i = 0; i < cc && ts_node_end_byte( ts_node_named_child( n, i ) ) <= at; ++i )
+        {
+            stack.push_back( ts_node_named_child( n, i ) );
+        }
+        while( !stack.empty() )
+        {
+            const TSNode cur = stack.back();
+            stack.pop_back();
+            if( rubyNodeBindsDescribedClass( cur, src ) )
+            {
+                return true;
+            }
+            if( isRubyLocalScope( ts_node_type( cur ) ) )
+            {
+                continue;   // a nested scope's locals never reach the site
+            }
+            const std::uint32_t kids = ts_node_named_child_count( cur );
+            for( std::uint32_t i = 0; i < kids; ++i )
+            {
+                stack.push_back( ts_node_named_child( cur, i ) );
+            }
+        }
+        const char* nt = ts_node_type( n );
+        if( isRubyLocalScope( nt ) && !kindIs( nt, "block" ) && !kindIs( nt, "do_block" ) && !kindIs( nt, "lambda" ) )
+        {
+            break;   // a def, class or module: no outer local reaches in
         }
     }
     return false;
@@ -214,7 +296,8 @@ inline std::optional<RecvShape> classifyRubyReceiver( TSNode node, std::string_v
     }
     if( kindIs( rt, "identifier" ) && pattern::nodeText( node, src ) == "described_class" )
     {
-        const std::string_view cls = rubyRedefinesDescribedClass( src ) ? std::string_view {} : rspecDescribedClass( node, src );
+        const bool             redefined = rubyDefinesDescribedClassMethod( src ) || rubyDescribedClassIsLocal( node, src );
+        const std::string_view cls       = redefined ? std::string_view {} : rspecDescribedClass( node, src );
         if( cls.empty() )
         {
             return std::nullopt;   // redefined, or no constant-described group encloses it: the identifier arm answers as before

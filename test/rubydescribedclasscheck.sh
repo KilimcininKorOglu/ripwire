@@ -135,6 +135,10 @@ class Calc
     a
   end
 
+  def self.r_self( a )
+    a
+  end
+
   def m_chain
     1
   end
@@ -218,6 +222,10 @@ class Tally
   end
 
   def self.m_sctx( a )
+    a
+  end
+
+  def self.r_self( a )
     a
   end
 
@@ -361,6 +369,8 @@ RSpec.describe Calc do
     described_class ||= Tally
     described_class.r_opasgn( 1 )
   end
+
+  it { described_class = described_class.r_self( 1 ) }
 end
 RUBY
 
@@ -478,6 +488,7 @@ untouched local_spec.rb   r_bparam "a block parameter |described_class| redefine
 untouched local_spec.rb   r_mparam "a method parameter def helper( described_class ) redefines it inside that def (floor (e), stated)"
 untouched local_spec.rb   r_masgn  "a multiple-assignment target described_class, other = … redefines it (floor (e), stated)"
 untouched local_spec.rb   r_opasgn "described_class ||= Tally binds a local too (floor (e), stated)"
+untouched local_spec.rb   r_self   "described_class = described_class.r_self — the right side already reads the local (floor (e), stated)"
 
 echo "=== floor (e) is Ruby's local scoping, and matches the name as a whole word ==="
 pins scope_spec.rb  m_pre   Calc   Tally "a site BEFORE the local's assignment still reads RSpec's method"
