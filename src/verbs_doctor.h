@@ -242,15 +242,33 @@ inline int doctorVersionOrder( std::string_view versionLine, std::string_view mi
     return *theirs < *ours ? -1 : 1;
 }
 
-// 2026-09-06 stranger audit: the not-on-PATH verdict, with the fix spelled out (see the call site).
-inline std::string doctorNotOnPathHint( const std::string& selfPath, std::vector<char>& esc )
+// The line that puts this binary's directory first on PATH (#334: PowerShell's spelling on Windows).
+inline std::string doctorPathPrependLine( const std::string& selfPath )
 {
     const std::size_t slash   = selfPath.find_last_of( '/' );
     const std::string selfDir = ( slash == std::string::npos ) ? std::string( "." ) : selfPath.substr( 0, slash );
+    return rw::os::path_prepend_hint( selfDir );
+}
+
+// 2026-09-06 stranger audit: the not-on-PATH verdict, with the fix spelled out (see the call site). The attribute is
+// XML-escaped like every other one, so its raw bytes (&apos; &quot;) do not paste into a shell; runDoctor also prints
+// the same line unescaped on stderr (doctorPasteablePathLine), and the hint says so.
+inline std::string doctorNotOnPathHint( const std::string& selfPath, std::vector<char>& esc )
+{
     return " hint=\"" + std::string( rw::escapeXml( std::string_view(
                   "NOT ON PATH: no ripwire resolves from PATH; this run used " + selfPath
-                + " — add its directory (" + std::string( rw::os::path_prepend_scope() ) + "), the command last so pasting from it runs: "
-                + rw::os::path_prepend_hint( selfDir ) ), esc ) ) + "\"";   // #334: PowerShell's spelling on Windows
+                + " — add its directory (" + std::string( rw::os::path_prepend_scope() ) + "; stderr carries this line unescaped): "
+                + doctorPathPrependLine( selfPath ) ), esc ) ) + "\"";
+}
+
+// CodeRabbit 4109273959 / review R4: the not-on-PATH remedy as a terminal shows it — no XML escaping — on stderr, after
+// the document, with the command alone on its own last line so a paste of that line runs as-is. stdout stays the one
+// well-formed XML document; a run with ripwire on PATH prints nothing here.
+inline void doctorPasteablePathLine( const std::string& selfPath )
+{
+    std::fflush( stdout );
+    rw::emitTo( stderr, "ripwire --doctor: no ripwire resolves from PATH. To put this binary's directory first ({}), paste this line:\n{}\n",
+                rw::os::path_prepend_scope(), doctorPathPrependLine( selfPath ) );
 }
 
 inline std::string doctorBinaryPathVerdictAttr( const std::string& selfPath, const std::string& whichPath,
@@ -785,6 +803,7 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     int                okCount = 0;
     std::string        rows;
     std::vector<char>  esc;
+    std::string        notOnPathSelf;   // set by the binary-path row's NOT ON PATH verdict: stderr repeats its remedy unescaped
 
     const auto row = [ & ]( const char* name, bool ok, const std::string& attrs )
     {
@@ -820,6 +839,7 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
             // not found". Not being on PATH is the commonest state a fresh install is in; it fails this row, with the fix.
             ok = false;
             attrs += " on_path=\"0\"" + doctorNotOnPathHint( selfPath, esc );
+            notOnPathSelf = selfPath;
         }
         else if( haveSelf )
         {
@@ -1064,6 +1084,10 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     out += "</doctor>";
     std::fputs( out.c_str(), stdout );
     std::fputc( '\n', stdout );
+    if( !notOnPathSelf.empty() )
+    {
+        doctorPasteablePathLine( notOnPathSelf );
+    }
     return ( okCount == checks ) ? 0 : 1;
 }
 

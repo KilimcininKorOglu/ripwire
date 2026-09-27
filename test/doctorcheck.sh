@@ -323,6 +323,35 @@ for g3sh in bash sh zsh; do
         || no "(G3) $g3sh: pasting the hint's tail failed (rc=$G3RC, PATH head [$G3OUT], stderr [$( head -c 120 "$TMP/g3-$g3sh.err" )]): [$WTAIL]"
 done
 
+# ── (G4) review R4 of the CodeRabbit 4109273959 follow-up: the hint ATTRIBUTE is XML-escaped (&apos; &quot;) like every
+#     attribute, so the bytes a terminal shows do not paste into any shell. With ripwire not on PATH, --doctor also prints
+#     the remedy UNESCAPED on stderr, the command alone on the last line. Paste that raw last line, byte for byte, into
+#     each shell present: exit 0 and the literal $/`/'/space directory first on PATH. stdout stays one well-formed
+#     document. RED on 0.6.4, which printed nothing on stderr.
+WERR="$TMP/g4-doctor.err"
+PATH="/usr/bin:/bin" TMPDIR="$WEIRDCACHE" "$WEIRDDIR/ripwire" "$REPO" --doctor --no-cache >"$TMP/g4-doctor.out" 2>"$WERR"
+xmllint --noout "$TMP/g4-doctor.out" 2>/dev/null \
+    && ok "(G4) stdout is still one well-formed XML document when the remedy is also on stderr" \
+    || no "(G4) --doctor stdout is not well-formed XML"
+G4LINE="$( tail -n 1 "$WERR" )"
+case "$G4LINE" in
+    export\ PATH=*) ok "(G4) stderr's last line is the bare command: [$G4LINE]" ;;
+    *)              no "(G4) stderr's last line is not the command (nothing pasteable unescaped): [$G4LINE]" ;;
+esac
+for g4sh in bash sh dash zsh; do
+    command -v "$g4sh" >/dev/null 2>&1 || continue
+    printf '%s\nprintf "%%s" "${PATH%%%%:*}"\n' "$G4LINE" >"$TMP/g4-$g4sh.sh"
+    G4OUT="$( PATH="/usr/bin:/bin" "$g4sh" "$TMP/g4-$g4sh.sh" 2>"$TMP/g4-$g4sh.err" )"; G4RC=$?
+    [ "$G4RC" -eq 0 ] && [ "$G4OUT" = "$WEIRDDIR_REAL" ] && [ ! -e "$MARKER" ] \
+        && ok "(G4) $g4sh: the raw stderr line pastes as-is and puts the directory first on PATH" \
+        || no "(G4) $g4sh: the raw stderr line did not paste (rc=$G4RC, PATH head [$G4OUT], stderr [$( head -c 120 "$TMP/g4-$g4sh.err" )])"
+done
+# control: with ripwire on PATH, --doctor says nothing on stderr about PATH
+PATH="$WEIRDDIR:/usr/bin:/bin" TMPDIR="$WEIRDCACHE" "$WEIRDDIR/ripwire" "$REPO" --doctor --no-cache >/dev/null 2>"$TMP/g4-onpath.err"
+grep -q 'no ripwire resolves from PATH' "$TMP/g4-onpath.err" \
+    && no "(G4) control: stderr carries the PATH remedy even with ripwire on PATH" \
+    || ok "(G4) control: with ripwire on PATH, stderr carries no PATH remedy"
+
 # §P11 doctor item: binary-path's ok="0" row names which of self=/which= is the STALE (older) one.
 echo "$SOUT" | grep -oE '<c n="binary-path" ok="0"[^<]*/>' | grep -q 'hint="STALE:' \
     && ok "genuine-stale binary -> binary-path row carries hint=\"STALE: ...\"" \
