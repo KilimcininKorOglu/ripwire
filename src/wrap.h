@@ -439,7 +439,18 @@ inline void wrapMcpJsonOpencode( const std::string& token, std::string_view tool
 // hermes (their `mcp add` spell each argument with a flag of their own) get a NOTE instead of a guessed command.
 inline bool wrapWritesToolsArg( const AgentTarget& row ) noexcept
 {
-    return row.mcpForm == McpForm::Json || row.mcpForm == McpForm::JsonMcpKey || ( row.mcpForm == McpForm::CliAdd && row.name == "claude" );
+    switch( row.mcpForm )
+    {
+        case McpForm::Json:
+        case McpForm::JsonMcpKey:
+            return true;
+        case McpForm::CliAdd:
+            return row.name == "claude";   // openclaw/hermes spell each argument with their own flag
+        case McpForm::Toml:
+        case McpForm::None:
+            return false;
+    }
+    return false;
 }
 
 // claude's `mcp add … -- ripwire --mcp`: the flag goes on the end of that command line, ahead of its newline.
