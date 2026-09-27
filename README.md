@@ -2941,8 +2941,9 @@ terms.
 config ripwire could not read is disclosed rather than guessed (thanks @srinchow). On Windows, `--doctor` searches PATH as
 Windows does and no longer calls a byte-identical copy stale; two ripwire builds on one tree no longer re-parse on every
 run (thanks @elsRobin, @lennix1337 and @antoniojosedev for testing). `--doctor`'s PATH hint can be pasted as printed.
-`--for` lifts a symbol the task names verbatim, and a method call on a dict or map no longer binds to the repository's
-only method of that name.
+`--for` lifts a symbol the task names verbatim. In Python, JS/TS and Ruby, a method call on a dict or map binds to an
+in-repo method of that name only when the calling file names its class (or one in its inheritance cone); otherwise it
+is declined and counted (`declined_calls=`).
 
 **ripwire 0.6.4 — Windows fixes from real testers, and honest TypeScript answers.** On Windows without symlink rights,
 the skills installer no longer reports success after creating empty folders: it copies instead, or says it failed. `--doctor`
