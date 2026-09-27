@@ -130,5 +130,53 @@ printf '%s' "$LEG" | grep -q 'ppalt' && printf '%s' "$LEG" | grep -qi 'measured 
     && ok "metrics legend states which keys' absence is a measured value" \
     || no "metrics legend does not say which keys' absence is a measured value (ppalt/tested/ev/humps/role)"
 
+# --- ONE ROW PER DEFINITION (P11, 2026-09-27) --------------------------------------------------------------------
+# --metrics used to fold every same-name (kind, id) group into ONE row that carried ONE member's cx/ccx/loc: a Java or
+# C++ overload set hid every other body's metrics, and a consumer joining metrics by function lost them. Now each body
+# is its own row with l= (its start line); bodyless declarations add no row and fold into overloads=; a prototype +
+# definition pair stays ONE row whose metrics are the DEFINITION's. The default map keeps its collapse. RED on 0.6.5.
+OV="$TMP/perdef"; mkdir -p "$OV/src"
+printf '%s\n' 'public class Calc {' '    public int add(int a, int b) {' '        return a + b;' '    }' \
+    '    public double add(double a, double b) {' '        if (a > b) { return a + b; }' '        if (a < 0) { return b; }' \
+    '        return a;' '    }' '}' > "$OV/src/Calc.java"
+printf '%s\n' 'int scale(int x);' 'int scale(int x, int k);' > "$OV/src/ov.h"
+printf '%s\n' '#include "ov.h"' 'int scale(int x) {' '    return x * 2;' '}' 'int scale(int x, int k) {' \
+    '    if (k > 0) { return x * k; }' '    if (k < -5) { return -x; }' '    return x;' '}' \
+    'int proto_only(int y);' 'int proto_only(int y) {' '    return y + 1;' '}' > "$OV/src/ov.cpp"
+PD="$( cd "$OV" && "$BIN" . --metrics 2>/dev/null )"
+PDROWS="$( printf '%s' "$PD" | sed 's/<f /\n<f /g; s/<s /\n<s /g' )"
+row(){ printf '%s\n' "$PDROWS" | grep "^<s t=\"$1\" n=\"$2\" "; }
+ADD="$( row method add )"
+[ "$( printf '%s\n' "$ADD" | grep -c . )" -eq 2 ] && printf '%s' "$ADD" | grep -q 'l="2" .* cx="1" ' \
+    && printf '%s' "$ADD" | grep -q 'l="5" .* cx="3" ' && ! printf '%s' "$ADD" | grep -q 'overloads=' \
+    && ok "per-def: Java add() overloads print two rows, l=2 cx=1 and l=5 cx=3" \
+    || no "per-def: Java add() overloads not split per definition with l= (got: $ADD)"
+SCL="$( printf '%s\n' "$PDROWS" | sed -n '/^<f p="src\/ov.cpp"/,/^<f /p' | grep '^<s t="fn" n="scale" ' )"
+[ "$( printf '%s\n' "$SCL" | grep -c . )" -eq 2 ] && printf '%s' "$SCL" | grep -q 'l="5" .* cx="3" ' \
+    && ok "per-def: C++ scale() overloads print two rows in ov.cpp" \
+    || no "per-def: C++ scale() overloads not split per definition (got: $SCL)"
+PRO="$( row fn proto_only )"
+[ "$( printf '%s\n' "$PRO" | grep -c . )" -eq 1 ] && printf '%s' "$PRO" | grep -q 'overloads="2" .* loc="3" ' \
+    && ! printf '%s' "$PRO" | grep -q ' l=' \
+    && ok "per-def: prototype + definition stay ONE row carrying the definition's loc=3" \
+    || no "per-def: prototype + definition row wrong (got: $PRO)"
+HDR="$( printf '%s\n' "$PDROWS" | sed -n '/^<f p="src\/ov.h"/,$p' | grep -c '^<s t="fn" n="scale" ' )"
+[ "$HDR" -eq 1 ] && ok "per-def: two bodyless prototypes add no rows (one folded row in ov.h)" \
+    || no "per-def: bodyless prototypes printed $HDR rows in ov.h, want 1"
+NROWS="$( printf '%s\n' "$PDROWS" | grep -c '^<s ' )"
+EXTRA="$( printf '%s\n' "$PDROWS" | grep -o 'overloads="[0-9]*"' | tr -dc '0-9\n' | awk '{ s += $1 - 1 } END { print s + 0 }' )"
+SHOWN="$( printf '%s' "$PD" | grep -o ' shown=[0-9][0-9]*' | head -1 | tr -dc '0-9' )"
+[ $(( NROWS + EXTRA )) -eq "${SHOWN:-x}" ] && ok "per-def: rows($NROWS)+sum(overloads-1)($EXTRA) = shown=$SHOWN" \
+    || no "per-def: rows($NROWS)+sum(overloads-1)($EXTRA) != shown=$SHOWN"
+printf '%s' "$PD" | sed -n '1,/-->/p' | grep -q 'l=N: start line' \
+    && ok "per-def: the metrics legend defines l=" || no "per-def: l= emitted but the metrics legend does not define it"
+PJ="$( cd "$OV" && "$BIN" . --metrics --json 2>/dev/null )"
+printf '%s' "$PJ" | grep -q '"n":"add","l":2,' && printf '%s' "$PJ" | grep -q '"n":"add","l":5,' \
+    && ok "per-def: --json twin carries \"l\" on the split rows" || no "per-def: --json twin lacks \"l\" on the split rows"
+DM="$( cd "$OV" && "$BIN" . 2>/dev/null | sed 's/<s /\n<s /g' | grep -c '^<s t="method" n="add" overloads="2"' )"
+[ "$DM" -eq 1 ] && ! ( cd "$OV" && "$BIN" . 2>/dev/null ) | grep -q ' l="' \
+    && ok "per-def: the default map keeps its overload collapse and prints no l=" \
+    || no "per-def: the default map changed shape (add rows with overloads=2: $DM)"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$fail"
