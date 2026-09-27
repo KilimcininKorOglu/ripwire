@@ -13,7 +13,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
-## [Unreleased]
+## [0.6.5] — 2026-09-27
 
 
 ### Changed — `--for` lifts change logs and translated docs last in doc-mention surfacing
@@ -65,8 +65,11 @@ line or a stack trace anywhere in the task turns it off for the whole task.
   mentions already use, just below the top hit, so #1 is never displaced; on the example above, `hybrid_search`
   is now r=2. A C/C++ prototype beside its definition counts once.
 - A test or fixture definition is lifted only when the task also names its file.
-- At most two symbols are lifted per task, in text order. A refused one is disclosed with
-  `mention_syms_capped=` / `mention_syms_total=` only when the lift would have moved it.
+- At most two identifier-resolved symbols are lifted per task, in text order: a bare name, call syntax, `ns::fn`,
+  or a dotted name that matched no `Type.method`. They share the eight direct-symbol slots, which `Type.method`
+  matches can fill on their own. The two count definitions, not names: a name defined in two files spends both.
+  A refused one is disclosed with `mention_syms_capped=` / `mention_syms_total=` only when the lift would have
+  moved it.
 - The first 64 distinct identifiers are read; a task naming more discloses `mention_idents_capped=` /
   `mention_idents_total=`.
 - Plain English words that happen to be symbol names (`get`, `run`, `results`) are never lifted.
@@ -125,9 +128,10 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
   each other's blob every time. Measured on `test/fixture`, alternating a format-24 build with this one for
   three rounds: before, every run after the first printed `format-version — not used` and every run reported
   `reparsed=5 reused=0`; now every run after each build's first reports `reparsed=0 reused=5`. The names now
-  carry `c<kCacheVersion>p<parser version>` — at kCacheVersion 25, kParserVer 122: `ripwire-<key>-lean-c25p122.bin`,
-  `ripwire-<key>-rich-c25p123.bin`, and for the MCP index `ripwire-mcp-<key>-c25p123.cache`. Two builds of
-  one format still share a blob.
+  carry `c<format>p<parser>`: `ripwire-<key>-lean-c<format>p<parser>.bin`, `ripwire-<key>-rich-c<format>p<parser>.bin`,
+  and for the MCP index `ripwire-mcp-<key>-c<format>p<parser>.cache`, where the rich and MCP parser number is always
+  the lean one plus 1. This release writes `-lean-c25p124.bin`, `-rich-c25p125.bin` and `-c25p125.cache`. Two
+  builds of one format still share a blob.
 - **`--cache=PATH` is not renamed.** A file you name is used under exactly that name (a committed
   `--index-out` artifact is consumed by its exact name). Two builds that share one `--cache` file still
   refuse each other's blob, and the notice says so.

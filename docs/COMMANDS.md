@@ -357,7 +357,7 @@ $ ./build/ripwire . --for="tree-sitter parse of a source file" --adaptive
 
 **Answers:** (with --for) stop lifting what the task text names: a path, module, Type.method or identifier (with --for) disable the query-mention anchor.
 
-By DEFAULT, a file or dotted module literally NAMED in the task text (a path, `pkg.module` — even inside a URL) has its symbols' SCORE lifted to within 5% of the top score; the header says what anchored. That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1. A SYMBOL named directly takes the same first slot: `Type.method`, `ns::fn`, `mod.fn`, or a verbatim identifier with identifier shape (snake_case, camelCase), call syntax (`name()`; off for the WHOLE task once it carries pasted code: a ``` fence, an indented line or a stack trace) or backticks, defined in at most 3 files (each file's best definition, a prototype beside its definition counting once; test/fixture files only if the task names them). At most 2 are lifted per task, in text order, and the rest are disclosed by mention_syms_capped=. Only the first 64 identifiers are read, and the rest are disclosed by mention_idents_capped=. Plain words never qualify ("run the tests" lifts no run()). Inert (byte-identical) when the text names nothing indexed. RIPWIRE_NO_MENTION=1 disables it everywhere (incl. MCP `for`).
+By DEFAULT, a file or dotted module literally NAMED in the task text (a path, `pkg.module` — even inside a URL) has its symbols' SCORE lifted to within 5% of the top score; the header says what anchored. That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1. A SYMBOL named directly takes the same first slot: `Type.method`, `ns::fn`, `mod.fn`, or a verbatim identifier with identifier shape (snake_case, camelCase), call syntax (`name()`; off for the WHOLE task once it carries pasted code: a ``` fence, an indented line or a stack trace) or backticks, defined in at most 3 files (each file's best definition, a prototype beside its definition counting once; test/fixture files only if the task names them). Up to 8 named symbols are lifted per task: `Type.method` matches first, which may fill all 8, then identifier-resolved symbols (bare, call syntax, `ns::fn`, or a dotted name that matched no `Type.method`), at most 2 of them, in text order. The 2 count definitions, not names: a name defined in two files spends both, and a prototype beside its definition adds none. The rest are disclosed by mention_syms_capped=. Only the first 64 identifiers are read, and the rest are disclosed by mention_idents_capped=. Plain words never qualify ("run the tests" lifts no run()). Inert (byte-identical) when the text names nothing indexed. RIPWIRE_NO_MENTION=1 disables it everywhere (incl. MCP `for`).
 
 **Try it**
 
@@ -382,7 +382,7 @@ $ ./build/ripwire . --for="why does src/lexical.h chooseForRanker pick name-exac
 **Caveats (stated by the binary):**
 
 - That is a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1.
-- At most 2 are lifted per task, in text order, and the rest are disclosed by mention_syms_capped=.
+- The rest are disclosed by mention_syms_capped=.
 - Only the first 64 identifiers are read, and the rest are disclosed by mention_idents_capped=.
 
 ### `--no-doc-mention`

@@ -2508,8 +2508,8 @@ inline std::string headSnapCachePath( const std::string& repoHex, const std::str
 // formats — an installed release and a local build, or two installed versions — that alternate on one tree
 // refused and rewrote each other's blob on EVERY run (`format-version — not used`, reparsed=N reused=0, one path).
 // The auto names now carry the pair that decides whether a blob is readable at all, (kCacheVersion, the class's
-// parserVer): `ripwire-<rootKey>-lean-c25p122.bin`, `ripwire-<rootKey>-rich-c25p123.bin` and
-// `ripwire-mcp-<rootKey>-c25p123.cache`. Two builds of one format still share a blob (a rebuild of the same
+// parserVer): `ripwire-<rootKey>-lean-c<format>p<parser>.bin`, `ripwire-<rootKey>-rich-c<format>p<parser>.bin` and
+// `ripwire-mcp-<rootKey>-c<format>p<parser>.cache`, the rich/MCP parser number being the lean one + 1. Two builds of one format still share a blob (a rebuild of the same
 // tree must not go cold); two formats never meet at one path.
 //
 // THE TAG IS NEVER 16 HEX: `c<digits>p<digits>` always holds a 'p', so cacheBlobRootKey's "first 16-hex field"
@@ -2551,7 +2551,8 @@ inline constexpr RootBlobShape kRootBlobShapes[] = {
 };
 static_assert( std::size( kRootBlobShapes ) == static_cast<std::size_t>( RootBlobFamily::Count ), "one shape per root-keyed family" );
 
-// Everything after the root key, build tag included: `-lean-c25p122.bin`, `-rich-c25p123.bin`, `-c25p123.cache`.
+// Everything after the root key, build tag included: `-lean-c<format>p<parser>.bin`, `-rich-c<format>p<parser+1>.bin`,
+// `-c<format>p<parser+1>.cache`.
 inline std::string rootBlobTail( const RootBlobShape& shape )
 {
     return std::format( "{}-c{}p{}{}", shape.classField, kIngestCacheVersionMirror, ingestParserVerFor( shape.rich ), shape.ext );
@@ -2649,7 +2650,7 @@ inline bool isOtherBuildRootBlob( std::string_view name, const OwnBuildBlobTails
 //
 // The rule is positional-free on purpose: return the FIRST '-'-delimited field that is exactly 16 hex
 // digits. No family tag is 16 characters of hex ("qheadsnap", "qsnap", "qbody", "qhist", "qms", "qchurn",
-// "stier", "mcp"), and no build tag is either (`c25p122` always holds a 'p'), so the first such field is the root
+// "stier", "mcp"), and no build tag is either (`c<format>p<parser>` always holds a 'p'), so the first such field is the root
 // key in every filename shape, and a foreign or legacy blob that carries no such field yields "" — which pins
 // nothing and evicts exactly as it did before.
 //

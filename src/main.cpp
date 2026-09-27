@@ -197,7 +197,7 @@ using rw::quality::deadCodeEligibleKind;
 // and can no longer truncate the shared blob. Gate: test/cacheoffsetcheck.sh.
 //
 // #334 follow-up — THE BUILD TAG. The name also carries (kCacheVersion, the class's parserVer):
-// `ripwire-<rootKey>-lean-c25p122.bin`. Keyed by root and class alone, two builds of different formats that
+// `ripwire-<rootKey>-lean-c<format>p<parser>.bin`. Keyed by root and class alone, two builds of different formats that
 // alternate on one tree (an installed release and a local build, or two installed versions) refused and rewrote
 // each other's blob on every run. This is NOT the reverted key change above: that one multiplied blobs per root
 // by CONFIGURATION inside one build, which every gate battery exercises; this one adds a blob per root only per

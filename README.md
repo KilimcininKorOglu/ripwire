@@ -54,7 +54,7 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
-**Latest: 0.6.4** — Windows fixes from real testers, and honest TypeScript answers. [Release notes](#release-notes) ·
+**Latest: 0.6.5** — TypeScript alias imports resolve, and fixes from Windows testers. [Release notes](#release-notes) ·
 [the presentation](present/ripwire-showcase.pdf) · [the changelog](CHANGELOG.md) — with thanks to the
 contributors named there; this release is largely theirs.
 
@@ -2935,6 +2935,14 @@ terms.
 ---
 
 ## Release notes
+
+**ripwire 0.6.5 — TypeScript alias imports resolve, and fixes from Windows testers.** Imports through a tsconfig alias,
+`baseUrl` or a workspace package are now real edges, so `--deps`, `--arch`, `--impact` and the call graph see them, and a
+config ripwire could not read is disclosed rather than guessed (thanks @srinchow). On Windows, `--doctor` searches PATH as
+Windows does and no longer calls a byte-identical copy stale; two ripwire builds on one tree no longer re-parse on every
+run (thanks @elsRobin, @lennix1337 and @antoniojosedev for testing). `--doctor`'s PATH hint can be pasted as printed.
+`--for` lifts a symbol the task names verbatim, and a method call on a dict or map no longer binds to the repository's
+only method of that name.
 
 **ripwire 0.6.4 — Windows fixes from real testers, and honest TypeScript answers.** On Windows without symlink rights,
 the skills installer no longer reports success after creating empty folders: it copies instead, or says it failed. `--doctor`

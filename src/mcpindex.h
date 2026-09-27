@@ -564,7 +564,7 @@ struct McpIndex
 // diverged from the CLI's twice over: a different offset basis, and a key that followed the SPELLING of the
 // root (a trailing slash or a symlinked checkout minted a second blob).
 //
-// The name carries the build tag too (`ripwire-mcp-<rootKey>-c25p123.cache`, quality.h rootBlobTail): two MCP
+// The name carries the build tag too (`ripwire-mcp-<rootKey>-c<format>p<parser>.cache`, quality.h rootBlobTail): two MCP
 // servers of different formats on one root — an agent wired to an older install beside one wired to a newer —
 // each keep their own warm index instead of refusing and rewriting one file on every start.
 inline std::string mcpCachePath( const std::string& root )
