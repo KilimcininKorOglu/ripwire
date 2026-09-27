@@ -179,6 +179,7 @@ struct DeltaBasis
     gtl::btree_map<std::string, rw::quality::AckRecord> acks;
     rw::quality::IdentityHealing                        healing;
     std::size_t                                         registerMacroExcluded = 0;   // P2.2: disclosed dead-code exemption count
+    std::size_t                                         declinedCallExcluded  = 0;   // dead-code exemption by a declined call (quality.h isDeadCandidate)
     std::size_t                                         apiNewSurface         = 0;   // Q-DIAL-4: new PUBLIC symbols this change added — the count that replaced one never-gating row each
     std::size_t acksBadLines = 0;   // 2026-09-06: .ripwire_quality_acks lines skipped as unparseable (disclosed on the root)
     // #228: WHICH basis produced baseSel.snapshot when the marker is one of the git-HEAD family, and WHY when
@@ -226,7 +227,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
                                              out.deltaRoot, root, cfg.qualityAck, refs.rangeSpan );
         out.regs    = quality::computeDelta( refs.target().ing, refs.target().g, out.baseSel.snapshot,
                                              out.deltaRoot, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface,
-                                             &out.cloneIdioms );
+                                             &out.cloneIdioms, &out.declinedCallExcluded );
         return std::nullopt;
     }
 
@@ -307,7 +308,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
     out.healing = quality::healIdentity( out.baseSel.snapshot, out.acks, d.ing, d.g,
                                          std::string( cfg.rootPath ), root, cfg.qualityAck );
     out.regs = quality::computeDelta( d.ing, d.g, out.baseSel.snapshot, cfg.rootPath, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface,
-                                      &out.cloneIdioms );
+                                      &out.cloneIdioms, &out.declinedCallExcluded );
     return std::nullopt;
 }
 
@@ -795,6 +796,7 @@ struct QualityDeltaLegendParts
     bool                                          anyForeignAck; // foreign-acks= is on the root, with foreign-scope sa rows under it
     std::size_t                                   baselineAbsorbed; // H11: baseline_absorbed= on the root (0 = attribute absent)
     const char*                                   headBasis;     // #228: head_basis= value on the root (nullptr = attribute absent)
+    bool                                          anyDeclinedCallExcluded = false;   // declined-call-excluded= is on the root
 };
 
 // A DEFINITION IS EMITTED WHEN THE THING IT DEFINES IS IN THE DOCUMENT. Nothing is dropped and no limit is
@@ -854,6 +856,11 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
     if( p.anyRegisterMacroWarning )
     {
         std::fputs( kQdRegisterMacroWarnLegend, stdout );
+    }
+    if( p.anyDeclinedCallExcluded )
+    {
+        std::fputs( "declined-call-excluded= is a FLOOR, not a finding: symbols this run kept out of the dead-code kind only because a call "
+                    "the resolver declined to bind (the map's declined=) could have meant them. Never gates; absent at zero. ", stdout );
     }
 
     // (3) the two identity re-filings, each keyed to the attribute family it defines. The second is
@@ -1508,8 +1515,10 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             const std::string absorbedJson = baselineAbsorbed == 0 ? std::string()
                                             : ",\"baseline_absorbed\":" + std::to_string( baselineAbsorbed );
             // #228: the JSON twin of head_basis=, under the same absent-means-the-ordinary-archived-tree rule.
-            const std::string headBasisJson = basis.headBasis == nullptr ? std::string()
-                                             : std::string( ",\"head_basis\":\"" ) + basis.headBasis + "\"";
+            const std::string headBasisJson = ( basis.headBasis == nullptr ? std::string()
+                                              : std::string( ",\"head_basis\":\"" ) + basis.headBasis + "\"" )
+                                            + ( basis.declinedCallExcluded == 0 ? std::string()   // the XML twin's declined-call-excluded=, absent at zero
+                                              : ",\"declined-call-excluded\":" + std::to_string( basis.declinedCallExcluded ) );
             rw::emitTo( stdout, "{{\"baseline\":\"{}\",\"regressions\":{},\"minor\":{},\"acked\":{},\"stale\":{},"
                          "\"preexisting-worse\":{},\"new-symbol\":{},\"gating\":{},\"register-macro-excluded\":{},\"api-new-surface\":{},\"at\":{}{}{}{}{}{}{},\"r\":[",
                          jsonStr( baseMarkerJ ).c_str(), regs.size(), minorCount, ackedCount, staleAcks.size(),
@@ -1611,7 +1620,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         emitQualityDeltaLegend( { baseSel.marker, refPair, identityAttrs, !saRows.empty(), ackedCount > 0,
                                   basis.registerMacroExcluded > 0, configDiag.total() > 0, regs, outOfScope,
                                   scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed,
-                                  basis.headBasis } );
+                                  basis.headBasis, basis.declinedCallExcluded > 0 } );
         const char* baseMarker = baseSel.marker;    // R3: ditto — one seam decides staleness AND names it
         // 2026-09-06: what the sidecar readers skipped, on the root (absent means none) — see kQdBaseHeadUnreadable
         std::string sidecarHealthAttrs;
@@ -1620,6 +1629,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // #228: present-only, and its absence is the ordinary archived HEAD tree — the floor every git-HEAD
         // marker named on its own before this attribute existed.
         if( basis.headBasis != nullptr )  { sidecarHealthAttrs += std::string( " head_basis=\"" ) + basis.headBasis + "\""; }
+        if( basis.declinedCallExcluded > 0 ) { sidecarHealthAttrs += " declined-call-excluded=\"" + std::to_string( basis.declinedCallExcluded ) + "\""; }
         // at= anchors this regression list to the commit (+dirty state) it was computed against.
         rw::emitTo( stdout, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\" api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
                      baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface,

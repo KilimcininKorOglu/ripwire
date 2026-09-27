@@ -406,11 +406,15 @@ X1="$( runjs testgatenodetestimportfix src/bounded.ts )"; X1EC="$( rcjs testgate
     && ok '(x1) #60: exact repro (no package.json, import test from "node:test") -> node --experimental-strip-types --test' \
     || no "(x1) #60 repro not derived (exit=$X1EC): $X1"
 
-# (x2) .js variant: no type-stripping question at all, so the bare form.
+# (x2) .js variant: the import IS derived as evidence, but train20-cr C8 refuses the command. This .js file uses
+#      a static ES `import`, and there is no package.json, so no "type": "module" and no engines.node: Node
+#      reads it as CommonJS unless it has default module-syntax detection (22.7+, 20.19+), which nothing here
+#      proves. RED on the 0.6.4 binary, which spelled `node --test` here. Arms (z1)-(z5) below pin the
+#      positive cases ("type": "module", an engines floor with detection).
 X2="$( runjs testgatenodetestimportjsfix src/bounded.js )"; X2EC="$( rcjs testgatenodetestimportjsfix src/bounded.js )"
-{ [ "$X2EC" = 4 ] && printf '%s' "$X2" | grep -qF 'run="node --test test/behavior.test.js"'; } \
-    && ok '(x2) #60: .js variant, import test from "node:test" -> node --test' \
-    || no "(x2) #60 .js variant not derived (exit=$X2EC): $X2"
+{ [ "$X2EC" = 4 ] && printf '%s' "$X2" | grep -q 'run_unknown="1"' && ! printf '%s' "$X2" | grep -q 'run="node'; } \
+    && ok '(x2) #60 + C8: .js variant with a static import and no "type"/engines.node -> run_unknown="1"' \
+    || no "(x2) C8: .js ES-syntax test file with no module type evidence wrongly derived a runner (exit=$X2EC): $X2"
 
 # (x3) require("node:test") — the CommonJS shape.
 X3="$( runjs testgatenodetestimportrequirefix src/bounded.js )"; X3EC="$( rcjs testgatenodetestimportrequirefix src/bounded.js )"
@@ -502,6 +506,121 @@ if command -v xmllint >/dev/null 2>&1; then
 else
     printf '  SKIP  (y6) xml well-formed, F1-F3 fixtures (no xmllint)\n'
 fi
+
+# ── (z1)-(z16) train20-cr follow-ups (0.6.5): C8 module kind, the --test flag's own Node floor, C9 the
+#     reachable-module walk, C10 non-erasable TypeScript syntax, and default stripping's upper gap. Each
+#     fixture is built here, under $TMP (not committed), from the same two-file shape as the #60 repro:
+#     test/behavior.test.{js,ts} imports ../src/bounded.{js,ts} and calls it. RED on the 0.6.4 binary:
+#     z1, z3, z6, z9, z10, z11, z12, z13, z14, z16 (and x2 above); the rest are controls that pass on
+#     both, so each RED arm is shown to be about the named construct and not about the fixture shape.
+#     z18-z26 (review R1/R2) are RED on ba451866, this lane's pre-review head, except the controls z19.
+fxjs(){ # fxjs DIR [PACKAGE_JSON] — ES-syntax .js test file
+    mkdir -p "$1/src" "$1/test"
+    printf 'import test from "node:test";\nimport { bounded } from "../src/bounded.js";\ntest( "b", () => { bounded( "x" ); } );\n' >"$1/test/behavior.test.js"
+    printf 'export function bounded( t ) { return t; }\n' >"$1/src/bounded.js"
+    [ -z "${2:-}" ] || printf '%s\n' "$2" >"$1/package.json"; }
+fxcjs(){ # fxcjs DIR [PACKAGE_JSON] — CommonJS .js test file
+    mkdir -p "$1/src" "$1/test"
+    printf 'const test = require( "node:test" );\nconst { bounded } = require( "../src/bounded.js" );\ntest( "b", () => { bounded( "x" ); } );\n' >"$1/test/behavior.test.js"
+    printf 'module.exports = { bounded: ( t ) => t };\n' >"$1/src/bounded.js"
+    [ -z "${2:-}" ] || printf '%s\n' "$2" >"$1/package.json"; }
+fxts(){ # fxts DIR SRC_BOUNDED_TS [PACKAGE_JSON] — .ts test file importing ../src/bounded.ts
+    mkdir -p "$1/src" "$1/test"
+    printf 'import test from "node:test";\nimport { bounded } from "../src/bounded.ts";\ntest( "b", () => { bounded( "x" ); } );\n' >"$1/test/behavior.test.ts"
+    printf '%s\n' "$2" >"$1/src/bounded.ts"
+    [ -z "${3:-}" ] || printf '%s\n' "$3" >"$1/package.json"; }
+runfx(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$1" --test-gate="$2" --no-cache 2>/dev/null; echo "rc=$?"; }
+# zwant LABEL DIR CHANGED WANT — WANT is the exact run="…" or the literal run_unknown; the gate must exit 4
+zwant(){
+    local out; out="$( runfx "$2" "$3" )"
+    case "$4" in
+        run_unknown) { printf '%s' "$out" | grep -q 'rc=4$' && printf '%s' "$out" | grep -q 'run_unknown="1"' && ! printf '%s' "$out" | grep -q 'run="node'; } \
+                         && ok "$1 -> run_unknown=\"1\"" || no "$1: want run_unknown=\"1\", got: $( printf '%s' "$out" | grep -oE 'run="[^"]*"|run_unknown="1"|rc=[0-9]+' | tr '\n' ' ' )" ;;
+        *)           { printf '%s' "$out" | grep -q 'rc=4$' && printf '%s' "$out" | grep -qF "run=\"$4\""; } \
+                         && ok "$1 -> run=\"$4\"" || no "$1: want run=\"$4\", got: $( printf '%s' "$out" | grep -oE 'run="[^"]*"|run_unknown="1"|rc=[0-9]+' | tr '\n' ' ' )" ;;
+    esac; }
+Z="$TMP/z"; mkdir -p "$Z"
+TSOK='export function bounded( t: string ): string { return t; }'
+JSCMD='node --test test/behavior.test.js'
+TSFLAG='node --experimental-strip-types --test test/behavior.test.ts'
+TSBARE='node --test test/behavior.test.ts'
+# C8: a static ES import in a .js file loads as ESM only under "type": "module", or on a Node with default detection
+fxjs "$Z/z1" '{ "type": "commonjs", "engines": { "node": ">=24" } }'
+zwant '(z1) C8: ES-syntax .js under an explicit "type": "commonjs" (detection is off for a typed package)' "$Z/z1" src/bounded.js run_unknown
+fxjs "$Z/z2" '{ "type": "module" }'
+zwant '(z2) C8 control: the same file under "type": "module"' "$Z/z2" src/bounded.js "$JSCMD"
+fxjs "$Z/z3" '{ "engines": { "node": ">=20.19" } }'
+zwant '(z3) C8: typeless ES-syntax .js with engines ">=20.19" (admits 21.x, which has no default detection)' "$Z/z3" src/bounded.js run_unknown
+fxjs "$Z/z4" '{ "engines": { "node": ">=22.7" } }'
+zwant '(z4) C8 control: typeless ES-syntax .js with engines ">=22.7" (default detection on every admitted Node)' "$Z/z4" src/bounded.js "$JSCMD"
+fxcjs "$Z/z5"
+zwant '(z5) C8 control: a CommonJS .js test file with no manifest keeps the bare form' "$Z/z5" src/bounded.js "$JSCMD"
+# the `--test` flag's own floor: 18.1, backported to 16.17 (never 17.x); a floor alone cannot see that gap
+fxcjs "$Z/z6" '{ "engines": { "node": "^16.17.0" } }'
+zwant '(z6) node --test floor: engines "^16.17.0" stays on the 16.x line, which has --test' "$Z/z6" src/bounded.js "$JSCMD"
+fxcjs "$Z/z7" '{ "engines": { "node": ">=16.17" } }'
+zwant '(z7) node --test floor control: ">=16.17" also admits 17.x, which never had --test' "$Z/z7" src/bounded.js run_unknown
+fxcjs "$Z/z8" '{ "engines": { "node": ">=18" } }'
+# 18.0.0 has node:test but not --test (18.1); treated as supporting it on purpose (one release, a loud failure; see kHasTestFlag)
+zwant '(z8) node --test floor: ">=18" gets a command (18.0.x is accepted by design)' "$Z/z8" src/bounded.js "$JSCMD"
+fxcjs "$Z/z8b" '{ "engines": { "node": ">=16" } }'
+zwant '(z8b) node --test floor: ">=16" admits 16.0-16.16 and 17.x, which never had --test' "$Z/z8b" src/bounded.js run_unknown
+fxcjs "$Z/z9" '{ "engines": { "node": ">=16.17 <17 || >=18.1" } }'
+zwant '(z9) node --test floor: every alternative of ">=16.17 <17 || >=18.1" has --test' "$Z/z9" src/bounded.js "$JSCMD"
+# C9: the reachable local TypeScript modules, not only the test file's own imports
+fxts "$Z/z10" 'import { helper } from "./helper";
+export function bounded( t: string ): string { return helper( t ); }'
+printf 'export function helper( t: string ): string { return t; }\n' >"$Z/z10/src/helper.ts"
+zwant '(z10) C9: an extensionless import one module past the test file (ERR_MODULE_NOT_FOUND under stripping)' "$Z/z10" src/bounded.ts run_unknown
+fxts "$Z/z11" 'import { m0 } from "./m0.ts";
+export function bounded( t: string ): string { return m0( t ); }'
+zi=0; while [ $zi -lt 70 ]; do
+    printf 'import { m%d } from "./m%d.ts";\nexport function m%d( t: string ): string { return m%d( t ); }\n' $(( zi + 1 )) $(( zi + 1 )) $zi $(( zi + 1 )) >"$Z/z11/src/m$zi.ts"
+    zi=$(( zi + 1 )); done
+printf 'export function m70( t: string ): string { return t; }\n' >"$Z/z11/src/m70.ts"
+zwant '(z11) C9: a 72-module chain cuts the bounded walk, and a cut walk proves nothing' "$Z/z11" src/bounded.ts run_unknown
+# C10: syntax strip-only mode rejects (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX), found in a module the test reaches
+fxts "$Z/z12" 'export enum Color { Red }
+export function bounded( t: string ): string { return t; }'
+zwant '(z12) C10: an enum in an imported module' "$Z/z12" src/bounded.ts run_unknown
+fxts "$Z/z13" 'namespace N { export const v = 1; }
+export function bounded( t: string ): string { return t; }'
+zwant '(z13) C10: a namespace with runtime code' "$Z/z13" src/bounded.ts run_unknown
+fxts "$Z/z14" 'export class K { constructor( readonly a: number ) {} }
+export function bounded( t: string ): string { return t; }'
+zwant '(z14) C10: a parameter property (readonly)' "$Z/z14" src/bounded.ts run_unknown
+fxts "$Z/z15" 'declare enum Color { Red }
+namespace T { export type A = string; }
+export function bounded( t: string ): string { return t; }'
+zwant '(z15) C10 control: a declare enum and a type-only namespace are erased, so the flagged form stays' "$Z/z15" src/bounded.ts "$TSFLAG"
+# default stripping has an upper gap too (23.0-23.5): an unbounded ">=22.18" reaches it, "^22.18.0" does not
+fxts "$Z/z16" "$TSOK" '{ "engines": { "node": ">=22.18" } }'
+zwant '(z16) F3: ">=22.18" admits 23.0-23.5, where stripping is not on by default, so the flag stays' "$Z/z16" src/bounded.ts "$TSFLAG"
+fxts "$Z/z17" "$TSOK" '{ "engines": { "node": "^22.18.0" } }'
+zwant '(z17) F3 control: "^22.18.0" stays on 22.x, where stripping is on by default' "$Z/z17" src/bounded.ts "$TSBARE"
+# review R1: a hyphen range "A - B" is bounded by B, never by A's major (ba451866 read "16.17 - 18" as 16.x only)
+fxcjs "$Z/z18" '{ "engines": { "node": "16.17 - 18" } }'
+zwant '(z18) R1: hyphen "16.17 - 18" admits 17.x, which never had --test' "$Z/z18" src/bounded.js run_unknown
+fxcjs "$Z/z19" '{ "engines": { "node": "16.17 - 16.20" } }'
+zwant '(z19) R1 control: hyphen "16.17 - 16.20" stays on 16.x, which has --test' "$Z/z19" src/bounded.js "$JSCMD"
+fxts "$Z/z20" "$TSOK" '{ "engines": { "node": "22.18 - 24" } }'
+zwant '(z20) R1: hyphen "22.18 - 24" admits 23.0-23.5, so the flag stays' "$Z/z20" src/bounded.ts "$TSFLAG"
+fxjs "$Z/z21" '{ "engines": { "node": "20.19 - 22" } }'
+zwant '(z21) R1: hyphen "20.19 - 22" admits 21.x (no default detection) for a typeless ES .js' "$Z/z21" src/bounded.js run_unknown
+fxcjs "$Z/z22" '{ "engines": { "node": "18.0.x" } }'
+zwant '(z22) owner rule edge: a range confined to 18.0.x admits no Node with --test' "$Z/z22" src/bounded.js run_unknown
+# review R2: more syntax Node 26.9's strip-only mode rejects, in a module the test reaches
+fxts "$Z/z23" 'function bounded( t: string ): string { return t; }
+export = bounded;'
+zwant '(z23) R2: export = x' "$Z/z23" src/bounded.ts run_unknown
+fxts "$Z/z24" 'export function bounded( t: string ): string { return <string>t; }'
+zwant '(z24) R2: an angle-bracket assertion <T>x' "$Z/z24" src/bounded.ts run_unknown
+fxts "$Z/z25" 'module M { export type T = string; }
+export function bounded( t: string ): string { return t; }'
+zwant '(z25) R2: the legacy module keyword, even with a type-only body' "$Z/z25" src/bounded.ts run_unknown
+fxts "$Z/z26" 'namespace N { declare const a: number; }
+export function bounded( t: string ): string { return t; }'
+zwant '(z26) R2: a namespace holding only a declare statement' "$Z/z26" src/bounded.ts run_unknown
 
 # (t) xml well-formed for the fix-round fixtures
 if command -v xmllint >/dev/null 2>&1; then

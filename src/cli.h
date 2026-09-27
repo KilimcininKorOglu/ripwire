@@ -154,9 +154,9 @@ struct Config
     std::vector<std::string> outline;                      // --outline=NAME,...: control-flow skeletons (L3 scoped snippet)
     std::string_view forTask;                              // --for=TASK: the task lens — ranked signatures inventory + metrics, framed for reuse
     bool             anchor = false;                       // --anchor (with --for, EXPERIMENTAL): seed PPR personalization from the lexical anchors and blend graph expansion into the lens rank (LARGER-style; graph.h anchoredLexicalRank)
-    bool             noRoute = false;                      // --no-route (with --for/--query): force plain subtoken+body BM25 (the pre-default-routing behavior). Routing is the DEFAULT: a deterministic confidence-gated query-shape classifier picks name-exact vs subtoken+body and prints which/why in the header (lexical.h chooseForRanker). --route is still accepted (now a no-op: routing is already on). Routing also carries the QUERY-SHAPE document demotion: when the task text parses as a stack trace / sanitizer report / compiler diagnostic, or as a pasted issue-template form, the document tier scores down (repo meta-docs — issue templates, CONTRIBUTING, changelogs — twice as hard) and route= says so; --no-route has no route= to disclose it in, so it does not demote either.
+    bool             noRoute = false;                      // --no-route (with --for/--query): force plain subtoken+body BM25 (the pre-default-routing behavior). Routing is the DEFAULT: a deterministic confidence-gated query-shape classifier picks name-exact vs subtoken+body and prints which/why in the header (lexical.h chooseForRanker). --route is still accepted (now a no-op: routing is already on). Routing also carries the QUERY-SHAPE document demotion: when the task text parses as a stack trace / sanitizer report / compiler diagnostic, or as a pasted issue-template form, the document tier scores down (repo meta-docs — issue templates, CONTRIBUTING, changelogs — twice as hard) and route= says so; --no-route has no route= to disclose it in, so it does not demote either. Routing also orders doc-mention surfacing (filter.h docNoiseSymbolMultipliers): change logs and translated duplicates of a default-language doc are lifted last and to x0.35 of the usual height (BM25 untouched), unless the task asks about changes or translations or names the file.
     bool             adaptive = false;                      // --adaptive (with --for/--query): cut the returned set at the largest relative score gap (Adaptive-k) with a floor (~5) + the existing top-k ceiling, so a sharp query returns few and a flat/broad one hits the ceiling; prints the cut in the header
-    bool             noMentionBoost = false;                // --no-mention-boost (with --for): disable the B8 query-mention anchor — by default, files / dotted modules / Scope.symbols literally NAMED in the task text have their SCORE lifted to within 5% of the top score (the measured #1 competitor-win bucket; bench/headtohead) — a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1. Inert when the text names nothing indexed (byte-identical). Env RIPWIRE_NO_MENTION=1 disables everywhere (incl. the MCP `for` verb).
+    bool             noMentionBoost = false;                // --no-mention-boost (with --for): disable the B8 query-mention anchor — by default, files / dotted modules literally NAMED in the task text have their SCORE lifted to within 5% of the top score (the measured #1 competitor-win bucket; bench/headtohead) — a score promise, not a rank one: on a flat/tied head the anchored hit can still land several ranks below #1; a directly named symbol (Scope.symbol, ns::fn, a verbatim identifier — mention.h NAMED IDENTIFIERS) takes the same first slot. Inert when the text names nothing indexed (byte-identical). Env RIPWIRE_NO_MENTION=1 disables everywhere (incl. the MCP `for` verb).
     bool             cochangeBoost = false;                 // --cochange-boost (with --for): OPT-IN, EXPERIMENTAL (the --anchor precedent) — the B3 co-change prior: files that historically change WITH the top-ranked files (git co-change, last 500 commits, support >= 3) get a small bounded score boost into the lower bundle; the top seeds can never be displaced. Honest numbers (B3 held-out record): train multi-file strict@10 +6.4pp but held-out +0.0pp (n=55) at warm p50 +19% — did NOT confirm on the Python LocBench corpus; default stays OFF pending a large-C++-corpus history eval. Env RIPWIRE_COCHANGE=1 enables everywhere (incl. the MCP `for` verb, which has no per-call flags).
     bool             noDocMention = false;                  // --no-doc-mention (with --for): disable the doc-mention surfacing — by default, a doc that names one of the task's top-resolved symbols in a `backtick` (the g.mentions edges `--mentions=SYM` already exposes) is lifted into the bundle, strictly below that symbol's own score. Inert when nothing resolved has a mentioning doc (byte-identical). Route-agnostic (applies under --no-route too). Env RIPWIRE_NO_DOC_MENTION=1 disables everywhere (incl. the MCP `for`/`pack_task` verbs).
     bool             signaturesOnly = false;                // --signatures-only (with --for): opt OUT of the T3 terminal-by-default bundle — no auto <bodies> section, no bundle="auto" disclosure; restores the pre-T3 signatures-only lens byte-identically. Contradicts --detail=N (the explicit body knob), refused together. Pre-registered: docs/EVALS.md §4, T3 round.
@@ -986,6 +986,11 @@ inline constexpr char kHelpHead[] =
         "                               down (repo meta-prose - issue templates, CONTRIBUTING, changelogs - twice as hard) and route= names the\n"
         "                               shape, its evidence and both factors. Demotion, never exclusion, and the mention anchor still lifts a\n"
         "                               document the task NAMES. --no-route has no route= to disclose it in, so it does not demote either.\n"
+        "                               Routing also puts CHANGE LOGS (CHANGELOG*, CHANGES*, HISTORY*, NEWS*, RELEASES*, release-notes/)\n"
+        "                               and TRANSLATIONS of a default-language doc (README.zh-CN.md beside README.md, docs/ja/x.md beside\n"
+        "                               docs/en/x.md) LAST in doc-mention surfacing, lifted to x0.35 of the usual height; their own match\n"
+        "                               score is untouched. A task about changes (added, changed, removed, release, version...), about\n"
+        "                               translation, or naming the file or its language tag keeps the usual lift; --no-route turns it off.\n"
         "                               route= is a CODE: name-exact(X) = the task names symbol X (the anchors: clause after it is the\n"
         "                               evidence); subtoken+body = the conceptual ranker over names and bodies; subtoken+body:broad = a\n"
         "                               one- or two-word query where plain rg may also win; subtoken+body:declined(word;N-carriers,M-defs)\n"
@@ -996,14 +1001,25 @@ inline constexpr char kHelpHead[] =
         "                               (with --for/--query) cut the result at the relevance CLIFF — the largest relative score gap\n"
         "                               (Adaptive-k), floor 5, ceiling = the existing top-k; a sharp query returns few, a flat/broad one\n"
         "                               hits the ceiling. Prints [adaptive: kept K of N ...] in the header. Without it, output is unchanged.\n"
-        "    --no-mention-boost         (with --for) stop lifting symbols the task text names by path, module or Type.method\n"
-        "                               (with --for) disable the query-mention anchor. By DEFAULT, a file, dotted module, or\n"
-        "                               Scope.symbol literally NAMED in the task text (a path, `pkg.module`, `Type.method` — even\n"
-        "                               inside a URL) has its SCORE lifted to within 5% of the top score; the header says what\n"
-        "                               anchored. That is a score promise, not a rank one: on a flat/tied head the anchored hit\n"
-        "                               can still land several ranks below #1. Inert (byte-identical) when the text names\n"
-        "                               nothing indexed. RIPWIRE_NO_MENTION=1 disables it\n"
-        "                               everywhere (incl. MCP `for`).\n"
+        "    --no-mention-boost         (with --for) stop lifting what the task text names: a path, module, Type.method or identifier\n"
+        "                               (with --for) disable the query-mention anchor. By DEFAULT, a file or dotted module\n"
+        "                               literally NAMED in the task text (a path, `pkg.module` — even inside a URL) has its\n"
+        "                               symbols' SCORE lifted to within 5% of the top score; the header says what anchored. That\n"
+        "                               is a score promise, not a rank one: on a flat/tied head the anchored hit can still land\n"
+        "                               several ranks below #1. A SYMBOL named directly takes the same first slot: `Type.method`,\n"
+        "                               `ns::fn`, `mod.fn`, or a verbatim identifier with identifier shape (snake_case, camelCase),\n"
+        "                               call syntax (`name()`; off for the WHOLE task once it carries pasted code: a ``` fence, an\n"
+        "                               indented line or a stack trace) or backticks, defined in at most 3 files (each file's best\n"
+        "                               definition, a prototype beside its definition counting once; test/fixture files only if the\n"
+        "                               task names them). Up to 8 named symbols are lifted per task: `Type.method` matches first,\n"
+        "                               which may fill all 8, then identifier-resolved symbols (bare, call syntax, `ns::fn`, or a\n"
+        "                               dotted name that matched no `Type.method`), at most 2 of them, in text order. The 2 count\n"
+        "                               definitions, not names: a name defined in two files spends both, and a prototype beside its\n"
+        "                               definition adds none. Named symbols past either cap are disclosed by mention_syms_capped=.\n"
+        "                               Only the first 64 identifiers are read, and the rest are disclosed\n"
+        "                               by mention_idents_capped=. Plain words never qualify (\"run the tests\" lifts no run()).\n"
+        "                               Inert (byte-identical) when the text names nothing indexed. RIPWIRE_NO_MENTION=1\n"
+        "                               disables it everywhere (incl. MCP `for`).\n"
         "    --no-doc-mention           (with --for) stop surfacing markdown docs that name the task's top symbols\n"
         "                               (with --for) disable doc-mention surfacing. By DEFAULT, a markdown doc that names one of\n"
         "                               the task's top-resolved symbols in a `backtick` (the same doc<->code edges --mentions=SYM\n"
@@ -1375,8 +1391,13 @@ inline constexpr char kHelpHead[] =
         "                               (lazy=1) and in the row's inc t= list, NOT in afferent/instab/transitive/godfiles/\n"
         "                               stabledeps/cycles/ccd/acd/nccd/shape. <health lazy_edges=> counts the pairs left out,\n"
         "                               a row's lazy_edges= its own; both absent when 0. A TS/JS import through a tsconfig paths\n"
-        "                               alias, a baseUrl path or a workspace package draws no edge yet: the root's\n"
-        "                               imports_unresolved=N graph_partial=1 counts them: numbers above are over resolved edges only\n"
+        "                               alias or baseUrl, a workspace package or a package.json imports entry draws its edge by\n"
+        "                               tsc's and Node's rules from the configs inside the crawl root, and one that names this tree\n"
+        "                               yet draws no edge is counted in the root's imports_unresolved=N graph_partial=1. Configs that\n"
+        "                               were not read (above the crawl root up to the git top-level, unparseable, or an extends or\n"
+        "                               references target not in the tree) are counted in tsconfig_unread=N: numbers above are then\n"
+        "                               over resolved edges only. The nearest tsconfig's aliases apply to every TS/JS file below it,\n"
+        "                               whether or not its include lists the file (a references project owns its own)\n"
         "    --hotspots                 rank files by complexity times recent git churn — where maintenance hurts\n"
         "                               complexity x recent git churn (maintenance pain); each row's top= is the worst function's\n"
         "                               BARE name, top_ccx= its cognitive complexity, top_l= its source line (build an --expand\n"
@@ -2652,7 +2673,7 @@ inline constexpr char kHelpTail[] =
         "    -v, --version              print the version + short build info, exit 0\n\n"
         "every line above is a summary. --help=--FLAG prints that flag's full text — the caveats, the units, what it\n"
         "refuses and why. --help=SECTION does one family; --help=all is the whole catalog (~46K tokens).\n"
-        "determinism: output is byte-identical run-to-run  (t=$(mktemp -d); ripwire <dir> >$t/a; ripwire <dir> >$t/b; diff -q $t/a $t/b)\n";
+        "determinism: output is byte-identical run-to-run  (t=$(mktemp -d); ripwire <dir> >\"$t/a\"; ripwire <dir> >\"$t/b\"; diff -q \"$t/a\" \"$t/b\")\n";
 
 // ── the two tiers ───────────────────────────────────────────────────────────────────────────────────
 // The catalog above is ONE text and stays one text — nothing here deletes a line of it. What changed is

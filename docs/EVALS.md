@@ -21,7 +21,7 @@ section, and it is not an afterthought.
 | **Co-change / known-item evals** | `--eval`, `--eval-retrieval` (see `bench/ANSWERQUALITY.md`) | Whether the tool surfaces the other files a real historical commit touched; and known-item retrieval across four rankers. |
 | **Ensemble calibration harness** | `bench/ensemblecal/` | Whether `--ensemble`'s four evidence families are actually orthogonal, how often each fires, how stable each is across commits — and the preset ladder derived from that (§9). |
 | **Differential argv harness** | `test/argvdiffcheck.sh` | That a refactor changed *nothing observable*: two binaries, every argv vector, stdout + stderr + exit code byte-identical. |
-| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 649 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
+| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 650 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
 | **`--quality-delta`** | `src/quality.h` | Ten measured code-quality failure modes, reported only where a change made them worse. |
 
 ### The labeling protocol (why the held-out eval is allowed to disagree with the ranker)
@@ -615,8 +615,20 @@ refresh** (`make_snapshot.py --freeze --corpus src`, `--corpus` deliberately has
 
 ### Query-mention anchoring
 
-A file, dotted module, or `Type.method` named literally in the task text is lifted just below the top
-hit. It is on by default and byte-identical when the text names nothing indexed.
+A file, dotted module, `Type.method`, or a verbatim identifier (snake_case/camelCase, backticked, `ns::fn`,
+`name()` when the task carries no pasted code; defined in at most 3 files; at most 2 identifier-resolved definitions
+lifted per task, within the 8 direct-symbol slots `Type.method` also uses) named
+literally in the task text is lifted just below the top hit. It is on by default and byte-identical when the text
+names nothing indexed.
+
+The identifier half was pre-registered and measured once on the 92-question LocBench held-out set
+(the served-head grade of `bench/locbench/calibrate_confidence.py`, which lives on the `lane/served-syms-result`
+branch and is not on main; v0.6.4 as base): gold file in head 75 → 76, every gold file 55 → 56, gold function
+51 → 52, first-gold-file MRR 0.6017 → 0.6040, served bytes +0.4% (the lane's own run, on its branch binary).
+The 0.6.5 release train re-ran the same set on the merged binary, with every other 0.6.5 change in: gold file in
+head 75 → 76, every gold file 55 → 56, gold function 51 → 52, gold file in the bundle 86 → 86, first-gold-file MRR
+0.6017 → 0.6026, served bytes 702,455 → 705,555 (+0.44%). Each +1 is a
+single question, so the result is "no regression, named-symbol case fixed", not a recall gain.
 
 The reproducible in-tree ablations, both machine-generated scoreboards:
 
@@ -1419,6 +1431,23 @@ file in THIS crawl owns is preserved). The stat-gate is unchanged, so a served r
 incorrectly, because a record is only ever served to a lookup of its own path — confirmed by comparing the
 record's own stored key against the key that found it, so even a 64-bit pathHash collision reparses rather
 than answers.
+
+**Band (8) after the build tag (2026-09-26, #334 follow-up).** The auto name now also carries the cache
+format, `ripwire-<rootKey>-lean-c<format>p<parser>.bin`: two builds of different formats alternating on one tree
+(an installed release and a local build) refused and rewrote each other's blob on every run, measured
+`reparsed=5 reused=0` on every run of three alternating rounds on `test/fixture`, `reused=5` on every run
+after the first with the tag. Band (8) holds per build: every configuration of one binary still shares one
+blob per class, so a gate battery (one binary) is unaffected, and so are two local builds of one format. A
+root gains blobs only per FORMAT that actually ran on it. That is not the registered negative above, and
+the budget pass is what keeps it so. It evicts in tiers, oldest-first within each: other roots' blobs first,
+then another build's blobs of the root being written, never this build's blobs of that root. The 30-day age
+pass retires a format nobody runs. Where one root's blobs from two formats do not fit the 2 GiB budget
+together (llvm-project, 1.76 GB per build), the other format's blobs of that root are evicted once every
+other root's are gone, and that build re-parses on its next run: the pre-tag cost, now paid only in that
+regime. An upgrade adds new blobs beside the old ones, and the old version's blobs of the root being written are
+tier 1, so near the budget every other root's blob goes before them. Measured by review on 2026-09-26: an
+llvm-sized upgrade beside five newer 50 MB roots evicted all five; the untiered order of a079f26c kept all
+five, and the pre-tag in-place rewrite never swept. Gates: `test/cacheidentitycheck.sh` (D3), `test/evictioncheck.sh` (h2, h3).
 
 ### `.gitignore` honoured by default, `--no-ignore` to override — PRE-REGISTERED 2026-09-03 (owner decision 1-B)
 
@@ -5837,7 +5866,7 @@ copy here would be exactly the dialect divergence that gate exists to catch. Com
 tags, wrap, stable-order defaults), seven individually invoked standalone gates (`g1freshcheck`,
 `skillscan`, `htmlexport`, `compresscheck`, `handoffcheck`, `releaseinstallcheck`,
 `taskroutecheck`), and a single loop
-naming **649 gate scripts**, all of which exist on disk. <!-- gatecount -->
+naming **650 gate scripts**, all of which exist on disk. <!-- gatecount -->
 
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same scripts in parallel so a full
 verification fits in one sitting. It does not modify `regression.sh`.
@@ -6256,6 +6285,13 @@ Private C++ corpus, 1,574 files.
 *fusing* structure into the lexical ranker made it worse (7.7% at 5, against 40.3% lexical alone).
 The result is published because it constrains the design: the graph answers "what is load-bearing",
 not "what changes together", and the tool uses different machinery for each.
+
+**Measured at HEAD (disclosed 2026-09-26).** Every commit above was ranked on the index, bodies and graph at the
+corpus's HEAD, which already contain that commit's change, and gold keeps only files still present at HEAD
+(`src/eval.h`). The absolute recall values, PageRank's 3.8% included, are therefore most likely upper bounds; not
+proven, since the HEAD index also holds files added after each commit, which compete for the top-k and push recall
+down. The lexical-over-PageRank ordering would reverse only if lexical recall fell more than tenfold relative to
+PageRank's at the parent revisions; that has not been measured. The corpus is private and cannot be re-measured from this tree.
 
 ### End-to-end agent A/B
 
@@ -6933,7 +6969,7 @@ Listed because the reason is more useful than the silence.
   shipped**. See `bench/locbench/anchorhop_calib.json`. The mention anchor's reproducible numbers are
   the ablations in §4.
 - **A single round gate-count.** Two in-tree numbers disagree (`test/pargates.py`'s docstring says
-  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 649. The <!-- gatecount -->
+  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 650. The <!-- gatecount -->
   loop is the authority; the stale docstrings are a known drift. Since 2026-09-10 the number is not
   written by hand anywhere: `docs/gatecount_build.py` derives it from the loop and rewrites every
   published site, `test/gatecountcheck.sh` fails if any of them drifts, and `test/manifestcheck.sh`
@@ -12820,6 +12856,13 @@ arm-vs-arm table says."* **ripwire beats the random-rank placebo on 6 of 30 ques
 required. The consequence is therefore honoured here: the table below is published because the losses are the
 result, and **no claim of ranking superiority over any arm is made or implied by it.**
 
+**Disclosed 2026-09-26: every question was asked at the one corpus pin, which already contains all 30 graded
+commits** (`derive_questions.py` asserts HEAD == pin). So every arm's index holds each graded change, S5's
+`--rank-by=churn-decay` read history that includes it in every run, and from the post-fix run on so did S2's
+`--situ` co-change. No ranking claim rests on this instrument. Its per-shape and before/after figures, here and in
+the Graft round below, were measured at a pin that already contained the graded change (the Graft CHECK axis, run
+at `c~1`, is not affected).
+
 All five registered arms plus the placebo ran on all 30 questions; nothing is absent, and codanna stayed out.
 The harness is committed at `bench/roundc-h2h/` — `scorer.py` is the single metric implementation every arm is
 scored through, and `derive_questions.py` re-derives the frozen question table from the corpus (it reproduces
@@ -13060,7 +13103,8 @@ reproduces Round C's published value exactly and re-ran stable on the four rows 
   days at HEAD's clock, from the same mining pass the teleport already ran. The first cut ordered rows by
   decayed weight and named none of the S5 gold; the age analysis showed q25's gold at 9 days and the
   weight-first 40th row at 21 days, so the order became newest-first — and q25 completes at 4,562 B where it
-  was 37,845 B incomplete. The other five S5 rows carry gold aged 26–484 days (the questions are
+  was 35,238 B incomplete (corrected 2026-09-26 from 37,845 B, which matches no committed results file; that
+  completion is not established, see the 2026-09-26 correction under the post-fix result). The other five S5 rows carry gold aged 26–484 days (the questions are
   stride-sampled from a 1,200-commit window, so their "recently" is not recent): no recency verb can serve
   them, the placebo wins three of them on budget alone, and that is the honest shape.
 - **L4 — "where is `<commit subject>` implemented" (S1: 1/6 ripwire, 0/6 graft-ask, 4/6 floor) and "how
@@ -13068,7 +13112,7 @@ reproduces Round C's published value exactly and re-ran stable on the four rows 
   serves `sigs shown="4" total="40"` — four signatures for a 21-file gold (q21) — and `--for` returns a set,
   not a path. Question-shape losses; registered as follow-ups (raise the compact sig quota under the same
   budget; a file-level `--path`). Not fixed here.
-- **L5 — the placebo (post-fix 11 / 14 / 5).** Fourteen mutually-incomplete ties and five placebo wins
+- **L5 — the placebo (post-fix 11 / 14 / 5; 10 / 15 / 5 without q25, see the 2026-09-26 correction below).** Fourteen mutually-incomplete ties and five placebo wins
   (q08, q20 and three S5 rows) on the rows where ripwire's byte budget is largest. The stop condition stands.
 
 Graft's own losses, for the record: `graft-expert`'s `callers <PascalCase(stem)>` emitted **0 bytes** on q02,
@@ -13099,12 +13143,22 @@ tier" resolves no cross-file call for them.
 Per shape, complete / gold named, post-fix: S1 ripwire 1/6 · 7/43 (graft-ask 0/6 · 3/43) · S2 4/6 · 5/14
 (2/6 · 3/14) · S3 **4/6 · 9/11** (2/6 · 2/11) · S4 1/6 · 7/31 (1/6 · 5/31) · S5 **1/6 · 6/30** (0/6 · 5/30).
 The rows that flipped: q10 (S3, the stem partner, 1,814 B incomplete → 2,095 B complete), q25 (S5, `<recent>`,
-37,845 B incomplete → 4,562 B complete); q12 went 6,233 → 2,073 B. The cost: +281 B of legend on every
+35,238 B incomplete → 4,562 B complete; `results.json`, corrected 2026-09-26 from 37,845 B); q12 went 6,233 → 2,073 B. The cost: +281 B of legend on every
 rows-bearing `--affected`/`--situ`/`--test-gate` document (`testgatelegendbudgetcheck` re-pinned 2260 → 2540
 with the measurement), and +2.6 KB on every `--rank-by=churn-decay` map for the 40 `<rc>` rows.
 
 **The stop condition still fires (11 < 16) and no ranking claim is published.** The tool is measurably
 better on the two axes the losses named and it does not clear the bar the registration set.
+
+**Correction (2026-09-26): q25's completion and its paired win are not established.** q25 was asked at a pin
+that already contained its graded commit (see the Round C disclosure), and `<recent>` lists the newest commits'
+files at that pin, so the 9-day age that put q25's gold into it is most likely the graded commit's own touch. Without q25 the post-fix
+figures are 10/30 and 32/129 (30/129 if the q28/q29 +1s have the same cause), S5 0/6, paired 5/20/5 · 7/20/3 ·
+8/8/14 · 10/15/5; lane 2 below becomes 13/30 and 38–40/129, paired 8/17/5 · 10/17/3 · 10/8/12 · 12/13/5. Not yet
+re-measured at q25's parent revision; the arithmetic re-derives from `results_post*.json` with q25/q28/q29 set to
+their `results.json` rows. Without q25 the paired rows against graft-ask, graft-expert and `rg` equal the pre-fix
+column (5/20/5, 7/20/3, 8/8/14) and S5 is back to its pre-fix 0/6, so "measurably better on the two axes the losses
+named" above survives the q25 correction for L2 only, not for L3.
 
 ### The CHECK axis — "I have a change in my working tree, which tests must run?" (N = 6, `check_axis.py`)
 
@@ -13168,7 +13222,8 @@ trimmed surface files enter the tail. One row moved the other way: q24 (18-file 
 the tail's 24 slots now being taken by higher-ranked trimmed files. The five byte losses against graft-ask are
 untouched by design (they are the legend). **The stop condition still fires — 13 of 30 against a required 16
 — and no ranking claim is published.** The remaining tied rows are the shapes named above: stride-sampled S5
-gold, multi-file S4/S1 proxies, and two S3 graph-recall misses.
+gold, multi-file S4/S1 proxies, and two S3 graph-recall misses. The lane 2 column carries q25 unchanged, so the
+2026-09-26 correction above applies to it: 13/30 and 38–40/129 without q25.
 
 ### Registered follow-ups (not funded here)
 

@@ -2086,13 +2086,18 @@ inline constexpr const char* kIgnoredLegend =
     "<!-- hdr:ignored_files=files-git's-own-ignore-rules-covered(exact;would-otherwise-be-indexed;the-no-ignore-flag-restores-them)"
     " hdr:ignored_dirs=SUBTREES-those-rules-pruned(walk-stopped-there:contents-UNKNOWN-not-zero;the-skipped-verb-rows-both) -->";
 
-// Tier 3's declines: the header's declined= and the answers' declined_calls=. Charged to the map that carries
+// Tier 3's declines, and the builtin-method name gate's (graph.h BuiltinMethodGate): the header's declined= and the
+// answers' declined_calls=. Charged to the map that carries
 // declined= (kIgnoredLegend's rule), because an always-on entry measured +177 B and +70 est_tokens on
 // test/fixture, a map that cannot carry the attribute. No '>' anywhere: gates read these comments with a
 // [^>]* pattern, and one '>' inside the text silently empties what they read (lpincheck arm F found it).
 inline constexpr const char* kDeclinedMapLegend =
     "<!-- hdr:declined=calls-tier-3-declined(two-or-more-same-language-defs,none-in-the-callers-file-or-dir,"
     "none-pinned-by-a-qualifier/receiver/include;no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->";
+// The builtin-method name gate's declines (graph.h BuiltinMethodGate) ride the same declined= count; this clause is charged
+// only to a map where the gate declined at least one call, so a map the gate never touched keeps its bytes.
+inline constexpr const char* kDeclinedGateMapLegend =
+    "<!-- hdr:declined=also-counts-builtin-type-method-calls(dict.get,list.append)whose-bound-targets-classes-the-callers-file-never-names -->";
 
 // #157: the default map's own nest-refused disclosure — before this, a refused file's absence carried no signal
 // on the map's own header at all, only in the skipped verb's own report (if a reader thought to ask). Charged
@@ -2427,7 +2432,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                        std::size_t externalCalls = 0,
                        // Tier 3's per-caller declines (graph.h g.declinedOut) → header declined=N, absent when zero, so a
                        // corpus where no call reached tier 3 undecided stays byte-identical.
-                       const std::vector<std::uint32_t>* declinedOut = nullptr )
+                       const std::vector<std::uint32_t>* declinedOut = nullptr,
+                       // of those, the calls the builtin-method name gate declined (graph.h g.gateDeclinedCalls) → the
+                       // kDeclinedGateMapLegend clause, absent when zero.
+                       std::size_t gateDeclinedCalls = 0 )
 {
     const std::size_t* changedCount = ann.changedCount;
     const std::string* mapAtStamp   = ann.atStamp;
@@ -2650,6 +2658,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const std::size_t locPinTotal     = counterTotal( locPinOut );       // Phase 4: calls the locality prior ALONE pinned
     const std::size_t declinedTotal   = counterTotal( declinedOut );     // calls tier 3 declined: no edge, and no guess
     legend += declinedTotal > 0 ? kDeclinedMapLegend : "";               // charged to the map that carries declined=
+    legend += gateDeclinedCalls > 0 ? kDeclinedGateMapLegend : "";       // only where the builtin-method gate declined a call
     // C1 DRIFT FIX (Round C lane B, found by re-reading this header's own output). `precise=` means "how many
     // out-edges a SCIP index PINNED", and the emitter's own comment below says it is "emitted ONLY under
     // --scip". Both were true when outProv held only {0, 1}. A4-R5 then added value 2 (an FFI binding edge)
@@ -7569,9 +7578,11 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
                       int pageLimit = 0, int pageOffset = 0,
                       std::string_view rootArg = {},    // R-E (2026-08-17): same single-root-only root
                                                         // argument serialize() takes — see its comment.
-                      // #220 part 1: in-repo TS/JS imports that drew no edge (graph.h StructuralIncludeAdj). > 0 ⇒ the
-                      // root carries imports_unresolved= graph_partial="1" and the legend defines them; 0 ⇒ byte-identical.
-                      std::uint64_t importsUnresolved = 0 )
+                      // #220: in-repo TS/JS imports that drew no edge, edges only to a .d.ts, unread tsconfig bases
+                      // (graph.h StructuralIncludeAdj). unresolved or unread > 0 ⇒ the root carries its attribute and
+                      // graph_partial="1", and the legend defines them (graphlegend.h tsImportRootAttrXml); all 0 ⇒
+                      // byte-identical.
+                      const rw::TsImportRootCounts& tsImports = {} )
 {
     const std::size_t F = ing.files.size();
     const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
@@ -7628,7 +7639,8 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
              "dependency: it is in the impact verb's importer tier (lazy=1) and in this row's inc t= list, and it is NOT in "
              "afferent=/instab=/transitive=/godfiles/stabledeps/cycles/ccd/acd/nccd/shape=; health lazy_edges= counts the "
              "pairs left out and a row's lazy_edges= its own — both absent when 0. " );
-    w.write( rw::depsImportsUnresolvedLegend( importsUnresolved > 0 ) );   // #220: exactly when the root carries the pair
+    w.write( rw::depsImportsUnresolvedLegend( tsImports.unresolved > 0 ) );   // #220: exactly when the root carries the pair
+    w.write( rw::depsTsImportExtrasLegend( tsImports.dts, tsImports.unread ) );
     w.write( "raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it). -->" );
 
     // discloseCap=TRUE, and this is the one un-paginated byte-shape change here: --deps caps the listing at
@@ -7643,7 +7655,7 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
         // R-E: root= is unbounded (a deep absolute path), so it is NOT folded into the fixed `db` buffer above
         // (the V1-1 truncation class main.cpp's own history warns about) — written separately.
         if( !rootArg.empty() ) { w.write( " root=\"" );  w.write( escapeXml( rootArg, esc ) );  w.write( "\"" ); }
-        w.write( rw::importsUnresolvedPartialAttrXml( importsUnresolved ) );   // #220: absent at 0; partial, not a floor — see graphlegend.h
+        w.write( rw::tsImportRootAttrXml( tsImports.unresolved, tsImports.dts, tsImports.unread ) );   // #220: absent at 0; partial, not a floor — see graphlegend.h
         w.write( ">" );
     }
 
@@ -8330,7 +8342,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
                                                                  // XML serialize() takes (see its own comment)
                            const std::vector<std::uint32_t>* locPinOut = nullptr,   // Phase 4: same as serialize()'s
                            std::size_t externalCalls = 0,                           // Phase 5: same as serialize()'s
-                           const std::vector<std::uint32_t>* declinedOut = nullptr ) // tier-3 declines: same as serialize()'s
+                           const std::vector<std::uint32_t>* declinedOut = nullptr, // tier-3 declines: same as serialize()'s
+                           std::size_t /*gateDeclinedCalls*/ = 0 )  // serialize()'s legend clause; JSON carries no legend, so unread here
 {
     const std::size_t S = ing.symbols.size();
     const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );

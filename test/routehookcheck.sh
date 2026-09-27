@@ -781,16 +781,21 @@ O11OTHER="$TMP/o11other"; mkdir -p "$O11OTHER"; git -C "$O11OTHER" init -q
 for o11hook in "$HOOK" "$ROOT/hooks/ripwire-codex-route.sh"; do
     o11h="$( basename "$o11hook" )"
     for o11case in "GIT_DIR only" "GIT_DIR and an ancestor GIT_WORK_TREE" "GIT_DIR and GIT_WORK_TREE"; do
+        # one array element per assignment, so a path with a space in it stays one argument to env
         case "$o11case" in
-            "GIT_DIR only")                          o11env="GIT_DIR=$REPO/.git" ;;
-            "GIT_DIR and an ancestor GIT_WORK_TREE") o11env="GIT_DIR=$REPO/.git GIT_WORK_TREE=$TMP" ;;
-            *)                                       o11env="GIT_DIR=$REPO/.git GIT_WORK_TREE=$REPO" ;;
+            "GIT_DIR only")                          o11env=( "GIT_DIR=$REPO/.git" ) ;;
+            "GIT_DIR and an ancestor GIT_WORK_TREE") o11env=( "GIT_DIR=$REPO/.git" "GIT_WORK_TREE=$TMP" ) ;;
+            *)                                       o11env=( "GIT_DIR=$REPO/.git" "GIT_WORK_TREE=$REPO" ) ;;
         esac
         : >"$O11LOG"
-        # shellcheck disable=SC2086 # o11env is one or two VAR=VAL words, split on purpose
         printf '%s' "$( promptjson o11e "$NONREPO" "$RECPROMPT" )" \
-            | env HOME="$TMP/fakehome" RIPWIRE_HOME="$H11" PATH="$O11ENVBIN:$PATH" $o11env bash "$o11hook" >/dev/null 2>&1
-        if [ -s "$O11LOG" ]; then
+            | env HOME="$TMP/fakehome" RIPWIRE_HOME="$H11" PATH="$O11ENVBIN:$PATH" "${o11env[@]}" bash "$o11hook" >/dev/null 2>&1
+        o11rc=$?
+        # an empty log proves the hook stayed quiet only if the hook actually ran and exited 0: a failed env or
+        # bash (a split path, a missing interpreter) also leaves the log empty
+        if [ "$o11rc" -ne 0 ]; then
+            no "O11 route: $o11h with an inherited $o11case exited $o11rc, so its empty log proves nothing"
+        elif [ -s "$O11LOG" ]; then
             no "O11 route: $o11h called ripwire in a non-git cwd with an inherited $o11case: [$( tr '\n' ' ' <"$O11LOG" )]"
         else
             ok "O11 route: $o11h never calls ripwire in a non-git cwd with an inherited $o11case"

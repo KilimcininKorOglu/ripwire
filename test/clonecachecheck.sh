@@ -151,9 +151,9 @@ if [ -d "$XDG4/ripwire" ]; then
     # A4-P4: the auto-cache filename is now split by verb class → ripwire-<hash>-{lean,rich}.bin (a plain
   # map is the lean class). The <hash> stability + ladder/mode contract is unchanged. Y4: new blobs
     # live in a 2-hex-char shard subdir (legacy flat blobs are still honored in place), so look in BOTH layouts.
-    find "$XDG4/ripwire" -maxdepth 2 -type f | grep -q '/\([0-9a-f]\{2\}/\)\{0,1\}ripwire-[0-9a-f]\{16\}-\(lean\|rich\)\.bin$' \
-        && ok "defaultCachePath: cache file named ripwire-<hash>-<class>.bin lives under \$XDG_CACHE_HOME/ripwire (flat or shard)" \
-        || no "defaultCachePath: no ripwire-<hash>-<class>.bin found under \$XDG_CACHE_HOME/ripwire (flat or shard)"
+    find "$XDG4/ripwire" -maxdepth 2 -type f | grep -q '/\([0-9a-f]\{2\}/\)\{0,1\}ripwire-[0-9a-f]\{16\}-\(lean\|rich\)-c[0-9]\{1,\}p[0-9]\{1,\}\.bin$' \
+        && ok "defaultCachePath: cache file named ripwire-<hash>-<class>-c<format>p<parser>.bin lives under \$XDG_CACHE_HOME/ripwire (flat or shard)" \
+        || no "defaultCachePath: no ripwire-<hash>-<class>-c<format>p<parser>.bin found under \$XDG_CACHE_HOME/ripwire (flat or shard)"
 else
     no "defaultCachePath: \$XDG_CACHE_HOME/ripwire was not created"
 fi
@@ -175,7 +175,7 @@ fi
 
 # ── (e) STABLE per-root path: same root + same env -> same defaultCachePath (warm reuse still works) ─
 env -u TMPDIR XDG_CACHE_HOME="$XDG4" "$BIN" "$CORPUS" >/dev/null 2>/dev/null
-COUNT1="$(find "$XDG4/ripwire" -maxdepth 2 -type f | grep -c '/\([0-9a-f]\{2\}/\)\{0,1\}ripwire-[0-9a-f]\{16\}-\(lean\|rich\)\.bin$')"
+COUNT1="$(find "$XDG4/ripwire" -maxdepth 2 -type f | grep -c '/\([0-9a-f]\{2\}/\)\{0,1\}ripwire-[0-9a-f]\{16\}-\(lean\|rich\)-c[0-9]\{1,\}p[0-9]\{1,\}\.bin$')"
 [ "$COUNT1" = "1" ] \
     && ok "defaultCachePath: two runs on the same root (same class) produce exactly ONE cache file (stable path, warm reuse intact)" \
     || no "defaultCachePath: expected exactly 1 cache file after 2 runs, found $COUNT1"

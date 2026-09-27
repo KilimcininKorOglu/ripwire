@@ -93,6 +93,9 @@ inline SkillManifest skillManifest( const std::filesystem::path& path )
     return out;
 }
 
+// A `ripwire-*` directory is a LIVE skill only when it holds a `SKILL.md` an agent can load: an empty directory
+// (0.6.3's Git Bash `ln -sfn` leftover, #334) or a link whose target is gone loads nothing, so it must not read
+// as manifest parity. train20-cr follow-up: before, any directory counted.
 inline std::vector<std::string> liveSkills( const std::filesystem::path& skillHome, bool& scanned )
 {
     std::vector<std::string> live;
@@ -102,7 +105,11 @@ inline std::vector<std::string> liveSkills( const std::filesystem::path& skillHo
     {
         const std::string name = it->path().filename().string();
         std::error_code sec;
-        if( name.rfind( "ripwire-", 0 ) == 0 && it->is_directory( sec ) && !sec ) { live.push_back( name ); }
+        std::error_code fec;
+        if( name.rfind( "ripwire-", 0 ) == 0 && it->is_directory( sec ) && !sec && std::filesystem::is_regular_file( it->path() / "SKILL.md", fec ) )
+        {
+            live.push_back( name );
+        }
         it.increment( ec );
     }
     std::sort( live.begin(), live.end() );

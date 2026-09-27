@@ -170,7 +170,7 @@ constexpr std::array<LangEntry, 51> kLangTable = {{
     // (ingest_sidecap.h). Rides Lang::TypeScript deliberately — langCompatible() admits only same-Lang
     // pairs, so a Lang of its own would not resolve a frontmatter call into the .ts service it names,
     // which is the entire point of issue #67. Same shape as .tsx/.mts above and .metal/.cu below.
-    { ".astro", Lang::TypeScript, &tree_sitter_typescript, "typescript" },
+    { kAstroExt, Lang::TypeScript, &tree_sitter_typescript, "typescript" },
     { ".swift", Lang::Swift,     &tree_sitter_swift,      "swift"      },
     { ".m",    Lang::ObjC,       &tree_sitter_objc,       "objc"       },   // Objective-C
     { ".mm",   Lang::ObjC,       &tree_sitter_objc,       "objc"       },   // Objective-C++ (ObjC layer + C-style; C++ partial)
