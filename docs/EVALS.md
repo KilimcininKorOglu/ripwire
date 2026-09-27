@@ -616,14 +616,18 @@ refresh** (`make_snapshot.py --freeze --corpus src`, `--corpus` deliberately has
 ### Query-mention anchoring
 
 A file, dotted module, `Type.method`, or a verbatim identifier (snake_case/camelCase, backticked, `ns::fn`,
-`name()` when the task carries no pasted code; defined in at most 3 files; at most 2 lifted per task) named
+`name()` when the task carries no pasted code; defined in at most 3 files; at most 2 identifier-resolved definitions
+lifted per task, within the 8 direct-symbol slots `Type.method` also uses) named
 literally in the task text is lifted just below the top hit. It is on by default and byte-identical when the text
 names nothing indexed.
 
 The identifier half was pre-registered and measured once on the 92-question LocBench held-out set
 (the served-head grade of `bench/locbench/calibrate_confidence.py`, which lives on the `lane/served-syms-result`
 branch and is not on main; v0.6.4 as base): gold file in head 75 → 76, every gold file 55 → 56, gold function
-51 → 52, first-gold-file MRR 0.6017 → 0.6040, served bytes +0.4%. Each +1 is a
+51 → 52, first-gold-file MRR 0.6017 → 0.6040, served bytes +0.4% (the lane's own run, on its branch binary).
+The 0.6.5 release train re-ran the same set on the merged binary, with every other 0.6.5 change in: gold file in
+head 75 → 76, every gold file 55 → 56, gold function 51 → 52, gold file in the bundle 86 → 86, first-gold-file MRR
+0.6017 → 0.6026, served bytes 702,455 → 705,555 (+0.44%). Each +1 is a
 single question, so the result is "no regression, named-symbol case fixed", not a recall gain.
 
 The reproducible in-tree ablations, both machine-generated scoreboards:
