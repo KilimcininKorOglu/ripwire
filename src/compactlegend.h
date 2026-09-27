@@ -316,7 +316,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // first two at once.
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
-    { "declined_calls",    "declined_calls=K: K call sites left unbound (several defs, none chosen; or a builtin-type method name with no class evidence), in no count or row" },
+    { "declined_calls",    "declined_calls=K: K call sites left unbound (no evidence chose one def), in no count or row" },
     // #220 part 1: the FILE graph's gauge (graphlegend.h importsUnresolvedAttrXml), absent at zero, on the --deps/--arch/
     // --impact roots and the MCP impact twin. What it means for the numbers is the reading BESIDE it, never this row:
     // graph_partial= on --deps/--arch (next row), counts_floor= on --impact (its own row above; importers= only rises).
@@ -402,7 +402,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // The map HEADER's absent-at-zero gauges: `<!-- files=` is kept as data while the `<!-- hdr:` clauses that define
     // these fields go (kDeclinedMapLegend, kIgnoredLegend, kExtentSuspectHdrLegend, kMacroBlankedHdrLegend, the absent-if-0
     // half of the always-on legend, kMaxTokensFitLegend). Header-ONLY: several are quoted attributes elsewhere.
-    { "declined",          "declined=K: K calls left unbound (several defs, none chosen; or a builtin-type method name with no class evidence)", false, {}, MapHeaderRead::Only },
+    { "declined",          "declined=K: K calls left unbound (no evidence chose one def)", false, {}, MapHeaderRead::Only },
     { "external",          "external=K: K calls taken as outside the tree, no edge", false, {}, MapHeaderRead::Only },
     { "locality_pinned",   "locality_pinned=K: K calls pinned by locality alone (a guess)", false, {}, MapHeaderRead::Only },
     { "extent_suspect_syms", "extent_suspect_syms=K: K defs failed containment, corpus-wide", false, {}, MapHeaderRead::Only },
@@ -652,6 +652,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "preexisting-worse", "preexisting-worse=N: regressions on symbols that existed at baseline; only these gate (when major)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "new-symbol", "new-symbol=N: regressions on NEW code; never gate, but the debt is yours: read them", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "register-macro-excluded", "register-macro-excluded=N: symbols kept out of dead-code as self-registering test/bench macros; a floor", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "declined-call-excluded", "declined-call-excluded=N: symbols kept out of dead-code only because a declined call may mean them; a floor", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "api-new-surface", "api-new-surface=N: new PUBLIC symbols; a count, never gates, not in regressions=", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "renames", "renames=/rename_window_commits=: git rename pairs read over that many commits, to re-file baseline and acks", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },   // also defines rename_window_commits=
     { "acked_by_rename", "acked_by_rename=/acked_by_content=: acked= suppressions matched via git renames / an equal body hash", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },   // also defines acked_by_content=

@@ -855,6 +855,9 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
         }
     }
     const EditCheckVerdict verdict = editCheckVerdict( contract, incompatibleCount );
+    // Declined calls that could have meant this definition (graph.h declinedCallsNaming): callers= cannot count them, so
+    // the root says how many there are — the same count and spelling as --callers' declined_calls=.
+    const std::size_t declinedCalls = declinedCallsNaming( g, overloadNodes );
     // THE WINDOW, taken AFTER every verdict number above is already fixed and over the UNFLAGGED rows only.
     // Its position in this function is the guarantee: there is no path by which a window can reach a count.
     const EditCheckRowWindow rowWindow = editCheckRowWindow( callerIds.size(), incompatibleCount, pageLimit, pageOffset );
@@ -954,6 +957,7 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     // H1: what callers= and incompatible= did not read, addressed to incompatible= by name — ahead of the floor tail, and
     // emitted exactly when the root carries unproven_defs= (graphlegend.h unprovenDefsVerbLegend).
     out += unprovenDefsVerbLegend( UnprovenDefsVerb::EditCheck, unprovenDefs > 0 );
+    out += declinedCallsLegend( declinedCalls > 0, g.gateDeclinedCalls > 0 );   // exactly when the root carries declined_calls=
     // §H4 §3.4: the shared floor + counting-unit tail, appended from the ONE constant every graph-count verb
     // splices. It is load-bearing HERE more than anywhere: callers="1" on a symbol with an unmodelled second
     // caller is the exact shape §H4 measured, and this legend's own "the tree as it stands" paragraph reads
@@ -1010,6 +1014,7 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     rw::formatTo( callersOpen, sizeof( callersOpen ), " callers=\"{}\" incompatible=\"{}\"", callerIds.size(), incompatibleCount );
     out += callersOpen;
     out += unprovenDefsAttrXml( unprovenDefs );   // H1: beside the incompatible= it qualifies; absent at zero
+    out += declinedCallsAttrXml( declinedCalls ); // callers the resolver declined to bind that could have meant it; absent at zero
     // r26-stamp Task A: the HEAD baseline this contract compares against is only meaningful pinned to a
     // commit (+dirty state) — omitted entirely on a non-git root. Appended LAST (after every pre-existing
     // attribute) so an existing substring-adjacency assertion elsewhere (e.g. "status=\"x\" callers=\"N\"")

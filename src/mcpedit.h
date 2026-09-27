@@ -1028,6 +1028,7 @@ namespace mcpedit
         // graph_unresolved="2952" counts_floor="1">` says it is a floor off a name-based call graph. Same
         // helper, same JSON spelling every other folded surface uses: a disclosure survives into every
         // sibling surface or is DECLARED, and this one had been neither.
+        out += declinedCallsKeyJson( declinedCallsNaming( g, overloadNodes ) );   // the standalone root's declined_calls=, absent at zero
         out += graphCountFloorAttrJson( g );
         out += "}";
         (void) pathRel;

@@ -740,11 +740,16 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
                              const std::vector<std::uint64_t>& topLevelCallees,
                              const std::vector<NodeId>& registeredMacroIds,
                              const std::vector<NodeId>& pythonDispatchIds,
-                             bool* exemptedByRegisterMacro = nullptr ) noexcept
+                             bool* exemptedByRegisterMacro = nullptr,
+                             bool* exemptedByDeclinedCall  = nullptr ) noexcept   // set iff ONLY the declined-call exemption kept it out
 {
     if( exemptedByRegisterMacro )
     {
         *exemptedByRegisterMacro = false;
+    }
+    if( exemptedByDeclinedCall )
+    {
+        *exemptedByDeclinedCall = false;
     }
     const Symbol& s = ing.symbols[i];
     if( s.kind == SymKind::Section || s.kind == SymKind::ModuleScope )
@@ -759,10 +764,6 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
     if( ro[i + 1] - ro[i] != 0 )
     {
         return false; // has at least one caller
-    }
-    if( i < g.gateDeclinedTarget.size() && g.gateDeclinedTarget[ i ] != 0 )
-    {
-        return false; // a builtin-name call the resolver declined could have meant it (graph.h BuiltinMethodGate)
     }
     if( std::binary_search( topLevelCallees.begin(), topLevelCallees.end(), fnv1a64( s.name ) ) )
     {
@@ -792,6 +793,14 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
             *exemptedByRegisterMacro = true;
         }
         return false; // P2.2: self-registers via a static initializer the call graph cannot see
+    }
+    if( i < g.gateDeclinedTarget.size() && g.gateDeclinedTarget[ i ] != 0 )
+    {
+        if( exemptedByDeclinedCall )
+        {
+            *exemptedByDeclinedCall = true;   // LAST, so the flag means "dead but for this" — the count the delta discloses
+        }
+        return false; // a builtin-name call the resolver declined could have meant it (graph.h BuiltinMethodGate)
     }
     return true;
 }
@@ -7588,8 +7597,13 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                                              std::size_t maxFileBytes = kDefaultMaxFileBytes,
                                              std::size_t* registerMacroExcludedOut = nullptr,   // P2.2: honest disclosure count, additive+optional — see isDeadCandidate
                                              std::size_t* apiNewSurfaceOut = nullptr,          // Q-DIAL-4: the api-surface new-symbol COUNT that replaced N never-gating rows
-                                             std::vector<CloneIdiomFact>* cloneIdiomsOut = nullptr )   // every CURRENT-tree clone group's (hash, idiom), for the legacy-ack backfill
+                                             std::vector<CloneIdiomFact>* cloneIdiomsOut = nullptr,   // every CURRENT-tree clone group's (hash, idiom), for the legacy-ack backfill
+                                             std::size_t* declinedCallExcludedOut = nullptr )         // symbols kept out of dead-code ONLY by a declined call (isDeadCandidate)
 {
+    if( declinedCallExcludedOut )
+    {
+        *declinedCallExcludedOut = 0;
+    }
     ASSUME( registerMacroExcludedOut == nullptr || registerMacroExcludedOut != apiNewSurfaceOut,
                  "computeDelta: registerMacroExcludedOut and apiNewSurfaceOut must be distinct" );   // both default to nullptr, so the object form would dereference null
     std::vector<Regression> regs;
@@ -8020,12 +8034,17 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
         {
             continue;
         }
-        bool macroExempt = false;
-        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch, &macroExempt ) )
+        bool macroExempt    = false;
+        bool declinedExempt = false;
+        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch, &macroExempt, &declinedExempt ) )
         {
             if( macroExempt && registerMacroExcludedOut )
             {
                 ++( *registerMacroExcludedOut );   // P2.2: would be dead-code but for the macro exemption — disclosed count
+            }
+            if( declinedExempt && declinedCallExcludedOut )
+            {
+                ++( *declinedCallExcludedOut );    // would be dead-code but for a declined call that may reach it — disclosed count
             }
             continue;
         }

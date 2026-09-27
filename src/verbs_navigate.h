@@ -201,7 +201,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             rw::emitTo( stdout, "{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
-                         rw::declinedCallsLegend( chRows.declinedCalls > 0 ),   // exactly when the root carries declined_calls=
+                         rw::declinedCallsLegend( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0 ),   // exactly when the root carries declined_calls=
                          rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ),     // H1: likewise, exactly when unproven_defs= is there
                          rw::modScopeLegend( chHasModScope ),                   // #60: likewise, exactly when a t="modscope" row is
                          rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( chSingleRoot ),
@@ -674,8 +674,13 @@ std::optional<int> runUses( const MainDispatch& d )
         // §A6b: the qualifier disclosure, built once for both emitters. defs_of_name= is the un-narrowed DEF
         // count; narrowed_roles="call" names which roles the qualifier actually narrowed and call_sites_of_name=
         // is that role's un-narrowed total, so "how much did the qualifier drop" is arithmetic, not a guess.
+        // declined_calls=: a narrowed selector keeps only the call sites that RESOLVE to its defs, so a call the resolver
+        // declined to bind is in no row here although it may mean one of them — counted as --callers counts it. A bare name
+        // lists every same-named call site already, so it carries none.
+        const std::size_t usDeclinedCalls = ( sel.fileQualified || sel.scopeNarrowed ) ? declinedCallsNaming( g, defs ) : 0;
         const std::string selectorAttrs = ( sel.fileQualified || sel.scopeNarrowed )
             ? " defs_of_name=\"" + std::to_string( sel.defsOfName ) + "\" narrowed_roles=\"call\" call_sites_of_name=\"" + std::to_string( callSitesOfName ) + "\""
+              + rw::declinedCallsAttrXml( usDeclinedCalls )
             : std::string{};
 
         std::vector<char> esc;
@@ -699,7 +704,8 @@ std::optional<int> runUses( const MainDispatch& d )
                      "resolution and stay name-matched across every def sharing the name. narrowed_roles= names what narrowed, and "
                      "defs_of_name=/call_sites_of_name= (qualifier only) are the un-narrowed totals. "
                      "{}{}{}-->{}{}", rw::kUsesLegendOpen,
-                     rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Uses, usUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
+                     ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Uses, usUnprovenDefs > 0 )           // H1: exactly when the root carries unproven_defs=
+                       + rw::declinedCallsLegend( usDeclinedCalls > 0, g.gateDeclinedCalls > 0 ) ).c_str(),                              // exactly when it carries declined_calls=
                      rw::capLegendClause( rw::computePageDisclosure( pageRows, sites.size(), upw.end,
                                                                     cfg.pageLimit, cfg.pageOffset, usDiscloseCap ).active ),
                      rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( usSingleRoot ),
@@ -787,8 +793,16 @@ std::optional<int> runUses( const MainDispatch& d )
 // H1's residue: `unprovenDefs` is the count resolveAllByNameQualified dropped for this selector. Its clause
 // (graphlegend.h kUnprovenDefsSafeDeleteLegend) follows the risk= sentence directly, because it is the sentence
 // that says what risk= did NOT read; emitted exactly when the root carries unproven_defs=, nothing otherwise.
-inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs, std::size_t ambiguousCallers, std::string_view risk, bool singleRoot, bool hasUnindexed, bool hasModScope )
+inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs, std::size_t ambiguousCallers, std::string_view risk, bool singleRoot, bool hasUnindexed, bool hasModScope,
+                                  std::size_t declinedCalls = 0, bool gateDeclined = false )
 {
+    // declined_calls=: its definition, and — beside risk=none-found — the sentence that keeps none-found from reading as
+    // a safety verdict about a definition some declined call may have meant (graph.h declinedCallsNaming).
+    std::string declinedClause = rw::declinedCallsLegend( declinedCalls > 0, gateDeclined );
+    if( declinedCalls > 0 && risk == "none-found" )
+    {
+        declinedClause += "none-found beside declined_calls= is not a safety reading: those calls may reach this definition. ";
+    }
     rw::emitTo( stdout, "<!-- ripwire safe-delete: composes signals the tool already computes into one \"can I delete this?\" READ "
                 "— never a verdict. defs= is resolveAllByNameQualified's match count, exactly as the impact/uses/callers "
                 "verbs already disclose it. callers= is the 1-hop caller count (the callers verb's own walk over defs' "
@@ -826,7 +840,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                       ? "untested-radius: callers or uses exist, and NONE of the transitive blast radius is test-covered. "
                       : "uses-exist: callers or uses exist, and at least part of the radius is test-covered. ",
                 // H1: what risk= did not read, straight after the sentence for the value it qualifies.
-                rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::SafeDelete, unprovenDefs > 0 ).c_str(),
+                ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::SafeDelete, unprovenDefs > 0 ) + declinedClause ).c_str(),
                 rw::modScopeLegend( hasModScope ),   // #60: exactly when a <c n="<file-scope>"> row is on this page
                 rw::graphCountDisclosure( hasUnindexed ).c_str(), rw::rootRelPathsLegend( singleRoot ) );
 }
@@ -998,8 +1012,10 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // #60: exactly when an owner is one of the <c> rows this page prints. pageWindow is pure, so recomputing
     // it here (the legend streams BEFORE the rows) cannot disagree with the window the rows below take.
     const PageWindow sdLw = pageWindow( callerIds.size(), effectiveRowCap( cfg.pageLimit, 40 ), cfg.pageOffset );
+    const std::size_t sdDeclinedCalls = declinedCallsNaming( g, defs );   // declined calls that could have meant a def (as --callers counts them)
     emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk, sdSingleRoot, g.unindexedFiles > 0,
-                          anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ) );
+                          anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ), sdDeclinedCalls,
+                          g.gateDeclinedCalls > 0 );
 
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
                                                         // lowest, same convention --impact/--uses/--callers's of=/defs=
@@ -1009,11 +1025,12 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     const std::string  sdRootAttr = sdSingleRoot ? ( " root=\"" + ex( cfg.roots[0] ) + "\"" ) : std::string();
     rw::emitTo( stdout, "<safe-delete sym=\"{}\" t=\"{}\" p=\"{}:{}\" defs=\"{}\" callers=\"{}\" ambiguous_callers=\"{}\" "
                 "impact_reaches=\"{}\" uses=\"{}\" tested_self=\"{}\" radius_tested=\"{}\" radius_untested=\"{}\" "
-                "dead_code_candidate=\"{}\" risk=\"{}\"{}{}{}{}>",
+                "dead_code_candidate=\"{}\" risk=\"{}\"{}{}{}{}{}>",
                 ex( cfg.safeDeleteSym ).c_str(), symTag( lead.kind ), ex( sdPathRel( lead.fileId ) ).c_str(), lead.line,
                 defs.size(), callerIds.size(), ambiguousCallers, reach.size(), sites.size(), testedSelf ? 1 : 0,
                 radiusTested, radiusUntested, deadCodeCandidate ? 1 : 0, risk,
                 rw::unprovenDefsAttrXml( sdUnprovenDefs ).c_str(),   // H1: beside the verdict it qualifies; absent at zero
+                rw::declinedCallsAttrXml( sdDeclinedCalls ).c_str(), // beside risk= too: declined calls that may reach it; absent at zero
                 pageDisclosure( cab, sizeof( cab ), cw.end - cw.begin, callerIds.size(), cw.end, cfg.pageLimit, cfg.pageOffset, true ),
                 rw::graphCountFloorAttrXml( g ).c_str(), sdRootAttr.c_str() );
     for( std::size_t i = cw.begin; i < cw.end; ++i )
@@ -2399,7 +2416,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
                          rw::kTestedLensBlindSpotLegend,                           // F-02: rides with the partition
                          rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
-                         rw::declinedCallsLegend( imDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
+                         rw::declinedCallsLegend( imDeclinedCalls > 0, g.gateDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
                          rw::modScopeLegend( imHasModScope ),                      // #60: likewise, exactly when a t="modscope" row is
                          rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         }

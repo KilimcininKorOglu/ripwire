@@ -1090,6 +1090,9 @@ struct TestGateResult
     // silently dropped — a real obligation (a module scope no test reaches) must not read as exit 0 with
     // nothing to say why. Still counted in impactedSymbols; see writeTestGateReport's reconciliation note.
     std::size_t                untestedModscope = 0;
+    // Declined calls (graph.h declinedCallsNaming) that could have reached a changed symbol or one in its radius: callers
+    // the radius above could not walk, so a test behind one of them is in no row. declined_calls=, absent at zero.
+    std::size_t                declinedCalls    = 0;
     bool                       hasObligations  = false; // !tests.empty() || !untested.empty()
 };
 
@@ -1155,6 +1158,11 @@ inline TestGateResult computeTestGateFor( const IngestResult& ing, const Graph& 
         }
     }
     r.testRows = rankTestRows( ing, reach, gateDepth, &isChangedSym, gateSplit.src, gateSplit.tests );
+    {
+        std::vector<NodeId> declineTargets( changedSyms.begin(), changedSyms.end() );   // the change and its radius, as --impact counts it
+        declineTargets.insert( declineTargets.end(), reach.begin(), reach.end() );
+        r.declinedCalls = declinedCallsNaming( g, declineTargets );
+    }
     for( const TestRow& row : r.testRows )
     {
         r.tests.push_back( row.fileId );
@@ -1413,7 +1421,8 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
                   tgHasRows ? kTestGateRowLegend : "", std::string_view( kTestRowEvidenceLegend.data(), tgHasRows ? int( kTestRowEvidenceLegend.size() ) : 0 ),
                   runHintClauseIfRows( testRows, runsAreRootRelative( ing, root ) ),   // the ONE gate: this clause is about <t> rows, so an untested-only report pays nothing
                   untestedModscopeLegend( r.untestedModscope > 0 ),   // F3: the full clause at N>0, a one-line definition at 0
-                  rw::graphUnindexedLegend( g.unindexedFiles > 0 ),   // #66: exactly when the root carries the attribute
+                  ( std::string( rw::graphUnindexedLegend( g.unindexedFiles > 0 ) )   // #66: exactly when the root carries the attribute
+                    + rw::declinedCallsLegend( r.declinedCalls > 0, g.gateDeclinedCalls > 0 ) ).c_str(),     // exactly when it carries declined_calls=
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where
     // one is derivable. Absent run= = not derivable (testmap.h states why a fallback would be a lie).
@@ -1428,7 +1437,7 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     rw::emitTo( out, "<test-gate changed=\"{}\" impacted=\"{}\" tests=\"{}\" untested=\"{}\" untested_modscope=\"{}\""
                        " shown_tests=\"{}\" tests_capped=\"{}\" shown_untested=\"{}\" untested_capped=\"{}\""
                        " script_gates_unmodelled=\"{}\" script_gates_registered=\"{}\" script_gates_mapped=\"{}\""
-                       " script_gates_unresolved_dynamic=\"{}\" ccx_bar=\"{}\"{}{}{}{}{}>",
+                       " script_gates_unresolved_dynamic=\"{}\" ccx_bar=\"{}\"{}{}{}{}{}{}>",
                   r.changedFiles, r.impactedSymbols, testRows, r.untested.size(), r.untestedModscope,
                   shownTests, shownTests < testRows ? 1 : 0, shownRows, shownRows < r.untested.size() ? 1 : 0,
                   scriptGatesUnmodelledCount( ing ),
@@ -1436,6 +1445,7 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
                   graphCountFloorAttrXml( g ).c_str(),   // M15: gauge + counts_floor="1", the one splice every graph-floored root shares
                   pagingDisclosure( uab, sizeof( uab ), r.untested.size(), uw.end, pageLimit, pageOffset ),
                   gitstamp::atAttr( root ).c_str(), tgRootAttr.c_str(),
+                  declinedCallsAttrXml( r.declinedCalls ).c_str(),   // callers the radius could not walk; absent at zero
                   nextAttrXml( testGateNextInvocation( ing, r, gateRunners ) ).c_str()  );   // P3 (L7)
     rw::emitRaw( out, testRowsJoined( gateRunners, evidenceRowsOut( r.testRows, EvDialect::Xml, tgPathRel ), TestRowShape{ RowDialect::Xml, "t" }, ex ).c_str() );   // E1: <g> where no runner is derivable
     for( const ShellGateObligation& gate : r.shellGates.obligations )
@@ -1496,13 +1506,14 @@ inline void writeTestGateReportJson( std::FILE* out, const IngestResult& ing, co
     rw::emitTo( out, "{{\"changed\":{},\"impacted\":{},\"tests\":{},\"untested\":{},\"untested_modscope\":{}"
                        ",\"shown_tests\":{},\"tests_capped\":{},\"shown_untested\":{},\"untested_capped\":{}"
                        ",\"script_gates_unmodelled\":{},\"script_gates_registered\":{},\"script_gates_mapped\":{}"
-                       ",\"script_gates_unresolved_dynamic\":{},\"ccx_bar\":{}{}{},\"at\":{}{}{},\"tests_to_run\":[",
+                       ",\"script_gates_unresolved_dynamic\":{},\"ccx_bar\":{}{}{},\"at\":{}{}{}{},\"tests_to_run\":[",
                  r.changedFiles, r.impactedSymbols, testRows, r.untested.size(), r.untestedModscope,
                  shownTestsJ, shownTestsJ < testRows ? "true" : "false", shownRows,
                  shownRows < r.untested.size() ? "true" : "false",
                  scriptGatesUnmodelledCount( ing ), r.shellGates.registered, r.shellGates.mapped, r.shellGates.unresolvedDynamic, kTestGateCcxBarMirror,
                  graphCountFloorAttrJson( g ).c_str(),   // M15: the JSON twin's gauge + "counts_floor":true
                  rw::cstr( pageJson ), atJson.c_str(), tgJRootJson.c_str(),   // M12: root= rides only when the document has rows (same gate as the XML twin)
+                 declinedCallsKeyJson( r.declinedCalls ).c_str(),                // the XML twin's declined_calls=
                  nextFieldJson( testGateNextInvocation( ing, r, gateRunnersJ ) ).c_str()  );   // P3 (L7): the XML twin's next=
     const TestRunnerIndex gateRunners( ing, root );                       // §P11.4, the JSON sibling of the XML run=
     const auto            jesc = []( std::string_view s ) { return jsonStr( s ); };

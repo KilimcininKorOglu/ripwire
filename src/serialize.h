@@ -2093,8 +2093,11 @@ inline constexpr const char* kIgnoredLegend =
 // [^>]* pattern, and one '>' inside the text silently empties what they read (lpincheck arm F found it).
 inline constexpr const char* kDeclinedMapLegend =
     "<!-- hdr:declined=calls-tier-3-declined(two-or-more-same-language-defs,none-in-the-callers-file-or-dir,"
-    "none-pinned-by-a-qualifier/receiver/include;or-a-builtin-type-method-name-whose-defs-classes-the-callers-file-never-names;"
-    "no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->";
+    "none-pinned-by-a-qualifier/receiver/include;no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->";
+// The builtin-method name gate's declines (graph.h BuiltinMethodGate) ride the same declined= count; this clause is charged
+// only to a map where the gate declined at least one call, so a map the gate never touched keeps its bytes.
+inline constexpr const char* kDeclinedGateMapLegend =
+    "<!-- hdr:declined=also-counts-builtin-type-method-calls(dict.get,list.append)whose-bound-targets-classes-the-callers-file-never-names -->";
 
 // #157: the default map's own nest-refused disclosure — before this, a refused file's absence carried no signal
 // on the map's own header at all, only in the skipped verb's own report (if a reader thought to ask). Charged
@@ -2429,7 +2432,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                        std::size_t externalCalls = 0,
                        // Tier 3's per-caller declines (graph.h g.declinedOut) → header declined=N, absent when zero, so a
                        // corpus where no call reached tier 3 undecided stays byte-identical.
-                       const std::vector<std::uint32_t>* declinedOut = nullptr )
+                       const std::vector<std::uint32_t>* declinedOut = nullptr,
+                       // of those, the calls the builtin-method name gate declined (graph.h g.gateDeclinedCalls) → the
+                       // kDeclinedGateMapLegend clause, absent when zero.
+                       std::size_t gateDeclinedCalls = 0 )
 {
     const std::size_t* changedCount = ann.changedCount;
     const std::string* mapAtStamp   = ann.atStamp;
@@ -2652,6 +2658,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const std::size_t locPinTotal     = counterTotal( locPinOut );       // Phase 4: calls the locality prior ALONE pinned
     const std::size_t declinedTotal   = counterTotal( declinedOut );     // calls tier 3 declined: no edge, and no guess
     legend += declinedTotal > 0 ? kDeclinedMapLegend : "";               // charged to the map that carries declined=
+    legend += gateDeclinedCalls > 0 ? kDeclinedGateMapLegend : "";       // only where the builtin-method gate declined a call
     // C1 DRIFT FIX (Round C lane B, found by re-reading this header's own output). `precise=` means "how many
     // out-edges a SCIP index PINNED", and the emitter's own comment below says it is "emitted ONLY under
     // --scip". Both were true when outProv held only {0, 1}. A4-R5 then added value 2 (an FFI binding edge)
@@ -8332,7 +8339,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
                                                                  // XML serialize() takes (see its own comment)
                            const std::vector<std::uint32_t>* locPinOut = nullptr,   // Phase 4: same as serialize()'s
                            std::size_t externalCalls = 0,                           // Phase 5: same as serialize()'s
-                           const std::vector<std::uint32_t>* declinedOut = nullptr ) // tier-3 declines: same as serialize()'s
+                           const std::vector<std::uint32_t>* declinedOut = nullptr, // tier-3 declines: same as serialize()'s
+                           std::size_t /*gateDeclinedCalls*/ = 0 )  // serialize()'s legend clause; JSON carries no legend, so unread here
 {
     const std::size_t S = ing.symbols.size();
     const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );

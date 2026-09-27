@@ -14,11 +14,13 @@
 #
 # THE FIX (graph.h BuiltinMethodGate; the tables and their generator commands are in src/externalnames.h). A call whose
 # name is a method of its language's builtin map, list, set or string type, and that no qualifier, import binding or
-# receiver rule resolved, keeps only the definitions its FILE gives evidence for: a method whose class (or a class in
-# its inheritance cone) the file names; a free function only when the call is not a classified member access. Nothing
-# kept means the call is DECLINED and counted (header declined=, declined_calls= on the callers/impact answers). The
-# list decides only WHEN evidence is required — a name outside it keeps the ladder — and languages with no table keep
-# the ladder whole, each for a reason graph.h records beside the gate.
+# receiver rule resolved, is decided by the UNCHANGED ladder and then POST-FILTERED: when the gate admits none of the
+# ladder's targets the call loses its edge — DECLINED and counted (header declined=, declined_calls= on every verb that
+# reads callers) when a target lacked evidence, EXTERNAL when every target is one the call provably cannot reach. The
+# gate only ever removes: a call the ladder declined stays declined, and a kept call keeps exactly its targets. The list
+# decides only WHEN evidence is required, and languages with no table keep the ladder whole (reasons in graph.h).
+# Fix round (review of the first cut): that cut filtered the candidates BEFORE the ladder, so a declined two-way set
+# narrowed to one admitted member and BOUND — 17,466 new edges and 10,319 retargeted over 88 repositories, most false.
 #
 # THE FIXTURE (test/builtinbindfix/). Per language, one in-repo method named like a builtin method, called from a file
 # that names its class (the edge must SURVIVE) and from plain.* files that never do (the calls must NOT bind).
@@ -26,15 +28,29 @@
 #       (file evidence), and an untyped parameter in a file that names a SUBCLASS (cone evidence) — exactly those three
 #   (B) Python builtin calls do not bind: dict.get, a parameter's .get, os.environ.get, self.store.get — none is a
 #       caller row, and all four are counted as declined_calls="4" (the RED arm on a pre-change binary)
-#   (C) a nested helper `def decode( raw )` inside a method is no method: `raw.decode( "utf-8" )` elsewhere is declined,
-#       while the bare call inside its enclosing method still binds
+#   (C) a nested helper `def decode( raw )` inside a method is no method: `raw.decode( "utf-8" )` elsewhere loses its
+#       edge as EXTERNAL (no member call reaches a closure) and adds nothing to its declined_calls=, while the bare call
+#       inside its enclosing method still binds
 #   (D) control: a name OUTSIDE the table (`checkout`) still binds by name from the same plain file — the gate is not
 #       a general receiver-type requirement
 #   (M) control: Rule 3 still chooses between two admitted FREE functions — a bare `add( … )` in a file that imports
 #       helpers/sums.py binds there and not to other/sums.py's namesake, as it did before the gate
 #   (N) a member call can never reach a free function: `table.get`, `config.get`, `self.store.get` and
 #       `os.environ.get` (rooted at an import from outside the tree) all skip the module-level `def get` in lookup.py,
-#       which the pre-change binary split every one of them onto by directory locality
+#       which the pre-change binary split every one of them onto by directory locality — and count none of them as
+#       declined against it (it is not what they could have meant)
+#   (O) MONOTONE (fixture mono/): a call the ladder DECLINED stays declined — Python `cfg.update()` in a file that
+#       constructs Timer (Timer.update vs Config.update), Ruby `rows.each` beside `LinkedList.new`, JS `app.has()` and
+#       `m.has()` beside a free `has` — each definition keeps count="0" and its declined_calls=; the census diff against
+#       the ladder's own decision has no added and no retargeted call (the first cut bound all three)
+#   (P) Python `from ..d.instance import registry; registry.pop( k )`: an imported INSTANCE is no module, so the free
+#       `pop` in another package gains nothing (the first cut bound it silently); Registry.pop is declined, disclosed
+#   (Q) JS: `list.shift()` in a file that requires no module defining `shift` is declined; `q.shift()` on
+#       `const q = require( "../b/queue" )` keeps its edge (a direct require is evidence)
+#   (R) the caller-reading verbs disclose a declined caller: --edit-check, --safe-delete (beside risk=none-found, with
+#       the legend sentence), --uses FILE:SYM and --test-gate each carry declined_calls="1" for dependency-injected
+#       `self.pool.popitem()`; --quality-delta counts the dead-code exemption as declined-call-excluded=
+#   (S) 0 bytes on a tree the gate never declined in: test/declinefix's map and --callers legends carry no gate clause
 #   (E) JavaScript: Map.get and Array.push are declined; `new ConnectionPool()` in the file keeps its edge
 #   (F) TypeScript: the named import carries a parameter annotated with the class (the extractor records no
 #       per-parameter type there), while Map.get in a file that never names it is declined
@@ -109,6 +125,11 @@ check(){   # label | selector | want rows | want declined_calls
     else no "$1 — got rows [$( rows "$TMP/callers.xml" )] declined_calls=\"$( attr "$( root_tag "$TMP/callers.xml" callers )" declined_calls )\""; fi
 }
 
+# the census and the full-legend map every later arm reads (O's census rows, I's header) — written FIRST, so no arm reads
+# a file that does not exist yet (an awk over a missing file prints nothing, which would pass a "no row" check blind)
+"$BIN" . --no-cache --pin-census="$TMP/c.tsv" --legend=full >"$TMP/map.xml" 2>"$TMP/err" || no "(I) the map run exited non-zero"
+[ -s "$TMP/c.tsv" ] || no "the census run wrote no census — every census arm below would be vacuous"
+
 # ── (A) + (B) Python ──────────────────────────────────────────────────────────────────────────────────────────
 echo "=== (A)(B) Python: the evidenced callers stay, the builtin calls are declined and counted ==="
 PYGET='py/uses_pool.py:true_field py/uses_pool.py:true_local py/uses_smart.py:via_subclass'
@@ -120,8 +141,8 @@ rows "$TMP/callers.xml" | grep -q 'py/plain.py' \
 
 # ── (C) the nested helper ─────────────────────────────────────────────────────────────────────────────────────
 echo "=== (C) a nested helper is no method ==="
-check "(C) --callers=py/pool.py:decode is only its enclosing render; raw.decode(\"utf-8\") is declined_calls=\"1\"" \
-      py/pool.py:decode 'py/pool.py:render' 1
+check "(C) --callers=py/pool.py:decode is only its enclosing render; raw.decode(\"utf-8\") is external, not declined against it" \
+      py/pool.py:decode 'py/pool.py:render' ''
 
 # ── (D) control: a name outside the table keeps the ladder ────────────────────────────────────────────────────
 echo "=== (D) control: a non-builtin name still binds by name ==="
@@ -133,8 +154,71 @@ echo "=== (M)(N) free functions: Rule 3 still chooses among admitted ones; a mem
 check "(M) --callers=py/helpers/sums.py:add is the importing bare call (Rule 3 over the admitted free functions)" \
       py/helpers/sums.py:add 'py/uses_add.py:total' ''
 check "(M) --callers=py/other/sums.py:add has no caller and no decline (the import chose its namesake)" py/other/sums.py:add '' ''
-check "(N) --callers=py/lookup.py:get has no caller: the four member .get calls could have meant it and are declined_calls=\"4\"" \
-      py/lookup.py:get '' 4
+check "(N) --callers=py/lookup.py:get has no caller and no declined_calls=: no member .get call can mean a free function" \
+      py/lookup.py:get '' ''
+
+# ── (O) (P) (Q) monotone: the gate never binds what the ladder declined ────────────────────────────────────────
+echo "=== (O)(P)(Q) the gate only removes: declined stays declined; an imported instance is no module; JS require evidence ==="
+check "(O) py: --callers=mono/py/a/timer.py:update stays count=\"0\" declined_calls=\"1\" (the ladder declined cfg.update between two classes)" \
+      mono/py/a/timer.py:update '' 1
+check "(O) py: --callers=mono/py/b/config.py:update stays count=\"0\" declined_calls=\"1\"" mono/py/b/config.py:update '' 1
+check "(O) rb: --callers=mono/rb/a/list.rb:each stays count=\"0\" declined_calls=\"1\" beside LinkedList.new" mono/rb/a/list.rb:each '' 1
+check "(O) rb: --callers=mono/rb/b/tree.rb:each stays count=\"0\" declined_calls=\"1\"" mono/rb/b/tree.rb:each '' 1
+check "(O) js: --callers=mono/js/b/helpers.js:has stays count=\"0\" declined_calls=\"2\" (app.has and m.has)" mono/js/b/helpers.js:has '' 2
+check "(O) js: --callers=mono/js/a/pool.js:has stays count=\"0\" declined_calls=\"2\"" mono/js/a/pool.js:has '' 2
+if awk -F'\t' '$1=="C" && $6 ~ /^mono\// && ( $7=="update" || $7=="each" || $7=="has" )' "$TMP/c.tsv" | grep -q .; then
+    no "(O) a census decision row binds update/each/has in mono/ — the gate bound a call the ladder declined"
+else
+    ok "(O) no census decision row for update/each/has in mono/: nothing bound that the ladder declined"
+fi
+check "(P) --callers=mono/py/e/util.py:pop has no caller and no declined_calls=: registry (an imported instance) is not the util module" \
+      mono/py/e/util.py:pop '' ''
+check "(P) --callers=mono/py/d/registry.py:pop: the Rule-3 edge the file gives no class evidence for is declined, disclosed" \
+      mono/py/d/registry.py:pop '' 1
+check "(Q) js: --callers=mono/js/b/queue.js:shift keeps q.shift() on a direct require; list.shift() is declined_calls=\"1\"" \
+      mono/js/b/queue.js:shift 'mono/js/c/uses_queue.js:head' 1
+
+# ── (R) the caller-reading verbs disclose a declined caller ───────────────────────────────────────────────────
+echo "=== (R) edit-check, safe-delete, uses FILE:SYM, test-gate and quality-delta disclose the declined caller ==="
+for spec in "edit-check|--edit-check=mono/py/e/pool.py:popitem" "safe-delete|--safe-delete=mono/py/e/pool.py:popitem" \
+            "uses|--uses=mono/py/e/pool.py:popitem" "test-gate|--test-gate=mono/py/e/pool.py" "callers|--callers=mono/py/e/pool.py:popitem"; do
+    tag="${spec%%|*}"; flag="${spec#*|}"
+    rw "$flag" --legend=full >"$TMP/r.xml"
+    R="$( root_tag "$TMP/r.xml" "$tag" )"
+    if [ "$( attr "$R" declined_calls )" = 1 ] && legend_of "$TMP/r.xml" | grep -q 'declined_calls=K (absent when 0)'; then
+        ok "(R) $flag carries declined_calls=\"1\" and its legend defines it"
+    else
+        no "(R) $flag: no declined_calls=\"1\" or no definition: ${R:-no <$tag> root}"
+    fi
+done
+rw --safe-delete=mono/py/e/pool.py:popitem --legend=full >"$TMP/sd.xml"
+if [ "$( attr "$( root_tag "$TMP/sd.xml" safe-delete )" risk )" = none-found ] && legend_of "$TMP/sd.xml" | grep -q 'none-found beside declined_calls= is not a safety reading'; then
+    ok "(R) --safe-delete: risk=none-found is qualified by the declined_calls= sentence"
+else
+    no "(R) --safe-delete: risk=none-found stands unqualified beside declined_calls="
+fi
+QD="$TMP/qd"; rm -rf "$QD"; mkdir -p "$QD"; cp -R mono "$QD/" 2>/dev/null
+( cd "$QD" && git init -q && git -c user.name=t -c user.email=t@t add -A && git -c user.name=t -c user.email=t@t commit -qm base ) >/dev/null 2>&1
+printf '\n' >>"$QD/mono/py/c/service.py"
+( cd "$QD" && "$BIN" . --no-cache --quality-delta >"$TMP/qd.xml" 2>/dev/null )
+QR="$( root_tag "$TMP/qd.xml" quality-delta )"
+if [ -n "$( attr "$QR" declined-call-excluded )" ] && [ "$( attr "$QR" declined-call-excluded )" -ge 1 ] 2>/dev/null; then
+    ok "(R) --quality-delta counts the dead-code exemption: declined-call-excluded=\"$( attr "$QR" declined-call-excluded )\""
+else
+    no "(R) --quality-delta carries no declined-call-excluded= count: ${QR:-no <quality-delta> root}"
+fi
+
+# ── (S) no bytes where the gate declined nothing ──────────────────────────────────────────────────────────────
+echo "=== (S) a tree the gate never declined in carries no gate clause ==="
+DF="$ROOT/test/declinefix"
+"$BIN" "$DF" --no-cache --legend=full >"$TMP/df.xml" 2>/dev/null
+"$BIN" "$DF" --no-cache --legend=full --callers=jbody >"$TMP/dfc.xml" 2>/dev/null
+if grep -q 'declined=' "$TMP/df.xml" && ! grep -q 'also-counts-builtin' "$TMP/df.xml" && grep -q 'declined_calls=' "$TMP/dfc.xml" \
+   && ! grep -q 'builtin-type method' "$TMP/dfc.xml"; then
+    ok "(S) declinefix: map and --callers carry declined= / declined_calls= with no gate clause"
+else
+    no "(S) declinefix: the gate clause leaked onto a tree the gate declined nothing in (or the premise declined= is gone)"
+fi
 
 # ── (E) (F) (G) the other gated languages ─────────────────────────────────────────────────────────────────────
 echo "=== (E)(F)(G) JavaScript, TypeScript, Ruby ==="
@@ -151,11 +235,12 @@ check "(H) --callers=java/JPool.java:get still lists javaMapGet with no declined
 
 # ── (I) header, legend, census conservation ───────────────────────────────────────────────────────────────────
 echo "=== (I) the header, its legend and the census agree ==="
-"$BIN" . --no-cache --pin-census="$TMP/c.tsv" --legend=full >"$TMP/map.xml" 2>"$TMP/err" || no "(I) the map run exited non-zero"
 HDR="$( stats "$TMP/map.xml" )"
-[ "$( gauge "$HDR" declined )" = 9 ] && ok "(I) header declined=9 (four Python .get, one bytes .decode, JS Map.get and Array.push, TS Map.get, Ruby Hash#fetch)" \
-    || no "(I) header declined= should be 9: ${HDR:-no stats comment}"
-legend_of "$TMP/map.xml" | grep -q 'hdr:declined=[^>]*builtin-type-method-name' \
+[ "$( gauge "$HDR" declined )" = 15 ] && ok "(I) header declined=15 (8 gate declines outside mono/: four Python .get, JS Map.get and Array.push, TS Map.get, Ruby Hash#fetch; mono/: 4 ladder declines kept + pop, popitem, shift)" \
+    || no "(I) header declined= should be 15: ${HDR:-no stats comment}"
+[ "$( gauge "$HDR" external )" = 1 ] && ok "(I) header external=1: raw.decode(\"utf-8\") can reach no in-repo definition (the only one is a closure)" \
+    || no "(I) header external= should be 1: ${HDR:-no stats comment}"
+legend_of "$TMP/map.xml" | grep -q 'hdr:declined=also-counts-builtin-type-method-calls' \
     && ok "(I) the full map legend defines hdr:declined= including the builtin-name clause" \
     || no "(I) the full map legend does not name the builtin-name decline under hdr:declined="
 DISP="$( grep -m1 '^# dispositions ' "$TMP/c.tsv" )"
