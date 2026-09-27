@@ -13,6 +13,49 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+
+### Added — RSpec's `described_class` is the class its example group names, so a spec's calls pin to the class under test (#338)
+
+`described_class` is how RSpec spells the class under test. Inside `RSpec.describe Calc do … end`,
+`described_class.m( 1 )` is `Calc.m( 1 )`. Its receiver is a bare identifier that no binding names, though, so every
+such call declined. A spec reached nothing through it, and `tested=`, `--seams` and `--test-gate` read the class under
+test as unreached by the spec written for it.
+
+The call now pins the way a written `Calc.m( 1 )` does (#267's constant-receiver arm). The rule is RSpec's own
+(rspec-core 3.13, `Metadata::ExampleGroupHash#described_class`): a group's described class is its first description
+argument, unless that is `nil` or a String, in which case it is the parent group's. So the innermost enclosing example
+group with a constant first argument answers. An example group is `describe` / `context` (and `feature`,
+`example_group` and the `x`- / `f`- spellings), called bare or on `RSpec`, with a block. A shared group
+(`shared_examples`, `shared_examples_for`, `shared_context`) stops the walk with no answer, because its body runs in
+whichever group includes it.
+
+Stated floors, each pinned by `test/rubydescribedclasscheck.sh`:
+- **(a)** A chained receiver (`described_class.new.m`) is untouched: #267's one-hop bound.
+- **(b)** A group with no constant (`describe "text"` at the top, `describe :sym`) names no class.
+- **(c)** A `describe` on any other receiver (`Docs.describe Calc do`) is not an RSpec example group.
+- **(d)** `subject`, the implicit `described_class.new`, is not modelled.
+- **(e)** A redefined `described_class` declines. A **method** of that name (any `:described_class` symbol, as in
+  `let( :described_class )`, or `def described_class`) declines every site in the file. A **local** of that name (an
+  assignment, `||=`, a multiple-assignment target, or a block or method parameter) declines the sites Ruby reads as
+  that local: after the binding in its own scope and in the blocks nested inside it, never in a sibling block, and
+  never across a `def`. The name is matched as a whole word, so `my_described_class = x` redefines nothing.
+- **(f)** A qualified describe is named by its final segment: `RSpec.describe Cask::Tab` reads as `Tab`. Where another
+  `Tab` defines the method too, the call splits between them. Where only the other `Tab` defines it, the call pins
+  there, unmarked. A written `Cask::Tab.m` behaves the same way.
+
+Measured with `--no-cache`, `--report` edge totals, `main` (3fcd515f) against this change:
+
+| Corpus | Edges |
+| --- | --- |
+| Rails app A | 26,649 → 26,755 (+106) |
+| Rails app B | 20,807 → 21,149 (+342) |
+| activerecord, activesupport, actionpack 8.1.3 `lib/`; this repo's `src/` | default map byte-identical |
+
+`kParserVer` → 125 (carried as 121 on the PR): `RawRef::recv` / `recvVar` change value for these call sites.
+The record layout is unchanged, so `kCacheVersion` stays 25.
+
 ## [0.6.5] — 2026-09-27
 
 
