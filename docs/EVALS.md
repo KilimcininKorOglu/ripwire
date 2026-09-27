@@ -1420,6 +1420,21 @@ incorrectly, because a record is only ever served to a lookup of its own path â€
 record's own stored key against the key that found it, so even a 64-bit pathHash collision reparses rather
 than answers.
 
+**Band (8) after the build tag (2026-09-26, #334 follow-up).** The auto name now also carries the cache
+format, `ripwire-<rootKey>-lean-c<format>p<parser>.bin`: two builds of different formats alternating on one tree
+(an installed release and a local build) refused and rewrote each other's blob on every run, measured
+`reparsed=5 reused=0` on every run of three alternating rounds on `test/fixture`, `reused=5` on every run
+after the first with the tag. Band (8) holds per build: every configuration of one binary still shares one
+blob per class, so a gate battery (one binary) is unaffected, and so are two local builds of one format. A
+root gains blobs only per FORMAT that actually ran on it. That is not the registered negative above, and
+the budget pass is what keeps it so. It evicts in tiers, oldest-first within each: other roots' blobs first,
+then another build's blobs of the root being written, never this build's blobs of that root. The 30-day age
+pass retires a format nobody runs. Where one root's blobs from two formats do not fit the 2 GiB budget
+together (llvm-project, 1.76 GB per build), the other format's blobs of that root are evicted once every
+other root's are gone, and that build re-parses on its next run: the pre-tag cost, now paid only in that
+regime. An upgrade adds new blobs beside the old ones, so near the budget it can also cost one other root
+its cache once. Gates: `test/cacheidentitycheck.sh` (D3), `test/evictioncheck.sh` (h2, h3).
+
 ### `.gitignore` honoured by default, `--no-ignore` to override â€” PRE-REGISTERED 2026-09-03 (owner decision 1-B)
 
 **Why.** The tool is named for ripgrep, whose defining default is that ignored files are not searched;

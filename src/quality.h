@@ -43,6 +43,7 @@
 #include <ctime>       // ::nanosleep — the lock's bounded 10 ms poll
 
 #include <algorithm>
+#include <array>        // OwnBuildBlobTails — one tagged tail per root-keyed family
 #include <atomic>       // the A5 process-once cache-sweep guard
 #include <cctype>       // std::isxdigit/std::isdigit — B10.2d churn-blame porcelain parsing
 #include <chrono>       // A5: the 30-day cache-blob age cutoff (evictOldCacheFamily)
@@ -1994,8 +1995,8 @@ constexpr std::uint32_t kHeadSnapCacheScheme = 1;
 // ─── THE ROOT KEY — one canonical spelling, for every cache family ────────────────────────────────────
 //
 // The 16-hex field every cache blob's filename carries, identifying the ROOT the blob belongs to:
-// `ripwire-<rootKey>-{lean,rich}.bin` (main.cpp::defaultCachePath), `ripwire-mcp-<rootKey>.cache`
-// (mcpindex.h::mcpCachePath) and `ripwire-<family>-<rootKey>-<exclHex>-<shaHex>.bin`
+// `ripwire-<rootKey>-{lean,rich}-c<format>p<parser>.bin` (main.cpp::defaultCachePath),
+// `ripwire-mcp-<rootKey>-c<format>p<parser>.cache` (mcpindex.h::mcpCachePath) and `ripwire-<family>-<rootKey>-<exclHex>-<shaHex>.bin`
 // (shaKeyedCachePath below: qheadsnap, qsnap, qbody, qhist, qms, qchurn, stier). It is what makes
 // "which root does this blob belong to?" answerable from the NAME alone — see cacheBlobRootKey and the
 // byte-budget pin in evictBySizeBudget, which is only ever as wide as the set of blobs that spell the
@@ -2491,23 +2492,145 @@ inline std::string headSnapCachePath( const std::string& repoHex, const std::str
     return shaKeyedCachePath( "qheadsnap", repoHex, exclHex, headSha );
 }
 
-// The builder for the two families whose whole key IS the root — the main parse cache
-// (`ripwire-<rootKey>-lean.bin` / `-rich.bin`, main.cpp::defaultCachePath) and the MCP index
-// (`ripwire-mcp-<rootKey>.cache`, mcpindex.h::mcpCachePath). They sat in different translation units and
-// each open-coded the same three lines around its own copy of the hash, which is exactly how the two root
-// spellings drifted apart in the first place; one body means a future family joins by naming a prefix and
-// a suffix rather than by re-deriving a key. `prefix`/`suffix` bracket the 16-hex field because that is the
-// only thing the two shapes disagree about — everything the pin reads is in the middle.
-inline std::string rootKeyedCachePath( const std::string& root, const char* prefix, const char* suffix )
+// ─── THE BUILD TAG — which ingest format a root-keyed blob holds, spelled in its NAME ─────────────────────────
+//
+// #334 (follow-up). Both root-keyed families were keyed by root and verb class only, so two builds of different
+// formats — an installed release and a local build, or two installed versions — that alternate on one tree
+// refused and rewrote each other's blob on EVERY run (`format-version — not used`, reparsed=N reused=0, one path).
+// The auto names now carry the pair that decides whether a blob is readable at all, (kCacheVersion, the class's
+// parserVer): `ripwire-<rootKey>-lean-c25p122.bin`, `ripwire-<rootKey>-rich-c25p123.bin` and
+// `ripwire-mcp-<rootKey>-c25p123.cache`. Two builds of one format still share a blob (a rebuild of the same
+// tree must not go cold); two formats never meet at one path.
+//
+// THE TAG IS NEVER 16 HEX: `c<digits>p<digits>` always holds a 'p', so cacheBlobRootKey's "first 16-hex field"
+// rule below still reads the root key and nothing else, in every shape. Only [a-z0-9.-] appear, so the name
+// stays valid on NTFS. An explicit `--cache=PATH` is NOT tagged: that file is the user's, named by them, and is
+// often a committed `--index-out` artifact a CI job consumes by its exact name.
+//
+// The mirror pair lives in this header (see kIngestParserVerMirror); ingest_cache.h static_asserts that
+// `ingestParserVerFor` agrees with its own parserVerFor for both classes, so the tag cannot drift from the
+// header stamp the blob carries.
+inline constexpr std::uint32_t ingestParserVerFor( bool captureValueUses ) noexcept
 {
+    return kIngestParserVerMirror + ( captureValueUses ? 1u : 0u );
+}
+
+// The families whose whole key IS the root — the main parse cache's two verb classes (main.cpp::defaultCachePath)
+// and the MCP index (mcpindex.h::mcpCachePath, always the rich class) — as ONE table: the builder and the eviction
+// pin below read the same rows, so "is this blob this build's?" cannot disagree with "what does this build write?".
+enum class RootBlobFamily : std::uint8_t
+{
+    Lean,
+    Rich,
+    Mcp,
+    Count
+};
+
+struct RootBlobShape
+{
+    std::string_view prefix;       // before the 16-hex root key
+    std::string_view classField;   // between the key and the build tag ("" for the MCP index)
+    std::string_view ext;
+    bool             rich;         // which parserVer the tag names
+};
+
+inline constexpr RootBlobShape kRootBlobShapes[] = {
+    { "ripwire-",     "-lean", ".bin",   false },
+    { "ripwire-",     "-rich", ".bin",   true  },
+    { "ripwire-mcp-", "",      ".cache", true  },
+};
+static_assert( std::size( kRootBlobShapes ) == static_cast<std::size_t>( RootBlobFamily::Count ), "one shape per root-keyed family" );
+
+// Everything after the root key, build tag included: `-lean-c25p122.bin`, `-rich-c25p123.bin`, `-c25p123.cache`.
+inline std::string rootBlobTail( const RootBlobShape& shape )
+{
+    return std::format( "{}-c{}p{}{}", shape.classField, kIngestCacheVersionMirror, ingestParserVerFor( shape.rich ), shape.ext );
+}
+
+// The builder for every root-keyed family. They sat in different translation units and each open-coded the same
+// three lines around its own copy of the hash, which is exactly how the two root spellings drifted apart in the
+// first place; one body means a future family joins by adding a row rather than by re-deriving a key.
+inline std::string rootKeyedCachePath( const std::string& root, RootBlobFamily family )
+{
+    EXPECTS( family < RootBlobFamily::Count );
+    const RootBlobShape& shape = kRootBlobShapes[ static_cast<std::size_t>( family ) ];
+    const std::string    after = rootBlobTail( shape );
+    // Bounded: the longest prefix is "ripwire-mcp-" (12), the key is 16 hex, and the longest tail is
+    // "-rich-c<u32>p<u32>.bin" (32 at ten digits a side) — 60 of the 63 usable bytes.
+    EXPECTS( shape.prefix.size() + 16 + after.size() < 64, "a root-keyed cache name is a fixed-width prefix, key and build-tagged tail" );
     char tail[ 64 ];
-    rw::formatTo( tail, sizeof( tail ), "{}{}{}", prefix, cacheRootKeyHex( root ).c_str(), suffix );
+    rw::formatTo( tail, sizeof( tail ), "{}{}{}", shape.prefix, cacheRootKeyHex( root ), after );
     return resolveCacheBlobPath( cacheDirLadder(), tail );
+}
+
+// This build's tagged tails, one per family, built once per sweep rather than once per blob.
+using OwnBuildBlobTails = std::array<std::string, static_cast<std::size_t>( RootBlobFamily::Count )>;
+
+inline OwnBuildBlobTails ownBuildBlobTails()
+{
+    static_assert( std::tuple_size_v<OwnBuildBlobTails> == 3, "one tail per kRootBlobShapes row, in row order" );
+    return OwnBuildBlobTails{ rootBlobTail( kRootBlobShapes[ 0 ] ), rootBlobTail( kRootBlobShapes[ 1 ] ), rootBlobTail( kRootBlobShapes[ 2 ] ) };
+}
+
+// `c<digits>p<digits>` — the tag shape, and nothing else.
+inline bool isCacheBuildTagField( std::string_view field ) noexcept
+{
+    const std::size_t p = field.find( 'p' );
+    if( field.size() < 4 || field.front() != 'c' || p == std::string_view::npos || p < 2 || p + 1 >= field.size() )
+    {
+        return false;
+    }
+    const auto allDigits = []( std::string_view s ) noexcept
+    {
+        return std::all_of( s.begin(), s.end(), []( const char c ) noexcept { return c >= '0' && c <= '9'; } );
+    };
+    return allDigits( field.substr( 1, p - 1 ) ) && allDigits( field.substr( p + 1 ) );
+}
+
+// A root-keyed blob ANOTHER build wrote, read off its name alone:
+//   * a build tag that is not one of this build's tails (another kCacheVersion or parserVer), or
+//   * a pre-tag name — `ripwire-<16hex>-lean.bin`, `ripwire-<16hex>-rich.bin`, `ripwire-mcp-<16hex>.cache` —
+//     which from this change on only an older release writes.
+// Every other name (qheadsnap/qsnap/qbody/qchurn/…, whose keys already fold the extraction identity) answers
+// false and keeps exactly the pin it had.
+// A name THIS build writes for one of its root-keyed families (any root).
+inline bool isThisBuildRootBlobName( std::string_view name, const OwnBuildBlobTails& own ) noexcept
+{
+    for( std::size_t f = 0; f < own.size(); ++f )
+    {
+        if( name.starts_with( kRootBlobShapes[ f ].prefix ) && name.ends_with( own[ f ] ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool isOtherBuildRootBlob( std::string_view name, const OwnBuildBlobTails& own ) noexcept
+{
+    if( !name.starts_with( "ripwire-" ) || isThisBuildRootBlobName( name, own ) )
+    {
+        return false;
+    }
+    const bool             isMcp = name.starts_with( "ripwire-mcp-" );
+    const std::size_t      dot   = name.rfind( '.' );
+    const std::string_view stem  = name.substr( 0, dot );
+    const std::string_view ext   = dot == std::string_view::npos ? std::string_view{} : name.substr( dot );
+    const std::size_t      dash  = stem.rfind( '-' );
+    const std::string_view last  = dash == std::string_view::npos ? stem : stem.substr( dash + 1 );
+    if( isCacheBuildTagField( last ) )
+    {
+        return true;   // tagged, and not with this build's tag
+    }
+    // the pre-tag shapes, matched exactly: "ripwire-" (8) + 16 hex + "-lean"/"-rich" (5) + ".bin", or "ripwire-mcp-" (12) + 16 hex + ".cache"
+    const bool legacyClass = ext == ".bin" && stem.size() == 8 + 16 + 5 && ( stem.ends_with( "-lean" ) || stem.ends_with( "-rich" ) );
+    const bool legacyMcp   = isMcp && ext == ".cache" && stem.size() == 12 + 16;
+    return legacyClass || legacyMcp;
 }
 
 // P1-1 (2026-09-10 full audit) — THE PIN KEY. Every cache blob's filename carries the SAME 16-hex root
 // field, and since the follow-up round it really is the same one: `defaultCachePath` writes
-// `ripwire-<rootKey>-{lean,rich}.bin`, `mcpCachePath` writes `ripwire-mcp-<rootKey>.cache` and
+// `ripwire-<rootKey>-{lean,rich}-<tag>.bin`, `mcpCachePath` writes `ripwire-mcp-<rootKey>-<tag>.cache` and
 // `shaKeyedCachePath` writes `ripwire-<family>-<rootKey>-<exclHex>-<shaHex>.bin`, all three through the ONE
 // canonical `cacheRootKeyHex` above — so ONE root's every family (lean, rich, mcp, qheadsnap, qsnap, qbody,
 // qhist, qms, qchurn, stier) spells the same key in the same place. That makes "which root does this blob
@@ -2516,8 +2639,9 @@ inline std::string rootKeyedCachePath( const std::string& root, const char* pref
 //
 // The rule is positional-free on purpose: return the FIRST '-'-delimited field that is exactly 16 hex
 // digits. No family tag is 16 characters of hex ("qheadsnap", "qsnap", "qbody", "qhist", "qms", "qchurn",
-// "stier", "mcp"), so the first such field is the root key in every filename shape, and a foreign or legacy
-// blob that carries no such field yields "" — which pins nothing and evicts exactly as it did before.
+// "stier", "mcp"), and no build tag is either (`c25p122` always holds a 'p'), so the first such field is the root
+// key in every filename shape, and a foreign or legacy blob that carries no such field yields "" — which pins
+// nothing and evicts exactly as it did before.
 //
 // TWO FAMILIES ARE EXCEPTIONS, and they are NAMED rather than guessed at — their 16-hex field is a real
 // key, just not a key over a ROOT:
@@ -2605,9 +2729,53 @@ struct CacheBlobStat
     std::string                     path;
 };
 
-// P1-1 (2026-09-10 full audit) — THE BYTE-BUDGET PASS: delete oldest-first until the family is under a
-// LOW-WATER mark of 7/8 budget, taking OTHER roots' blobs first and the MRU root's last. Returns the blobs
-// that survived. `mine` arrives unsorted; it is sorted oldest-first here.
+// The byte-budget pass's eviction ORDER (evictBySizeBudget below): each blob's tier, read off its name ONCE — a
+// comparator that re-derived it would parse every name O(n log n) times — then sorted by tier, oldest first within a
+// tier. Tier 0: another root's blob, or one no root owns. Tier 1: another ripwire build's blob of the root being
+// written (isOtherBuildRootBlob). Tier 2 (kEvictTierPinned): this build's blobs of that root, and keepPath itself.
+inline constexpr std::uint8_t kEvictTierPinned = 2;
+
+struct RankedBlob
+{
+    std::uint8_t tier;
+    std::size_t  blobIndex;   // into the vector that was ranked
+};
+
+inline std::uint8_t evictionTier( const std::string& blobPath, const std::string& keepPath, const std::string& pinRootKey,
+                                  const OwnBuildBlobTails& ownTails )
+{
+    if( blobPath == keepPath )
+    {
+        return kEvictTierPinned;
+    }
+    const std::string name = std::filesystem::path( blobPath ).filename().string();
+    if( pinRootKey.empty() || cacheBlobRootKey( name ) != pinRootKey )
+    {
+        return 0;
+    }
+    return isOtherBuildRootBlob( name, ownTails ) ? std::uint8_t( 1 ) : kEvictTierPinned;
+}
+
+inline std::vector<RankedBlob> rankBlobsForEviction( const std::vector<CacheBlobStat>& blobs, const std::string& keepPath )
+{
+    const std::string       pinRootKey = cacheBlobRootKey( std::filesystem::path( keepPath ).filename().string() );
+    const OwnBuildBlobTails ownTails   = ownBuildBlobTails();
+    std::vector<RankedBlob> order;
+    order.reserve( blobs.size() );
+    for( std::size_t i = 0; i < blobs.size(); ++i )
+    {
+        order.push_back( RankedBlob{ evictionTier( blobs[ i ].path, keepPath, pinRootKey, ownTails ), i } );
+    }
+    std::sort( order.begin(), order.end(), [ &blobs ]( const RankedBlob& a, const RankedBlob& b )
+               { return a.tier != b.tier ? a.tier < b.tier : blobs[ a.blobIndex ].mtime < blobs[ b.blobIndex ].mtime; } );
+    ENSURES( order.size() == blobs.size(), "every blob is ranked exactly once" );
+    return order;
+}
+
+// P1-1 (2026-09-10 full audit) — THE BYTE-BUDGET PASS: delete until the family is under a LOW-WATER mark of
+// 7/8 budget, in THREE TIERS, oldest-first within each: (0) other roots' blobs and unowned ones, (1) another
+// ripwire build's blobs of the root being written, (2) never — this build's blobs of that root and `keepPath`.
+// Returns the blobs that survived. `mine` arrives unsorted.
 //
 // THE LOW-WATER MARK is F6's live-cache finding (B7.4, 2026-07-14): trimming to exactly the budget left the
 // dir hovering AT the ceiling, so every subsequent process re-crossed it on its first write and paid
@@ -2635,10 +2803,25 @@ struct CacheBlobStat
 // says nothing at all, so no ordinary run, and no gate that compares stderr, grows a line. Plain emits,
 // NEVER DISCLOSE: NDEBUG compiles that out, and a Release binary is exactly where a 10x
 // slowdown needs to be visible.
+//
+// ANOTHER BUILD'S BLOBS OF THIS ROOT ARE TIER 1, NEITHER PINNED NOR FIRST (#334 follow-up). Since the auto names
+// carry the build tag, one root can hold a blob per build that ran on it (isOtherBuildRootBlob above).
+//   * Pinning them would make every upgrade leave the previous version's blobs pinned for the 30 days the age pass
+//     waits — on llvm-project 1.76 GB of them against a 2 GiB budget, the self-sustaining "kept anyway" state this
+//     pass exists to avoid.
+//   * Taking them oldest-first WITH other roots' blobs (the first cut of this change) evicted blobs still in use:
+//     a live MCP server of another build indexing this root, or the other build's class when two builds alternate,
+//     while evicting another root alone would have been enough. Measured by review: the server's next rebuild went
+//     from reparsed=1 to reparsed=5 of 5 files.
+// So they go only after every other root's blob is gone and the dir is still over the low-water mark. The cost that
+// remains: where one root's blobs from two builds do not fit the budget together (llvm-project, 1.76 GB per build),
+// the other build's blobs of it are evicted and that build re-parses on its next run — the pre-tag cost, paid now
+// only in that regime, and after every other root's blob was spent first.
 inline std::vector<CacheBlobStat> evictBySizeBudget( std::vector<CacheBlobStat>& mine, const std::string& dir,
                                                      const std::string& keepPath, std::uintmax_t maxTotalBytes )
 {
     namespace fs = std::filesystem;
+    EXPECTS( maxTotalBytes > 0, "a zero budget means 'no size pass' and evictOldCacheFamily never calls this pass with it" );
 
     std::uintmax_t totalBytes = 0;
     for( const CacheBlobStat& b : mine )
@@ -2650,19 +2833,18 @@ inline std::vector<CacheBlobStat> evictBySizeBudget( std::vector<CacheBlobStat>&
         return std::move( mine );
     }
 
-    const std::string    pinRootKey    = cacheBlobRootKey( fs::path( keepPath ).filename().string() );
-    const std::uintmax_t lowWaterBytes = maxTotalBytes - maxTotalBytes / 8;
-    std::sort( mine.begin(), mine.end(), []( const CacheBlobStat& a, const CacheBlobStat& b ){ return a.mtime < b.mtime; } );   // oldest first
+    const std::uintmax_t          lowWaterBytes = maxTotalBytes - maxTotalBytes / 8;
+    const std::vector<RankedBlob> order         = rankBlobsForEviction( mine, keepPath );
 
     std::vector<CacheBlobStat> kept;
     kept.reserve( mine.size() );
     std::size_t    evictedCount = 0;
     std::uintmax_t pinnedBytes  = 0;
-    for( const CacheBlobStat& b : mine )
+    for( const RankedBlob& r : order )
     {
-        const bool pinned = b.path == keepPath
-                         || ( !pinRootKey.empty() && cacheBlobRootKey( fs::path( b.path ).filename().string() ) == pinRootKey );
-        if( pinned )
+        ASSUME( r.blobIndex < mine.size(), "rankBlobsForEviction returns one entry per index of mine" );
+        const CacheBlobStat& b = mine[ r.blobIndex ];
+        if( r.tier == kEvictTierPinned )
         {
             pinnedBytes += b.byteSize;
         }
@@ -2680,12 +2862,12 @@ inline std::vector<CacheBlobStat> evictBySizeBudget( std::vector<CacheBlobStat>&
     constexpr std::uintmax_t kMiB = 1024ull * 1024;
     if( evictedCount > 0 )
     {
-        rw::emitTo( stderr, "ripwire: cache {}: over its {} MiB budget — evicted {} blob(s) of other roots (this root's own families are kept)\n",
+        rw::emitTo( stderr, "ripwire: cache {}: over its {} MiB budget — evicted {} blob(s) of other roots or other ripwire builds (this build's blobs for this root are kept)\n",
                       dir.c_str(), maxTotalBytes / kMiB, evictedCount );
     }
     if( totalBytes > maxTotalBytes )
     {
-        rw::emitTo( stderr, "ripwire: cache {}: this root's own families are {} MiB, past the {} MiB budget — kept anyway (evicting one costs a full re-parse)\n",
+        rw::emitTo( stderr, "ripwire: cache {}: this build's blobs for this root are {} MiB, past the {} MiB budget — kept anyway (evicting one costs a full re-parse)\n",
                       dir.c_str(), pinnedBytes / kMiB, maxTotalBytes / kMiB );
     }
     return kept;

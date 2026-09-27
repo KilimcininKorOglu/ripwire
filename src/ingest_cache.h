@@ -1425,10 +1425,15 @@ constexpr std::uint8_t kArtifactArch =
 //         orientation path" therefore overstates: lean speeds the default map + nav/read + --pr-context;
 //         --for-led sessions need the rich family too. See the ingest-report to the wiring wave for the
 //         measured lean-vs-rich blob sizes and the both-families recommendation.
-inline std::uint32_t parserVerFor( bool captureValueUses ) noexcept
+inline constexpr std::uint32_t parserVerFor( bool captureValueUses ) noexcept
 {
     return kParserVer + ( captureValueUses ? 1u : 0u );   // lean and full-use caches must never cross-hit
 }
+
+// The auto blob's NAME carries the same pair its header does (quality.h rootBlobTail): a build tag that disagreed
+// with the stamp would put a blob this binary refuses at the path it reads, which is the #334 thrash back again.
+static_assert( quality::ingestParserVerFor( false ) == parserVerFor( false ) && quality::ingestParserVerFor( true ) == parserVerFor( true ),
+               "quality.h's ingestParserVerFor must derive both classes exactly as parserVerFor does — the build tag names what the header stamps" );
 
 // T5: renamed from fnv1a64 to contentHash64 to avoid an ODR clash now that this file also includes
 // arch.h (which defines its OWN fnv1a64 for the baseline-hash path, quality.h's canonId hashing, etc.
@@ -2377,11 +2382,36 @@ struct CacheLoadStats
 // ordinary cold-start miss (absent) stays silent; anything else says what it found, once per run.
 //
 // #334: a Windows tester alternating 0.6.2 and 0.6.3 on one tree saw `format-version — not used` on every run and read
-// it as "the CLI never reuses its cache". The blob path is keyed by root and verb class, not by build, so two builds of
-// different formats that alternate on one tree refuse and rewrite each other's blob every time, while one build run
-// twice reuses its own. A version refusal now names the number it found and the one this binary reads, so the cause is
-// on the line. It is APPENDED: the line up to "rewrites it" is unchanged, and gates grep that prefix
-// (test/localscountcheck.sh, test/cachefuzzcheck.sh).
+// it as "the CLI never reuses its cache". The auto path was keyed by root and verb class only, so two builds of
+// different formats refused and rewrote each other's blob every time. The auto path now carries the build tag
+// (quality.h rootBlobTail), so this notice on an AUTO blob means a hand-copied or foreign file; on a --cache file
+// the user named, it still means another build (or the other verb class) wrote that one file. A version refusal
+// names the number it found and the one this binary reads, so the cause is on the line. It is APPENDED: the line up
+// to "rewrites it" is unchanged, and gates grep that prefix (test/localscountcheck.sh, test/cachefuzzcheck.sh).
+//
+// WHO WROTE IT (the #334 review, M1). A parser stamp equal to this build's OTHER verb class is what one --cache file
+// shared by a lean and a rich verb holds, and it used to be blamed on "another ripwire build". The stamp alone
+// cannot tell that apart from an older build whose parserVer was one lower or higher (a rich class of kParserVer-1
+// stamps exactly this build's lean number), so that case names both. The advice then depends on WHO named the file:
+// a --cache file the user named is fixed by giving each class its own file; an automatic file carries this build's
+// own name (quality.h isThisBuildRootBlobName), which no build writes with another stamp, so it was copied in by
+// hand — and "two builds alternating on one cache file" cannot happen to it either.
+inline std::string_view cacheRejectCause( const CacheFrame& frame, bool captureValueUses, bool automaticPath ) noexcept
+{
+    if( frame.reason == CacheReject::ParserVersion && frame.foundStamp == parserVerFor( !captureValueUses ) )
+    {
+        if( automaticPath )
+        {
+            return captureValueUses ? "this build's lean verb class writes that number, or another ripwire build wrote it; an automatic cache file holds it only when copied in by hand"
+                                    : "this build's rich verb class writes that number, or another ripwire build wrote it; an automatic cache file holds it only when copied in by hand";
+        }
+        return captureValueUses ? "this build's lean verb class writes that number, or another ripwire build wrote it; give each verb class its own --cache file"
+                                : "this build's rich verb class writes that number, or another ripwire build wrote it; give each verb class its own --cache file";
+    }
+    return automaticPath ? "another ripwire build wrote it; an automatic cache file holds that only when copied in by hand"
+                         : "another ripwire build wrote it; two builds alternating on one cache file re-parse every run";
+}
+
 inline void noteCacheReject( const std::string& path, const CacheFrame& frame, bool captureValueUses )
 {
     if( frame.reason == CacheReject::Absent )
@@ -2390,12 +2420,15 @@ inline void noteCacheReject( const std::string& path, const CacheFrame& frame, b
     }
     const bool format  = frame.reason == CacheReject::FormatVersion;
     const bool version = format || frame.reason == CacheReject::ParserVersion;
-    char detail[ 192 ] = "";
+    char detail[ 256 ] = "";
     if( version )
     {
-        rw::formatTo( detail, sizeof( detail ),
-                      " (blob {} {}, this binary {}: another ripwire build wrote it; two builds alternating on one tree re-parse every run)",
-                      format ? "format" : "parser", frame.foundStamp, format ? kCacheVersion : parserVerFor( captureValueUses ) );
+        const std::size_t slash     = path.find_last_of( "/\\" );
+        const bool        automatic = quality::isThisBuildRootBlobName( std::string_view( path ).substr( slash == std::string::npos ? 0 : slash + 1 ),
+                                                                        quality::ownBuildBlobTails() );
+        rw::formatTo( detail, sizeof( detail ), " (blob {} {}, this binary {}: {})",
+                      format ? "format" : "parser", frame.foundStamp, format ? kCacheVersion : parserVerFor( captureValueUses ),
+                      cacheRejectCause( frame, captureValueUses, automatic ) );
     }
     rw::emitTo( stderr, "ripwire: cache {}: {} — not used; this run parses from source and rewrites it{}\n",
                 path.c_str(), cacheRejectName( frame.reason ), rw::cstr( detail ) );

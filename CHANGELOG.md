@@ -15,6 +15,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+
 ### Fixed — `--test-gate` spells `node --test` only where Node can start it (CodeRabbit review of #336)
 
 Each refusal below used to get a `run=` command that fails before any test runs, and is now `run_unknown="1"`.
@@ -54,7 +55,46 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
   prints the command unescaped on stderr, alone on its last line.
 - The `--help` footer's determinism recipe quotes `"$t/a"` and `"$t/b"`, like every other copy.
 
----
+### Fixed — two ripwire builds on one tree no longer re-parse on every run (#334 follow-up)
+
+- **The auto cache is keyed by cache format as well as by tree.** The per-tree blob was named for the tree
+  and the verb class only (`ripwire-<key>-lean.bin`). Two builds whose cache formats differ — an installed
+  release and a local build, or two installed versions — that alternate on one tree refused and rewrote
+  each other's blob every time. Measured on `test/fixture`, alternating a format-24 build with this one for
+  three rounds: before, every run after the first printed `format-version — not used` and every run reported
+  `reparsed=5 reused=0`; now every run after each build's first reports `reparsed=0 reused=5`. The names now
+  carry `c<kCacheVersion>p<parser version>` — at kCacheVersion 25, kParserVer 122: `ripwire-<key>-lean-c25p122.bin`,
+  `ripwire-<key>-rich-c25p123.bin`, and for the MCP index `ripwire-mcp-<key>-c25p123.cache`. Two builds of
+  one format still share a blob.
+- **`--cache=PATH` is not renamed.** A file you name is used under exactly that name (a committed
+  `--index-out` artifact is consumed by its exact name). Two builds that share one `--cache` file still
+  refuse each other's blob, and the notice says so.
+- **The 2 GiB cache budget is unchanged; the eviction order changed.** When the directory is over budget,
+  blobs are evicted in tiers, oldest first within each: other trees' blobs first; then another build's blobs
+  for the tree in use (including the untagged names 0.6.4 and older wrote, and another build's MCP index);
+  never the writing build's own blobs for that tree. Blobs untouched for 30 days are deleted, as before.
+  Where one tree's blobs from two builds do not fit together (llvm-project needs 1.76 GB per build), the
+  other build's blobs are evicted once no other tree's are left, and that build re-parses when it runs next.
+  The eviction notice now reads `evicted N blob(s) of other roots or other ripwire builds`.
+- **Upgrading costs one cold run per tree and verb class** — the map (lean), `--for`-class verbs (rich) and
+  the MCP index each re-parse once — because the names changed. The old untagged blobs stay until the budget
+  or the 30-day rule removes them. Near the 2 GiB budget, the new blobs written beside the old ones can push
+  the directory over it, so one other tree may lose its cache once.
+- **A `parser-version` refusal no longer blames another build for this build's other verb class.** One
+  `--cache` file used by both a lean verb (the map) and a rich verb (`--for`) used to read "another ripwire
+  build wrote it". It now reads "this build's lean verb class writes that number, or another ripwire build
+  wrote it; give each verb class its own --cache file". The stamp alone cannot tell the two apart. On an
+  automatic cache file, which only a hand copy can put there, the advice reads "an automatic cache file holds
+  it only when copied in by hand" instead.
+
+### Documented — the 0.6.4 skills-installer entry states the ownership rule that release shipped
+
+- The 0.6.4 entry said the prune step treats a name its last manifest listed as its own copy. It does not: the
+  installer removes or replaces a real `ripwire-*` directory only when it can show the directory is its own copy:
+  its copy marker names that skill, it holds no files at any depth (an empty leftover, nested or not), or its
+  files are byte-identical to the skill it ships under that name. A name listed in the previous manifest is not
+  proof on its own, so a user's own directory under a shipped name is kept too. Every other `ripwire-*`
+  directory is kept with a `kept … (your own directory)` line. (The released 0.6.4 section is left as published.)
 
 ## [0.6.4] — 2026-09-25
 
@@ -186,12 +226,9 @@ not resolved (that is part 2); they are now counted. A tree without one is byte-
   for each one, wrote all of them to the manifest and announced them as active. It now checks each link by
   its result (a symlink whose `SKILL.md` reads back). When the link did not take, it copies the skill and
   prints `copied`. When the copy fails too, it prints `FAILED`, leaves the skill out of the count and the
-  manifest, and exits 1. The installer removes or replaces a real `ripwire-*` directory only when it can
-  show the directory is its own copy: its copy marker names that skill, it holds no files at any depth (an
-  empty leftover, nested or not), or its files are byte-identical to the skill it ships under that name. A
-  name listed in the previous manifest is not proof on its own, so a user's own directory under a shipped
-  name is kept too. Every other `ripwire-*` directory is kept with a `kept … (your own directory)` line;
-  before, a user's own `ripwire-*` directory made the installer stop with `rm: … is a directory`.
+  manifest, and exits 1. The prune step recognises its own copies (a marker file, an empty leftover
+  directory, or a name its last manifest listed) and leaves any other `ripwire-*` directory alone; before,
+  a user's own `ripwire-*` directory made the installer stop with `rm: … is a directory`.
 - A cache blob written by a different ripwire build is now refused with both numbers on the line:
   `format-version — not used; … rewrites it (blob format 24, this binary 25: another ripwire build wrote
   it; …)`. The
