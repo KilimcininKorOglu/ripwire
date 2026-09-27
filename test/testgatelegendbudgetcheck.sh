@@ -128,10 +128,16 @@ EOF
 #   count alone, not a sum term." — the disclosure #324 owed once it started excluding a real obligation
 #   from untested= without saying so (a silent pass a review caught: exit 0 with nothing explaining why).
 # Measured on this fixture: 3013 -> 3305 B; 3400 leaves ~95 B — the same posture as every pin above.
-if [ "$legend" -le 3400 ]; then
-    ok "(a) --test-gate legend is $legend B (<= 3400 B budget; total=$total payload=$payload)"
+# RE-PINNED 3400 -> 3730 (lane/builtin-bind-065 fix round, review finding M1). ONE new FACT, gated on declined_calls=K > 0:
+# the radius over src/model.h is reached by call sites the resolver declined to bind (tier-3 splits, and on this tree the
+# builtin-method gate's declines in bench/ and test/ scripts), and a test behind one of them is in no row — --test-gate
+# was the one caller-reading verb that said nothing about them. The clause is --test-gate's own short form
+# (graphlegend.h kDeclinedCallsTestGateLegend, 186 B, not the 620 B shared one) plus the gate sentence (143 B) that rides
+# only a graph where the builtin-method gate declined a call. Measured on this fixture: 3305 -> 3634 B; 3730 leaves ~95 B.
+if [ "$legend" -le 3730 ]; then
+    ok "(a) --test-gate legend is $legend B (<= 3730 B budget; total=$total payload=$payload)"
 else
-    no "(a) --test-gate legend is $legend B (> 3400 B budget) — the essay re-inflated"
+    no "(a) --test-gate legend is $legend B (> 3730 B budget) — the essay re-inflated"
 fi
 
 # (b) the honesty vocabulary + the §B12.5 cross-verb UNIT-collision anchors (test/testgatecheck.sh arm (g)

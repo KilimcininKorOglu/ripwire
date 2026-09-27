@@ -553,14 +553,27 @@ inline const char* capLegendClause( bool active ) noexcept
 
 // ── TIER-3 DECLINES — declined_calls= on the callers, callees and impact answers (test/declinecheck.sh) ────
 // A call whose candidates are two or more same-language definitions, none in the caller's file or directory,
-// and that no qualifier or receiver rule pinned, gets NO edge: the resolver declines to guess. Until this
+// and that no qualifier or receiver rule pinned, gets NO edge: the resolver declines to guess. So does a call the
+// builtin-method name gate refused (graph.h BuiltinMethodGate), whatever the number of definitions. Until this
 // clause the decline was also SILENT, so count="0" read as "no caller exists" about a call the resolver had
 // seen. One sentence for the three answers and their MCP twins, emitted exactly when the attribute is:
 // declinedCallsLegend( bool ) takes the emitter's own attribute-present condition, never a re-derivation. No
 // double hyphen anywhere, because it lands inside an XML comment.
 inline constexpr const char* kDeclinedCallsLegend =
     "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge exists and no count or row here includes them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
+// The builtin-method name gate's declines (graph.h BuiltinMethodGate) ride the same count with ONE definition possible;
+// this clause is charged only where the gate declined at least one call in the graph (Graph::gateDeclinedCalls), so an
+// answer on a tree the gate never touched keeps its bytes.
+inline constexpr const char* kDeclinedCallsGateClause =
+    "It also counts a call named like a builtin-type method (dict.get, list.append) whose bound definitions' classes the caller's file never names. ";
 inline const char* declinedCallsLegend( bool on ) noexcept { return on ? kDeclinedCallsLegend : ""; }
+inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDeclinedCallsGateClause : ""; }
+// --test-gate's own short form: the same attribute and unit, sized for a verb whose legend has an absolute byte budget
+// (test/testgatelegendbudgetcheck.sh), so it defines the one form it emits rather than all three.
+inline constexpr const char* kDeclinedCallsTestGateLegend =
+    "declined_calls=K (absent when 0): K call SITES the resolver declined to bind that could have reached the change or its radius (the map's declined=); a test behind one is in no row here. ";
+// The clause and, where the gate declined in this graph, its gate sentence — the one spelling every declined_calls= emitter uses.
+inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined ) { return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ); }
 
 // ONE absent-at-zero count attribute: ` name="N"`, or nothing at all when count is 0. declined_calls= below and
 // --skipped's extent_suspect_files=/macro_blanked_files= (root) and extent_suspect_syms=/macro_blanked= (<h> rows)

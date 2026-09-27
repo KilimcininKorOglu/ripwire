@@ -793,6 +793,16 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
     return true;
 }
 
+// The dead-code kind's one exemption beyond isDeadCandidate: a call the builtin-method name gate DECLINED could have
+// meant this definition (graph.h BuiltinMethodGate, Graph::gateDeclinedTarget), so it is not provably uncalled — which
+// is what it was before the gate, when that call bound to it by name. Both dead-set readers (the snapshot and the
+// delta) apply it after isDeadCandidate, so a symbol it exempts is exactly one that would otherwise be dead, and the
+// delta counts those as declined-call-excluded=.
+inline bool declinedCallMayReach( const Graph& g, NodeId i ) noexcept
+{
+    return i < g.gateDeclinedTarget.size() && g.gateDeclinedTarget[ i ] != 0;
+}
+
 // ONE clone group of the CURRENT tree, reduced to the two facts an ack row can be healed from: the
 // member-set hash that IS the ack identity for both clone kinds, and the idiom verdict that decides their
 // severity. computeDelta already computes both for every group it scans (exactIdioms/type3Idioms), so
@@ -3269,7 +3279,11 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // resolution, and so two builds that resolve differently served each other's dead set (see producerIdentity).
 // Since v14 a bump is no longer what keeps two builds' blobs apart — any source change renames every blob — so
 // a semantics change that lands without one leaves this history incomplete, not a wrong answer across builds.
-constexpr std::uint32_t kQSnapCacheScheme = 14;
+// v15 (2026-09-26, lane/builtin-bind-065) — isDeadCandidate no longer counts a definition dead when a call the
+// builtin-method name gate DECLINED could have meant it (graph.h BuiltinMethodGate, Graph::gateDeclinedTarget):
+// the dead SET moved, as in v9/v12. The producer identity already keeps this build's blobs apart from older ones;
+// bumped 14 -> 15 so the history above stays complete. No extraction change: kParserVer 122 and its mirror stay.
+constexpr std::uint32_t kQSnapCacheScheme = 15;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -4397,7 +4411,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
         // (editcheck.h). A COUNT is overload-collision-proof for the opposite reason a MAX is: it is the one
         // number a collision cannot hide. (maskBySym is the other non-MAX kind; it sums for its own reason.)
         { std::uint32_t& slot = snap.defsBySym[ key ];    slot += 1; }
-        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch ) )
+        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch ) && !declinedCallMayReach( g, i ) )
         {
             snap.dead.push_back( key );
         }
@@ -7762,8 +7776,13 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                                              std::size_t maxFileBytes = kDefaultMaxFileBytes,
                                              std::size_t* registerMacroExcludedOut = nullptr,   // P2.2: honest disclosure count, additive+optional — see isDeadCandidate
                                              std::size_t* apiNewSurfaceOut = nullptr,          // Q-DIAL-4: the api-surface new-symbol COUNT that replaced N never-gating rows
-                                             std::vector<CloneIdiomFact>* cloneIdiomsOut = nullptr )   // every CURRENT-tree clone group's (hash, idiom), for the legacy-ack backfill
+                                             std::vector<CloneIdiomFact>* cloneIdiomsOut = nullptr,   // every CURRENT-tree clone group's (hash, idiom), for the legacy-ack backfill
+                                             std::size_t* declinedCallExcludedOut = nullptr )         // symbols kept out of dead-code ONLY by a declined call (declinedCallMayReach)
 {
+    if( declinedCallExcludedOut )
+    {
+        *declinedCallExcludedOut = 0;
+    }
     ASSUME( registerMacroExcludedOut == nullptr || registerMacroExcludedOut != apiNewSurfaceOut,
                  "computeDelta: registerMacroExcludedOut and apiNewSurfaceOut must be distinct" );   // both default to nullptr, so the object form would dereference null
     std::vector<Regression> regs;
@@ -8200,6 +8219,14 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             if( macroExempt && registerMacroExcludedOut )
             {
                 ++( *registerMacroExcludedOut );   // P2.2: would be dead-code but for the macro exemption — disclosed count
+            }
+            continue;
+        }
+        if( declinedCallMayReach( g, i ) )
+        {
+            if( declinedCallExcludedOut )
+            {
+                ++( *declinedCallExcludedOut );    // would be dead-code but for a declined call that may reach it — disclosed count
             }
             continue;
         }
