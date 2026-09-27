@@ -21,9 +21,20 @@
 #   (c) a `describe` call on any other receiver (`Docs.describe Calc do`) is not an RSpec example group.
 #   (d) `subject` — the implicit `described_class.new` — is NOT modeled in this round: an explicit `subject { … }`
 #       can be anything, and telling the two apart is its own round.
-#   (e) a file that REDEFINES `described_class` — `let( :described_class ) { … }`, `def described_class`, or a local
-#       `described_class = …` — declines every `described_class` in that file: the redefinition names what it means,
-#       and this rule does not read it, so it answers nothing rather than the group's constant.
+#   (e) a REDEFINED `described_class` declines: the redefinition names what it means, and this rule does not read
+#       it, so it answers nothing rather than the group's constant. A METHOD of that name — any `:described_class`
+#       symbol (`let( :described_class ) { … }`) or `def described_class` — declines every site in the file, since a
+#       method reaches the whole group. A LOCAL of that name — an assignment (`=`, `||=`), a multiple-assignment
+#       target, a block or method parameter — declines the sites Ruby reads as that local: after the binding in its
+#       own scope and in the blocks nested inside it, never in a sibling block, and never across a `def`. The name
+#       is matched as a whole word: `my_described_class = x` and `:described_class_name` redefine nothing.
+#   (f) a QUALIFIED describe is named by its FINAL segment: `RSpec.describe Cask::Tab` reads as `Tab`, the same
+#       final-segment rule #267 gives a written `Cask::Tab.m`. So where another `Tab` defines the method too, the
+#       call splits between the two; where only the other `Tab` defines it (the described class inherits it), the
+#       call pins to that one, unmarked. Carrying the full path to the resolver is its own round.
+#
+# A SHARED group (`shared_examples`, `shared_examples_for`, `shared_context`) stops the walk with no answer: its body
+# runs inside whichever group includes it, so its lexical parent's described class is not its own.
 #
 # Usage:  test/rubydescribedclasscheck.sh   |   RIPWIRE_BIN=asan/ripwire test/rubydescribedclasscheck.sh
 # Exits non-zero on any failure. Does NOT edit test/regression.sh. Self-contained via mktemp.
@@ -84,6 +95,46 @@ class Calc
     a
   end
 
+  def self.r_bparam( a )
+    a
+  end
+
+  def self.r_mparam( a )
+    a
+  end
+
+  def self.r_masgn( a )
+    a
+  end
+
+  def self.r_opasgn( a )
+    a
+  end
+
+  def self.m_sib( a )
+    a
+  end
+
+  def self.m_pre( a )
+    a
+  end
+
+  def self.m_wb1( a )
+    a
+  end
+
+  def self.m_wb2( a )
+    a
+  end
+
+  def self.m_shared( a )
+    a
+  end
+
+  def self.m_sctx( a )
+    a
+  end
+
   def m_chain
     1
   end
@@ -130,6 +181,46 @@ class Tally
     a
   end
 
+  def self.r_bparam( a )
+    a
+  end
+
+  def self.r_mparam( a )
+    a
+  end
+
+  def self.r_masgn( a )
+    a
+  end
+
+  def self.r_opasgn( a )
+    a
+  end
+
+  def self.m_sib( a )
+    a
+  end
+
+  def self.m_pre( a )
+    a
+  end
+
+  def self.m_wb1( a )
+    a
+  end
+
+  def self.m_wb2( a )
+    a
+  end
+
+  def self.m_shared( a )
+    a
+  end
+
+  def self.m_sctx( a )
+    a
+  end
+
   def m_chain
     2
   end
@@ -152,6 +243,29 @@ end
 module Docs
   def self.describe( what )
     yield
+  end
+end
+RUBY
+
+# floor (f): two classes whose FINAL segment matches, each in its own file so FILE:SYM names one definition
+cat > "$FIX/lib/cask_tab.rb" <<'RUBY'
+module Cask
+  class Tab
+    def self.t_both( a )
+      a
+    end
+  end
+end
+RUBY
+
+cat > "$FIX/lib/tab.rb" <<'RUBY'
+class Tab
+  def self.t_both( a )
+    a
+  end
+
+  def self.t_lone( a )
+    a
   end
 end
 RUBY
@@ -230,6 +344,76 @@ RSpec.describe Calc do
 end
 RUBY
 
+cat > "$FIX/spec/local_spec.rb" <<'RUBY'
+RSpec.describe Calc do
+  [Tally].each do |described_class|
+    it { described_class.r_bparam( 1 ) }
+  end
+
+  def helper( described_class )
+    described_class.r_mparam( 1 )
+  end
+
+  it { described_class, other = Tally, 1
+       described_class.r_masgn( 1 ) }
+
+  it do
+    described_class ||= Tally
+    described_class.r_opasgn( 1 )
+  end
+end
+RUBY
+
+cat > "$FIX/spec/scope_spec.rb" <<'RUBY'
+RSpec.describe Calc do
+  it "binds a local after one call" do
+    described_class.m_pre( 1 )
+    described_class = Tally
+  end
+
+  it "is a sibling of the example that binds it" do
+    described_class.m_sib( 1 )
+  end
+end
+RUBY
+
+cat > "$FIX/spec/wordb1_spec.rb" <<'RUBY'
+RSpec.describe Calc do
+  it do
+    my_described_class = Tally
+    described_class.m_wb1( 1 )
+  end
+end
+RUBY
+
+cat > "$FIX/spec/wordb2_spec.rb" <<'RUBY'
+RSpec.describe Calc do
+  it do
+    respond_to( :described_class_name )
+    described_class.m_wb2( 1 )
+  end
+end
+RUBY
+
+cat > "$FIX/spec/shared_spec.rb" <<'RUBY'
+RSpec.describe Calc do
+  shared_examples "a shared group" do
+    it { described_class.m_shared( 1 ) }
+  end
+
+  shared_context "a shared context" do
+    it { described_class.m_sctx( 1 ) }
+  end
+end
+RUBY
+
+cat > "$FIX/spec/qual_spec.rb" <<'RUBY'
+RSpec.describe Cask::Tab do
+  it { described_class.t_both( 1 ) }
+  it { described_class.t_lone( 1 ) }
+end
+RUBY
+
 MAP="$DIR/map.xml"
 "$BIN" "$FIX" --no-cache >"$MAP" 2>"$DIR/map.err"
 if [ $? -eq 0 ]; then ok "default map exits 0"; else no "default map exited non-zero: $( cat "$DIR/map.err" )"; fi
@@ -289,7 +473,36 @@ untouched noclass_spec.rb m_none  "RSpec.describe \"no class\" names no class (f
 untouched noclass_spec.rb m_sym   "RSpec.describe :sym names no class (floor (b), stated)"
 untouched docs_spec.rb    m_docs  "Docs.describe Calc is not an RSpec example group (floor (c), stated)"
 untouched let_spec.rb     m_let   "let( :described_class ) redefines it: the file declines (floor (e), stated)"
-untouched asgn_spec.rb    m_asgn  "a local described_class = Tally redefines it: the file declines (floor (e), stated)"
+untouched asgn_spec.rb    m_asgn   "a local described_class = Tally redefines it: the site after it declines (floor (e), stated)"
+untouched local_spec.rb   r_bparam "a block parameter |described_class| redefines it inside that block (floor (e), stated)"
+untouched local_spec.rb   r_mparam "a method parameter def helper( described_class ) redefines it inside that def (floor (e), stated)"
+untouched local_spec.rb   r_masgn  "a multiple-assignment target described_class, other = … redefines it (floor (e), stated)"
+untouched local_spec.rb   r_opasgn "described_class ||= Tally binds a local too (floor (e), stated)"
+
+echo "=== floor (e) is Ruby's local scoping, and matches the name as a whole word ==="
+pins scope_spec.rb  m_pre   Calc   Tally "a site BEFORE the local's assignment still reads RSpec's method"
+pins scope_spec.rb  m_sib   Calc   Tally "a local bound in a sibling example does not reach this one"
+pins wordb1_spec.rb m_wb1   Calc   Tally "my_described_class = Tally is another name — nothing is redefined"
+pins wordb2_spec.rb m_wb2   Calc   Tally ":described_class_name is another symbol — nothing is redefined"
+
+echo "=== a shared group stops the walk: its body runs in whichever group includes it ==="
+untouched shared_spec.rb  m_shared "shared_examples inside RSpec.describe Calc is not described by Calc"
+untouched shared_spec.rb  m_sctx   "nor is shared_context"
+
+echo "=== floor (f): a qualified describe is named by its final segment (stated, pinned both ways) ==="
+calls "$FIX" lib/cask_tab.rb:t_both qual_spec.rb; qa=$?
+calls "$FIX" lib/tab.rb:t_both      qual_spec.rb; qb=$?
+if [ "$qa" -ne 2 ] && [ "$qb" -ne 2 ]
+then
+    [ "$qa" -eq 0 ] && [ "$qb" -eq 0 ] && ok "qual_spec.rb: describe Cask::Tab reads as Tab — described_class.t_both splits over Cask::Tab and ::Tab (floor (f), stated)" \
+        || no "qual_spec.rb: described_class.t_both — Cask::Tab caller=$( [ "$qa" -eq 0 ] && echo yes || echo no ), ::Tab caller=$( [ "$qb" -eq 0 ] && echo yes || echo no ) — floor (f) says both"
+fi
+calls "$FIX" lib/tab.rb:t_lone qual_spec.rb; ql=$?
+if [ "$ql" -ne 2 ]
+then
+    [ "$ql" -eq 0 ] && ok "qual_spec.rb: described_class.t_lone pins to ::Tab, the only Tab defining it — the unmarked pin floor (f) states" \
+        || no "qual_spec.rb: described_class.t_lone no longer reaches ::Tab::t_lone — floor (f) moved; restate it"
+fi
 
 echo "=== determinism and warm == cold ==="
 "$BIN" "$FIX" --no-cache >"$DIR/b.xml" 2>/dev/null
