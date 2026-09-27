@@ -167,23 +167,45 @@ inline bool rubyDefinesDescribedClassMethod( std::string_view src ) noexcept
     return false;
 }
 
-// True when `n` itself BINDS the local described_class: a parameter list or parameter naming it, or an assignment
-// (`=`, `||=`, a multiple assignment's target list) whose target it is.
-inline bool rubyNodeBindsDescribedClass( TSNode n, std::string_view src )
+// How a Ruby node kind takes part in LOCAL scoping, for rubyDescribedClassIsLocal. A Closure (a block, a lambda) keeps
+// its locals in but sees the enclosing ones; a Wall (a def, a class, a module) sees no outer local; the Binds* kinds
+// bind a local — the `left:` child, the `name:` child (not a parameter's default value), or any child identifier.
+enum class RubyLocalRole : std::uint8_t { Closure, Wall, BindsLeft, BindsName, BindsChildren };
+struct RubyLocalKind
+{
+    std::string_view kind;
+    RubyLocalRole    role;
+};
+inline constexpr RubyLocalKind kRubyLocalKinds[] = {
+    { "block", RubyLocalRole::Closure },                        { "do_block", RubyLocalRole::Closure },
+    { "lambda", RubyLocalRole::Closure },                       { "method", RubyLocalRole::Wall },
+    { "singleton_method", RubyLocalRole::Wall },                { "class", RubyLocalRole::Wall },
+    { "singleton_class", RubyLocalRole::Wall },                 { "module", RubyLocalRole::Wall },
+    { "assignment", RubyLocalRole::BindsLeft },                 { "operator_assignment", RubyLocalRole::BindsLeft },
+    { "optional_parameter", RubyLocalRole::BindsName },         { "keyword_parameter", RubyLocalRole::BindsName },
+    { "block_parameters", RubyLocalRole::BindsChildren },       { "method_parameters", RubyLocalRole::BindsChildren },
+    { "lambda_parameters", RubyLocalRole::BindsChildren },      { "left_assignment_list", RubyLocalRole::BindsChildren },
+    { "destructured_left_assignment", RubyLocalRole::BindsChildren }, { "rest_assignment", RubyLocalRole::BindsChildren },
+    { "destructured_parameter", RubyLocalRole::BindsChildren }, { "splat_parameter", RubyLocalRole::BindsChildren },
+    { "hash_splat_parameter", RubyLocalRole::BindsChildren },   { "block_parameter", RubyLocalRole::BindsChildren },
+    { "exception_variable", RubyLocalRole::BindsChildren },
+};
+
+inline std::optional<RubyLocalRole> rubyLocalRole( const char* t ) noexcept
+{
+    const auto it = std::ranges::find( kRubyLocalKinds, std::string_view( t ), &RubyLocalKind::kind );
+    return it == std::end( kRubyLocalKinds ) ? std::nullopt : std::optional<RubyLocalRole>( it->role );
+}
+
+// True when `n`, whose kind plays `role`, itself BINDS the local described_class.
+inline bool rubyNodeBindsDescribedClass( TSNode n, std::optional<RubyLocalRole> role, std::string_view src )
 {
     const auto named = [ & ]( TSNode c ) { return !ts_node_is_null( c ) && kindIs( ts_node_type( c ), "identifier" ) && pattern::nodeText( c, src ) == "described_class"; };
-    const char* t = ts_node_type( n );
-    if( kindIs( t, "assignment" ) || kindIs( t, "operator_assignment" ) )
+    if( role == RubyLocalRole::BindsLeft || role == RubyLocalRole::BindsName )
     {
-        return named( fieldChild( n, NodeField::Left ) );
+        return named( fieldChild( n, role == RubyLocalRole::BindsLeft ? NodeField::Left : NodeField::Name ) );
     }
-    if( kindIs( t, "optional_parameter" ) || kindIs( t, "keyword_parameter" ) )
-    {
-        return named( fieldChild( n, NodeField::Name ) );
-    }
-    if( !kindIs( t, "block_parameters" ) && !kindIs( t, "method_parameters" ) && !kindIs( t, "lambda_parameters" ) && !kindIs( t, "left_assignment_list" )
-        && !kindIs( t, "destructured_left_assignment" ) && !kindIs( t, "rest_assignment" ) && !kindIs( t, "destructured_parameter" )
-        && !kindIs( t, "splat_parameter" ) && !kindIs( t, "hash_splat_parameter" ) && !kindIs( t, "block_parameter" ) && !kindIs( t, "exception_variable" ) )
+    if( role != RubyLocalRole::BindsChildren )
     {
         return false;
     }
@@ -198,53 +220,55 @@ inline bool rubyNodeBindsDescribedClass( TSNode n, std::string_view src )
     return false;
 }
 
-// A node whose locals never leak out (a block, a lambda), or that sees no outer local at all (a def, a class, a module).
-inline bool isRubyLocalScope( const char* t ) noexcept
+// True when a child of `n` that ENDS before byte `at` — an earlier statement, a block's or a def's parameters — binds
+// described_class, searched without entering a nested block, lambda, def, class or module, whose locals never reach
+// past it. `stack` is the caller's scratch, so a hostile nesting depth costs heap, not stack.
+inline bool rubyEarlierChildBindsDescribedClass( TSNode n, std::uint32_t at, std::string_view src, std::vector<TSNode>& stack )
 {
-    return kindIs( t, "block" ) || kindIs( t, "do_block" ) || kindIs( t, "lambda" ) || kindIs( t, "method" ) || kindIs( t, "singleton_method" )
-        || kindIs( t, "class" ) || kindIs( t, "singleton_class" ) || kindIs( t, "module" );
+    stack.clear();
+    const std::uint32_t cc = ts_node_named_child_count( n );
+    for( std::uint32_t i = 0; i < cc && ts_node_end_byte( ts_node_named_child( n, i ) ) <= at; ++i )
+    {
+        stack.push_back( ts_node_named_child( n, i ) );
+    }
+    while( !stack.empty() )
+    {
+        const TSNode cur = stack.back();
+        stack.pop_back();
+        const std::optional<RubyLocalRole> role = rubyLocalRole( ts_node_type( cur ) );
+        if( rubyNodeBindsDescribedClass( cur, role, src ) )
+        {
+            return true;
+        }
+        if( role == RubyLocalRole::Closure || role == RubyLocalRole::Wall )
+        {
+            continue;   // a nested scope's locals never reach the site
+        }
+        const std::uint32_t kids = ts_node_named_child_count( cur );
+        for( std::uint32_t i = 0; i < kids; ++i )
+        {
+            stack.push_back( ts_node_named_child( cur, i ) );
+        }
+    }
+    return false;
 }
 
 // True when the (identifier) `site` reads a LOCAL named described_class, not RSpec's method — Ruby's own rule: a local
-// is visible after its binding, in its own scope and in the blocks nested inside it. So the walk climbs from the site;
-// at each enclosing node it searches the children that END before the site (earlier statements, a block's or a def's
-// parameters) without entering a nested block, def, class or module; and it stops after the first def, class or
-// module, which sees no outer local. Floor (e).
+// is visible after its binding, in its own scope and in the blocks nested inside it. So the walk climbs from the site,
+// searching each enclosing node's earlier children, and stops after the first def, class or module. An enclosing
+// assignment counts too: in `described_class = described_class.m` the right side already reads the local. Floor (e).
 inline bool rubyDescribedClassIsLocal( TSNode site, std::string_view src )
 {
     const std::uint32_t at = ts_node_start_byte( site );
     std::vector<TSNode> stack;
     for( TSNode n = ts_node_parent( site ); !ts_node_is_null( n ); n = ts_node_parent( n ) )
     {
-        if( rubyNodeBindsDescribedClass( n, src ) )
+        const std::optional<RubyLocalRole> role = rubyLocalRole( ts_node_type( n ) );
+        if( rubyNodeBindsDescribedClass( n, role, src ) || rubyEarlierChildBindsDescribedClass( n, at, src, stack ) )
         {
-            return true;   // `described_class = described_class.m` — the right side already reads the local
+            return true;
         }
-        const std::uint32_t cc = ts_node_named_child_count( n );
-        for( std::uint32_t i = 0; i < cc && ts_node_end_byte( ts_node_named_child( n, i ) ) <= at; ++i )
-        {
-            stack.push_back( ts_node_named_child( n, i ) );
-        }
-        while( !stack.empty() )
-        {
-            const TSNode cur = stack.back();
-            stack.pop_back();
-            if( rubyNodeBindsDescribedClass( cur, src ) )
-            {
-                return true;
-            }
-            if( isRubyLocalScope( ts_node_type( cur ) ) )
-            {
-                continue;   // a nested scope's locals never reach the site
-            }
-            const std::uint32_t kids = ts_node_named_child_count( cur );
-            for( std::uint32_t i = 0; i < kids; ++i )
-            {
-                stack.push_back( ts_node_named_child( cur, i ) );
-            }
-        }
-        const char* nt = ts_node_type( n );
-        if( isRubyLocalScope( nt ) && !kindIs( nt, "block" ) && !kindIs( nt, "do_block" ) && !kindIs( nt, "lambda" ) )
+        if( role == RubyLocalRole::Wall )
         {
             break;   // a def, class or module: no outer local reaches in
         }

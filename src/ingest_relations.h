@@ -1303,11 +1303,7 @@ template< std::size_t N >
 inline std::string_view fieldChildTextOfKind( TSNode n, NodeField field, const char ( &kind )[N], std::string_view src ) noexcept
 {
     const TSNode c = fieldChild( n, field );
-    if( ts_node_is_null( c ) || !kindIs( ts_node_type( c ), kind ) )
-    {
-        return {};
-    }
-    return nodeTextOf( c, src );
+    return !ts_node_is_null( c ) && kindIs( ts_node_type( c ), kind ) ? nodeTextOf( c, src ) : std::string_view {};
 }
 
 // If the node's field child is a bare identifier, its text; else empty (elixirTarget, elixirDirectiveTarget,
