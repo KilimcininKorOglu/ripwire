@@ -28,13 +28,14 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
 - **Modules the test reaches.** The exact-path import check now covers every local TypeScript module the test
   file reaches, not only the test file's own imports. The walk stops at 64 modules, and a cut walk gets no
   command.
-- **Syntax type stripping cannot erase.** On the same walk: an `enum`, a `namespace` with runtime code, a
-  constructor parameter property, an import alias or a decorator, outside any `declare`.
+- **Syntax type stripping cannot erase.** On the same walk: an `enum`, a `namespace` with runtime code or only
+  `declare` statements, the legacy `module M {}` keyword, a constructor parameter property, an import alias,
+  `export =`, an angle-bracket assertion `<T>x` or a decorator, outside any `declare`.
 - **Node versions.** The `--test` flag exists from Node 18 (18.1 strictly; the single 18.0.0 release is accepted on
   purpose) and, by backport, 16.17, but never on 17.x. Stripping is on by default from 22.18 and 23.6, but not on
-  23.0–23.5. Each `engines.node` alternative is now read for its upper bound as well as its floor, so `^16.17.0` and
-  `>=18` get a command, `>=16` and `>=16.17` do not, and `>=22.18` keeps `--experimental-strip-types` where
-  `^22.18.0` gets the bare form.
+  23.0–23.5. Each `engines.node` alternative is now read for its upper bound as well as its floor (a hyphen range
+  `A - B` by B), so `^16.17.0` and `>=18` get a command; `>=16`, `>=16.17`, `16.17 - 18` and a range confined to
+  18.0.x do not; and `>=22.18` or `22.18 - 24` keep `--experimental-strip-types` where `^22.18.0` gets the bare form.
 
 ### Fixed — hooks and doctor
 
@@ -45,10 +46,12 @@ The version reading also gives a command to two ranges it used to refuse (`^16.1
   variables first, as the two prompt route hooks already did.
 - `--doctor --agent=codex` and `--agent=claude` count a `ripwire-*` skill directory as live only when it holds
   a `SKILL.md`. An empty directory, as 0.6.3's installer could leave on Git Bash, no longer reads as parity.
-- `--doctor`'s NOT ON PATH hint now ends with the command. It used to end with `(and put that line in your shell rc
-  file)` after the `export PATH=` line, so pasting the whole hint was a syntax error in bash and sh (and zsh stopped
-  with "number expected"), and PATH never changed. The PowerShell hint had the same trailing note. The guidance now
-  comes before the command.
+- `--doctor`'s NOT ON PATH remedy can be pasted as printed. The hint used to end with `(and put that line in your
+  shell rc file)` after the `export PATH=` line, so pasting it from the command to its end was a syntax error in bash
+  and sh (zsh stopped with "number expected"), and PATH never changed; the PowerShell hint had the same trailing
+  note. The guidance now comes before the command. And because the hint is an XML attribute, the terminal showed
+  its quotes escaped (`&apos;`, `&quot;`), which no shell accepts: with ripwire not on PATH, `--doctor` now also
+  prints the command unescaped on stderr, alone on its last line.
 - The `--help` footer's determinism recipe quotes `"$t/a"` and `"$t/b"`, like every other copy.
 
 ---

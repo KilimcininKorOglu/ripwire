@@ -805,8 +805,9 @@ namespace detail
 inline bool isTypeOnlyStatement( TSNode stmt ) noexcept
 {
     const char* kind = ts_node_type( stmt );
-    if( rw::kindIs( kind, "interface_declaration" ) || rw::kindIs( kind, "type_alias_declaration" ) || rw::kindIs( kind, "ambient_declaration" )
-        || rw::kindIs( kind, "internal_module" ) || rw::kindIs( kind, "module" ) || rw::kindIs( kind, "comment" ) || rw::kindIs( kind, "empty_statement" ) )
+    // NOT `ambient_declaration`: Node 26.9 refuses a namespace holding only `declare` statements (review R2).
+    if( rw::kindIs( kind, "interface_declaration" ) || rw::kindIs( kind, "type_alias_declaration" ) || rw::kindIs( kind, "internal_module" )
+        || rw::kindIs( kind, "comment" ) || rw::kindIs( kind, "empty_statement" ) )
     {
         return true;
     }
@@ -823,19 +824,40 @@ inline bool isTypeOnlyStatement( TSNode stmt ) noexcept
     return false;
 }
 
+/// Whether `node` is an `export = x` assignment: an `export_statement` whose anonymous `=` token the grammar keeps as
+/// a child (a plain `export default x` has none).
+inline bool isExportAssignment( TSNode node ) noexcept
+{
+    const std::uint32_t count = ts_node_child_count( node );
+    for( std::uint32_t i = 0; i < count; ++i )
+    {
+        const TSNode child = ts_node_child( node, i );
+        if( !ts_node_is_named( child ) && rw::kindIs( ts_node_type( child ), "=" ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// train20-cr C10: whether `node` (outside any `declare`) is TypeScript syntax that type stripping cannot
-/// erase: Node's own list (an `enum`, a `namespace`/`module` with runtime code, a parameter property, an
-/// import alias `import A = B.C` / `import x = require(…)`) plus a decorator, which strip-only mode rejects
-/// as a parse error. Each fails before a single test runs, so a hit means the command would fail.
+/// erase: Node's own list (an `enum`, a `namespace` with runtime code, a parameter property, an import alias
+/// `import A = B.C` / `import x = require(…)`), plus what strip-only mode also rejects (review R2, each run under
+/// Node 26.9): `export =`, an angle-bracket assertion `<T>x`, the legacy `module M {}` keyword even with a type-only
+/// body, and a decorator (a parse error). Each fails before a single test runs, so a hit means the command would fail.
 inline bool nodeIsNonErasable( TSNode node ) noexcept
 {
     const char* kind = ts_node_type( node );
     if( rw::kindIs( kind, "enum_declaration" ) || rw::kindIs( kind, "import_alias" ) || rw::kindIs( kind, "import_require_clause" )
-        || rw::kindIs( kind, "decorator" ) )
+        || rw::kindIs( kind, "decorator" ) || rw::kindIs( kind, "type_assertion" ) || rw::kindIs( kind, "module" ) )
     {
-        return true;
+        return true;   // `module` is the legacy keyword; `declare module "x" {}` sits under an ambient_declaration, never reached here
     }
-    if( rw::kindIs( kind, "internal_module" ) || rw::kindIs( kind, "module" ) )
+    if( rw::kindIs( kind, "export_statement" ) )
+    {
+        return isExportAssignment( node );
+    }
+    if( rw::kindIs( kind, "internal_module" ) )
     {
         const TSNode body = fieldChild( node, NodeField::Body );
         if( ts_node_is_null( body ) )
@@ -1059,21 +1081,22 @@ constexpr long long nodeVersion( long long major, long long minor ) noexcept
 constexpr long long kNoCeiling = std::numeric_limits<long long>::max();
 
 /// What ONE `engines.node` alternative (the text between two `||`) admits, read as far as the decisions
-/// below need it — NOT a semver engine. `floor` is the LOWEST version it admits, from its FIRST major.minor
-/// pair (">=X.Y[.Z]", "^X.Y[.Z]", "~X.Y[.Z]", a bare "X.Y[.Z]", ">X.Y[.Z]": patch-level exclusivity never
-/// changes a major.minor comparison); `0` when it asserts no lower bound this reader can find — a
-/// `<`/`<=`-led clause or no version number at all — read as "admits anything", never a guess in the other
-/// direction. `ceilMajor` is the first major it can no longer reach (exclusive), or `kNoCeiling`: an exact,
-/// `=`, `^` or `~` version stays in its own major (`^0.x` stays tighter still, which only lowers the true
-/// ceiling), a later `<X[.Y[.Z]]`/`<=X…` comparator and a hyphen range's upper end both bound it too.
-/// train20-cr: the ceiling exists because the three version sets below are not monotone — `node --test`
-/// exists on 16.17+ and 18.1+ but not 17.x; default type stripping on 22.18+ and 23.6+ but not 23.0-23.5;
-/// default module-syntax detection on 20.19+ and 22.7+ but not 21.x — so a floor alone cannot say whether a
-/// range reaches a gap.
+/// below need it — NOT a semver engine. Both bounds are versions as `major*1000 + minor` (patch never changes a
+/// decision below). `floor` is the LOWEST version it admits, from its FIRST major.minor pair (">=X.Y[.Z]",
+/// "^X.Y[.Z]", "~X.Y[.Z]", a bare "X[.Y[.Z]]", ">X.Y[.Z]", the lower end of "A - B"); `0` when it asserts no lower
+/// bound this reader can find — a `<`/`<=`-led clause or no version number at all — read as "admits anything",
+/// never a guess in the other direction. `ceil` is the first version it can no longer reach (exclusive), or
+/// `kNoCeiling`: `^X…` and a bare or `~` major (`X`, `X.x`, `~X`) stay in major X; a bare, `=` or `~` X.Y
+/// (`X.Y`, `X.Y.Z`, `X.Y.x`, `~X.Y`) stays in minor X.Y; a hyphen range "A - B" ends at B inclusive (B's major
+/// when B names no minor), never at A's major — train20-cr review R1: reading A as same-major collapsed
+/// "16.17 - 18" to 16.x; and a later `<`/`<=` comparator lowers it further. The ceiling exists because the
+/// version sets below are not monotone — `node --test` exists on 16.17+ and 18+ but not 17.x; default type
+/// stripping on 22.18+ and 23.6+ but not 23.0-23.5; default module-syntax detection on 20.19+ and 22.7+ but not
+/// 21.x — so a floor alone cannot say whether a range reaches a gap.
 struct EngineClause
 {
-    long long floor     = 0;
-    long long ceilMajor = kNoCeiling;
+    long long floor = 0;
+    long long ceil  = kNoCeiling;
 };
 
 /// Reads `major[.minor[.patch]]` at `p` (advancing it), `-1` for each part that has no digits.
@@ -1105,10 +1128,16 @@ inline void readVersion( std::string_view text, std::size_t& p, long long& major
     }
 }
 
-/// The first major an upper bound in `rest` (the clause text after its floor) no longer reaches, or `kNoCeiling`: a
-/// `<X[.Y[.Z]]` comparator excludes X itself unless a minor or patch past zero lets X in, `<=X…` includes X, and a
-/// hyphen range's upper end (`A - B`) is inclusive.
-inline long long upperBoundCeilMajor( std::string_view rest ) noexcept
+/// The first version an INCLUSIVE upper end `X[.Y[.Z]]` no longer reaches: past its minor, or past its major when
+/// it names no minor (`<=18`, "A - 18" admit every 18.x).
+constexpr long long inclusiveCeil( long long major, long long minor ) noexcept
+{
+    return minor < 0 ? nodeVersion( major + 1, 0 ) : nodeVersion( major, minor + 1 );
+}
+
+/// The ceiling an upper bound in `rest` (the clause text after its floor) sets, or `kNoCeiling`: `<X[.Y[.Z]]`
+/// excludes X.Y unless a patch past zero lets it in, `<=X…` and a hyphen range's upper end (`A - B`) include it.
+inline long long upperBoundCeil( std::string_view rest ) noexcept
 {
     const std::size_t lt   = rest.find( '<' );
     const std::size_t dash = lt == std::string_view::npos ? rest.find( " - " ) : std::string_view::npos;
@@ -1128,7 +1157,11 @@ inline long long upperBoundCeilMajor( std::string_view rest ) noexcept
     {
         return kNoCeiling;   // no version after the comparator: no bound this reader can use
     }
-    return ( inclusive || minor > 0 || patch > 0 ) ? major + 1 : major;
+    if( inclusive || patch > 0 )
+    {
+        return inclusiveCeil( major, minor );
+    }
+    return nodeVersion( major, minor < 0 ? 0 : minor );
 }
 
 inline EngineClause engineClause( std::string_view clause ) noexcept
@@ -1154,21 +1187,35 @@ inline EngineClause engineClause( std::string_view clause ) noexcept
     {
         return {};   // no version number found at all: unparseable, read as "admits anything"
     }
-    const bool   sameMajor = op.empty() || op == "=" || op == "v" || op == "=v" || op == "^" || op == "~";
+    const std::string_view rest   = clause.substr( p );
+    const bool             hyphen = rest.find( " - " ) != std::string_view::npos;   // "A - B": B alone bounds it (R1)
+    const bool             exact  = op.empty() || op == "=" || op == "v" || op == "=v" || op == "~";   // X, X.Y, X.Y.Z, X.x, ~X.Y
+    long long              own    = kNoCeiling;                                                       // >=, >: open above
+    if( !hyphen && exact )
+    {
+        own = inclusiveCeil( major, minor );   // stays within the minor it names, or the major when it names none
+    }
+    else if( !hyphen && op == "^" )
+    {
+        own = nodeVersion( major + 1, 0 );
+    }
     EngineClause out;
-    out.floor     = nodeVersion( major, minor < 0 ? 0 : minor );
-    out.ceilMajor = std::min( sameMajor ? major + 1 : kNoCeiling, upperBoundCeilMajor( clause.substr( p ) ) );
-    ENSURES( out.floor >= 0 && out.ceilMajor > 0, "a floor is a version and a ceiling is a major past zero" );
+    out.floor = nodeVersion( major, minor < 0 ? 0 : minor );
+    out.ceil  = std::min( own, upperBoundCeil( rest ) );
+    ENSURES( out.floor >= 0 && out.ceil > 0, "a floor is a version and a ceiling is past zero" );
     return out;
 }
 
 /// A set of Node versions as the decisions below need it: every version from `floor` on, plus an older release
-/// line that got the feature by backport, from `backportFloor` up to (not including) major `backportCeilMajor`.
+/// line that got the feature by backport, from `backportFloor` up to (not including) `backportCeil` — minus a clause
+/// CONFINED to [`gapFloor`, `gapCeil`), a hole the set tolerates inside an open range but not as the whole range.
 struct VersionSet
 {
     long long floor;
     long long backportFloor;
-    long long backportCeilMajor;
+    long long backportCeil;
+    long long gapFloor = 0;
+    long long gapCeil  = 0;
 };
 
 // The version facts the decisions below read. `--test` (the CLI flag, not only the `node:test` module) was added in
@@ -1178,16 +1225,19 @@ struct VersionSet
 // have it. Module-syntax detection (an ES-syntax file with no `"type"` runs as ESM) is on by default from 22.7,
 // backported to 20.19; 21.x and 22.0-22.6 need a flag for it.
 // kHasTestFlag's floor is 18.0, not 18.1, ON PURPOSE (owner, 2026-09-26): 18.0.0 is one April-2022 release that fails loudly
-// ("bad option"), and refusing ">=18" -- the most common spelling -- would make run= useless on most projects; below 18 stays strict.
-constexpr VersionSet kHasTestFlag         { nodeVersion( 18, 0 ), nodeVersion( 16, 17 ), 17 };
+// ("bad option"), and refusing ">=18" -- the most common spelling -- would make run= useless on most projects; below 18 stays
+// strict, and so does a range confined to 18.0.x (its gap), which admits nothing else.
+constexpr VersionSet kHasTestFlag         { nodeVersion( 18, 0 ), nodeVersion( 16, 17 ), nodeVersion( 17, 0 ), nodeVersion( 18, 0 ), nodeVersion( 18, 1 ) };
 constexpr VersionSet kHasStripFlag        { nodeVersion( 22, 6 ), nodeVersion( 22, 6 ), kNoCeiling };
-constexpr VersionSet kStripsByDefault     { nodeVersion( 23, 6 ), nodeVersion( 22, 18 ), 23 };
-constexpr VersionSet kDetectsModuleSyntax { nodeVersion( 22, 7 ), nodeVersion( 20, 19 ), 21 };
+constexpr VersionSet kStripsByDefault     { nodeVersion( 23, 6 ), nodeVersion( 22, 18 ), nodeVersion( 23, 0 ) };
+constexpr VersionSet kDetectsModuleSyntax { nodeVersion( 22, 7 ), nodeVersion( 20, 19 ), nodeVersion( 21, 0 ) };
 
 /// Whether every Node one `engines.node` alternative admits is in `set`.
 constexpr bool clauseWithin( EngineClause c, VersionSet set ) noexcept
 {
-    return c.floor >= set.floor || ( c.floor >= set.backportFloor && c.ceilMajor <= set.backportCeilMajor );
+    const bool inSet    = c.floor >= set.floor || ( c.floor >= set.backportFloor && c.ceil <= set.backportCeil );
+    const bool inTheGap = set.gapCeil > set.gapFloor && c.floor >= set.gapFloor && c.ceil <= set.gapCeil;
+    return inSet && !inTheGap;
 }
 
 /// Whether every Node a non-empty `range` admits is in `set` — a compound range admits whichever alternative a

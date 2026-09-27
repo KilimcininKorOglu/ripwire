@@ -513,6 +513,7 @@ fi
 #     test/behavior.test.{js,ts} imports ../src/bounded.{js,ts} and calls it. RED on the 0.6.4 binary:
 #     z1, z3, z6, z9, z10, z11, z12, z13, z14, z16 (and x2 above); the rest are controls that pass on
 #     both, so each RED arm is shown to be about the named construct and not about the fixture shape.
+#     z18-z26 (review R1/R2) are RED on ba451866, this lane's pre-review head, except the controls z19.
 fxjs(){ # fxjs DIR [PACKAGE_JSON] — ES-syntax .js test file
     mkdir -p "$1/src" "$1/test"
     printf 'import test from "node:test";\nimport { bounded } from "../src/bounded.js";\ntest( "b", () => { bounded( "x" ); } );\n' >"$1/test/behavior.test.js"
@@ -597,6 +598,29 @@ fxts "$Z/z16" "$TSOK" '{ "engines": { "node": ">=22.18" } }'
 zwant '(z16) F3: ">=22.18" admits 23.0-23.5, where stripping is not on by default, so the flag stays' "$Z/z16" src/bounded.ts "$TSFLAG"
 fxts "$Z/z17" "$TSOK" '{ "engines": { "node": "^22.18.0" } }'
 zwant '(z17) F3 control: "^22.18.0" stays on 22.x, where stripping is on by default' "$Z/z17" src/bounded.ts "$TSBARE"
+# review R1: a hyphen range "A - B" is bounded by B, never by A's major (ba451866 read "16.17 - 18" as 16.x only)
+fxcjs "$Z/z18" '{ "engines": { "node": "16.17 - 18" } }'
+zwant '(z18) R1: hyphen "16.17 - 18" admits 17.x, which never had --test' "$Z/z18" src/bounded.js run_unknown
+fxcjs "$Z/z19" '{ "engines": { "node": "16.17 - 16.20" } }'
+zwant '(z19) R1 control: hyphen "16.17 - 16.20" stays on 16.x, which has --test' "$Z/z19" src/bounded.js "$JSCMD"
+fxts "$Z/z20" "$TSOK" '{ "engines": { "node": "22.18 - 24" } }'
+zwant '(z20) R1: hyphen "22.18 - 24" admits 23.0-23.5, so the flag stays' "$Z/z20" src/bounded.ts "$TSFLAG"
+fxjs "$Z/z21" '{ "engines": { "node": "20.19 - 22" } }'
+zwant '(z21) R1: hyphen "20.19 - 22" admits 21.x (no default detection) for a typeless ES .js' "$Z/z21" src/bounded.js run_unknown
+fxcjs "$Z/z22" '{ "engines": { "node": "18.0.x" } }'
+zwant '(z22) owner rule edge: a range confined to 18.0.x admits no Node with --test' "$Z/z22" src/bounded.js run_unknown
+# review R2: more syntax Node 26.9's strip-only mode rejects, in a module the test reaches
+fxts "$Z/z23" 'function bounded( t: string ): string { return t; }
+export = bounded;'
+zwant '(z23) R2: export = x' "$Z/z23" src/bounded.ts run_unknown
+fxts "$Z/z24" 'export function bounded( t: string ): string { return <string>t; }'
+zwant '(z24) R2: an angle-bracket assertion <T>x' "$Z/z24" src/bounded.ts run_unknown
+fxts "$Z/z25" 'module M { export type T = string; }
+export function bounded( t: string ): string { return t; }'
+zwant '(z25) R2: the legacy module keyword, even with a type-only body' "$Z/z25" src/bounded.ts run_unknown
+fxts "$Z/z26" 'namespace N { declare const a: number; }
+export function bounded( t: string ): string { return t; }'
+zwant '(z26) R2: a namespace holding only a declare statement' "$Z/z26" src/bounded.ts run_unknown
 
 # (t) xml well-formed for the fix-round fixtures
 if command -v xmllint >/dev/null 2>&1; then

@@ -1431,8 +1431,9 @@ it, and a refusal is `run_unknown="1"`, never a guess:
   exact path. The walk follows each specifier that lands on a `.ts`/`.mts`/`.cts` file, reads at most 64
   modules, and a walk cut at that bound stays `run_unknown="1"` too.
 - **No module on that walk may use syntax type stripping cannot erase.** Node strips types and rewrites
-  nothing, so an `enum`, a `namespace` with runtime code, a constructor parameter property, an import alias
-  (`import A = B.C`, `import x = require(…)`) or a decorator stops it with
+  nothing, so an `enum`, a `namespace` with runtime code (or holding only `declare` statements), the legacy
+  `module M {}` keyword, a constructor parameter property, an import alias (`import A = B.C`,
+  `import x = require(…)`), `export =`, an angle-bracket assertion `<T>x` or a decorator stops it with
   `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` (or a parse error) before any test runs; any of them outside a
   `declare` stays `run_unknown="1"`. A type-only namespace and a `declare enum` are erased and do not count.
 - **The command is additionally Node-version-aware, from `engines.node`.** `--experimental-strip-types`
@@ -1462,7 +1463,8 @@ no assumption at all. A CommonJS file (`require`, no ES `import`/`export`) runs 
 `.js`/`.mjs`/`.cjs` never need the flag. Their one version question is the runner itself: the `--test` flag
 exists from Node 18.1 and, by backport, 16.17 — never on 17.x, and 18.0 has the `node:test` module but not
 the flag. So `engines.node` must not admit a Node below 18 without it: `^16.17.0`, `>=18` and `>=18.1` get the bare
-form, while `>=16` and `>=16.17` (they reach 17.x) stay `run_unknown="1"`. `>=18` is accepted although it admits 18.0:
+form, while `>=16`, `>=16.17` and `16.17 - 18` (they reach 17.x) stay `run_unknown="1"`, and so does a range confined
+to 18.0.x such as `18.0.x`. A hyphen range `A - B` is bounded by B. `>=18` is accepted although it admits 18.0:
 that is one release from April 2022, the command fails loudly there, and refusing the most common spelling would make
 the answer useless on most projects. No `engines.node` at all keeps the bare form.
 
