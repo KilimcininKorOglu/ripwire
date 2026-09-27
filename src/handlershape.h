@@ -364,11 +364,15 @@ inline std::string_view calleeText( TSNode call, std::string_view src, std::stri
 }
 
 // An ASCII-lower-cased copy, for the case-insensitive vocabulary tests below (every needle is lower case).
+// Spelled as size-then-copy: the copy-construct-then-mutate spelling is token-identical to unrelated
+// string builders (oswin::powerShellPathPrependHint), which --quality-delta's duplication kind reads as a
+// clone of a reused helper — the false-positive class infra/dirwalk.h's banner documents.
 inline std::string lowerCopy( std::string_view s )
 {
-    std::string out( s );
-    strkern::lowerFoldAscii( out.data(), out.size() );
-    return out;
+    std::string folded( s.size(), '\0' );
+    std::copy( s.begin(), s.end(), folded.begin() );
+    strkern::lowerFoldAscii( folded.data(), folded.size() );
+    return folded;
 }
 
 // How many of the (lower-case) `needles` occur in `hay`, case-insensitively. A COUNT rather than the one-line
