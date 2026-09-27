@@ -1963,11 +1963,14 @@ struct JsonNode
 
     const JsonNode* get( std::string_view key ) const noexcept
     {
-        for( std::size_t i = keys.size(); i-- > 0; )
+        // Cursor counts down to 1, index = cursor - 1: the `i-- > 0` idiom wraps the unsigned to SIZE_MAX on EVERY
+        // miss, which G1's `-fsanitize=integer` aborts on (train 21's asan editcheckcheck arm (g): a package.json
+        // with no `workspaces` key, read by collectWorkspaceMembers, exit 134).
+        for( std::size_t cursor = keys.size(); cursor > 0; --cursor )
         {
-            if( keys[i] == key )
+            if( keys[cursor - 1] == key )
             {
-                return &vals[i];
+                return &vals[cursor - 1];
             }
         }
         return nullptr;
@@ -2335,10 +2338,12 @@ inline bool globPath( std::span<const std::string_view> patIn, std::span<const s
     const std::size_t P = pat.size(), S = path.size(), W = S + 1;
     std::vector<char> m( ( P + 1 ) * W, 0 );   // m[i*W + j]: pattern suffix i matches path suffix j
     m[ P * W + S ] = 1;
-    for( std::size_t i = P; i-- > 0; )
+    for( std::size_t ic = P; ic > 0; --ic )   // cursors, not `i-- > 0` (see JsonNode::get): no unsigned wrap at exit
     {
-        for( std::size_t j = W; j-- > 0; )
+        const std::size_t i = ic - 1;
+        for( std::size_t jc = W; jc > 0; --jc )
         {
+            const std::size_t j = jc - 1;
             const bool more = j < S;
             m[ i * W + j ] = pat[i] == "**" ? char( m[ ( i + 1 ) * W + j ] || ( more && m[ i * W + j + 1 ] ) )
                                            : char( more && m[ ( i + 1 ) * W + j + 1 ] && wildcardMatch( path[j], pat[i] ) );

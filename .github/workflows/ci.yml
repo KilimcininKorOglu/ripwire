@@ -689,6 +689,13 @@ jobs:
       - name: Heavy verb — --edit-check (test/editcheckcheck.sh)
         run: RIPWIRE_BIN=asan/ripwire bash test/editcheckcheck.sh
 
+      # The TS/JS import resolver (tsconfig/package.json/workspace readers) under the G1 sanitizers. Train 21's
+      # JsonNode::get wrapped its unsigned index on every key miss (-fsanitize=integer, exit 134); editcheckcheck
+      # arm (g) only caught it because this repo's own package.json happens to lack `workspaces`. This gate's
+      # fixtures drive every reader deterministically (72 aborts before the fix).
+      - name: TS/JS import resolution — --deps (test/depsprecisecheck.sh)
+        run: RIPWIRE_BIN=asan/ripwire bash test/depsprecisecheck.sh
+
       # cachefuzzcheck's two mutation tables ARE sanitizer sweeps: they drive corrupt/truncated/hostile cache
       # blobs and corrupt qsnap blobs through the readers and assert that no sanitizer report fires. That needs
       # an instrumented binary — RIPWIRE_ASAN_BIN is the whole point of the gate — and the `release` jobs, which
