@@ -673,13 +673,16 @@ inline void addNamedIdentTok( std::vector<NamedIdentTok>& out, std::string_view 
 // kMentionMaxNamedIdents. Sort-based: O(n log n) in the spellings, whatever the task. Returns the distinct count.
 inline std::size_t finalizeNamedIdents( std::vector<NamedIdentTok>& toks, std::vector<NamedIdent>& out )
 {
+    // svLess on the two string_view keys, not operator<: libstdc++'s string_view::_S_compare wraps n1 - n2
+    // and aborts the Linux G1 leg (#345 — the search side of this table family already switched in train 21;
+    // these two sorts are the side it left). The pos tiebreakers stay numeric; the order is unchanged.
     std::sort( toks.begin(), toks.end(), []( const NamedIdentTok& a, const NamedIdentTok& b )
-               { return a.name != b.name ? a.name < b.name : a.qualifier != b.qualifier ? a.qualifier < b.qualifier : a.pos < b.pos; } );
+               { return a.name != b.name ? rw::sortutil::svLess( a.name, b.name ) : a.qualifier != b.qualifier ? rw::sortutil::svLess( a.qualifier, b.qualifier ) : a.pos < b.pos; } );
     toks.erase( std::unique( toks.begin(), toks.end(), []( const NamedIdentTok& a, const NamedIdentTok& b )
                              { return a.name == b.name && a.qualifier == b.qualifier; } ),
                 toks.end() );
     std::sort( toks.begin(), toks.end(), []( const NamedIdentTok& a, const NamedIdentTok& b )
-               { return a.pos != b.pos ? a.pos < b.pos : a.name != b.name ? a.name < b.name : a.qualifier < b.qualifier; } );
+               { return a.pos != b.pos ? a.pos < b.pos : a.name != b.name ? rw::sortutil::svLess( a.name, b.name ) : rw::sortutil::svLess( a.qualifier, b.qualifier ); } );   // svLess: #345
     const std::size_t distinct = toks.size();
     const std::size_t keep     = std::min( distinct, kMentionMaxNamedIdents );
     out.reserve( keep );

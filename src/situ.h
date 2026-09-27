@@ -15,6 +15,7 @@
 #include "graph.h"
 #include "filter.h"
 #include "gitmine.h"
+#include "infra/sortutil.h"   // svLess — string_view order without libstdc++'s length subtraction (#344)
 #include "prcontext.h"   // A3-F17b/A3-F13: reuse the ONE numstat-based mask builder (gitDiffChangedMaskNumstat)
 #include "gitstamp.h"    // r26-stamp Task A: gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
 #include "testmap.h"     // §P11.4: TestRunnerIndex / runAttr — the run= hint on a named test row
@@ -495,8 +496,12 @@ inline std::vector<ChangedDirRow> changedRowsByDir( const IngestResult& ing, con
             rows.push_back( { siblift_detail::dirOf( ing.files[f] ), ing.files[f] } );
         }
     }
+    // svLess on both string_view keys, not operator<: libstdc++'s string_view::_S_compare wraps n1 - n2
+    // and aborts the Linux G1 leg (#344). svLess keeps operator<'s total order, so this sort and
+    // hasLexicalSiblingIn's lower_bound below still name the same order (infra/sortutil.h's contract).
     std::sort( rows.begin(), rows.end(), []( const ChangedDirRow& a, const ChangedDirRow& b ) noexcept
-               { return a.dir != b.dir ? a.dir < b.dir : a.path < b.path; } );
+               { return a.dir != b.dir ? rw::sortutil::svLess( a.dir, b.dir )
+                                       : rw::sortutil::svLess( a.path, b.path ); } );
     return rows;
 }
 
@@ -507,7 +512,7 @@ inline bool hasLexicalSiblingIn( const std::vector<ChangedDirRow>& changedByDir,
 {
     const std::string_view candDir = siblift_detail::dirOf( cand );
     const auto             first   = std::lower_bound( changedByDir.begin(), changedByDir.end(), candDir,
-                                                       []( const ChangedDirRow& row, std::string_view dir ) noexcept { return row.dir < dir; } );
+                                                       []( const ChangedDirRow& row, std::string_view dir ) noexcept { return rw::sortutil::svLess( row.dir, dir ); } );   // svLess: #344, the sort above names the same order
     for( auto it = first; it != changedByDir.end() && it->dir == candDir; ++it )
     {
         if( isLexicalSiblingOf( cand, it->path ) )

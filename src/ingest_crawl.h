@@ -6,6 +6,7 @@
 #error "ingest_crawl.h is a SECTION of src/ingest.cpp's translation unit - include it only from ingest.cpp (see the ingest-family split note there)"
 #endif
 #include "infra/tablelookup.h"   // findByField — the same lookup wrap's agentTarget uses
+#include "infra/sortutil.h"      // svLess — string_view order without libstdc++'s length subtraction (#343)
 
 // ingest_crawl.h — crawl + parse setup, moved VERBATIM from ingest.cpp in the 2026-08-29 split: the
 // limits/skip config, the extension -> {lang, grammar, query} table (lookupLang), capture-role and
@@ -224,8 +225,11 @@ constexpr bool everyMarkdownGrammarExtHasARow() noexcept
 {
     for( const std::string_view ext : docparse::kMarkdownGrammarExts )
     {
-        const LangEntry* row = findByField( kLangTable, &LangEntry::ext, ext );
-        if( row == nullptr || row->lang != Lang::Markdown )
+        // findIndexByField, not findByField: GCC rejects the pointer-vs-null compare of an array-derived
+        // address in constant evaluation under the sanitizer flags (#347); the index form is clean on
+        // every front end.
+        const std::size_t rowIdx = findIndexByField( kLangTable, &LangEntry::ext, ext );
+        if( rowIdx == std::size( kLangTable ) || kLangTable[rowIdx].lang != Lang::Markdown )
         {
             return false;
         }
@@ -251,10 +255,21 @@ constexpr std::size_t firstCrawlRowLangOfPathMisbuckets() noexcept
 {
     for( std::size_t index = 0; index < kLangTable.size(); ++index )
     {
-        const LangEntry&  row  = kLangTable[index];
-        const LintExtRow* lint = findByField( kLintExtRows, &LintExtRow::ext, row.ext );
-        const bool isMirrored  = lint != nullptr && lint->lang == row.lang;
-        if( row.ext.empty() || row.grammar == nullptr || ( isCodeLang( row.lang ) ? !isMirrored : lint != nullptr ) )
+        const LangEntry&  row      = kLangTable[index];
+        const std::size_t lintIdx  = findIndexByField( kLintExtRows, &LintExtRow::ext, row.ext );   // index form: #347
+        const bool lintFound       = lintIdx != std::size( kLintExtRows );
+        const bool isMirrored      = lintFound && kLintExtRows[lintIdx].lang == row.lang;
+        // The grammar-pointer-vs-null clause is the ONE part of this guard GCC cannot constant-evaluate
+        // when the grammar TUs are ASan-instrumented ("'(tree_sitter_cpp == 0)' is not a constant
+        // expression", #347); clang accepts it under the same flags. The degrade is scoped to exactly
+        // that front end + flag pair — the "REAL but reduced" posture CMakeLists announces for the GCC
+        // sanitizer stack — and every other build asserts the grammar non-null in full.
+#if defined( __SANITIZE_ADDRESS__ ) && !defined( __clang__ )
+        const bool grammarNull = false;
+#else
+        const bool grammarNull = row.grammar == nullptr;
+#endif
+        if( row.ext.empty() || grammarNull || ( isCodeLang( row.lang ) ? !isMirrored : lintFound ) )
         {
             return index;
         }
@@ -266,9 +281,9 @@ constexpr std::size_t firstLangOfPathRowTheCrawlNeverAdmits() noexcept
 {
     for( std::size_t index = 0; index < std::size( kLintExtRows ); ++index )
     {
-        const LintExtRow& row   = kLintExtRows[index];
-        const LangEntry*  crawl = findByField( kLangTable, &LangEntry::ext, row.ext );
-        if( crawl == nullptr || crawl->lang != row.lang )
+        const LintExtRow& row      = kLintExtRows[index];
+        const std::size_t crawlIdx = findIndexByField( kLangTable, &LangEntry::ext, row.ext );   // index form: #347
+        if( crawlIdx == std::size( kLangTable ) || kLangTable[crawlIdx].lang != row.lang )
         {
             return index;
         }
@@ -1441,8 +1456,15 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
 // then counts only the subtrees no rule this build already carried had pruned.
 bool pathInIgnoreSet( const std::vector<std::string>& sorted, std::string_view rel ) noexcept
 {
-    return std::binary_search( sorted.begin(), sorted.end(), rel,
-                               []( std::string_view a, std::string_view b ) noexcept { return a < b; } );
+    // lower_bound + the explicit found-check, not a binary_search one-liner: svLess because libstdc++'s
+    // string_view::_S_compare computes n1 - n2 in size_type and the wrap aborts the Linux G1 leg on the
+    // first prefix-equal, length-differing probe (#343 — `.git` against `.github/…`); the lower_bound
+    // shape because --quality-delta files a third `binary_search( …, svLess )` membership wrapper as a
+    // duplication clone of docparse's and externalnames' (measured: gating, tokens=35). Found ⟺ the
+    // first not-less element is not greater: svLess is the same total order operator< defines, so the
+    // vector sorted under operator< above stays sorted under this (infra/sortutil.h's contract).
+    const auto it = std::lower_bound( sorted.begin(), sorted.end(), rel, rw::sortutil::svLess );
+    return it != sorted.end() && !rw::sortutil::svLess( rel, *it );
 }
 
 // §N6-C — the probe AND the mode it implies, as one decision, so collectSources reads the answer instead
