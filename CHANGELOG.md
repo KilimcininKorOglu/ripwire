@@ -106,6 +106,43 @@ the row would read `ok="1"` there; it did not.
 - The Windows CI job adds a byte-identical copy first on PATH (must read `ok="1" copied="1"`). Its fake older
   ripwire is now a `.cmd`, which a PATHEXT search finds.
 
+### Fixed — TS/JS imports through a tsconfig alias, `baseUrl` or a workspace package are real edges (#220, part 2)
+
+Part 1 (0.6.4) disclosed these imports; they now resolve at graph time, following tsc's and Node's rules over the
+configs inside the crawl root, so `--deps`, `--arch`, `--report`, the `--impact` importer tier, cochange's static
+coupling and the call graph's file includes all gain the edges. On the issue's own tree, indexed from its root, the
+alias spelling now finds both cycles and gives `<cycles>`/`<godfiles>` byte-identical to the relative spelling.
+- **`paths`**: the one key `tsc` picks (exact, else the longest wildcard prefix), targets in order, from `baseUrl`
+  or the declaring config (a matched key that finds nothing stops there); **`baseUrl`** paths; `extends` chains
+  (relative, package-form from an in-tree `node_modules`, or a workspace member that is a config package).
+- **tsconfig `references`**: when the nearest tsconfig.json does not hold the file (create-vite's `files: []`), the
+  referenced project that does owns it (`files`/`include`/`exclude`, through nested references); a file in a
+  project only because a held file imports it resolves under the projects that can place the specifier.
+- **Workspace packages**: package.json `workspaces` (array or `{ "packages" }`), pnpm-workspace.yaml (block or flow
+  list), lerna.json and rush.json; `exports` (subpaths, `*` patterns; the `import`/`require`/`node`/`default`
+  conditions must agree, else the import is counted as ambiguous), else `module`/`main`/`index`, with an emitted
+  `dist/` entry mapped back to its source through the package's `outDir` → `rootDir` (`src/` when `rootDir` is
+  unset). A package importing itself by name through its `exports` resolves too.
+- **package.json `imports`** (`#lib/x`, `#*` patterns, conditions) through the nearest package.json.
+- **Re-exports are imports**: `export … from './y'` (all four forms) is now recorded, so a barrel file's edges and
+  the cycles through it exist, relative or aliased. `kParserVer` 122 → 124; `kCacheVersion` is unchanged.
+- **Disclosed, not guessed**: a missing target or an ambiguity (two workspace members with one name, `exports`
+  conditions naming different files, two referenced projects that disagree, a pnpm member shadowing a registry range
+  the importer declares) stays in `imports_unresolved=` with `graph_partial="1"`, as does a `#`, `@/` or `~`
+  specifier nothing answers (no registry can publish those names). New root attributes, absent at zero:
+  `imports_dts=N` (edges that land only on a `.d.ts`) and `tsconfig_unread=N` (configs that could declare an alias
+  or a workspace package and were not read: an `extends` base or referenced project not in the tree, one that does
+  not parse, or a tsconfig/jsconfig/workspace root **above the crawl root**, looked for up to the git top-level;
+  `graph_partial="1"` on `--deps`/`--arch`, a qualified `--report` cycle line, beside `counts_floor="1"` on
+  `--impact`). Configs above the crawl root are disclosed, not read: index the package or repository root for their
+  edges. An asset import (a stylesheet, an image, a font) that no indexed file answers is not counted: the graph
+  has no node for it.
+- A UTF-8 byte-order mark on a package.json, tsconfig or pnpm-workspace.yaml is read as tsc and the package
+  managers read it. A run of `**` in a workspace glob or a tsconfig `include` is matched in polynomial time; a
+  dozen of them used to stall the graph build.
+- The `--deps` help line says which imports resolve, which are counted, which configs are not read, and that the
+  nearest tsconfig's aliases apply to every file below it whether or not its `include` lists the file.
+
 ### Documented — the 0.6.4 skills-installer entry states the ownership rule that release shipped
 
 - The 0.6.4 entry said the prune step treats a name its last manifest listed as its own copy. It does not: the
