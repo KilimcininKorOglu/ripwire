@@ -25,6 +25,91 @@ format, exit codes and limits. You do not need it to get started.
 <p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
+<summary><b>Field report: what ripwire contributed to a large multi-agent coding engagement</b> — written by Claude Fable 5.0, the frontier model orchestrating ~20 coding agents over two days on a ~1,500-file C++/Metal codebase. Click for the full report.</summary>
+
+> For a single developer, this tool is a good lookup accelerator. For an *orchestrated fleet*, it's load-bearing: it
+> halved the research spend, twice redirected tasks before wasted work, prevented at least one silent-divergence shipped
+> bug, and turned code-quality hygiene from a hope into a per-task mechanical gate. Whole-workflow ~2×; per-lookup
+> 10–25×; and two moments where one call was worth more than the rest of the session's tooling combined.
+>
+> — the report's bottom line
+
+<p align="center"><a href="docs/assets/field-report-multi-agent.jpg"><img src="docs/assets/field-report-multi-agent.jpg"
+  alt="The full field report: what ripwire contributed to a large multi-agent coding engagement — headline numbers, where the value concentrated, the honest boundary, and the bottom line" width="720"></a></p>
+
+<details>
+<summary>Text version of the report</summary>
+
+**Field report: what ripwire contributed to a large multi-agent coding engagement**
+
+*Context, genericized: one orchestrating session directing ~20 sequential/parallel coding agents over a ~1,500-file
+C++/Metal codebase across two days — a deep architecture audit, then a 14-task feature wave (new subsystems,
+measurement infrastructure, a search-archive migration), ending in a verified all-on release flip. Every agent was
+instructed to lead with ripwire for orientation and to close with its quality gates.*
+
+**The headline numbers**
+
+- **Roughly half the total token spend of the audit/research phase, saved.** This is the operator's whole-phase
+  estimate — it includes everything the research agents did, ordinary file reads and all, which makes it conservative
+  rather than cherry-picked. The per-call factors underneath are much steeper: a single doc-recall call served the
+  relevant sections of a 164KB planning document in ~6K tokens (~25×), and agents that led with the tool ran ~30–40%
+  leaner on tool-call counts than agents doing raw read fan-outs over comparable questions.
+- **Two tasks had their direction changed by a single call.** One task was chartered to activate a steering behavior
+  the team believed was in production; one `--callers` query returned **zero production callers**, redirecting the
+  task to the real gap (the data provider that behavior needed had never been wired anywhere). Another task
+  refactored a widely-shared computation; `--edit-check` flagged **5 of 6 call sites** as incompatible — sites a text
+  search had missed — that would otherwise have silently diverged from the canonical path the day the feature was
+  enabled, surfacing months later as an unexplainable visual bug.
+- **A dozen-plus real code-quality defects fixed, not waived, across ~15 implementing agents** — all caught by
+  `--quality-delta` at each agent's "I think I'm done" moment: a 480-token duplicated routine, a fourth private copy of
+  a shared RNG utility, a hand-duplicated cost function, a pair of near-identical functions with a flipped sign
+  (correct at one boundary, quietly wrong at the other), test-fixture duplication across sibling suites, and functions
+  that had quietly absorbed a second job. None of these would have failed a test; all of them are the sediment that
+  rots a codebase under high-velocity multi-agent development. The gate made removing them routine instead of heroic.
+
+**Where the value concentrated**
+
+1. **Orientation and recall (the token win).** Ranked-signature task orientation and section-granular document recall
+   meant agents started from *answers*, not file dumps. Recall over planning docs was the orchestrator's single
+   most-used verb — the audit's entire framing came from two calls.
+2. **The contract checker (the shipped-bug preventions).** Beyond the 5-of-6 catch above, `--edit-check` gave
+   near-free proof-of-contract on every public-symbol change across the wave — the kind of verification that
+   otherwise simply doesn't happen at agent speed.
+3. **The quality gate as a *protocol*.** The measurable effect wasn't any single catch — it was that fifteen different
+   agents, none sharing context, all converged on the same "fix or justify with a written reason" discipline, with an
+   acknowledgments ledger that survived across tasks. Unattended orchestration usually leaks quality; here the
+   leak-check was mechanized.
+4. **Persistent notes.** Agents left gotcha notes pinned to symbols mid-wave (a caller-wiring law, an arming-rule
+   invariant), which later agents' lookups surfaced automatically — cheap institutional memory between contexts
+   that never met.
+
+**The honest boundary**
+
+- **The engagement's deepest findings did not come from the tool.** A structural capacity ceiling, a mis-derived
+  constant, a floating-point re-association drift of 1 ulp, and a seed-keying bug were all found by *bespoke
+  measurement the agents built* — baseline worktree diffs over full data fills, multi-arm attribution sweeps,
+  funnels. The tool is a floor for honesty and orientation, not a substitute for measurement design.
+- **Known false-positive mode, handled by its own documentation:** the contract checker's arity heuristic
+  over-counts on defaulted trailing parameters (one task saw "incompatible=18" that were all fine). The tool's own
+  trust-calibration notes say to verify by compiling in exactly this case, and agents that followed them lost nothing.
+- For broad, common-word conceptual queries, plain grep-and-read still occasionally won — consistent with the tool's
+  own guidance that it shines on specific technical asks.
+
+**Bottom line**
+
+For a single developer, this tool is a good lookup accelerator. For an *orchestrated fleet*, it's load-bearing: it
+halved the research spend, twice redirected tasks before wasted work, prevented at least one silent-divergence shipped
+bug, and turned code-quality hygiene from a hope into a per-task mechanical gate. Whole-workflow ~2×; per-lookup
+10–25×; and two moments where one call was worth more than the rest of the session's tooling combined.
+
+</details>
+
+*The model's own report of one engagement, on a version before 0.5; not a controlled measurement. Controlled
+measurements are in [docs/EVALS.md](docs/EVALS.md).*
+
+</details>
+
+<details>
 <summary><b>Fifty years of software-engineering results, and research from last month.</b> 49 repositories and 71 papers folded — McCabe (1976) through to <b>seven published in the last two months</b> — each row in <a href="docs/LINEAGE.md"><b>docs/LINEAGE.md</b></a> naming the lesson taken and the file it lives in</summary>
 
 Beside those sits a labelled survey of **237 tools** that contributed nothing and says so. The two
