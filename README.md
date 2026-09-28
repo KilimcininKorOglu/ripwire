@@ -25,7 +25,7 @@ format, exit codes and limits. You do not need it to get started.
 <p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
-<summary><b>Field report: what ripwire contributed to a large multi-agent coding engagement</b> — written by Claude Fable, the frontier model orchestrating ~20 coding agents over two days on a ~1,500-file C++/Metal codebase. Click for the full report.</summary>
+<summary><b>Field report: what ripwire contributed to a large multi-agent coding engagement</b> — written by Claude Fable 5.0, the frontier model orchestrating ~20 coding agents over two days on a ~1,500-file C++/Metal codebase. Click for the full report.</summary>
 
 > For a single developer, this tool is a good lookup accelerator. For an *orchestrated fleet*, it's load-bearing: it
 > halved the research spend, twice redirected tasks before wasted work, prevented at least one silent-divergence shipped
