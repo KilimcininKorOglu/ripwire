@@ -15,6 +15,17 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--stray-content --plan` and `--merge-scout` stop extracting the subtrees the crawl prunes
+
+Each scouted arm materialised its commit with `git archive` + `tar -x` of EVERY committed byte, then ingested it
+with a crawl that prunes `third_party/`, `vendor/`, `build/` and the rest of the built-in denylist by name. On this
+repository that is 249 MB of a 325 MB archive per arm; `--stray-content --plan` (12 scouted arms) took 116 s on a
+loaded machine and a 60 s caller got no output at all. The archive now carries the denylist as exclude pathspecs
+(`:(exclude,glob)**/<dir>/**`), so an arm writes and deletes only what the crawl reads: one arm 14.4 s → 7.2 s,
+byte-identical output. It also stops an unextractable vendored path (a name component no filesystem accepts) from
+refusing the whole arm. An empty tree (git refuses an exclude-only pathspec over it) falls back to the plain archive. The one prune a pathspec cannot express — a directory holding `CMakeCache.txt` — is still
+extracted and still pruned by the crawl. Gate: `test/landingcheck.sh` REPO3 (red before, green after).
+
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any

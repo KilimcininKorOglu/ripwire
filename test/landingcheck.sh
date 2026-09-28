@@ -262,5 +262,40 @@ if command -v xmllint >/dev/null 2>&1; then
     if echo "$B" | xmllint --noout - 2>/dev/null; then ok "REPO2 landing-plan XML well-formed"; else no "REPO2 landing-plan XML malformed"; fi
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+# REPO3 — the per-arm tree materialization skips what the crawl prunes (src/quality.h crawlSkipDirPathspecs).
+# merge-scout extracted EVERY committed byte of each arm's tree and then let the crawl ignore third_party/,
+# build/ etc. On this repository that was 249 MB of a 325 MB archive per arm and --stray-content --plan ran
+# 116 s. The observable here is deterministic, not a timing: a vendored path no filesystem can create (a
+# 300-byte name component, stored with git plumbing) made `tar -x` fail, so the arm refused over a file the
+# crawl would never have read. Red before the prune, green after; a real source change on the same branch
+# must still be seen.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+R3="$TMP/repo3"; mkdir -p "$R3"
+g3(){ git -C "$R3" "$@" >/dev/null 2>&1; }
+g3 init -q -b main
+printf 'int keep( int a )\n{\n    return a + 1;\n}\n' >"$R3/a.c"
+g3 add a.c; g3 commit -q -m base
+g3 checkout -q -b vend
+printf 'int keep( int a )\n{\n    return a + 2;\n}\n\nint added( int b )\n{\n    return b * 3;\n}\n' >"$R3/a.c"
+g3 add a.c
+longName="$( printf 'v%.0s' $( seq 1 300 ) ).c"
+blob="$( printf 'int vendored( void ) { return 7; }\n' | git -C "$R3" hash-object -w --stdin )"
+g3 update-index --add --cacheinfo "100644,$blob,third_party/$longName"
+g3 commit -q -m "vendored tree with an unextractable path"
+g3 checkout -q -f main
+V3="$( "$BIN" "$R3" --stray-content --plan 2>/dev/null )"; v3rc=$?
+[ "$v3rc" -eq 0 ] && ok "REPO3: --stray-content --plan ran clean (rc=0)" || no "REPO3 run failed (rc=$v3rc)"
+echo "$V3" | grep -q '<arm ref="vend" [^>]*ok="1"' \
+    && ok "REPO3: the arm over an unextractable third_party/ path is scouted (ok=1): the prune skips it at archive time" \
+    || { no "REPO3: the vend arm refused — the materialization extracted a subtree the crawl prunes"; echo "$V3" | grep -o '<arm [^>]*>'; }
+echo "$V3" | grep -q '<arm ref="vend" [^>]*changed="[1-9]' \
+    && ok "REPO3: the arm still sees the real a.c change (changed>0)" \
+    || { no "REPO3: the vend arm lost the a.c change"; echo "$V3" | grep -o '<arm [^>]*>'; }
+MS3="$( "$BIN" "$R3" --merge-scout=vend 2>/dev/null )"
+echo "$MS3" | grep -q '<arm ref="vend" [^>]*ok="1"' \
+    && ok "REPO3: --merge-scout=vend scouts the arm too (the shared materializer)" \
+    || { no "REPO3: --merge-scout=vend refused the arm"; echo "$MS3" | grep -o '<arm [^>]*>'; }
+
 [ $fail -eq 0 ] && echo "landingcheck: ALL PASS" || echo "landingcheck: FAILURES"
 exit $fail

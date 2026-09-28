@@ -3686,7 +3686,27 @@ struct MaterializedTree
     }
 };
 
-inline std::string materializeCommitTree( const std::string& root, const std::string& committish, const char* tag )
+// The crawl denylist (ingest.h kCrawlSkipDirs / isSkippedCrawlDir) spelled as `git archive` exclude pathspecs, each
+// single-quoted and space-led. A caller that only INGESTS the tree (merge-scout's per-arm index) gains nothing from
+// extracting a subtree the crawl prunes by name anyway, and on this repository that subtree is most of the bytes:
+// third_party/ is 249 MB of a 325 MB archive, so every scouted arm wrote and deleted a quarter-gigabyte it never read
+// (--stray-content --plan: 12 arms, 116 s, timed out a 60 s caller with nothing printed). `glob` magic keeps `*` inside
+// one path component, the leading `**/` matches the root level too, and an exclude-only pathspec list still means
+// "everything else" (git >= 2.13). The one crawl prune a pathspec cannot express — a directory holding CMakeCache.txt —
+// is still extracted and still pruned by the crawl, so the ingest result is the one an unpruned archive gives.
+inline std::string crawlSkipDirPathspecs()
+{
+    std::string specs;
+    for( const std::string_view dir : kCrawlSkipDirs )
+    {
+        specs += " " + shSingleQuote( ":(exclude,glob)**/" + std::string( dir ) + "/**" );
+    }
+    specs += " " + shSingleQuote( ":(exclude,glob)**/cmake-build-?*/**" );   // isSkippedCrawlDir: the prefix plus at least one byte
+    specs += " " + shSingleQuote( ":(exclude,glob)**/?*.dSYM/**" );          // isSkippedCrawlDir: a name longer than the suffix
+    return specs;
+}
+
+inline std::string materializeCommitTree( const std::string& root, const std::string& committish, const char* tag, bool pruneCrawlSkipDirs = false )
 {
     namespace fs = std::filesystem;
     MaterializedTree tree;
@@ -3722,8 +3742,12 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // TmpTreeGuard owns.
     const std::string archiveFile = tmpRoot + ".tar";
     const std::string archiveCmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " -- 2>/dev/null";
-    if( os::system( archiveCmd.c_str() ) != 0 )
+                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " --";
+    // The pruned archive is an optimisation, never a new way to fail: git refuses an exclude-only pathspec over an
+    // EMPTY tree ("pathspec … did not match any files", measured on git 2.50), which is a legal base. Any refusal of
+    // the pruned form falls back to the plain archive, whose exit status then decides as it always did.
+    const bool archivedPruned = pruneCrawlSkipDirs && os::system( ( archiveCmd + crawlSkipDirPathspecs() + " 2>/dev/null" ).c_str() ) == 0;
+    if( !archivedPruned && os::system( ( archiveCmd + " 2>/dev/null" ).c_str() ) != 0 )
     {
         DISCLOSE( tree, MaterializedTree::DisclosureWhy::ArchiveFailed, "quality: git archive failed — committed tree unavailable" );
         std::error_code e;
