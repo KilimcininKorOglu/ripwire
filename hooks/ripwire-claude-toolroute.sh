@@ -99,6 +99,12 @@ esac
 cwd="$( printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null )"
 session="$( printf '%s' "$input" | jq -r '.session_id // .conversation_id // empty' 2>/dev/null )"
 [ -n "$cwd" ] && [ -d "$cwd" ] || exit 0
+# The hook answers for the JSON cwd, so git's repository-selection variables inherited from the caller are
+# cleared first, as the two route hooks do (git's own list, plus GIT_DIR/GIT_WORK_TREE if git cannot print
+# it). With GIT_DIR exported, `git -C "$cwd" rev-parse --show-toplevel` prints a non-git cwd as its own top
+# level, and the ripwire calls below would read that repository's history instead of the cwd's.
+# shellcheck disable=SC2046 # word splitting is intended: one variable name per word
+unset $( git rev-parse --local-env-vars 2>/dev/null ) GIT_DIR GIT_WORK_TREE
 
 command=""
 pattern=""

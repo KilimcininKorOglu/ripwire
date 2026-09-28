@@ -3,7 +3,7 @@
 // dirwalk.h — the ONE "walk up from a file to a crawl-root boundary, testing each directory" primitive.
 //
 // pythonrunner.h's hasPytestProject (nearest pytest config: pytest.ini / conftest.py / a recognized
-// pyproject.toml or setup.cfg section) and jsrunner.h's nearestPackageJson (#323, nearest package.json)
+// pyproject.toml or setup.cfg section) and jsrunner.h's nearestPackageManifests (#323, nearest package.json)
 // are the SAME walk over two different per-directory predicates: start at a file's own directory, climb
 // to the crawl root inclusive, stop at the first directory that matches. --quality-delta's duplication
 // kind flagged the pair the moment jsrunner.h landed — the same shape jsonesc.h's own W2-M0 note

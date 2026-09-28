@@ -23,7 +23,11 @@ recall@5 / @10 / @20:
 | random | 0.3% | 0.6% | 1.3% | floor |
 
 **→ ripwire's lexical retrieval recovers ~40% of a real change's files at top-5 (≈53% at top-20) —
-a 30–130× lift over random, and far above the same-directory prior.**
+a 30–130× lift over random, and far above the same-directory prior.** (Disclosed 2026-09-26: ranked on the
+index at HEAD, which already contains each graded commit, so these absolute values, PageRank's 3.8% included, are
+most likely upper bounds; not proven, since the HEAD index also holds files added after each commit, which push
+recall down. The ordering would reverse only if lexical recall fell more than tenfold relative to PageRank's at the
+parent revisions, which has not been measured. `docs/EVALS.md` §"Co-change".)
 
 **The honest finding (ripwire's own `--eval` has said this all along):** *relatedness is lexical,
 importance is structural.* PageRank — ripwire's headline ranker — is the wrong tool for "what else does
@@ -95,7 +99,8 @@ reciprocal-rank weight; score-space lets the graph term matter only where walk m
 Wired as the `anchored` column of `--eval` (file-granularity mirror: anchors lifted from the BM25body
 base, file scored by its best symbol). **Result on the 80-commit private-C++-corpus co-change benchmark
 (historical, private corpus, not reproducible publicly; 2026-07-05 re-run — history has moved since
-the table above; all columns re-based):** anchored
+the table above; all columns re-based; the same at-HEAD instrument, so its absolute values are most likely
+upper bounds too, not proven):** anchored
 30.6% / 38.0% / 43.7% @5/@10/@20 vs its lexical base BM25body 30.6% / 37.7% / 43.7% and BM25
 whole-name 36.9% / 45.1% / 48.1%. A sensitivity scan (N∈{8,20,40}, λ∈{0.15,0.30,0.50}) moves every
 number ≤0.3pt — the conclusion is parameter-robust, not a tuning artifact. **Honest verdict: anchoring

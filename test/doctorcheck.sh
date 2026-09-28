@@ -9,6 +9,9 @@
 #   (D) non-vacuity without a source mutation: assert the check COUNT in checks="N" equals the number
 #       of emitted <c ...> rows (a doctor that silently dropped a check would still exit 0/1 plausibly,
 #       but the count would betray it).
+#   (F4)-(F6) #334 binary-path lookup: PATH is read by this process (a shell's `which` is never asked); an unreadable
+#       PATH copy is UNVERIFIED (same_bytes="unknown"), never STALE; which= equals which(1)'s answer on POSIX; (F7) an
+#       unreadable file with different release numbers is STALE on those numbers, never "contents differ".
 #   (G) tracked-binary staleness: a binary committed, then its same-stem source
 #       edited in a LATER commit with the binary never recommitted, fires stale="1" ok="0" (git-commit-order,
 #       never mtime); a binary + source committed TOGETHER in their most recent touch stays stale="0" ok="1".
@@ -257,6 +260,93 @@ echo "$TROW" | grep -q 'which_version=' \
     && no "(F3) a byte-identical copy was asked for its version (only a mismatch runs the PATH copy)" \
     || ok "(F3) a byte-identical PATH copy carries no which_version= (the PATH binary is run only on a mismatch)"
 
+# ── (F4) #334: the row asks THIS process's PATH (os::which), never a child shell's `which`. On Windows, Git Bash's
+#     `which` answered from another PATH order, in a "/c/..." spelling, and named ~/bin's copy while PowerShell ran the
+#     0.6.4 install. Here a `which` that names a different copy (the byte-flipped STALEDIR one) comes first on PATH, and
+#     the ripwire PATH really runs is TWICEDIR's byte-identical copy. The row must follow PATH: ok="1" copied="1". ──
+FAKEWHICH="$TMP/fakewhich"; mkdir -p "$FAKEWHICH"
+printf '%s\n' '#!/bin/sh' "echo '$STALEDIR/ripwire'" >"$FAKEWHICH/which"
+chmod +x "$FAKEWHICH/which"
+F4CACHE="$TMP/f4cache"; mkdir -p "$F4CACHE"
+F4ROW="$( PATH="$FAKEWHICH:$TWICEDIR:$PATH" TMPDIR="$F4CACHE" "$BIN" "$REPO" --doctor --no-cache 2>/dev/null | grep -oE '<c n="binary-path"[^<]*/>' )"
+{ echo "$F4ROW" | grep -q ' ok="1"' && echo "$F4ROW" | grep -q 'copied="1"' && echo "$F4ROW" | grep -qF "which=\"$TWICEDIR/ripwire\""; } \
+    && ok "(F4) a shell \`which\` that names another copy is not asked: the row follows PATH to the identical copy (ok=\"1\" copied=\"1\")" \
+    || no "(F4) the row followed a child shell's \`which\` instead of PATH: $F4ROW"
+
+# ── (F5) #334: a PATH copy whose bytes cannot be READ has no known contents. Windows' version of this was the "/c/..."
+#     spelling std::fopen could not open: a byte-identical copy came out "STALE … their contents differ". Here the same
+#     size and the same build, but execute-only. The row must fail as unverified (same_bytes="unknown", the file named
+#     in the hint), never as STALE. (Skipped where the copy stays readable, e.g. as root.) ──
+UNREADDIR="$TMP/unreaddir"; mkdir -p "$UNREADDIR"
+cp -p "$BIN" "$UNREADDIR/ripwire"; chmod 111 "$UNREADDIR/ripwire"
+if [ -r "$UNREADDIR/ripwire" ]; then
+    ok "(F5) skipped: an execute-only copy is still readable here (root?), so it cannot model an unreadable file"
+else
+    F5CACHE="$TMP/f5cache"; mkdir -p "$F5CACHE"
+    F5ROW="$( PATH="$UNREADDIR:$PATH" TMPDIR="$F5CACHE" "$BIN" "$REPO" --doctor --no-cache 2>/dev/null | grep -oE '<c n="binary-path"[^<]*/>' )"
+    { echo "$F5ROW" | grep -q ' ok="0"' && echo "$F5ROW" | grep -q 'same_bytes="unknown"' \
+      && echo "$F5ROW" | grep -qF "hint=\"UNVERIFIED: could not read $UNREADDIR/ripwire"; } \
+        && ok "(F5) an unreadable same-size copy reads same_bytes=\"unknown\" with an UNVERIFIED hint naming it" \
+        || no "(F5) an unreadable copy was not reported as unverified: $F5ROW"
+    echo "$F5ROW" | grep -q 'STALE' \
+        && no "(F5) an unreadable copy was called STALE (no evidence the contents differ): $F5ROW" \
+        || ok "(F5) an unreadable copy is never called STALE"
+fi
+chmod 755 "$UNREADDIR/ripwire" 2>/dev/null
+
+# ── (F6) POSIX parity: dropping the child shell must not change which copy the row names. For each PATH shape, which=
+#     must be exactly what which(1) prints: a directory named ripwire first, a non-executable file first, a symlink, and
+#     an empty PATH entry (the current directory) leading, trailing ("/usr/bin:/bin:") and in the middle. (Skipped when
+#     this host has no which(1) to compare with.) ──
+if command -v which >/dev/null 2>&1 && [ -x "$( command -v which )" ]; then
+    SHAPES="$TMP/shapes"; mkdir -p "$SHAPES/dirnamed/ripwire" "$SHAPES/noexec" "$SHAPES/link" "$SHAPES/cwd"
+    cp "$BIN" "$SHAPES/noexec/ripwire"; chmod 644 "$SHAPES/noexec/ripwire"
+    ln -s "$TWICEDIR/ripwire" "$SHAPES/link/ripwire"
+    cp "$BIN" "$SHAPES/cwd/ripwire"; chmod 755 "$SHAPES/cwd/ripwire"
+    F6CACHE="$TMP/f6cache"; mkdir -p "$F6CACHE"
+    f6bad=0; f6n=0
+    for shape in "$SHAPES/dirnamed:$TWICEDIR:/usr/bin:/bin" "$SHAPES/noexec:$TWICEDIR:/usr/bin:/bin" \
+                 "$SHAPES/link:$TWICEDIR:/usr/bin:/bin" ":$TWICEDIR:/usr/bin:/bin" "/usr/bin:/bin:" "/usr/bin::/bin"; do
+        want="$( cd "$SHAPES/cwd" && PATH="$shape" which ripwire 2>/dev/null )"
+        row="$( cd "$SHAPES/cwd" && PATH="$shape" TMPDIR="$F6CACHE" "$BIN" "$REPO" --doctor --no-cache 2>/dev/null | grep -oE '<c n="binary-path"[^<]*/>' )"
+        f6n=$(( f6n + 1 ))
+        if [ -z "$want" ] || ! echo "$row" | grep -qF "which=\"$want\""; then
+            f6bad=$(( f6bad + 1 )); echo "    PATH=$shape: which(1)=[$want] row: $row"
+        fi
+    done
+    [ "$f6bad" -eq 0 ] \
+        && ok "(F6) which= equals which(1)'s answer on all $f6n PATH shapes (directory, non-executable, symlink, empty entry leading/trailing/middle)" \
+        || no "(F6) which= differs from which(1) on $f6bad of $f6n PATH shapes"
+else
+    ok "(F6) skipped: no which(1) on this host to compare with"
+fi
+
+# ── (F7) #334 review N1 (self= is the realpath of the running copy, so the unread name is read from it): an unreadable file with DIFFERENT stated release numbers. The release numbers are the evidence,
+#     so the row may say STALE, but it must not claim "their contents differ" (no bytes were compared) and it must name
+#     the file it could not read. Built so the RUNNING binary is the unreadable one (an execute-only copy of $BIN; exec
+#     needs no read permission) and the PATH copy is a readable same-size script that prints an older version: sizes
+#     equal, so the byte compare runs and cannot open self. (Skipped where the copy stays readable, e.g. as root.) ──
+F7="$TMP/f7"; mkdir -p "$F7/self" "$F7/path"
+cp "$BIN" "$F7/self/ripwire"; chmod 111 "$F7/self/ripwire"
+if [ -r "$F7/self/ripwire" ]; then
+    ok "(F7) skipped: an execute-only copy is still readable here (root?)"
+else
+    printf '%s\n' '#!/bin/sh' 'echo "ripwire 0.6.2 (Release, fake, emit=std::print, built_from=0000000f334)"' 'exit 0' >"$F7/path/ripwire"
+    pad=$(( $( wc -c <"$BIN" ) - $( wc -c <"$F7/path/ripwire" ) ))
+    head -c "$pad" /dev/zero | tr '\0' '#' >>"$F7/path/ripwire"; chmod 755 "$F7/path/ripwire"
+    F7CACHE="$TMP/f7cache"; mkdir -p "$F7CACHE"
+    F7ROW="$( PATH="$F7/path:$PATH" TMPDIR="$F7CACHE" "$F7/self/ripwire" "$REPO" --doctor --no-cache 2>/dev/null | grep -oE '<c n="binary-path"[^<]*/>' )"
+    { echo "$F7ROW" | grep -q ' ok="0"' && echo "$F7ROW" | grep -q 'same_bytes="unknown"' && echo "$F7ROW" | grep -q 'hint="STALE: ' \
+      && echo "$F7ROW" | grep -qF "could not read $( echo "$F7ROW" | sed -n 's/.* self="\([^"]*\)".*/\1/p' ) (" \
+      && echo "$F7ROW" | grep -q 'state different release numbers'; } \
+        && ok "(F7) unreadable + different release numbers: STALE on the release numbers, naming the unread file" \
+        || no "(F7) unreadable + different release numbers: $F7ROW"
+    echo "$F7ROW" | grep -q 'contents differ' \
+        && no "(F7) the hint claims the contents differ though no bytes were compared: $F7ROW" \
+        || ok "(F7) the hint makes no claim about contents it never read"
+    chmod 755 "$F7/self/ripwire" 2>/dev/null
+fi
+
 # ── (G) NOT on PATH at all — the state every fresh install is in until the user adds ~/.local/bin, and the
 #     state in which a stranger runs this binary by absolute path to ask what is wrong. Used to be ok="1"
 #     (passed=7/7) with `ripwire` a "command not found" at the prompt. Fails the row, names the fix. ──
@@ -306,6 +396,51 @@ WGOTPATH="$( PATH="/usr/bin:/bin" bash "$WEVALSCRIPT" 2>/dev/null )"
 [ ! -e "$MARKER" ] \
     && ok "(G2) no side effect from evaluating the pasted line (a broken quote would let \` or \$() run)" \
     || no "(G2) a marker file exists — the pasted line ran something"
+
+# ── (G3) CodeRabbit 4109273959, second comment: a user pastes the hint from the command to its END, so nothing may
+#     follow the command. The hint used to end "... :"$PATH" (and put that line in your shell rc file)", and pasting
+#     that made bash and sh refuse the whole line (syntax error near `(`) and zsh fail ("number expected"), so PATH
+#     never changed. Evaluate everything from `export PATH=` to the end of the hint in each shell present, and require
+#     exit 0 with the literal directory first on PATH. RED on 0.6.4's trailing guidance.
+WTAIL="$( printf '%s' "$WHINT_UNESC" | sed -e 's/^hint="//' -e 's/"$//' | sed -n 's/.*\(export PATH=\)/\1/p' )"
+[ -n "$WTAIL" ] || no "(G3) no 'export PATH=' in the not-on-PATH hint: $WHINT"
+for g3sh in bash sh zsh; do
+    command -v "$g3sh" >/dev/null 2>&1 || continue
+    printf '%s\nprintf "%%s" "${PATH%%%%:*}"\n' "$WTAIL" >"$TMP/g3-$g3sh.sh"
+    G3OUT="$( PATH="/usr/bin:/bin" "$g3sh" "$TMP/g3-$g3sh.sh" 2>"$TMP/g3-$g3sh.err" )"; G3RC=$?
+    [ "$G3RC" -eq 0 ] && [ "$G3OUT" = "$WEIRDDIR_REAL" ] \
+        && ok "(G3) $g3sh: pasting the hint from 'export PATH=' to its end runs and puts the directory first on PATH" \
+        || no "(G3) $g3sh: pasting the hint's tail failed (rc=$G3RC, PATH head [$G3OUT], stderr [$( head -c 120 "$TMP/g3-$g3sh.err" )]): [$WTAIL]"
+done
+
+# ── (G4) review R4 of the CodeRabbit 4109273959 follow-up: the hint ATTRIBUTE is XML-escaped (&apos; &quot;) like every
+#     attribute, so the bytes a terminal shows do not paste into any shell. With ripwire not on PATH, --doctor also prints
+#     the remedy UNESCAPED on stderr, the command alone on the last line. Paste that raw last line, byte for byte, into
+#     each shell present: exit 0 and the literal $/`/'/space directory first on PATH. stdout stays one well-formed
+#     document. RED on 0.6.4, which printed nothing on stderr.
+WERR="$TMP/g4-doctor.err"
+PATH="/usr/bin:/bin" TMPDIR="$WEIRDCACHE" "$WEIRDDIR/ripwire" "$REPO" --doctor --no-cache >"$TMP/g4-doctor.out" 2>"$WERR"
+xmllint --noout "$TMP/g4-doctor.out" 2>/dev/null \
+    && ok "(G4) stdout is still one well-formed XML document when the remedy is also on stderr" \
+    || no "(G4) --doctor stdout is not well-formed XML"
+G4LINE="$( tail -n 1 "$WERR" )"
+case "$G4LINE" in
+    export\ PATH=*) ok "(G4) stderr's last line is the bare command: [$G4LINE]" ;;
+    *)              no "(G4) stderr's last line is not the command (nothing pasteable unescaped): [$G4LINE]" ;;
+esac
+for g4sh in bash sh dash zsh; do
+    command -v "$g4sh" >/dev/null 2>&1 || continue
+    printf '%s\nprintf "%%s" "${PATH%%%%:*}"\n' "$G4LINE" >"$TMP/g4-$g4sh.sh"
+    G4OUT="$( PATH="/usr/bin:/bin" "$g4sh" "$TMP/g4-$g4sh.sh" 2>"$TMP/g4-$g4sh.err" )"; G4RC=$?
+    [ "$G4RC" -eq 0 ] && [ "$G4OUT" = "$WEIRDDIR_REAL" ] && [ ! -e "$MARKER" ] \
+        && ok "(G4) $g4sh: the raw stderr line pastes as-is and puts the directory first on PATH" \
+        || no "(G4) $g4sh: the raw stderr line did not paste (rc=$G4RC, PATH head [$G4OUT], stderr [$( head -c 120 "$TMP/g4-$g4sh.err" )])"
+done
+# control: with ripwire on PATH, --doctor says nothing on stderr about PATH
+PATH="$WEIRDDIR:/usr/bin:/bin" TMPDIR="$WEIRDCACHE" "$WEIRDDIR/ripwire" "$REPO" --doctor --no-cache >/dev/null 2>"$TMP/g4-onpath.err"
+grep -q 'no ripwire resolves from PATH' "$TMP/g4-onpath.err" \
+    && no "(G4) control: stderr carries the PATH remedy even with ripwire on PATH" \
+    || ok "(G4) control: with ripwire on PATH, stderr carries no PATH remedy"
 
 # §P11 doctor item: binary-path's ok="0" row names which of self=/which= is the STALE (older) one.
 echo "$SOUT" | grep -oE '<c n="binary-path" ok="0"[^<]*/>' | grep -q 'hint="STALE:' \

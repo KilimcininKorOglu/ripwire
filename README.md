@@ -54,7 +54,7 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
-**Latest: 0.6.4** — Windows fixes from real testers, and honest TypeScript answers. [Release notes](#release-notes) ·
+**Latest: 0.6.5** — TypeScript alias imports resolve, and fixes from Windows testers. [Release notes](#release-notes) ·
 [the presentation](present/ripwire-showcase.pdf) · [the changelog](CHANGELOG.md) — with thanks to the
 contributors named there; this release is largely theirs.
 
@@ -932,11 +932,16 @@ ripwire --version
   nothing; the Windows tool is `fc.exe`, run as `MSYS_NO_PATHCONV=1 fc.exe /b a b` so `/b` is not rewritten as a path.
 - **Git for Windows** is needed for the git-history features (churn, `--situ`, the `git` row of `--doctor`) and for
   the skills installer. The map itself runs without it.
-- **`ripwire . --doctor`**: every row should read `ok="1"`. `binary-path` stays marked `degraded="1"` on Windows
-  (it asks Git Bash's `which`). When it fails, `which=` names the `ripwire` that `Path` finds first, and
-  `which_version=` is what that one prints for `--version`. The cache lives in `%LOCALAPPDATA%\Temp\ripwire-<uid>`
+- **`ripwire . --doctor`**: every row should read `ok="1"`. `binary-path` finds `ripwire` the way PowerShell does
+  (`Path` in order, then `PATHEXT`). When it fails, `which=` names the `ripwire` that `Path` finds first, and
+  `which_version=` is what that one prints for `--version`. `same_bytes="unknown"` means a copy could not be read;
+  the row fails as unverified, so compare the two with `Get-FileHash`. The cache lives in `%LOCALAPPDATA%\Temp\ripwire-<uid>`
   (your `TEMP`). With `TMPDIR`, `TEMP` and `TMP` all unset, Windows' own temp-directory rule falls back to your profile
   folder, so the cache is `%USERPROFILE%\ripwire-<uid>`; the `cache-dir` row names the directory either way.
+- **Checking cache reuse:** in PowerShell `$env:RIPWIRE_CACHE_STATS=1; ripwire . > $null` (in Git Bash
+  `RIPWIRE_CACHE_STATS=1 ripwire . > /dev/null`) prints one `cache-stats` line on stderr. Run it twice with no other ripwire build in between: `reparsed=0` and `reused=` equal to `files=` mean every
+  file came from the cache. `warm_growths=` is a performance counter, not a reuse fact: it counts how often a worker
+  thread's buffer had to grow, which depends on how the threads split the files, so it varies from run to run by design.
 - **Agent skills** (Claude Code, Codex): from Git Bash, in the unzipped folder, `bash skills/install.sh` (Claude Code)
   or `bash skills/install.sh --codex`. From PowerShell, name Git Bash by full path,
   `& "C:\Program Files\Git\bin\bash.exe" skills/install.sh`: a bare `bash` there is often WSL's
@@ -1416,18 +1421,26 @@ wins over this — including an authoritative-but-unrecognized script, which is 
 import fallback only ever fires on what was previously `run_unknown="1"`.
 
 For a `.ts`/`.mts`/`.cts` file — whether the runner was named by `scripts.test: "node --test"` or inferred
-from the import above — a `run=` command is spelled only when it will actually run, never a guess:
+from the import above — a `run=` command is spelled only where the checks below find nothing that makes Node
+refuse to start it. They are read off the repository's own bytes, so they cannot see the Node that will run
+it, and a refusal is `run_unknown="1"`, never a guess:
 
 - **`.tsx` and `.jsx` never get a command.** Node's type stripping does not cover `.tsx` at all
   (`ERR_UNKNOWN_FILE_EXTENSION`), and plain `node` cannot load a `.jsx` file at all, on any Node version —
   both stay `run_unknown="1"` unconditionally.
-- **Every relative import/require in the test file must resolve exactly as written.** Node's module
-  resolver, under type stripping, never probes an extension and never maps a `.js` specifier onto a `.ts`
-  source — the exact shapes tsc-, tsx- and bundler-run TS code uses to import its own siblings. So a
-  command is spelled only when every relative (`./`/`../`) static `import`/`export … from` specifier or
-  `require(...)` argument in the test file's own bytes names a file that exists on disk at that exact path;
-  an extensionless specifier, or one whose spelled extension is not the file actually on disk, stays
-  `run_unknown="1"`.
+- **Every relative import/require must resolve exactly as written, in the test file and in every local
+  TypeScript module it reaches.** Node's module resolver, under type stripping, never probes an extension
+  and never maps a `.js` specifier onto a `.ts` source — the exact shapes tsc-, tsx- and bundler-run TS code
+  uses to import its own siblings. So a command is spelled only when every relative (`./`/`../`) static
+  `import`/`export … from` specifier or `require(...)` argument names a file that exists on disk at that
+  exact path. The walk follows each specifier that lands on a `.ts`/`.mts`/`.cts` file, reads at most 64
+  modules, and a walk cut at that bound stays `run_unknown="1"` too.
+- **No module on that walk may use syntax type stripping cannot erase.** Node strips types and rewrites
+  nothing, so an `enum`, a `namespace` with runtime code (or holding only `declare` statements), the legacy
+  `module M {}` keyword, a constructor parameter property, an import alias (`import A = B.C`,
+  `import x = require(…)`), `export =`, an angle-bracket assertion `<T>x` or a decorator stops it with
+  `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` (or a parse error) before any test runs; any of them outside a
+  `declare` stays `run_unknown="1"`. A type-only namespace and a `declare enum` are erased and do not count.
 - **The command is additionally Node-version-aware, from `engines.node`.** `--experimental-strip-types`
   itself exists from Node 22.6 only (an older Node refuses to start at all with it); stripping is ON BY
   DEFAULT — the flag becomes a harmless no-op — from Node 22.18 and separately from Node 23.6 (two floors,
@@ -1436,13 +1449,29 @@ from the import above — a `run=` command is spelled only when it will actually
   Node will run the emitted command, so it reads `engines.node` from the nearest manifest: the bare
   `node --test <file>` when that range proves every satisfying Node has stripping on by default; the
   flagged `node --experimental-strip-types --test <file>` when it proves >= 22.6 but not provably
-  default-on, or when there is no manifest at all (a stated assumption of Node >= 22.6, not a guess at an
-  unseen runtime); and `run_unknown="1"` when the range admits ANY Node below 22.6 (a plain `>=18`/`^20`,
-  or a compound range like `>=24 || ^20`, whose LOWEST admitted alternative decides it) or cannot be read
-  with confidence at all.
+  default-on, or when there is no manifest at all (a stated assumption of a Node that strips types with the
+  flag, not a guess at an unseen runtime); and `run_unknown="1"` when the range admits ANY Node below 22.6
+  (a plain `>=18`/`^20`, or a compound range like `>=24 || ^20`, where every `||` alternative must pass on
+  its own) or cannot be read with confidence at all. Each alternative is read for its upper bound too,
+  because the default-on versions have a gap: `^22.18.0` gets the bare form, but `>=22.18` also admits
+  23.0–23.5 and keeps the flag.
 
-`.js`/`.mjs`/`.cjs` never need the flag and always get the bare form, unless `engines.node` admits a Node
-below 18 (`node:test` itself does not exist there), in which case they too stay `run_unknown="1"`.
+Every node:test file, `.js` or TypeScript, must also load as the module kind its own syntax needs. A file
+with a static ES `import`/`export` runs as an ES module only as `.mjs`/`.mts`, under `"type": "module"` in
+its nearest `package.json`, or on a Node with default module-syntax detection (22.7 and later, 20.19 on the
+20.x line). Without one of those the command stays `run_unknown="1"`: an explicit `"type": "commonjs"` (or a
+`.cjs`/`.cts` file) turns detection off, and with no `"type"` the `engines.node` range must prove detection —
+`>=22.7` does, `>=20.19` does not, since it admits 21.x. With no `engines.node` at all, a TypeScript file keeps
+the stated assumption above and a `.js` file stays `run_unknown="1"`, since its command otherwise rests on
+no assumption at all. A CommonJS file (`require`, no ES `import`/`export`) runs either way.
+
+`.js`/`.mjs`/`.cjs` never need the flag. Their one version question is the runner itself: the `--test` flag
+exists from Node 18.1 and, by backport, 16.17 — never on 17.x, and 18.0 has the `node:test` module but not
+the flag. So `engines.node` must not admit a Node below 18 without it: `^16.17.0`, `>=18` and `>=18.1` get the bare
+form, while `>=16`, `>=16.17` and `16.17 - 18` (they reach 17.x) stay `run_unknown="1"`, and so does a range confined
+to 18.0.x such as `18.0.x`. A hyphen range `A - B` is bounded by B. `>=18` is accepted although it admits 18.0:
+that is one release from April 2022, the command fails loudly there, and refusing the most common spelling would make
+the answer useless on most projects. No `engines.node` at all keeps the bare form.
 
 A TS/JS `run_unknown="1"` can still mean the manifest genuinely names nothing recognized (and the test file
 itself names no `node:test` import either), one of the refusals above, or a real runner this tool does not
@@ -1948,9 +1977,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>650 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>651 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **650 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **651 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2300,7 +2329,7 @@ same renderer. One computation has one output shape.
 
 | Item | Requirement |
 | --- | --- |
-| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). Native Windows x64 **builds** with both clang-cl and MSVC `cl.exe` — CI builds both on `windows-latest` every full matrix and smoke-tests each binary (`--version`, `ctest`, a real crawl, the two-run byte-identical contract, well-formed XML); the 649-gate suite does not run there, and ASan is compiled but never executed, so treat it as a build, not a validated platform. From 0.6.3 a prebuilt `windows-x64` zip ships as a **preview** ([Windows](#windows)): CI unzips it and compares its output with Linux's byte for byte, but no maintainer runs Windows, so WSL2 remains the fully supported way to run it on a Windows machine. |
+| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). Native Windows x64 **builds** with both clang-cl and MSVC `cl.exe` — CI builds both on `windows-latest` every full matrix and smoke-tests each binary (`--version`, `ctest`, a real crawl, the two-run byte-identical contract, well-formed XML); the 650-gate suite does not run there, and ASan is compiled but never executed, so treat it as a build, not a validated platform. From 0.6.3 a prebuilt `windows-x64` zip ships as a **preview** ([Windows](#windows)): CI unzips it and compares its output with Linux's byte for byte, but no maintainer runs Windows, so WSL2 remains the fully supported way to run it on a Windows machine. |
 | Prebuilt Linux floor | RHEL 8 or later (glibc 2.28) |
 | Prebuilt macOS floor | macOS 14 or later, Apple silicon. 0.6.1 is the last release with an Intel macOS binary; on an Intel Mac, pin `RIPWIRE_VERSION=v0.6.1` or build from source. |
 | x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later), for a prebuilt binary and a source build alike |
@@ -2694,7 +2723,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 225 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 229 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.
@@ -2906,6 +2935,15 @@ terms.
 ---
 
 ## Release notes
+
+**ripwire 0.6.5 — TypeScript alias imports resolve, and fixes from Windows testers.** Imports through a tsconfig alias,
+`baseUrl` or a workspace package are now real edges, so `--deps`, `--arch`, `--impact` and the call graph see them, and a
+config ripwire could not read is disclosed rather than guessed (thanks @srinchow). On Windows, `--doctor` searches PATH as
+Windows does and no longer calls a byte-identical copy stale; two ripwire builds on one tree no longer re-parse on every
+run (thanks @elsRobin, @lennix1337 and @antoniojosedev for testing). `--doctor`'s PATH hint can be pasted as printed.
+`--for` lifts a symbol the task names verbatim. In Python, JS/TS and Ruby, a method call on a dict or map binds to an
+in-repo method of that name only when the calling file names its class (or one in its inheritance cone); otherwise it
+is declined and counted (`declined_calls=`).
 
 **ripwire 0.6.4 — Windows fixes from real testers, and honest TypeScript answers.** On Windows without symlink rights,
 the skills installer no longer reports success after creating empty folders: it copies instead, or says it failed. `--doctor`
