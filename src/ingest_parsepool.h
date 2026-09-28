@@ -743,6 +743,42 @@ inline void dropFactsFrom( RawFacts& raw, IngestFileScan& scan, std::size_t firs
     std::fill( scan.extractPartialBytes.begin() + std::ptrdiff_t( std::min( firstDropped, scan.extractPartialBytes.size() ) ), scan.extractPartialBytes.end(), 0u );
 }
 
+// #350: after the pool join, a memory-guard stop while files remained. The answer keeps the longest prefix of the SORTED
+// file list whose files were all claimed (every claimed file completed: workers look before claiming) and drops the facts
+// of any later file the work order reached first — so a partial answer depends on the tree and that prefix length alone,
+// never on which order the pool drew files in (memory_parsed= is the prefix length). The parse seam fixes the prefix at
+// N. A stop that came after the last claim cut nothing and is not a partial parse. Returns whether the parse was cut.
+inline bool applyMemoryParseCut( IngestResult& result, RawFacts& raw, IngestFileScan& scan, memguard::Watch* memWatch,
+                                 const std::vector<std::uint8_t>& claimedFlags )
+{
+    if( memWatch == nullptr || !memWatch->tripped() )
+    {
+        return false;
+    }
+    std::size_t keptPrefix = 0;
+    while( keptPrefix < claimedFlags.size() && claimedFlags[ keptPrefix ] != 0 )
+    {
+        ++keptPrefix;
+    }
+    keptPrefix = std::min( keptPrefix, memWatch->seamParseCutoff() );
+    if( keptPrefix >= claimedFlags.size() )
+    {
+        return false;
+    }
+    dropFactsFrom( raw, scan, keptPrefix );
+    result.memoryStop.limitBytes  = memWatch->hardBytes();
+    result.memoryStop.parsedFiles = static_cast<std::uint32_t>( keptPrefix );
+    if( memWatch->trippedByPressure() )
+    {
+        DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseUnderPressure, "ingest: the memory guard stopped the parse pool — the files after the kept sorted prefix carry no facts" );
+    }
+    else
+    {
+        DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseOverLimit, "ingest: the memory guard stopped the parse pool — the files after the kept sorted prefix carry no facts" );
+    }
+    return true;
+}
+
 inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::string_view cacheFile, bool captureValueUses,
                               HashMap<std::string, FileFacts>& cache, const CacheLoadStats& cacheStats,
                               IngestFileScan& scan, QueryPrewarm& prewarm, memguard::Watch* memWatch = nullptr )
@@ -900,36 +936,7 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
 
         raw = mergeThreadFacts( tFacts );
 
-        // #350: a stop while files remained. The answer keeps the longest prefix of the SORTED file list whose files
-        // were all claimed (every claimed file completed: workers look before claiming), and drops the facts of any
-        // later file the work order reached first — so a partial answer depends on the tree and that prefix length
-        // alone, never on which order the pool drew files in (memory_parsed= is the prefix length). The parse seam
-        // fixes the prefix at N. A stop that came after the last claim cut nothing and is not a partial parse.
-        std::size_t keptPrefix = nfiles;
-        if( memWatch != nullptr && memWatch->tripped() )
-        {
-            keptPrefix = 0;
-            while( keptPrefix < nfiles && claimedFlags[ keptPrefix ] != 0 )
-            {
-                ++keptPrefix;
-            }
-            keptPrefix = std::min( keptPrefix, memWatch->seamParseCutoff() );
-        }
-        const bool parseCut = keptPrefix < nfiles;
-        if( parseCut )
-        {
-            dropFactsFrom( raw, scan, keptPrefix );
-            result.memoryStop.limitBytes  = memWatch->hardBytes();
-            result.memoryStop.parsedFiles = static_cast<std::uint32_t>( keptPrefix );
-            if( memWatch->trippedByPressure() )
-            {
-                DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseUnderPressure, "ingest: the memory guard stopped the parse pool — the files after the kept sorted prefix carry no facts" );
-            }
-            else
-            {
-                DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseOverLimit, "ingest: the memory guard stopped the parse pool — the files after the kept sorted prefix carry no facts" );
-            }
-        }
+        const bool parseCut = applyMemoryParseCut( result, raw, scan, memWatch, claimedFlags );   // #350
 
         // The aggregate owns the moved fact payloads now. Release the per-thread vector storage before the
         // cache write and before returning to the model-build tail; keeping these empty-but-capacious vectors
