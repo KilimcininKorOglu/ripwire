@@ -2444,11 +2444,15 @@ inline void noteFileClass( BuiltinMethodGate& gate, const std::vector<char>& fil
     }
 }
 
-// A bare declared NAME with no type and no import: Python records the `class Pool:` statement's own module-level name
-// this way (a VarDecl), so it is the definition again, not a use of the class.
-inline bool isBareNameDeclaration( const Binding& b ) noexcept
+// The class names one binding mentions: its type, its variable and its imported name. A bare declared NAME with no type
+// and no import is how Python records the `class Pool:` statement's own module-level name (a VarDecl) — the definition
+// again, not a use of the class — so that variable names it as a definition.
+inline void noteBindingClasses( BuiltinMethodGate& gate, const std::vector<char>& fileGated, const Binding& b )
 {
-    return b.kind == LocalBindKind::VarDecl && b.typeName.empty() && b.importedName.empty();
+    const bool bareDeclaration = b.kind == LocalBindKind::VarDecl && b.typeName.empty() && b.importedName.empty();
+    noteFileClass( gate, fileGated, b.fileId, b.typeName, false );
+    noteFileClass( gate, fileGated, b.fileId, b.var, bareDeclaration );
+    noteFileClass( gate, fileGated, b.fileId, b.importedName, false );
 }
 
 inline void collectFileClassEvidence( const IngestResult& ing, const std::vector<char>& fileGated, const JsImportTables& jsImports, BuiltinMethodGate& gate )
@@ -2477,9 +2481,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
     }
     for( const Binding& b : ing.bindings )
     {
-        note( b.fileId, b.typeName );
-        note( b.fileId, b.var, isBareNameDeclaration( b ) );
-        note( b.fileId, b.importedName );
+        noteBindingClasses( gate, fileGated, b );
     }
     for( const auto& [ importKey, bound ] : jsImports.targets )   // key "<fileId>#<local name>" (jsImportKey)
     {

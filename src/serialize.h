@@ -15,6 +15,7 @@
 #include "lintrules.h"   // §P9.4: langOfPath / dependencyCapable — packDeps' dep_files= denominator
 #include "resolve.h"     // S6-C: canonicalId() — the `id=` canonical symbol string (shared with the resolver)
 #include "redact.h"      // deterministic secret redaction of emitted body content (opt-out --no-redact)
+#include "docparse.h"     // docparse::detail::readWholeFile — --pack-top-n reads each served file through the one whole-file reader
 #include "infra/sortutil.h"    // numeric-key radix helpers for rank/file score order
 #include "infra/jsonesc.h"     // F9: jsonesc::utf8SeqLen — the canonical UTF-8-sequence-length core (was duplicated here)
 #include "infra/strkern.h"     // S5: appendCleanRun — the run-copy skip that replaces escapeXml's per-byte switch
@@ -3281,25 +3282,6 @@ inline constexpr std::string_view kPackSourceCutLegend =
     "budget_bytes=, the byte ceiling); unreadable=N: files that could not be read. src truncated=\"1\": that file was "
     "cut at a line end, lines=\"1-K/T\" (K of its T lines shown) -->";
 
-// A file's bytes for --pack-top-n, or nullopt when it cannot be opened (gone since the crawl).
-inline std::optional<std::string> readPackFile( const std::string& path )
-{
-    std::FILE* in = std::fopen( path.c_str(), "rb" );
-    if( !in )
-    {
-        return std::nullopt;
-    }
-    std::string body;
-    char        buf[ 4096 ];
-    std::size_t n;
-    while( ( n = std::fread( buf, 1, sizeof( buf ), in ) ) > 0 )
-    {
-        body.append( buf, n );
-    }
-    std::fclose( in );
-    return body;
-}
-
 // Lines in `text`, a last line without its newline included.
 inline std::size_t packLineCount( std::string_view text ) noexcept
 {
@@ -3371,7 +3353,7 @@ inline void packSource( std::FILE* out, const IngestResult& ing, const std::vect
 
     for( std::size_t k = 0; k < keep && used < budgetBytes && !cutOne; ++k )
     {
-        std::optional<std::string> read = readPackFile( diskPath( ing, order[k] ) );
+        std::optional<std::string> read = docparse::detail::readWholeFile( diskPath( ing, order[k] ) );   // nullopt: gone since the crawl
         if( !read )
         {
             ++unreadable;   // graceful (file gone since the crawl), and counted: it is one of the files asked for
