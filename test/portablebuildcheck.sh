@@ -523,7 +523,12 @@ fi
 # argument ranges over (`x.begin()`, `std::begin( x )`, a ranges:: argument) → the NEAREST PRECEDING declaration
 # of that name in the same file (a member access skips parameter-shaped ones). string_view anywhere in that
 # declaration's template arguments (vector, span, array, a pair element) or a C array of string_view is a finding.
-# static_assert calls are exempt: constant evaluation runs no sanitizer. Stated blind spots — zero findings means
+# static_assert calls are exempt: constant evaluation runs no sanitizer. A ranges call at the ambiguous
+# iterator arity whose LAST argument is comparator-shaped (a lambda, a bare or qualified name) is the
+# (range, comp) overload and is skipped here — a safe `ranges::sort( v, svLess )` must not be accused as
+# a default-comparator call; #6c owns the lambda form. Disclosed floor: a BARE output-iterator name at
+# that arity reads as a comparator, so a TWO_RANGE iterator form ending in a bare `out` escapes the
+# default-comparator check. Stated blind spots — zero findings means
 # "none found", not "none exists": a container declared in ANOTHER file, an `auto`-typed container, and a
 # comparator lambda that itself applies `<` to string_views. The two control scans run on planted input every
 # time, so a scanner that goes quiet fails this arm instead of passing it.
@@ -556,10 +561,12 @@ TOKEN = re.compile(r'//[^\n]*|/\*.*?\*/'
 
 
 def blank(text):
+    """Replace comments and string/char literal CONTENTS with spaces, newlines and offsets preserved."""
     return TOKEN.sub(lambda m: m.group(0) if m.group(0)[0].isdigit() else re.sub(r'[^\n]', ' ', m.group(0)), text)
 
 
 def split_args(text, open_index):
+    """Top-level comma-separated argument texts of the call whose '(' is at open_index, or None."""
     depth, args, start = 0, [], open_index + 1
     for i in range(open_index, len(text)):
         c = text[i]
@@ -627,7 +634,19 @@ def type_before(text, pos):
     return re.sub(r'\s+', ' ', text[j + 1:end])
 
 
+def comparator_shaped(seg):
+    """True when a trailing argument reads as a comparator (lambda, bare or qualified name, function
+    object) rather than an iterator end — the shapes this gate sees spell begin/end/next/prev."""
+    s = seg.strip()
+    if s.startswith('['):
+        return True
+    if re.search(r'\b(?:begin|end|next|prev|cbegin|cend|rbegin|rend)\s*\(', s) or re.search(r'\.\s*(?:begin|end)\s*\(', s):
+        return False
+    return bool(re.fullmatch(r'[\w:]+', s)) or re.search(r'[Ll]ess|[Gg]reater|[Cc]ompare', s)
+
+
 def declarations(text, ident, cache):
+    """Cached (position, spelled type, next char) rows of every declarator of `ident` in the file."""
     if ident not in cache:
         rows = []
         for m in re.finditer(r'\b' + re.escape(ident) + r'\s*([;={(,)\[])', text):
@@ -639,12 +658,14 @@ def declarations(text, ident, cache):
 
 
 def is_string_view_ordered(spelled, next_char):
+    """True when a declaration of this shape orders string_views by default (container/element or C array)."""
     if re.search(r'<.*\bstring_view\b', spelled):
         return True   # a container (or pair/tuple element) of string_view: its operator< is the wrapping one
     return next_char == '[' and re.search(r'\bstring_view$', spelled) is not None   # a C array of string_view
 
 
 def scan_file(path, rel):
+    """Every default-comparator ordered algorithm over a string_view container declared in this file."""
     with open(path, encoding='utf-8', errors='replace') as fh:
         text = blank(fh.read())
     cache, findings = {}, []
@@ -659,6 +680,9 @@ def scan_file(path, rel):
             defaults.add(ALGS[alg] - (2 if alg in TWO_RANGE else 1))
         if len(args) not in defaults:
             continue   # an explicit comparator (or projection) is passed
+        if is_ranges and len(args) == ALGS[alg] and comparator_shaped(args[-1]):
+            continue   # (range, comparator), not (first, last): #6c's lambda pass owns the explicit case —
+            # counting it as a default-comparator call would accuse a safe `ranges::sort( v, svLess )`
         statement_start = max(text.rfind(';', 0, m.start()), text.rfind('{', 0, m.start()), text.rfind('}', 0, m.start()))
         if 'static_assert' in text[statement_start + 1:m.start()]:
             continue   # constant evaluation: no sanitizer runs there
@@ -723,7 +747,8 @@ inline void ranges( std::vector<std::string_view>& v )
     std::ranges::sort( v );   // PLANT
 }
 EOF
-    # none of these may be found: byte comparators, a std::string collision, constant evaluation, text that only spells a call
+    # none of these may be found: byte comparators, a std::string collision, constant evaluation,
+    # ranges::sort( range, svLess ) — the (range, comp) overload, #6c's case — and text that only spells a call
     cat > "$TMP/svctl/clean/clean.h" <<'EOF'
 inline constexpr const char* kRaw = R"x(std::sort( names.begin(), names.end() ) ")x";
 struct Scratch2
@@ -753,6 +778,10 @@ inline void sortChars()
     std::string buf( chars );
     std::sort( buf.begin(), buf.end() );
 }
+inline void rangesSvLess3( std::vector<std::string_view>& names )
+{
+    std::ranges::sort( names, rw::sortutil::svLess );
+}
 EOF
     wantPlanted="$( grep -n 'PLANT' "$TMP/svctl/planted/planted.h" | cut -d: -f1 | sed 's#^#planted/planted.h:#' )"
     gotPlanted="$( python3 "$SVSCAN" "$TMP/svctl/planted" | cut -d: -f1,2 )"
@@ -763,7 +792,7 @@ EOF
     fi
     gotClean="$( python3 "$SVSCAN" "$TMP/svctl/clean" )"; cleanRc=$?
     if [ "$cleanRc" -eq 0 ] && [ -z "$gotClean" ]; then
-        ok "#6b control: byte comparators, a std::string collision, static_assert and call-shaped text are not findings"
+        ok "#6b control: byte comparators, a std::string collision, static_assert, ranges::sort( range, svLess ) and call-shaped text are not findings"
     else
         no "#6b control: the clean input produced findings (rc=$cleanRc):"
         printf '%s\n' "$gotClean" | sed 's/^/        /'
@@ -787,14 +816,23 @@ fi
 # _S_compare is NOT in CMakeLists' libstdc++ ignorelist (that covers bits/basic_string.h and
 # bits/string_view.tcc), which is how #343 (pathInIgnoreSet), #344 (situ's lexical-sibling index) and
 # #345 (finalizeNamedIdents) landed green on main while the Linux G1 self-run and --situ aborted.
-# This pass resolves the lambda's operand types two ways: DECLARED string_view parameters, and struct
-# members declared std::string_view (the struct map is built from every file under the scanned root, so
-# a member defined in model.h resolves at its use in renamemine.h). A named comparator variable
-# (`const auto byPath = []( … ){ … };` passed to five sorts) resolves through its definition.
+# This pass resolves the lambda's operand types two ways: DECLARED string_view parameters (by value, by
+# const reference, by pointer), and struct members declared std::string_view (the struct map is built
+# brace-balanced from every file under the scanned root, so a brace-initialized field counts and a
+# member defined in model.h resolves at its use in renamemine.h). A named comparator variable
+# (`const auto byPath = []( … ){ … };` passed to five sorts) resolves through its definition. Safe calls
+# (svLess, nameLess, memcmp) are blanked per CALL, not per lambda — a MIXED comparator that routes one
+# key through svLess and orders another with raw operator< is still a finding — and every relational
+# operator is judged inside its own ternary branch/statement, so a numeric tie-break beside svLess calls
+# (finalizeNamedIdents' shape) is not. `std::ranges::sort( range, comp )` — ambiguous with (first, last)
+# by arity alone — is classified by its last argument's shape, so #6b's default-comparator pass never
+# accuses a safe `ranges::sort( v, svLess )` and this pass owns the lambda form.
 # FLOOR, disclosed: `const auto&` parameters, std::pair .first/.second members, locals aliasing a
-# container element (`const Symbol& x = ing.symbols[a];`), and ranges projection arguments are NOT
-# resolved — the clean control pins the auto-parameter floor so it cannot widen silently. Hand-rolled
-# memcmp comparators (ingest.h's extLess) are clean by contract: memcmp-then-length never subtracts.
+# container element (`const Symbol& x = ing.symbols[a];`), and a PROJECTION lambda of a
+# (range, comp, projection) call — scanned only as a comparator candidate, never resolved as a
+# projection — are NOT resolved; the clean control pins the auto-parameter floor so it cannot widen
+# silently. Hand-rolled memcmp comparators (ingest.h's extLess) are clean by contract:
+# memcmp-then-length never subtracts.
 SVLC="$TMP/svlambda.py"
 cat > "$SVLC" <<'PY'
 import bisect
@@ -816,18 +854,33 @@ TOKEN = re.compile(r'//[^\n]*|/\*.*?\*/'
                    r"|(?<![\w])\d[\w']*"
                    r'|"(?:[^"\\\n]|\\.)*"'
                    r"|'(?:[^'\\\n]|\\.)*'", re.S)
-STRUCT = re.compile(r'\bstruct\s+(\w+)[^{;]*\{([^{}]*)\}')
+STRUCT_HEAD = re.compile(r'\bstruct\s+(\w+)[^{;]*\{')
 SV_FIELD = re.compile(r'(?:std::)?string_view\s+(\w+)\s*(?:\{[^{}]*\})?\s*[;=]')
 SV_PARAM = re.compile(r'(?:std::)?string_view\s+(\w+)')
 REF_PARAM = re.compile(r'(?:const\s+)?(\w+)\s*(?:const\s*)?[&*]\s*(\w+)')
 REL = re.compile(r'(?<![<>=!-])<(?![<=])|(?<![<>=-])>(?![>=])')
+SAFE_CALL = re.compile(r'\b(?:svLess|nameLess|memcmp)\s*\(')
+NOT_MEMBER = r'(?!\s*(?:\.|->))'   # `a.size() < b.size()` orders numbers, not the string_views themselves
 
 
 def blank(text):
+    """Replace comments and string/char literal CONTENTS with spaces, newlines and offsets preserved."""
     return TOKEN.sub(lambda m: m.group(0) if m.group(0)[0].isdigit() else re.sub(r'[^\n]', ' ', m.group(0)), text)
 
 
+def comparator_shaped(seg):
+    """True when a trailing argument reads as a comparator (lambda, bare or qualified name, function
+    object) rather than an iterator end — the shapes this gate sees spell begin/end/next/prev."""
+    s = seg.strip()
+    if s.startswith('['):
+        return True
+    if re.search(r'\b(?:begin|end|next|prev|cbegin|cend|rbegin|rend)\s*\(', s) or re.search(r'\.\s*(?:begin|end)\s*\(', s):
+        return False
+    return bool(re.fullmatch(r'[\w:]+', s)) or re.search(r'[Ll]ess|[Gg]reater|[Cc]ompare', s)
+
+
 def split_args_off(text, open_index):
+    """Top-level comma-separated argument (start, end) spans of the call whose '(' is at open_index."""
     depth, args, start = 0, [], open_index + 1
     for i in range(open_index, len(text)):
         c = text[i]
@@ -845,6 +898,7 @@ def split_args_off(text, open_index):
 
 
 def match_paren(text, open_index):
+    """Index of the ')' balancing the '(' at open_index, or -1."""
     depth = 0
     for i in range(open_index, len(text)):
         if text[i] == '(':
@@ -857,6 +911,7 @@ def match_paren(text, open_index):
 
 
 def brace_body(text, open_pos):
+    """Text between the '{' at open_pos and its balanced '}' (nested braces included), or None."""
     depth = 0
     for i in range(open_pos, len(text)):
         if text[i] == '{':
@@ -894,40 +949,87 @@ def sv_operands(params, localmap, structmap):
     A struct declared in the SCANNED FILE wins over the whole-root map: two files may each declare a
     `struct Cand` over a different member type (mcpedit.h's std::string n beside didyoumean.h's
     std::string_view n), and merging them would accuse the std::string one — basic_string's _S_compare
-    is in CMakeLists' ignorelist, string_view's is not."""
+    is in CMakeLists' ignorelist, string_view's is not. Every pattern carries the NOT_MEMBER lookahead:
+    an operand immediately followed by `.member` is not the string_view itself (`a.size()` is a number).
+    Reference parameters resolve two ways: a `const std::string_view&` parameter IS a string_view
+    operand; a `const T&` parameter contributes T's string_view members as `param.member` patterns."""
     pats = []
     for m in SV_PARAM.finditer(params):
-        pats.append(re.compile(r'\b' + re.escape(m.group(1)) + r'\b'))
+        pats.append(re.compile(r'\b' + re.escape(m.group(1)) + NOT_MEMBER))
     for m in REF_PARAM.finditer(params):
         typ, pname = m.group(1), m.group(2)
         if re.fullmatch(r'(?:std::)?string_view', typ):
-            continue                            # SV_PARAM already collected it
+            pats.append(re.compile(r'\b' + re.escape(pname) + NOT_MEMBER))   # SV_PARAM matches by-value only
+            continue
         fields = localmap[typ] if typ in localmap else structmap.get(typ, ())
         for field in fields:
-            pats.append(re.compile(r'\b' + re.escape(pname) + r'\s*(?:\.|->)\s*' + re.escape(field) + r'\b'))
+            pats.append(re.compile(r'\b' + re.escape(pname) + r'\s*(?:\.|->)\s*' + re.escape(field) + r'\b' + NOT_MEMBER))
     return pats
 
 
+def blank_safe_calls(body):
+    """Every svLess/nameLess/memcmp call replaced with spaces, offsets and newlines kept.
+
+    Those comparators are safe by contract (memcmp-then-length never subtracts), but only the CALL is:
+    a mixed comparator that routes one key through svLess and orders ANOTHER string_view with raw
+    operator< is a finding the old whole-lambda exemption hid. Blanking keeps the safe call's operands
+    out of the scan while every relational operator outside it still faces the operand patterns."""
+    out = list(body)
+    for m in SAFE_CALL.finditer(body):
+        close = match_paren(body, m.end() - 1)
+        if close < 0:
+            continue
+        for i in range(m.start(), close + 1):
+            if out[i] != '\n':
+                out[i] = ' '
+    return ''.join(out)
+
+
+def branch_window(red, pos):
+    """(lo, hi) of the ternary branch / statement around pos: cut at `;`, braces, `?` and a single `:`
+    (`::` stays whole), so a numeric tie-break in one branch never sees the string_view operands a
+    sibling branch names — the false report a fixed ±60-character proximity window produced."""
+    def cut(i):
+        if red[i] in ';{}?':
+            return True
+        return red[i] == ':' and (i + 1 >= len(red) or red[i + 1] != ':') and (i == 0 or red[i - 1] != ':')
+    lo = 0
+    for i in range(pos - 1, -1, -1):
+        if cut(i):
+            lo = i + 1
+            break
+    hi = len(red)
+    for i in range(pos, len(red)):
+        if cut(i):
+            hi = i
+            break
+    return lo, hi
+
+
 def orders_sv(body, pats):
-    if 'memcmp' in body or 'svLess' in body or 'nameLess' in body:
-        return False                            # a byte comparator by contract
-    for m in REL.finditer(body):
-        left = body[max(0, m.start() - 60):m.start()]
-        right = body[m.end():m.end() + 60]
+    """True when the lambda orders known string_view operands with a relational operator directly:
+    safe-comparator calls blanked first, each operator judged inside its own branch/statement."""
+    red = blank_safe_calls(body)
+    for m in REL.finditer(red):
+        lo, hi = branch_window(red, m.start())
+        window = red[lo:hi]
         for p in pats:
-            if p.search(left) or p.search(right):
+            if p.search(window):
                 return True
     return False
 
 
 def scan_file(text, path, rel, structmap, localmap):
+    """Every ordered-algorithm comparator lambda in this file that orders string_views with operator<."""
     line_starts = [0] + [m.end() for m in re.finditer('\n', text)]
     findings = {}
 
     def line_of(pos):
+        """1-based line number of a byte offset."""
         return bisect.bisect_right(line_starts, pos)
 
     def analyze(params, body, bracket_pos, alg, is_ranges):
+        """File a finding when this lambda's declared operands are string_views and it orders them raw."""
         pats = sv_operands(params, localmap, structmap)
         if pats and orders_sv(body, pats):
             findings[line_of(bracket_pos)] = (
@@ -949,25 +1051,32 @@ def scan_file(text, path, rel, structmap, localmap):
         defaults = {ALGS[alg]}
         if is_ranges:
             defaults.add(ALGS[alg] - (2 if alg in TWO_RANGE else 1))
-        if len(args) in defaults:
-            continue                            # the default comparator is #6b's contract
-        if len(args) != max(defaults) + 1:
-            continue                            # projection+comparator ranges shapes: disclosed floor
+        cand = []
+        if len(args) == max(defaults) + 1:
+            cand = [len(args) - 1]
+            if is_ranges and len(args) >= 3:
+                cand.append(len(args) - 2)      # (range, comp, projection): the comparator is second-to-last
+        elif (is_ranges and len(args) == ALGS[alg] and len(args) >= 2
+              and comparator_shaped(text[args[-1][0]:args[-1][1]])):
+            cand = [len(args) - 1]              # (range, comp), not (first, last) — decided by the last
+        if not cand:                            # argument's shape; the default comparator stays #6b's
+            continue
         statement_start = max(text.rfind(';', 0, m.start()), text.rfind('{', 0, m.start()),
                               text.rfind('}', 0, m.start()))
         if 'static_assert' in text[statement_start + 1:m.start()]:
             continue                            # constant evaluation: no sanitizer runs there
-        start, end = args[-1]
-        seg = text[start:end]
-        if seg.lstrip().startswith('['):
-            lam = lambda_at(text, text.find('[', start))
-            if lam:
-                analyze(*lam, alg=alg, is_ranges=is_ranges)
-        else:
-            nm = seg.strip()
-            if re.fullmatch(r'\w+', nm) and nm in named:
-                params, body, pos = named[nm]
-                analyze(params, body, pos, alg, is_ranges)
+        for idx in cand:
+            start, end = args[idx]
+            seg = text[start:end]
+            if seg.lstrip().startswith('['):
+                lam = lambda_at(text, text.find('[', start))
+                if lam:
+                    analyze(*lam, alg=alg, is_ranges=is_ranges)
+            else:
+                nm = seg.strip()
+                if re.fullmatch(r'\w+', nm) and nm in named:
+                    params, body, pos = named[nm]
+                    analyze(params, body, pos, alg, is_ranges)
     return [findings[k] for k in sorted(findings)]
 
 
@@ -986,10 +1095,13 @@ for path in paths:
         text = blank(fh.read())
     texts[path] = text
     localmap = {}
-    for m in STRUCT.finditer(text):
+    for m in STRUCT_HEAD.finditer(text):
+        body = brace_body(text, m.end() - 1)   # balanced: a brace-initialized field (`name{}`) no longer
+        if body is None:                       # hides the whole struct body from the member map
+            continue
         fields = structmap.setdefault(m.group(1), set())
         local = localmap.setdefault(m.group(1), set())
-        for fm in SV_FIELD.finditer(m.group(2)):
+        for fm in SV_FIELD.finditer(body):
             fields.add(fm.group(1))
             local.add(fm.group(1))
     localmaps[path] = localmap
@@ -1002,7 +1114,9 @@ if ! command -v python3 >/dev/null 2>&1; then
     no "#6c needs python3 on PATH to resolve lambda parameter types"
 else
     mkdir -p "$TMP/svlctl/planted" "$TMP/svlctl/clean"
-    # every line marked PLANT must be found, and nothing else: the four shapes #343/#344/#345 landed with
+    # every line marked PLANT must be found, and nothing else: the four shapes #343/#344/#345 landed with,
+    # plus the four the review round added (a brace-initialized member, const string_view& parameters, a
+    # mixed svLess/raw comparator, and the ranges (range, comp) overload)
     cat > "$TMP/svlctl/planted/planted.h" <<'EOF'
 struct Row6c
 {
@@ -1030,9 +1144,32 @@ inline void named6c( std::vector<Sym6c*>& v, const std::string& n )
     const auto byName = []( const Sym6c* s, const std::string& x ) { return s->name < x; };   // PLANT
     std::lower_bound( v.begin(), v.end(), n, byName );
 }
+struct Brace6c { std::string_view dir{}; };
+inline void braceInit6c( std::vector<Brace6c>& rows )
+{
+    std::sort( rows.begin(), rows.end(),
+        []( const Brace6c& a, const Brace6c& b ) { return a.dir < b.dir; } );   // PLANT
+}
+inline bool searchRef6c( const std::vector<std::string>& sorted, std::string_view rel )
+{
+    return std::binary_search( sorted.begin(), sorted.end(), rel,
+        []( const std::string_view& a, const std::string_view& b ) { return a < b; } );   // PLANT
+}
+struct Mixed6c { std::string_view name; std::string_view qual; std::size_t pos; };
+inline void mixed6c( std::vector<Mixed6c>& v )
+{
+    std::sort( v.begin(), v.end(), []( const Mixed6c& a, const Mixed6c& b )   // PLANT
+               { if( a.name != b.name ) return rw::sortutil::svLess( a.name, b.name );
+                 return a.qual < b.qual; } );
+}
+inline void rangesLambda6c( std::vector<std::string_view>& v )
+{
+    std::ranges::sort( v, []( std::string_view a, std::string_view b ) { return a < b; } );   // PLANT
+}
 EOF
     # none of these may be found: svLess, numeric and std::string members, a hand-rolled memcmp comparator,
-    # constant evaluation, and the auto-parameter floor the arm comment discloses
+    # constant evaluation, numeric tie-breaks beside svLess calls (both the ternary-chain and the
+    # multi-statement shape), ranges::sort( range, svLess ), and the auto-parameter floor the arm discloses
     cat > "$TMP/svlctl/clean/clean.h" <<'EOF'
 struct Row6cClean { std::string_view dir; std::size_t n = 0; };
 struct Num6c { std::size_t count = 0; };
@@ -1064,17 +1201,36 @@ inline void autoFloor( std::vector<std::pair<std::string_view, int>>& v )
 {
     std::sort( v.begin(), v.end(), []( const auto& a, const auto& b ) { return a.first < b.first; } );
 }
+struct Tie6c { std::string_view name; std::string_view qual; std::size_t pos = 0; };
+inline void tieBreak6c( std::vector<Tie6c>& v )
+{
+    std::sort( v.begin(), v.end(), []( const Tie6c& a, const Tie6c& b )
+               { return a.name != b.name ? rw::sortutil::svLess( a.name, b.name )
+                                        : a.qual != b.qual ? rw::sortutil::svLess( a.qual, b.qual )
+                                                           : a.pos < b.pos; } );
+}
+inline void stmtScoped6c( std::vector<Tie6c>& v )
+{
+    std::sort( v.begin(), v.end(), []( const Tie6c& a, const Tie6c& b )
+               { if( !rw::sortutil::svLess( a.name, b.name ) && !rw::sortutil::svLess( b.name, a.name ) )
+                     return a.pos < b.pos;
+                 return rw::sortutil::svLess( a.name, b.name ); } );
+}
+inline void rangesSvLess6c( std::vector<std::string_view>& v )
+{
+    std::ranges::sort( v, rw::sortutil::svLess );
+}
 EOF
     wantPlanted="$( grep -n 'PLANT' "$TMP/svlctl/planted/planted.h" | cut -d: -f1 | sed 's#^#planted/planted.h:#' )"
     gotPlanted="$( python3 "$SVLC" "$TMP/svlctl/planted" | cut -d: -f1,2 )"
     if [ -n "$wantPlanted" ] && [ "$gotPlanted" = "$wantPlanted" ]; then
-        ok "#6c control: the lambda pass finds exactly the $( printf '%s\n' "$wantPlanted" | wc -l | tr -d ' ' ) planted comparator lambdas (sv parameters, sv struct members, lower_bound against an sv probe, a named comparator variable)"
+        ok "#6c control: the lambda pass finds exactly the $( printf '%s\n' "$wantPlanted" | wc -l | tr -d ' ' ) planted comparator lambdas (sv parameters by value and const reference, sv struct members incl. brace-initialized, lower_bound against an sv probe, a named comparator variable, a mixed svLess/raw comparator, ranges (range, comp))"
     else
         no "#6c control: planted comparator lambdas not found exactly — want [$( printf '%s ' $wantPlanted )] got [$( printf '%s ' $gotPlanted )]"
     fi
     gotClean="$( python3 "$SVLC" "$TMP/svlctl/clean" )"; cleanRc=$?
     if [ "$cleanRc" -eq 0 ] && [ -z "$gotClean" ]; then
-        ok "#6c control: svLess, numeric and std::string members, a memcmp comparator, constant evaluation and the auto-parameter floor are not findings"
+        ok "#6c control: svLess, numeric and std::string members, a memcmp comparator, constant evaluation, numeric tie-breaks beside svLess calls, ranges::sort( range, svLess ) and the auto-parameter floor are not findings"
     else
         no "#6c control: the clean input produced findings (rc=$cleanRc):"
         printf '%s\n' "$gotClean" | sed 's/^/        /'

@@ -30,7 +30,11 @@ the fix train 21 used for the search side of this family; the ignore-set probe t
 membership wrapper as a duplication clone of docparse's and externalnames' (measured, gating).
 `portablebuildcheck` gains arm #6c, which resolves
 lambda comparator parameter and member types (with planted controls and a disclosed floor), so the shape
-that walked through #6/#6b cannot walk through again.
+that walked through #6/#6b cannot walk through again. Review hardening: brace-initialized struct members
+resolve, `const string_view&` parameters count as string_view operands, a MIXED comparator (svLess on one
+key, raw operator< on another) is a finding — safe calls blank per call, relational operators judged per
+ternary branch — and `std::ranges::sort( range, comp )` belongs to #6c, so #6b no longer misclassifies it
+as a default-comparator call.
 
 `-DRIPWIRE_ASAN=ON` under GCC — CMakeLists' documented honest-degrade contributor path — failed to BUILD:
 GCC rejects `findByField( … ) != nullptr` in the constant-evaluated table guards under the sanitizer flags
