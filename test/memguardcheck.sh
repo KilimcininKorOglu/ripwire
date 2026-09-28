@@ -496,7 +496,9 @@ for f in range( 80 ):
     open( os.path.join( root, "z", "big%02d.c" % f ), "w" ).write(
         "".join( "int z%d_%d(int x){ return x>0 ? z%d_%d(x-1)+%d : %d; }\n" % ( f, k, f, ( k + 1 ) % 1500, k, k ) for k in range( 1500 ) ) )
 PY2
-RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG" --no-cache --max-memory=128M --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
+# ASan quarantine inflates the footprint past the 128M hard line before the soft parse stop is visible (review G1:
+#   peak 498 MB under ASan vs 82 MB plain); a plain binary ignores the option.
+ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}quarantine_size_mb=0" RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG" --no-cache --max-memory=128M --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
 hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b12.out" | head -1 )"
 parsed="$( printf '%s' "$hdr" | grep -oE 'memory_parsed=[0-9]+' | grep -oE '[0-9]+' )"
 if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=parse"*) true;; *) false;; esac && [ "${parsed:-0}" -ge 2 ] && grep -q 'p="z/' "$TMP/b12.out"; then
