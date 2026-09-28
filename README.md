@@ -25,6 +25,32 @@ format, exit codes and limits. You do not need it to get started.
 <p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
+<summary><b>Field report: about half the tokens across a two-day, 20-agent coding engagement</b> — one orchestrating agent directing ~20 coding agents over a ~1,500-file C++/Metal codebase. One engagement, on an earlier version; click for the report.</summary>
+
+Every agent was told to start with ripwire for orientation and to finish with its quality gates. What the orchestrating
+agent reported afterwards:
+
+- **Roughly half the total token spend of the audit and research phase.** This is the operator's estimate for the whole
+  phase, ordinary file reads included. Per call it was steeper: one doc-recall call served the relevant sections of a
+  164 KB planning document in about 6K tokens (~25×), and agents that led with the tool used ~30–40% fewer tool calls.
+- **Two tasks redirected by a single call.** `--callers` found zero production callers for a behaviour the team
+  believed was live. `--edit-check` flagged 5 of 6 call sites of a refactored computation as incompatible, sites a text
+  search had missed.
+- **A dozen-plus real code-quality defects fixed, not waived,** each caught by `--quality-delta` at an agent's
+  "I think I'm done" moment: duplicated routines, a fourth private copy of a shared utility, a near-identical pair with
+  a flipped sign.
+- **Its honest boundary:** the deepest findings came from measurement the agents built, not from the tool; the
+  contract checker over-counted defaulted trailing parameters; and plain grep still won some broad conceptual queries.
+
+*One engagement, reported by the orchestrating model itself; the token figure is the operator's estimate, not a
+controlled measurement, and ripwire has changed since. Controlled measurements are in [docs/EVALS.md](docs/EVALS.md).*
+
+<p align="center"><a href="docs/assets/field-report-multi-agent.jpg"><img src="docs/assets/field-report-multi-agent.jpg"
+  alt="The full field report: what ripwire contributed to a large multi-agent coding engagement — headline numbers, where the value concentrated, the honest boundary, and the bottom line" width="720"></a></p>
+
+</details>
+
+<details>
 <summary><b>Fifty years of software-engineering results, and research from last month.</b> 49 repositories and 71 papers folded — McCabe (1976) through to <b>seven published in the last two months</b> — each row in <a href="docs/LINEAGE.md"><b>docs/LINEAGE.md</b></a> naming the lesson taken and the file it lives in</summary>
 
 Beside those sits a labelled survey of **237 tools** that contributed nothing and says so. The two
