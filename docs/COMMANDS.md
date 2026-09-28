@@ -4199,7 +4199,9 @@ $ ./build/ripwire . --skipped
 
 ### `--scan-skill=FILE`
 
-**Answers:** scan a single skill file before installing (any file, not just .md)
+**Answers:** scan a single skill file before installing (any file, not just .md) EXFILTRATE:net-exfil (a network verb plus a $VAR or base64 on one fenced line) is CRITICAL only when a credential-shaped source is on that line: a credential-named var, an Authorization: header with a var, an env dump or a key file.
+
+Otherwise it is WARN and the row says why="no-cred-source".
 
 **Try it**
 

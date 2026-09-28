@@ -1,3 +1,4 @@
+// Lineage: this scanner descends from NVIDIA SkillSpector's work on vetting agent skills before install (see docs/LINEAGE.md).
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
@@ -8,7 +9,8 @@
 //
 //   INJECTION   — case-insensitive, word-boundary-anchored prompt-injection phrases (CRITICAL;
 //                 single generic words downgrade to WARN)
-//   EXFILTRATE  — shell snippets that exfiltrate env vars or credentials (CRITICAL)
+//   EXFILTRATE  — shell snippets that exfiltrate env vars or credentials (CRITICAL; net-exfil is WARN with
+//                 why="no-cred-source" unless a credential-shaped source is on the line — #353, hasCredentialSource)
 //   SCOPE-CREEP — body requests tools absent from the allowed-tools: frontmatter (WARN)
 //   FRONTMATTER — YAML keys attempting to set model/system/temperature (WARN)
 //
@@ -57,6 +59,7 @@ struct SkillFinding
     int           line;       // 1-based line number in the scanned file
     const char*   rule;       // stable rule name — points into the static pattern table
     std::string   excerpt;    // the offending line, trimmed to ≤120 chars
+    const char*   why = nullptr;   // why a rule graded below its usual severity (the row's why=); null = not downgraded
 };
 
 inline const char* skillSeverityStr( SkillSeverity s ) noexcept
@@ -139,7 +142,8 @@ inline std::vector<InjectionPattern> buildInjectionPatterns()
 //   EXFIL-APIKEY : line contains $ANTHROPIC_API_KEY
 //   EXFIL-SSH    : line contains $HOME/.ssh or ~/.ssh or ~/.aws
 //   EXFIL-NETEXFIL : line contains (curl|wget|nc) AND ($env-var OR base64), in EITHER order,
-//                    fenced-code lines only (prose mentions are not flagged)
+//                    fenced-code lines only (prose mentions are not flagged); CRITICAL only with a
+//                    credential-shaped source on the line, else WARN why="no-cred-source" (#353)
 //
 // "base64 + send" pattern — a line that contains base64 AND (curl|wget|nc), in either order
 // (`… | base64 | nc host port` included) — is covered by EXFIL-NETEXFIL.
@@ -247,6 +251,134 @@ inline bool hasNetExfilShape( std::string_view line ) noexcept
         }
         segBegin = segEnd + 1;
     }
+}
+
+// ── #353: what grades a net-exfil hit CRITICAL ───────────────────────────────────────────────────────────────────────
+// hasNetExfilShape says a network verb shares a line with SOME `$VAR` or base64. That shape is equally true of
+// `curl https://api.airtable.com/v0/$BASE_ID` and of a token on its way out, so on its own it is a WARN. The hit is
+// CRITICAL only when a CREDENTIAL-SHAPED source sits on the same line (hasCredentialSource). This is the quick
+// severity fix: it grades the lines the rule already matches and detects nothing new. Following a source to its sink
+// across lines, and resolving where `$VAR` points, is the flow decision still to come.
+inline constexpr const char* kNetExfilNoCredWhy = "no-cred-source";
+
+// Lowercase needles for isCredentialName and isKeyFileToken: WORDS match anywhere in a name, PARTS only as a whole
+// `_ - .`-separated component, SHAPES anywhere in a non-URL token.
+inline constexpr std::string_view kCredentialWords[] = { "token", "secret", "passw", "credential", "apikey" };
+inline constexpr std::string_view kCredentialParts[] = { "key", "keys", "auth", "pat", "pass", "pw" };
+inline constexpr std::string_view kKeyFileShapes[]   = { ".ssh/", ".pem", ".netrc", ".aws/credentials", "/environ", "id_rsa", "id_ecdsa", "id_ed25519" };
+
+// A LOWERCASED name that reads as a credential: an env/var name (`github_token`, `aws_secret_access_key`,
+// `db_password`) or a file's base name (`secret`, `token.json`). Short words count only as a whole component between
+// `_ - .` separators, so `$AUTHOR`, `$MONKEY` and `$PWD` (the shell's working directory) are not credentials.
+inline bool isCredentialName( std::string_view lowered ) noexcept
+{
+    const auto has = [ & ]( std::string_view word ) noexcept { return lowered.find( word ) != std::string_view::npos; };
+    if( std::any_of( std::begin( kCredentialWords ), std::end( kCredentialWords ), has ) || ( lowered.size() > 4 && lowered.starts_with( "aws_" ) ) )
+    {
+        return true;
+    }
+    for( std::size_t begin = 0; begin < lowered.size(); )
+    {
+        const std::size_t end  = std::min( lowered.find_first_of( "_-.", begin ), lowered.size() );
+        const std::string_view part = lowered.substr( begin, end - begin );
+        if( std::find( std::begin( kCredentialParts ), std::end( kCredentialParts ), part ) != std::end( kCredentialParts ) )
+        {
+            return true;
+        }
+        begin = end + 1;
+    }
+    return false;
+}
+
+// A LOWERCASED token that names a key file or the process environment, wherever it sits (a URL is not a file read).
+inline bool isKeyFileToken( std::string_view lowered ) noexcept
+{
+    return lowered.find( "://" ) == std::string_view::npos
+        && std::any_of( std::begin( kKeyFileShapes ), std::end( kKeyFileShapes ), [ & ]( std::string_view shape ) noexcept { return lowered.find( shape ) != std::string_view::npos; } );
+}
+
+// The operand a token hands to a reader or a sender, or empty: curl's `@file` (also `--data-binary=@file`, `f=@file`),
+// wget's `--post-file=file`, and the token after `cat`, `-T`/`--upload-file`, or a `<` redirect. `prevToken` keeps its
+// case (`-T` uploads a file; `-t` is a telnet option).
+inline std::string_view fileOperand( std::string_view token, std::string_view prevToken, bool afterRedirect ) noexcept
+{
+    if( afterRedirect || prevToken == "cat" || prevToken == "-T" || prevToken == "--upload-file" )
+    {
+        return token;
+    }
+    if( token.starts_with( "--post-file=" ) )
+    {
+        return token.substr( 12 );
+    }
+    if( token.starts_with( '@' ) )
+    {
+        return token.substr( 1 );
+    }
+    const std::size_t eqAt = token.find( "=@" );
+    return eqAt == std::string_view::npos ? std::string_view{} : token.substr( eqAt + 2 );
+}
+
+// A `$NAME` or `${NAME` on the LOWERCASED line whose name isCredentialName, or an `authorization:` header with a `$`
+// after it (a var or a command substitution).
+inline bool hasCredentialVar( std::string_view lowered ) noexcept
+{
+    for( std::size_t dollar = lowered.find( '$' ); dollar != std::string_view::npos; dollar = lowered.find( '$', dollar + 1 ) )
+    {
+        const std::size_t nameBegin = dollar + ( ( dollar + 1 < lowered.size() && lowered[ dollar + 1 ] == '{' ) ? 2 : 1 );
+        std::size_t       nameEnd   = nameBegin;
+        while( nameEnd < lowered.size() && namesplit::isIdentChar( lowered[nameEnd] ) )
+        {
+            ++nameEnd;
+        }
+        if( nameEnd > nameBegin && isCredentialName( lowered.substr( nameBegin, nameEnd - nameBegin ) ) )
+        {
+            return true;
+        }
+    }
+    const std::size_t header = lowered.find( "authorization:" );
+    return header != std::string_view::npos && lowered.find( '$', header ) != std::string_view::npos;
+}
+
+// A shell word on the line that is a credential source: the command word `printenv` or `env` (a whole-environment
+// dump), a key file (isKeyFileToken), or a file operand (fileOperand) whose base name isCredentialName. `line` and
+// `lowered` are the same bytes, one case-folded, so a token is cut from both at one offset.
+inline bool hasCredentialToken( std::string_view line, std::string_view lowered ) noexcept
+{
+    constexpr std::string_view kSeparators = " \t\"'`|;&()<>";
+    std::string_view prevToken;
+    bool             afterRedirect = false;
+    for( std::size_t i = 0; i < line.size(); )
+    {
+        if( kSeparators.find( line[i] ) != std::string_view::npos )
+        {
+            afterRedirect = afterRedirect || line[i] == '<';
+            ++i;
+            continue;
+        }
+        const std::size_t      end     = std::min( line.find_first_of( kSeparators, i ), line.size() );
+        const std::string_view token   = lowered.substr( i, end - i );
+        const std::string_view operand = fileOperand( token, prevToken, afterRedirect );
+        const std::string_view base    = operand.substr( operand.find_last_of( '/' ) + 1 );   // npos + 1 == 0: no slash, whole operand
+        if( token == "printenv" || token == "env" || isKeyFileToken( token ) || ( !operand.empty() && isCredentialName( base ) ) )
+        {
+            return true;
+        }
+        prevToken     = line.substr( i, end - i );
+        afterRedirect = false;
+        i             = end;
+    }
+    return false;
+}
+
+// True when a credential-shaped source is on the line: hasCredentialVar (a credential-named var, an Authorization:
+// header with a var) or hasCredentialToken (an env dump, a key file, a credential-named file operand). One case fold,
+// then each test is linear in the line. Line-local like the rule it grades: a token assigned to `$HOST` three lines up
+// is invisible here, and the bare word `env` in `env FOO=1 cmd` counts as a dump — both err toward CRITICAL.
+inline bool hasCredentialSource( std::string_view line )
+{
+    std::string lowered( line );
+    std::transform( lowered.begin(), lowered.end(), lowered.begin(), []( char c ) noexcept { return char( std::tolower( static_cast<unsigned char>( c ) ) ); } );
+    return hasCredentialVar( lowered ) || hasCredentialToken( line, lowered );
 }
 
 inline std::vector<ExfilPattern> buildExfilPatterns()
@@ -585,11 +717,11 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
     const bool                      bashAllowed  = toolAllowed( allowedTools, "Bash" );
 
     // helper: add a finding with a clipped excerpt
-    const auto addFinding = [ & ]( SkillSeverity sev, int lineNum, const char* rule, std::string_view lineText )
+    const auto addFinding = [ & ]( SkillSeverity sev, int lineNum, const char* rule, std::string_view lineText, const char* why = nullptr )
     {
         std::string excerpt( trimRight( lineText ) );
         if( excerpt.size() > 120 ) { excerpt.resize( 117 ); excerpt += "..."; }
-        findings.push_back( { sev, lineNum, rule, std::move( excerpt ) } );
+        findings.push_back( { sev, lineNum, rule, std::move( excerpt ), why } );
     };
     // helper: the regex boundary's answer as a plain hit, failing CLOSED on an undecided match — the line gets a
     // CRITICAL scan-incomplete finding (deduped per line below), so an unscannable skill can never read "clean".
@@ -813,7 +945,15 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
                 {
                     continue;
                 }
-                addFinding( SkillSeverity::Critical, lineNum, p.rule, ln );
+                // #353: net-exfil's shape is a verb plus ANY var; only a credential-shaped source on the line makes it CRITICAL.
+                if( p.isNetExfilShape && !hasCredentialSource( ln ) )
+                {
+                    addFinding( SkillSeverity::Warn, lineNum, p.rule, ln, kNetExfilNoCredWhy );
+                }
+                else
+                {
+                    addFinding( SkillSeverity::Critical, lineNum, p.rule, ln );
+                }
                 break;   // one EXFILTRATE finding per line
             }
 
@@ -1114,15 +1254,22 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // verdict= were undefined debt on every --legend=full run (legendcoverage_baseline.txt's four
 // `scan-skills | skillscan@*` lines). `fullLegend=true` (only when cfg.legend=="full") writes the missing
 // comment; false (every existing caller) is byte-identical.
+//
+// #353: a row graded below its rule's usual severity carries why= (today only why="no-cred-source" on an
+// EXFILTRATE:net-exfil WARN). The full legend defines it only when a row carries it, so every scan without one
+// stays byte-identical.
 inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, int filesScanned, int filesSkipped = 0, bool fullLegend = false ) noexcept
 {
     if( fullLegend )
     {
+        const bool anyWhy = std::any_of( rows.begin(), rows.end(), []( const SkillScanRow& r ) noexcept { return r.finding.why != nullptr; } );
         rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
                           "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
                           "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
                           "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
-                          "worst finding's severity, the same read as the exit code (0/1/2). -->", kSkillScanFindingCap );
+                          "worst finding's severity, the same read as the exit code (0/1/2).{} -->", kSkillScanFindingCap,
+                          anyWhy ? " An f row's why=no-cred-source: EXFILTRATE:net-exfil matched a network verb plus a $VAR or "
+                                   "base64, but no credential-shaped source is on the line, so it is WARN, not CRITICAL." : "" );
     }
     int maxSev = 0;
     for( const SkillScanRow& r : rows )
@@ -1151,8 +1298,13 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
     for( std::size_t i = 0; i < shown; ++i )
     {
         const SkillScanRow& r = rows[i];
-        rw::emitTo( out, "<f p=\"{}:{}\" rule=\"{}\" sev=\"{}\"/>",
+        rw::emitTo( out, "<f p=\"{}:{}\" rule=\"{}\" sev=\"{}\"",
                      escapeXmlAttr( r.path ).c_str(), r.finding.line, r.finding.rule, skillSeverityAttr( r.finding.sev ).c_str() );
+        if( r.finding.why != nullptr )
+        {
+            rw::emitTo( out, " why=\"{}\"", r.finding.why );
+        }
+        rw::emitRaw( out, "/>" );
     }
     rw::emitRaw( out, "</skillscan>\n" );
 }

@@ -667,6 +667,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "files", "files=N: files scanned (unscannable ones are skipped=)", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     { "findings", "findings=N: pattern hits; rows print up to 200 (shown= capped=1 past that)", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     { "verdict", "verdict=clean|warn|critical: the worst finding's severity, the same as exit 0/1/2", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
+    { "why", "f why=no-cred-source: net-exfil hit with no credential-shaped source on the line, so WARN not CRITICAL", true, "f", MapHeaderRead::No, {}, "scan-skills" },
     // seams: src/verbs_report.h runStructureText (the seams arm)
     { "modules", "modules=N: directories holding indexed symbols (a module = parent dir)", false, "seams", MapHeaderRead::No, {}, "seams" },
     { "bridges", "bridges=N: cross-directory call edges, tested or not; untested= is those no test reaches", false, "seams", MapHeaderRead::No, {}, "seams" },

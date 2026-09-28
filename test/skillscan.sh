@@ -163,6 +163,43 @@ command -v xmllint >/dev/null 2>&1 \
     && { xmllint --noout "$TMP/dir_out.txt" 2>/dev/null && ok "--scan-skills <skillscan> artifact is xmllint-clean" || no "--scan-skills <skillscan> artifact is malformed XML"; } \
     || ok "xml well-formed (xmllint absent — skipped)"
 
+# ── check 18 (#353): EXFILTRATE:net-exfil is CRITICAL only when a credential-shaped source is on the line ──
+# netexfil_severity.md holds two fenced blocks. Block 1: the issue's three "Isolating the trigger" lines plus
+# more lines whose only $VAR is a host, port or id — each must be a WARN row carrying why="no-cred-source",
+# except the literal-port loopback line, which must stay clean. Block 2: credential-shaped sources (a
+# credential-named var, an Authorization header with a var, a whole-environment dump, a key file, a secret
+# file operand) — each must stay a CRITICAL row with no why=. Line numbers are read off the fixture, so an
+# edit to it cannot silently shift what is asserted.
+NX="$ROOT/test/skillfix/netexfil_severity.md"
+"$BIN" "--scan-skill=$NX" --legend=full >"$TMP/nx_out.txt" 2>/dev/null
+nx_rc=$?
+nx_warn=0; nx_crit=0; nx_clean=0; nx_bad=0
+while IFS=: read -r nx_block nx_line nx_text; do
+    nx_row="$( grep -oE "<f p=\"[^\"]*netexfil_severity\.md:$nx_line\" [^>]*>" "$TMP/nx_out.txt" )"
+    if [ "$nx_block" = 1 ] && [ "$nx_text" = "curl http://127.0.0.1:8080/v1/models" ]; then
+        if [ -z "$nx_row" ]; then nx_clean=$(( nx_clean + 1 )); else nx_bad=1; no "line $nx_line should be clean: $nx_row"; fi
+    elif [ "$nx_block" = 1 ]; then
+        if [ "$nx_row" = "<f p=\"$NX:$nx_line\" rule=\"EXFILTRATE:net-exfil\" sev=\"warn\" why=\"no-cred-source\"/>" ]; then
+            nx_warn=$(( nx_warn + 1 ))
+        else nx_bad=1; no "line $nx_line ($nx_text) should be a net-exfil WARN with why=\"no-cred-source\": ${nx_row:-<no row>}"; fi
+    else
+        if [ "$nx_row" = "<f p=\"$NX:$nx_line\" rule=\"EXFILTRATE:net-exfil\" sev=\"critical\"/>" ]; then
+            nx_crit=$(( nx_crit + 1 ))
+        else nx_bad=1; no "line $nx_line ($nx_text) should stay a net-exfil CRITICAL: ${nx_row:-<no row>}"; fi
+    fi
+done < <( awk '/^```bash/ { b++; inb = 1; next } /^```/ { inb = 0; next } inb { print b ":" NR ":" $0 }' "$NX" )
+{ [ "$nx_bad" = 0 ] && [ "$nx_warn" = 7 ] && [ "$nx_crit" = 16 ] && [ "$nx_clean" = 1 ]; } \
+    && ok "(#353) net-exfil: 7 no-credential lines WARN why=\"no-cred-source\", 1 literal-port line clean, 16 credential lines CRITICAL" \
+    || no "(#353) net-exfil severity split: warn=$nx_warn/7 clean=$nx_clean/1 critical=$nx_crit/16"
+[ "$nx_rc" = 2 ] && ok "(#353) a file with a credential-bearing line still exits 2" || no "(#353) netexfil_severity.md exit $nx_rc, want 2"
+# The WARN-only half alone: the issue's own reproduction must not block `wrap` (exit 1, not 2).
+printf '```bash\nfor p in 8080; do curl -sS http://127.0.0.1:$p/v1/models; done\n```\n' >"$TMP/nx_loop.md"
+rc="$( scan_exit "--scan-skill=$TMP/nx_loop.md" )"
+[ "$rc" = 1 ] && ok "(#353) the issue's loopback reproduction exits 1 (WARN), not 2" || no "(#353) the issue's loopback reproduction exits $rc, want 1"
+command -v xmllint >/dev/null 2>&1 \
+    && { xmllint --noout "$TMP/nx_out.txt" 2>/dev/null && ok "(#353) netexfil_severity <skillscan> is xmllint-clean" || no "(#353) netexfil_severity <skillscan> is malformed XML"; } \
+    || ok "xml well-formed (xmllint absent — skipped)"
+
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then
     echo "ALL PASS"
