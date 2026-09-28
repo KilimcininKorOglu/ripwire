@@ -80,16 +80,16 @@ inline const char* shallowLegend( bool shallow )
 // unavailable / no history (need a git repo)" whenever mining came back empty, which on a shallow clone is false
 // twice: git is there and so is a repo — only the fetched history is too short, or its one squashed commit is
 // skipped as bulk. A shallow clone with history now hears exactly that; every other case keeps its bytes.
-// `fallback` is the verb's own pre-existing sentence.
-inline std::string historyRefusalCause( const std::string& root, std::string_view fallback )
+// "" means "not that case": the caller then prints its own pre-existing sentence, byte for byte.
+inline std::string shallowHistoryCause( const std::string& root )
 {
     if( quality::gitRepoHasHistory( root ) && isShallow( root ) )
     {
         return "shallow clone: the fetched history holds no commit this verb can mine (a depth-limited clone keeps only its "
-               "newest commits, and one touching many files is skipped as bulk); deepen it with "
+               "newest commits, and one touching many files is skipped as bulk); "
              + std::string( quality::kShallowDeepenHint );
     }
-    return std::string( fallback );
+    return {};
 }
 
 // The unknown-ref refusal's shallow hint (--pr-context base ref, --merge-scout refs). "unknown ref 'HEAD~1'" is
@@ -101,7 +101,7 @@ inline std::string shallowRefHint( const std::string& root )
     {
         return {};
     }
-    return " — this is a shallow clone, so the ref may lie beyond the fetched history; deepen it with " + std::string( quality::kShallowDeepenHint );
+    return " — this is a shallow clone, so the ref may lie beyond the fetched history; " + std::string( quality::kShallowDeepenHint );
 }
 
 inline std::string stampAt( const std::string& root )

@@ -1238,7 +1238,14 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                              windowLabel.c_str(), ing.files.size(), ing.files.size(), gitstamp::atAttr( root ).c_str() );
                 return 0;
             }
-            rw::emitTo( stderr, "ripwire --hotspots: {}\n", gitstamp::historyRefusalCause( root, "git unavailable / no history (need a git repo)" ) );   // 0.6.6: shallow says so
+            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            {
+                rw::emitTo( stderr, "ripwire --hotspots: {}\n", shallowWhy );
+            }
+            else
+            {
+                rw::emitTo( stderr, "ripwire --hotspots: git unavailable / no history (need a git repo)\n" );
+            }
             return 1;
         }
 
@@ -1529,7 +1536,14 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                 rw::emitTo( stdout, "<cochange pairs=\"0\" commits=\"0\" window=\"{}\" sub_windows=\"0\" shown=\"0\" capped=\"0\"{}></cochange>", coWindowLabel.c_str(), gitstamp::atAttr( root ).c_str() );
                 return 0;
             }
-            rw::emitTo( stderr, "ripwire --cochange: {}\n", gitstamp::historyRefusalCause( root, "git unavailable / no history (need a git repo)" ) );   // 0.6.6: shallow says so
+            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            {
+                rw::emitTo( stderr, "ripwire --cochange: {}\n", shallowWhy );
+            }
+            else
+            {
+                rw::emitTo( stderr, "ripwire --cochange: git unavailable / no history (need a git repo)\n" );
+            }
             return 1;
         }
         // §CLIO: one cell per pair carrying BOTH the support count and the sub-window bitmask, rather than a
@@ -1694,7 +1708,14 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
         }
         if( ownerships.empty() )
         {
-            rw::emitTo( stderr, "ripwire --owners: {}\n", gitstamp::historyRefusalCause( root, "git unavailable / no history (need a git repo with commits)" ) );   // 0.6.6: shallow says so
+            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            {
+                rw::emitTo( stderr, "ripwire --owners: {}\n", shallowWhy );
+            }
+            else
+            {
+                rw::emitTo( stderr, "ripwire --owners: git unavailable / no history (need a git repo with commits)\n" );
+            }
             return 1;
         }
 

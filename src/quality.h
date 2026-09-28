@@ -2007,7 +2007,9 @@ inline bool gitIsShallowBoundary( const std::string& root, const std::string& sh
 }
 
 // The one way to say how to get the missing history, so no two verbs name it differently.
-inline constexpr std::string_view kShallowDeepenHint = "git fetch --deepen=N, or git fetch --unshallow";
+// (Worded so no string literal here OPENS with a git command: githardencheck (L) reads such a literal as an
+// executed git invocation spelled outside rw::gitCmd(); this one is advice to a reader, never run.)
+inline constexpr std::string_view kShallowDeepenHint = "deepen it with git fetch --deepen=N, or git fetch --unshallow";
 
 // A4-P1 — the HEAD-snapshot ingest cache. The HEAD tree is IMMUTABLE for a given HEAD sha, so its cold ingest
 // (~12.5 s on the 1498-file corpus) is perfectly cacheable: we hand the archived-tree ingest an incremental
@@ -3819,7 +3821,7 @@ inline std::string noParentReason( const std::string& root, const std::string& s
     if( gitIsShallowBoundary( root, sha ) )
     {
         return "shallow clone: that commit's parent was not fetched, so there is no earlier tree here to be a delta against "
-               "(it is the shallow boundary, not a root commit; deepen with " + std::string( kShallowDeepenHint ) + ")";
+               "(it is the shallow boundary, not a root commit; " + std::string( kShallowDeepenHint ) + ")";
     }
     return "that commit has no parent — a root commit has no earlier tree to be a delta against";
 }
