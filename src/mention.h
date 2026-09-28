@@ -1431,6 +1431,37 @@ inline std::vector<MentionFileRow> collapseMentionsToFileRows( const IngestResul
 // beside a docs= that is exact for what it measures. A whole-word text match, so it is a CEILING on real mentions
 // of THIS symbol (a namesake elsewhere counts); files that cannot be read are skipped. Single root only (a doc edge
 // never crosses roots); the caller does not ask on a multi-root run.
+// Does `text` hold `name` as a whole identifier (no identifier character on either side)?
+inline bool holdsWholeIdentifier( std::string_view text, std::string_view name ) noexcept
+{
+    for( std::size_t at = text.find( name ); !name.empty() && at != std::string_view::npos; at = text.find( name, at + 1 ) )
+    {
+        const bool leftOk  = at == 0 || !namesplit::isIdentChar( text[ at - 1 ] );
+        const bool rightOk = at + name.size() >= text.size() || !namesplit::isIdentChar( text[ at + name.size() ] );
+        if( leftOk && rightOk )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The indexed markdown files, by id, sorted: every file holding a Markdown symbol (each one has at least its file section).
+inline std::vector<std::uint32_t> markdownFileIds( const IngestResult& ing )
+{
+    std::vector<std::uint32_t> ids;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.lang == Lang::Markdown )
+        {
+            ids.push_back( s.fileId );
+        }
+    }
+    std::sort( ids.begin(), ids.end() );
+    ids.erase( std::unique( ids.begin(), ids.end() ), ids.end() );
+    return ids;
+}
+
 inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted )
 {
     std::vector<std::string_view> names;
@@ -1446,39 +1477,16 @@ inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std
         countedFiles.push_back( row.fileId );
     }
     std::sort( countedFiles.begin(), countedFiles.end() );
-    std::vector<std::uint32_t> markdownFiles;
-    for( const Symbol& s : ing.symbols )
-    {
-        if( s.lang == Lang::Markdown )
-        {
-            markdownFiles.push_back( s.fileId );
-        }
-    }
-    std::sort( markdownFiles.begin(), markdownFiles.end() );
-    markdownFiles.erase( std::unique( markdownFiles.begin(), markdownFiles.end() ), markdownFiles.end() );
 
-    const auto namesWholeWord = []( std::string_view text, std::string_view name ) noexcept
-    {
-        for( std::size_t at = text.find( name ); !name.empty() && at != std::string_view::npos; at = text.find( name, at + 1 ) )
-        {
-            const bool leftOk  = at == 0 || !namesplit::isIdentChar( text[ at - 1 ] );
-            const bool rightOk = at + name.size() >= text.size() || !namesplit::isIdentChar( text[ at + name.size() ] );
-            if( leftOk && rightOk )
-            {
-                return true;
-            }
-        }
-        return false;
-    };
     std::size_t residue = 0;
-    for( const std::uint32_t fileId : markdownFiles )
+    for( const std::uint32_t fileId : markdownFileIds( ing ) )
     {
         if( std::binary_search( countedFiles.begin(), countedFiles.end(), fileId ) )
         {
             continue;
         }
         const std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
-        if( bytes && std::any_of( names.begin(), names.end(), [ & ]( std::string_view n ) { return namesWholeWord( *bytes, n ); } ) )
+        if( bytes && std::any_of( names.begin(), names.end(), [ & ]( std::string_view n ) { return holdsWholeIdentifier( *bytes, n ); } ) )
         {
             ++residue;
         }
