@@ -609,6 +609,9 @@ struct AstQueryGroup
     // claim; the emitter turns a non-zero into ellipsis_capped="1" + ellipsis_skipped=N and labels hits= a
     // floor, which is the disclosure V-2 found missing.
     std::atomic<std::uint64_t>*       ellipsisCappedOut = nullptr;
+    // AstWalk::Pattern only, optional: calls only a QUALIFIED spelling of a pattern leaf would have matched
+    // (pattern.h MatchStats::qualifiedUnmatchedCount) — never hits; the emitter discloses unmatched_qualified=.
+    std::atomic<std::uint64_t>*       qualifiedUnmatchedOut = nullptr;
 
     // §L3: a query that DID compile (for at least one grammar) still tells the caller nothing about WHICH
     // grammars accepted it, or how much of the corpus could even ask it the question. `(interface_declaration)

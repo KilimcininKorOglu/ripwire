@@ -31,6 +31,11 @@
 #   (B6) no sub-line fragment: formaxtokenscheck's own fixture (--for --detail=30 --token-budget=800) cut its top
 #        body to ONE BYTE under lines="1-1/7"; every truncated body's CDATA must now be exactly the whole lines its
 #        lines= names, re-derived from an uncut --expand of the same definition. RED on d4395e7e.
+#   (B8) --pack-top-n's cut (serialize.h packSource), the same defect on raw files: a bare `<!-- truncated -->` inside
+#        the last file's CDATA was the only trace, files the budget never reached vanished, and the loop kept serving
+#        fragments after the cut. Now the first file that does not fit closes the answer, cut at a line end with
+#        <src truncated="1" lines="1-K/T">, and <src_cut shown= total= capped="1" budget_bytes=> counts what was not
+#        served, both defined by one comment in that document. An uncut answer carries none of it. RED before.
 #
 # Usage:  test/overbudgetcommentcheck.sh   [ RIPWIRE_BIN=path/to/ripwire ]
 # Exits non-zero on any failure. Does NOT edit regression.sh.
@@ -297,6 +302,35 @@ case "$N5B" in
            *)  no "(B7) the $N5SZ-byte section's tag is clean but its body is not the whole section: $N5W" ;;
        esac ;;
 esac
+
+# ── (B8) --pack-top-n: the cut is stated, and nothing is served after it ─────────────────────────────────────
+PT="$TMP/packtop"; mkdir -p "$PT"
+for f in a b c d; do
+    { printf 'int %s_entry( int x )\n{\n    return %s_helper( x );\n}\n' "$f" "$f"
+      i=0; while [ $i -lt 40 ]; do printf 'int %s_helper%d( int x ) { return x + %d; }\n' "$f" $i $i; i=$(( i + 1 )); done
+      printf 'int %s_helper( int x ) { return x; }\n' "$f"; } >"$PT/$f.c"
+done
+FSZ="$( wc -c <"$PT/a.c" | tr -d ' ' )"
+PB=$(( FSZ + FSZ / 2 ))                                   # one whole file and half of the next
+"$BIN" "$PT" --pack-top-n=4 --pack-budget-bytes=$PB --no-cache >"$TMP/pt.xml" 2>/dev/null
+"$BIN" "$PT" --pack-top-n=4 --no-cache >"$TMP/pt_whole.xml" 2>/dev/null
+PT_SRC="$( grep -oE '<src p="[^"]*"[^>]*>' "$TMP/pt.xml" )"
+PT_N="$( printf '%s\n' "$PT_SRC" | grep -c '<src ' )"
+grep -qF '<!-- truncated -->' "$TMP/pt.xml" \
+    && no "(B8) a '<!-- truncated -->' marker is still written inside a --pack-top-n CDATA" \
+    || ok "(B8) no '<!-- truncated -->' marker inside the --pack-top-n CDATA"
+[ "$PT_N" = 2 ] && printf '%s\n' "$PT_SRC" | tail -1 | grep -qE ' truncated="1" lines="1-[0-9]+/[0-9]+"' \
+    && ok "(B8) two files served, the second cut at a line end: $( printf '%s\n' "$PT_SRC" | tail -1 )" \
+    || no "(B8) want 2 <src>, the last with truncated=\"1\" lines=\"1-K/T\"; got $PT_N: $PT_SRC"
+grep -qE '<src_cut shown="2" total="4" capped="1" budget_bytes="'"$PB"'"/>' "$TMP/pt.xml" \
+    && ok "(B8) <src_cut shown=\"2\" total=\"4\" capped=\"1\" budget_bytes=\"$PB\"/> counts the two files not served" \
+    || no "(B8) no <src_cut shown=\"2\" total=\"4\" capped=\"1\"> disclosure: $( grep -oE '<src_cut[^>]*>' "$TMP/pt.xml" )"
+grep -qE '<!-- src_cut: shown= [^>]*budget_bytes=[^>]*truncated=[^>]*lines=' "$TMP/pt.xml" \
+    && ok "(B8) one comment in the same document defines shown=/total=/capped=/budget_bytes=/truncated=/lines=" \
+    || no "(B8) the cut's attributes ride with no definition in the document"
+xmllint --noout "$TMP/pt.xml" 2>/dev/null && ok "(B8) the cut document is well-formed" || no "(B8) the cut document is not well-formed"
+if grep -qE 'src_cut|truncated=' "$TMP/pt_whole.xml"; then no "(B8) an uncut --pack-top-n answer carries cut disclosure"
+else ok "(B8) an uncut --pack-top-n answer carries no cut disclosure (4 whole files: $( grep -c '<src ' "$TMP/pt_whole.xml" | tr -d ' ' ) <src>)"; fi
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

@@ -3257,12 +3257,30 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
 }
 
 // --pack-top-n: append raw source of the top-N files (by aggregate symbol rank),
-// as CDATA, capped at budgetBytes; the last file is truncated at a newline with a marker.
-// Emitted AFTER </r> — a hybrid graph+source bundle (intentionally not a single XML doc).
+// as CDATA, capped at budgetBytes. Emitted AFTER </r> — a hybrid graph+source bundle (intentionally not a single XML doc).
 //
 // §B10.1 (W3-N1's discipline, extended): `redact` is REQUIRED — no default. Raw file source is the widest
 // credential seam this binary has, so a caller must state which run it belongs to; nullptr = --no-redact,
 // spelled deliberately. Both call sites already passed it, so this costs nothing and buys the compile error.
+//
+// THE CUT, STATED (lane honesty-cuts-066). The budget used to end the answer with a bare `<!-- truncated -->` inside the
+// last file's CDATA — bytes a paste-back carries, no counts — and the files the budget never reached vanished: on a public
+// Python repository --pack-top-n=5 served 2 of 5 files, the second one line long, and nothing said 3 were missing. On
+// this one the loop kept serving 20-32 B fragments (`#pragma on`) of three more files after the budget was effectively
+// spent, because a cut at a line end leaves a few bytes of slack. Now:
+//   * the first file that does not fit is cut at a line end and CLOSES the answer — no fragments after it — and says so
+//     on its own element: <src p= truncated="1" lines="1-K/T">, K of its T lines shown (a file of which not one whole
+//     line fits is not served at all: it is omitted, not served empty);
+//   * when a requested file was not served, one element before the first <src> counts them in the shared truncation
+//     vocabulary: <src_cut shown= total= capped="1" budget_bytes=>, plus unreadable=N when a file could not be read
+//     (it used to be skipped silently);
+//   * both readings ride one comment written only into a document that carries them (the kTruncatedBodyLegend rule).
+// An answer the budget did not cut is byte-identical to before.
+inline constexpr std::string_view kPackSourceCutLegend =
+    "<!-- src_cut: shown= of the total= top-ranked files requested were served, capped=\"1\" (the rest did not fit "
+    "budget_bytes=, the byte ceiling); unreadable=N: files that could not be read. src truncated=\"1\": that file was "
+    "cut at a line end, lines=\"1-K/T\" (K of its T lines shown) -->";
+
 inline void packSource( std::FILE* out, const IngestResult& ing, const std::vector<float>& rank,
                         int topN, std::size_t budgetBytes, RedactCounts* redact )
 {
@@ -3280,17 +3298,27 @@ inline void packSource( std::FILE* out, const IngestResult& ing, const std::vect
     }
     sortutil::radixSortByScoreDescId( order, fileRank );
 
-    XmlWriter         w( out );
     std::vector<char> esc;
-    std::size_t       used = 0;
+    std::string       served;                 // the <src> elements, held until the cut is known: its reading goes FIRST
+    std::size_t       used       = 0;
+    std::size_t       shown      = 0;
+    std::size_t       unreadable = 0;
+    bool              cutOne     = false;
     const std::size_t keep = std::min<std::size_t>( topN > 0 ? std::size_t( topN ) : 0, F );
 
-    for( std::size_t k = 0; k < keep && used < budgetBytes; ++k )
+    const auto lineCount = []( std::string_view text ) noexcept
+    {
+        const std::size_t newlines = static_cast<std::size_t>( std::count( text.begin(), text.end(), '\n' ) );
+        return newlines + ( ( !text.empty() && text.back() != '\n' ) ? 1u : 0u );
+    };
+
+    for( std::size_t k = 0; k < keep && used < budgetBytes && !cutOne; ++k )
     {
         std::FILE* in = std::fopen( diskPath( ing, order[k] ).c_str(), "rb" );
         if( !in )
         {
-            continue; // graceful: file gone
+            ++unreadable;   // graceful (file gone since the crawl), and counted: it is one of the files asked for
+            continue;
         }
 
         std::string body;
@@ -3302,14 +3330,14 @@ inline void packSource( std::FILE* out, const IngestResult& ing, const std::vect
         }
         std::fclose( in );
 
-        bool truncated = false;
+        std::string linesAttr;
         if( used + body.size() > budgetBytes )                 // truncate at a newline + UTF-8 boundary
         {
             const std::size_t room = budgetBytes - used;
             std::size_t cut = body.rfind( '\n', room );
             if( cut == std::string::npos )
             {
-                cut = room;
+                cut = 0;   // not one whole line fits: the file is omitted below, never served as a fragment
             }
             // never cut mid-codepoint: back off any UTF-8 continuation bytes (10xxxxxx) so the
             // CDATA stays valid UTF-8 (otherwise xmllint / the G4 guardrail rejects it)
@@ -3317,8 +3345,14 @@ inline void packSource( std::FILE* out, const IngestResult& ing, const std::vect
             {
                 --cut;
             }
+            cutOne = true;   // the first file that does not fit closes the answer, served in part or not at all
+            if( cut == 0 )
+            {
+                break;
+            }
+            const std::size_t totalLines = lineCount( body );
             body.resize( cut );
-            truncated = true;
+            linesAttr = " truncated=\"1\" lines=\"1-" + std::to_string( lineCount( body ) ) + "/" + std::to_string( totalLines ) + "\"";
         }
 
         // Redact credential shapes from the raw file body BEFORE CDATA-encoding — this is a
@@ -3329,15 +3363,24 @@ inline void packSource( std::FILE* out, const IngestResult& ing, const std::vect
         std::string safe;  safe.reserve( body.size() );        // split ]]>; scrub C0 controls (G4) + invalid UTF-8 (A4-F20)
         appendCdataSafe( body, safe );
 
-        w.write( "<src p=\"" );  w.write( escapeXml( ing.files[ order[k] ], esc ) );  w.write( "\"><![CDATA[" );
-        w.write( safe );
-        if( truncated )
-        {
-            w.write( "\n<!-- truncated -->" );
-        }
-        w.write( "]]></src>" );
+        served += "<src p=\"";  served += escapeXml( ing.files[ order[k] ], esc );  served += '"';  served += linesAttr;  served += "><![CDATA[";
+        served += safe;
+        served += "]]></src>";
         used += safe.size();   // charge EMITTED CDATA bytes (post ]]> expansion), not raw body
+        ++shown;
     }
+
+    XmlWriter w( out );
+    if( cutOne || shown < keep )
+    {
+        w.write( kPackSourceCutLegend );
+    }
+    if( shown < keep )
+    {
+        w.write( "<src_cut shown=\"" + std::to_string( shown ) + "\" total=\"" + std::to_string( keep ) + "\" capped=\"1\" budget_bytes=\""
+                 + std::to_string( budgetBytes ) + "\"" + ( unreadable > 0 ? " unreadable=\"" + std::to_string( unreadable ) + "\"" : std::string() ) + "/>" );
+    }
+    w.write( served );
     w.flush();
 }
 

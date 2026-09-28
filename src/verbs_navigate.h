@@ -2504,6 +2504,7 @@ std::optional<int> runMentions( const MainDispatch& d )
         std::sort( docs.begin(), docs.end() );  docs.erase( std::unique( docs.begin(), docs.end() ), docs.end() );
         const std::size_t           sectionCount = docs.size();
         std::vector<MentionFileRow> fileRows     = collapseMentionsToFileRows( ing, docs );
+        const std::size_t           unbackticked = mnSingleRoot ? countUnbacktickedDocFiles( ing, defs, fileRows ) : 0;
 
         std::vector<char> esc;
         const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
@@ -2514,6 +2515,10 @@ std::optional<int> runMentions( const MainDispatch& d )
                      "No line locator: the doc edge is stored at file granularity — a fabricated always-1 l= was removed; absent beats fake -->{}",
                      rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Mentions, mnUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
                      rw::rootRelPathsLegend( mnSingleRoot ) );
+        if( unbackticked > 0 )
+        {
+            rw::emitRaw( stdout, kUnbacktickedDocsLegend );
+        }
         // §P15/§P16: fileRows is deterministic (file path order) and printed unconditionally, no historic
         // display cap — pageWindow directly on cfg.pageLimit/cfg.pageOffset, discloseCap=false so the
         // un-paginated tag stays byte-identical.
@@ -2525,8 +2530,9 @@ std::optional<int> runMentions( const MainDispatch& d )
         const std::string mnSymAttr  = ( !cfg.mentionsSym.empty() && cfg.mentionsSym.front() == '@' )
                                      ? " sym=\"" + ex( ing.symbols[ defs[0] ].name ) + "\""
                                      : std::string();
-        rw::emitTo( stdout, "<mentions of=\"{}\"{} defs=\"{}\" docs=\"{}\" sections=\"{}\"{}{}{}>", ex( cfg.mentionsSym ).c_str(), mnSymAttr.c_str(), defs.size(),
-                     fileRows.size(), sectionCount,
+        const std::string mnUnbackticked = unbackticked > 0 ? " unbackticked_docs=\"" + std::to_string( unbackticked ) + "\"" : std::string();
+        rw::emitTo( stdout, "<mentions of=\"{}\"{} defs=\"{}\" docs=\"{}\" sections=\"{}\"{}{}{}{}>", ex( cfg.mentionsSym ).c_str(), mnSymAttr.c_str(), defs.size(),
+                     fileRows.size(), sectionCount, mnUnbackticked.c_str(),
                      rw::unprovenDefsAttrXml( mnUnprovenDefs ).c_str(),   // H1: beside the zero counts it qualifies; absent at zero
                      pageDisclosure( mentionsAb, sizeof( mentionsAb ), mentionsPw.end - mentionsPw.begin, fileRows.size(), mentionsPw.end,
                                      cfg.pageLimit, cfg.pageOffset, false ),

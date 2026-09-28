@@ -39,6 +39,7 @@
                       // queryshape::classify — the shipped trace classifier (rule a)
 #include "infra/namesplit.h"   // isIdentChar — the ONE ASCII identifier-character predicate
 #include "infra/sortutil.h"    // svLess — string_view order without libstdc++'s length subtraction (portablebuildcheck #6)
+#include "docparse.h"   // docparse::detail::readWholeFile — countUnbacktickedDocFiles reads the markdown the index holds
 #include "graph.h"   // R5: applyDocMentionBoost reads g.mentions (the doc->code backtick edges the
                       // --mentions=SYM verb already exposes) — same header gitmine.h already pulls in for
                       // an analogous "read one more Graph field" reason.
@@ -1419,6 +1420,76 @@ inline std::vector<MentionFileRow> collapseMentionsToFileRows( const IngestResul
                { return ing.files[ a.fileId ] < ing.files[ b.fileId ]; } );
     return fileRows;
 }
+
+// ── THE BACKTICK RULE'S RESIDUE (lane honesty-cuts-066) ─────────────────────────────────────────────────────────────
+// docs= counts markdown files whose `backtick` span IS the name (ingest_docs.h: one line, a clean identifier of 3+
+// characters). Prose that names the symbol bare, a fenced block, `callers:escapeXml`, or a span opened on one line and
+// closed on the next are not doc links by that rule, and the answer never said so: --mentions=escapeXml answered
+// docs="2" on this repository while a help-wanted prompt named it four times in prose and COMMANDS.md and CHANGELOG.md
+// named it too. This counts the markdown files the index holds that name one of the definitions' names as a whole
+// identifier and are NOT among the rows — the files the rule left out — so the answer can say unbackticked_docs=N
+// beside a docs= that is exact for what it measures. A whole-word text match, so it is a CEILING on real mentions
+// of THIS symbol (a namesake elsewhere counts); files that cannot be read are skipped. Single root only (a doc edge
+// never crosses roots); the caller does not ask on a multi-root run.
+inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted )
+{
+    std::vector<std::string_view> names;
+    for( const NodeId d : defs )
+    {
+        names.push_back( ing.symbols[ d ].name );
+    }
+    std::sort( names.begin(), names.end(), sortutil::svLess );
+    names.erase( std::unique( names.begin(), names.end() ), names.end() );
+    std::vector<std::uint32_t> countedFiles;
+    for( const MentionFileRow& row : counted )
+    {
+        countedFiles.push_back( row.fileId );
+    }
+    std::sort( countedFiles.begin(), countedFiles.end() );
+    std::vector<std::uint32_t> markdownFiles;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.lang == Lang::Markdown )
+        {
+            markdownFiles.push_back( s.fileId );
+        }
+    }
+    std::sort( markdownFiles.begin(), markdownFiles.end() );
+    markdownFiles.erase( std::unique( markdownFiles.begin(), markdownFiles.end() ), markdownFiles.end() );
+
+    const auto namesWholeWord = []( std::string_view text, std::string_view name ) noexcept
+    {
+        for( std::size_t at = text.find( name ); !name.empty() && at != std::string_view::npos; at = text.find( name, at + 1 ) )
+        {
+            const bool leftOk  = at == 0 || !namesplit::isIdentChar( text[ at - 1 ] );
+            const bool rightOk = at + name.size() >= text.size() || !namesplit::isIdentChar( text[ at + name.size() ] );
+            if( leftOk && rightOk )
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    std::size_t residue = 0;
+    for( const std::uint32_t fileId : markdownFiles )
+    {
+        if( std::binary_search( countedFiles.begin(), countedFiles.end(), fileId ) )
+        {
+            continue;
+        }
+        const std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
+        if( bytes && std::any_of( names.begin(), names.end(), [ & ]( std::string_view n ) { return namesWholeWord( *bytes, n ); } ) )
+        {
+            ++residue;
+        }
+    }
+    return residue;
+}
+
+// unbackticked_docs= (present only when non-zero): its reading, beside the root that carries it.
+inline constexpr const char* kUnbacktickedDocsLegend =
+    "<!-- unbackticked_docs=N: N more markdown files name of= as a whole word but not as a clean one-line backtick "
+    "span (prose, a code block, a span broken across lines) - not in docs=; a text match, so a ceiling -->";
 
 // ── R2-AF (round 2, answer-first ordering) — the S4 "named file's decl/impl partner" lookup ────────────
 //

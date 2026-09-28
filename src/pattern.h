@@ -882,6 +882,16 @@ inline bool nodesMatchExactly( TSNode a, TSNode b, std::string_view src, unsigne
 struct MatchStats
 {
     std::uint64_t ellipsisCappedCount = 0;
+    // QUALIFIED-CALLEE NEAR MISSES (lane honesty-cuts-066). The matcher is kind- and text-exact, so a bare callee in the
+    // pattern (`escapeXml($X, ...)`) never matches a SCOPE-QUALIFIED spelling of the same name (`rw::escapeXml( s, esc )`):
+    // the callee is a qualified_identifier there, not an identifier. On this repository that left 47 such calls out of
+    // hits="213" while --uses counted 265, and nothing said so. findMatches now re-asks every candidate the exact match
+    // refused with ONE relaxation — a pattern leaf may match the final name segment of a qualified/scoped name — and
+    // counts the nodes only that relaxation matches. They are NOT hits (the pattern did not say `rw::`); the count is
+    // disclosed as unmatched_qualified= so a reader knows the exact answer left them out and how to spell them in.
+    std::uint64_t qualifiedUnmatchedCount = 0;
+    bool          relaxQualified          = false;   // set by findMatches for the second ask only
+    bool          relaxedLeafHit          = false;   // the second ask used the relaxation at least once
 };
 
 bool matchAt( const PatternProgram& prog, std::uint32_t patIndex, TSNode cand, std::string_view src, MatchEnv& env, MatchStats& stats, unsigned depth );
@@ -964,6 +974,29 @@ inline bool matchChildren( const PatternProgram& prog, const PatNode& pat, TSNod
     return ci == kids.size();
 }
 
+// The final name segment of a scope-qualified name node (`a::b::c` -> `c`), or a null node when `n` is not one. By node
+// TYPE, so one rule serves every grammar that spells it: C/C++/CUDA qualified_identifier, Rust scoped_identifier, C#/PHP
+// qualified_name. The `name` field when the grammar has one, else the last named child; a nested qualified name descends.
+inline TSNode qualifiedTail( TSNode n ) noexcept
+{
+    for( unsigned depth = 0; depth < 16 && !ts_node_is_null( n ); ++depth )
+    {
+        const std::string_view type = ts_node_type( n );
+        if( type != "qualified_identifier" && type != "scoped_identifier" && type != "qualified_name" )
+        {
+            return depth == 0 ? TSNode{} : n;
+        }
+        TSNode next = ts_node_child_by_field_name( n, "name", 4 );
+        if( ts_node_is_null( next ) )
+        {
+            const std::uint32_t kids = ts_node_named_child_count( n );
+            next = kids == 0 ? TSNode{} : ts_node_named_child( n, kids - 1 );
+        }
+        n = next;
+    }
+    return TSNode{};
+}
+
 // Does the candidate node satisfy pattern node `patIndex`?
 inline bool matchAt( const PatternProgram& prog, std::uint32_t patIndex, TSNode cand, std::string_view src, MatchEnv& env, MatchStats& stats, unsigned depth )
 {
@@ -992,6 +1025,15 @@ inline bool matchAt( const PatternProgram& prog, std::uint32_t patIndex, TSNode 
     }
     if( ts_node_symbol( cand ) != pat.kindId )
     {
+        if( stats.relaxQualified && pat.childCount == 0 )   // the second ask only: see MatchStats::qualifiedUnmatchedCount
+        {
+            const TSNode tail = qualifiedTail( cand );
+            if( !ts_node_is_null( tail ) && ts_node_symbol( tail ) == pat.kindId && nodeText( tail, src ) == prog.textOf( pat ) )
+            {
+                stats.relaxedLeafHit = true;
+                return true;
+            }
+        }
         return false;
     }
     if( pat.childCount == 0 )
@@ -1027,6 +1069,21 @@ inline void findMatches( const PatternProgram& prog, TSNode root, std::string_vi
             if( matchAt( prog, 0, n, src, env, stats, 0 ) )
             {
                 out.emplace_back( ts_node_start_byte( n ), ts_node_end_byte( n ) );
+            }
+            else
+            {
+                // the second ask: would a qualified spelling of a pattern leaf have matched? Counted, never a hit. Its
+                // ellipsis abandons are not the exact answer's, so they are rolled back rather than double counted.
+                const std::uint64_t ellipsisBefore = stats.ellipsisCappedCount;
+                MatchEnv            relaxedEnv;
+                stats.relaxQualified = true;
+                stats.relaxedLeafHit = false;
+                if( matchAt( prog, 0, n, src, relaxedEnv, stats, 0 ) && stats.relaxedLeafHit )
+                {
+                    ++stats.qualifiedUnmatchedCount;
+                }
+                stats.relaxQualified      = false;
+                stats.ellipsisCappedCount = ellipsisBefore;
             }
         }
         // Collected once, then pushed in REVERSE so the stack pops left to right — the same visit order

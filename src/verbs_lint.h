@@ -1219,7 +1219,13 @@ struct PatternSearchOutcome
     std::size_t               skippedFiles  = 0;   // served-language files this pattern never scanned (V-3)
     bool                      ellipsisCapped = false;   // an ellipsis probe abandoned a node at the bound (V-2)
     std::uint64_t             ellipsisSkipped = 0;      // how many times — a floor on the nodes left unevaluated
+    std::uint64_t             qualifiedUnmatched = 0;   // nodes only a qualified spelling of a pattern leaf matches (not hits)
 };
+
+// unmatched_qualified= (present only when non-zero): its reading rides the answer that carries it, beside the root.
+inline constexpr std::string_view kPatternQualifiedLegend =
+    "<!-- unmatched_qualified=N: N more nodes match only when a name in q= is read as the last segment of a "
+    "scope-qualified name (ns::name, a::b::name) - NOT in hits=; spell the qualifier in the pattern to match them -->";
 
 // Compile the pattern for every served grammar, decide refusal-or-proceed, run the walk, and assemble the
 // disclosures. The refusal path is the load-bearing half: §P0.1's rule one level out — a pattern nothing
@@ -1240,16 +1246,19 @@ static PatternSearchOutcome runPatternSearch( const rw::IngestResult& ing, std::
     const rw::pattern::PatternProgramSet& progs = compiled.set;
 
     std::atomic<std::uint64_t> ellipsisCapped{ 0 };
+    std::atomic<std::uint64_t> qualifiedUnmatched{ 0 };
 
     rw::AstQueryGroup grp;
     grp.walk              = rw::AstWalk::Pattern;
     grp.patternPrograms   = &progs;
     grp.maxMatches        = rw::pattern::kMaxHits;
     grp.ellipsisCappedOut = &ellipsisCapped;
+    grp.qualifiedUnmatchedOut = &qualifiedUnmatched;
     out.matches           = std::move( rw::astQueryGrouped( ing, { grp } )[0] );
 
     out.ellipsisSkipped = ellipsisCapped.load( std::memory_order_relaxed );
     out.ellipsisCapped  = out.ellipsisSkipped != 0;
+    out.qualifiedUnmatched = qualifiedUnmatched.load( std::memory_order_relaxed );
 
     out.grammarsAttr                 = joinOwned( rw::pattern::resolvedNames( progs ), "," );
     out.shapesAttr                   = joinOwned( rw::pattern::resolvedShapes( progs ), "," );
@@ -1489,6 +1498,10 @@ std::optional<int> runLint( const MainDispatch& d )
             const std::size_t patShown = patPage.end - patPage.begin;
             char              ppab[ kPageDisclosureCap ];
             lintPrintOut( "{}", kPatternLegend );
+            if( ps.qualifiedUnmatched > 0 )
+            {
+                lintPrintOut( "{}", kPatternQualifiedLegend );
+            }
             // unresolved_in= is withheld only when it could not mislead: a run that found matches AND read
             // every file it serves. The moment a served-language file went unscanned (skipped_files>0), the
             // partial resolution is exactly what explains it, hits>0 or not — V-3's second case, where a
@@ -1496,9 +1509,10 @@ std::optional<int> runLint( const MainDispatch& d )
             const bool tellUnresolved = ps.matches.empty() || ps.skippedFiles > 0;
             // #157: same disclosure as --match, over the same shared walk (AstWalk::Pattern reaches the
             // identical per-file skip). Absent when nothing was refused.
-            const std::string patNestRefusedAttr = ing.crawlSkips.nestRefusedFiles > 0
+            const std::string patNestRefusedAttr = ( ing.crawlSkips.nestRefusedFiles > 0
                 ? " nest_refused=\"" + std::to_string( ing.crawlSkips.nestRefusedFiles ) + "\""
-                : std::string();
+                : std::string() )
+                + ( ps.qualifiedUnmatched > 0 ? " unmatched_qualified=\"" + std::to_string( ps.qualifiedUnmatched ) + "\"" : std::string() );
             lintPrintOut( "<pattern hits=\"{}\"{} hits_capped=\"{}\" q=\"{}\" grammars=\"{}\" shapes=\"{}\" unsupported=\"{}\"{}{} eligible_files=\"{}\" skipped_files=\"{}\" of_files=\"{}\"{}{}>",
                         ps.matches.size(),
                         pageDisclosure( ppab, sizeof( ppab ), patShown, ps.matches.size(), patPage.end, cfg.pageLimit, cfg.pageOffset, true,
