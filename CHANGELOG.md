@@ -15,6 +15,31 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — the history verbs say so when a clone is shallow
+
+On a `git clone --depth 1` (the `actions/checkout` default) the history verbs answered from one commit and said
+things that are false about the repository; the `+shallow` suffix on `at=` was the only hint. One probe
+(`git rev-parse --is-shallow-repository`, now shared by `at=`, `--doctor` and the verbs below) drives:
+
+- `--quality-delta=REV` and `--dmm=REV` on a shallow clone's boundary commit say "shallow clone: that commit's
+  parent was not fetched" and name `git fetch --deepen=N` / `git fetch --unshallow`, instead of "a root commit".
+  The raw commit object still records its parent, which is how a boundary is told from a true root commit, and a
+  true root commit is still called one.
+- `--owners`, `--hotspots` and `--cochange` (all three forms), plus the MCP `owners` and `cochange` twins, carry
+  `shallow="1"` on the root (`"shallow":true` in the cochange JSON), with a legend clause and a compact reading.
+  This is the attribute `--doctor`'s git row already uses. The numbers are unchanged; they are marked as coming
+  from only the fetched commits.
+- `--hotspots`, `--cochange` and `--owners` refusals on an empty mined history say "shallow clone: the fetched
+  history holds no commit this verb can mine", not "git unavailable / no history (need a git repo)".
+- `--rank-by=churn-decay` names its unscoped span `fetched-history` on a shallow clone, not `all-history`, and
+  both churn rankers append `(shallow clone)` to `window=`.
+- `--pr-context` and `--merge-scout` unknown-ref refusals add a shallow-clone hint.
+
+On a full-history clone every one of these answers is byte-identical to before (measured on a three-commit fixture
+for all ten verb forms under both legends, and on this repository for `--hotspots` and `--rank-by=churn-decay`).
+The legend dictionary gains one row (`dictv` changes).
+Gate: `test/shallowhistorycheck.sh` (21 checks fail on the previous binary; all 38 pass here).
+
 ### Fixed — three MCP answers no longer claim more than they checked (whereis, uses, find_symbol)
 
 - **MCP `whereis`** labelled HEAD rows with the lexical shape test (`head_labels="lexical"`), and that test

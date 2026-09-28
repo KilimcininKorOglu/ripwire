@@ -1219,6 +1219,7 @@ inline std::string cochangePartnersJson( const std::string& root, const std::str
          + ",\"partners\":" + std::to_string( ps.size() )
          + pageDisclosure( ccPab, sizeof( ccPab ), ccPw.end - ccPw.begin, ps.size(), ccPw.end,
                            page.limit, page.offset, /*discloseCap=*/true, kJsonPageSyntax )
+         + ( gitstamp::isShallow( root ) ? ",\"shallow\":true" : "" )   // 0.6.6: the CLI root's shallow="1", present-only
          + ",\"at\":" + atJson + ",\"rows\":[";
     bool first = true;
     for( std::size_t partnerIndex = ccPw.begin; partnerIndex < ccPw.end; ++partnerIndex )
@@ -2456,6 +2457,9 @@ inline std::optional<std::string> ownersText( const std::string& root, const std
                        "file holding the FIRST of them (lowest node id), so defs= above 1 means the other definitions' files "
                        "were NOT analysed. An @FILE:LINE seed rebinds to the innermost definition enclosing that line "
                        "(sym= names it) and covers exactly that definition's file -->" );
+    // 0.6.6: the CLI --owners qualification, on the same element in the same slot (before at=).
+    const bool owShallow = gitstamp::isShallow( root );
+    rw::emitRaw( mem, gitstamp::shallowLegend( owShallow ) );
     // §P8: the SAME <owners> element the CLI emits, so it takes the same at=. Stamping only the CLI half
     // would re-create, inside one element name, the two-shapes-one-spelling problem this round removes.
     // §B11.3-class: and the same of=/defs= fold disclosure, for the same reason.
@@ -2483,10 +2487,10 @@ inline std::optional<std::string> ownersText( const std::string& root, const std
     // Path order is kept, not ranked: it is the CLI's paging stream, and offset= must name the same rows there.
     const PageWindow owPw = pageWindow( printRows.size(), effectiveRowCap( page.limit, kCallHierarchyRowCap ), page.offset );
     char             owPab[ kPageDisclosureCap ];
-    rw::emitTo( mem, "<owners files=\"{}\"{}{}{}{}>", ownerships.size(), owSymAttr.c_str(),
+    rw::emitTo( mem, "<owners files=\"{}\"{}{}{}{}{}>", ownerships.size(), owSymAttr.c_str(),
                   pageDisclosure( owPab, sizeof( owPab ), owPw.end - owPw.begin, printRows.size(), owPw.end,
                                   page.limit, page.offset, /*discloseCap=*/owPw.end - owPw.begin < printRows.size() ),
-                  owRootAttr.c_str(), gitstamp::atAttr( root ).c_str() );
+                  owRootAttr.c_str(), gitstamp::shallowAttr( owShallow ), gitstamp::atAttr( root ).c_str() );
     if( uniformCount > 0 )
     {
         rw::emitTo( mem, "<uniform authors=\"1\" bf=\"1\" share=\"1.00\" files=\"{}\"/>", uniformCount );

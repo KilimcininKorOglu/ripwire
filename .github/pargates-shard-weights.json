@@ -502,6 +502,7 @@
 "selfcheckcheck.sh": 32.7,
 "selfcontainedcheck.sh": 2.2,
 "shadowcheck.sh": 11.2,
+"shallowhistorycheck.sh": 9.3,
 "shapingflagcheck.sh": 193.7,
 "shellgateindexcheck.sh": 1.2,
 "showcasecapturecheck.sh": 20.9,

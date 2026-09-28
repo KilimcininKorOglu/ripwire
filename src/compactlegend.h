@@ -203,6 +203,8 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
                                        // --connect alone, one verb paying full price for a fact the table
                                        // states in a third of the bytes.
 
+    "<!-- shallow=",                    // 0.6.6 shallow-history honesty: gitstamp.h kShallowLegendComment, the full clause
+                                       // beside a history verb's shallow="1" root; the completeness table reads it back.
     "<!-- notes_degraded=",             // L3 follow-up (CodeRabbit 4053600616): the map/--expand root's standalone
                                        // clause (serialize.h kNotesDegradedComment) — the graph_unindexed= precedent
                                        // exactly. Every OTHER emitter splices the same reading as plain text inside
@@ -584,6 +586,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // MCP verbs. Head term like disk_walk_failed=/refs_dropped= above; --notes itself is unaffected (its own
     // lines_skipped=/refused= rows already have readings, further up this table).
     { "notes_degraded",    "notes_degraded=1: the .ripwire_notes sidecar had unreadable lines or was refused this run (the notes verb's own listing names which)" },
+    // 0.6.6 shallow-history honesty (gitstamp.h shallowAttr): the root of owners / hotspots / cochange on a depth-limited
+    // clone. A head term — --doctor's <c shallow=> row (onTag "c", further down) is the same fact on another element.
+    { "shallow",           "shallow=1: a depth-limited clone; churn, bf=/share= and co-change count only the commits fetched (deepen or unshallow it)" },
 
 };
 

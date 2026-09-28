@@ -1395,8 +1395,12 @@ inline ChurnRanking churnDecayRanking( const MainDispatch& d, const rw::SinceSco
     {
         ranked.rank.assign( d.ing.symbols.size(), 0.0f );
     }
-    std::string window = churnWindowStamp( churnDecayWindowLabel( isScoped ? std::string_view( d.cfg.since ) : std::string_view( "all-history" ) ),
-                                           mined.anyHistory );
+    // 0.6.6 command sweep: "all-history" over a depth-1 clone's single commit was false — the decay mined only what
+    // was fetched. A shallow clone's unscoped span is named for what it is, and the stamp says why.
+    const bool  shallow = gitstamp::isShallow( d.root );
+    std::string window  = churnWindowStamp( churnDecayWindowLabel( isScoped ? std::string_view( d.cfg.since )
+                                                                            : std::string_view( shallow ? "fetched-history" : "all-history" ) ),
+                                            mined.anyHistory, shallow );
     discloseUniformChurnFallback( mined.anyHistory, stubbed, verbLabel, window );
     ChurnRanking cr{ std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, !stubbed } };
     // ONE build + ONE sort of the decayed rows, shared by both blocks (gitmine.h decayedRecentRowsSorted).
@@ -1444,7 +1448,8 @@ inline ChurnRanking churnRankedGraph( const MainDispatch& d )
     // F1: the DEFAULT window's stamp names the anchor that produced it ("18mo@HEAD"); an ACTIVE --since is
     // the user's own value and is stamped verbatim, exactly as before.
     const std::string  defaultWindow = rw::defaultWindowLabel( d.root, "18mo" );
-    std::string        window = churnWindowStamp( isScoped ? std::string_view( d.cfg.since ) : std::string_view( defaultWindow ), hasChurnEvidence );
+    std::string        window = churnWindowStamp( isScoped ? std::string_view( d.cfg.since ) : std::string_view( defaultWindow ), hasChurnEvidence,
+                                                  gitstamp::isShallow( d.root ) );   // 0.6.6: the window mined only the fetched commits
     // stubbed=false: this is the undecayed --rank-by=churn arm, which --in=DIR does not ride (it is refused
     // outside churn-decay), so a ranking really did run and the uniform sentence is the true one.
     discloseUniformChurnFallback( hasChurnEvidence, false, verbLabel, window );

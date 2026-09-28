@@ -1978,6 +1978,37 @@ inline bool gitRepoHasHistory( const std::string& root )
     return rc == 0 && gotHead;
 }
 
+// ─── SHALLOW-HISTORY HONESTY (0.6.6 command sweep) ──────────────────────────────────────────────────────
+// A `--depth=N` clone (actions/checkout's default) holds only the newest N commits. Every history verb then
+// answers from that stub, and the sweep found them saying things that are false about the REPOSITORY:
+// "a root commit" for a commit whose parent was simply not fetched, "git unavailable" for a git repo with a
+// short history, `window="all-history"` over one commit, bf="1" from one squashed commit. The at= stamp's
+// `+shallow` suffix was the only disclosure. These three are the ONE probe and the ONE sentence every such
+// verb now shares (gitstamp::isShallow and the shallow="1" root attribute read the same probe).
+//
+// Not memoized: the MCP server is long-lived, and a `git fetch --unshallow` mid-session must be seen.
+inline bool gitIsShallow( const std::string& root )
+{
+    return gitOneLine( root, "rev-parse --is-shallow-repository 2>/dev/null" ) == "true";
+}
+
+// Is `sha` a shallow BOUNDARY — a commit whose object records a parent the clone never fetched? The raw
+// commit object still carries its `parent` lines when the parent is missing (the shallow file grafts them
+// away from rev-parse/rev-list, not from the object), so this tells a boundary from a TRUE root commit in
+// a shallow clone whose depth happens to reach the root. `sha` must be a resolved commit name (the caller's
+// gitResolveCommitSha output); anything else answers false.
+inline bool gitIsShallowBoundary( const std::string& root, const std::string& sha )
+{
+    if( !isBareCommitSha( sha ) || !gitIsShallow( root ) )
+    {
+        return false;
+    }
+    return !gitOneLine( root, "cat-file commit " + sha + " 2>/dev/null | sed -n '/^parent /{p;q;}'" ).empty();
+}
+
+// The one way to say how to get the missing history, so no two verbs name it differently.
+inline constexpr std::string_view kShallowDeepenHint = "git fetch --deepen=N, or git fetch --unshallow";
+
 // A4-P1 — the HEAD-snapshot ingest cache. The HEAD tree is IMMUTABLE for a given HEAD sha, so its cold ingest
 // (~12.5 s on the 1498-file corpus) is perfectly cacheable: we hand the archived-tree ingest an incremental
 // content-hash cache file (the SAME format ingest()/loadCache()/saveCache() use for the auto-cache), so a
@@ -3768,7 +3799,7 @@ enum class RefSpecStatus : std::uint8_t
     NoGit,          // environment: not a repo, or no commit on HEAD — `reason` says which
     BadRange,       // USER error: the three-dot form — `badToken` is the spec verbatim
     BadRev,         // USER error: `badToken` does not resolve to a commit
-    NoParent,       // environment: the REV form landed on a root commit — `reason` says so
+    NoParent,       // environment: the REV form landed on a root commit or a shallow boundary — `reason` says which
 };
 
 struct RefSpec
@@ -3780,6 +3811,18 @@ struct RefSpec
     std::string   badToken;                    // BadRev/BadRange only: the offending token, verbatim
     std::string   reason;                      // NoGit/NoParent only: the environment sentence
 };
+
+// The NoParent sentence: a shallow clone's boundary commit is named as one (its parent exists upstream and was not
+// fetched), a true root commit keeps the sentence it always had.
+inline std::string noParentReason( const std::string& root, const std::string& sha )
+{
+    if( gitIsShallowBoundary( root, sha ) )
+    {
+        return "shallow clone: that commit's parent was not fetched, so there is no earlier tree here to be a delta against "
+               "(it is the shallow boundary, not a root commit; deepen with " + std::string( kShallowDeepenHint ) + ")";
+    }
+    return "that commit has no parent — a root commit has no earlier tree to be a delta against";
+}
 
 inline RefSpec resolveRefSpec( const std::string& root, std::string_view spec )
 {
@@ -3834,12 +3877,14 @@ inline RefSpec resolveRefSpec( const std::string& root, std::string_view spec )
         return r;
     }
     // The per-commit form: the commit against its FIRST parent. A root commit has none — an environment fact,
-    // not a typo, so it degrades with a stated reason rather than refusing.
+    // not a typo, so it degrades with a stated reason rather than refusing. 0.6.6: so does a shallow clone's
+    // BOUNDARY commit, whose parent exists but was never fetched; calling that "a root commit" was false
+    // (--quality-delta=HEAD and --dmm=HEAD on every depth-1 clone), so the reason names which one it is.
     r.baseSha = gitResolveCommitSha( root, r.targetSha + "^" );
     if( r.baseSha.empty() )
     {
         r.status = RefSpecStatus::NoParent;
-        r.reason = "that commit has no parent — a root commit has no earlier tree to be a delta against";
+        r.reason = noParentReason( root, r.targetSha );
     }
     return r;
 }

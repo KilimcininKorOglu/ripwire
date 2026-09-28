@@ -443,7 +443,8 @@ std::optional<int> runChangeViews( const MainDispatch& d )
                 // case (it still degrades to its own empty section); see prcontext.h §badRef.
                 if( masks[r].badRef )
                 {
-                    rw::emitTo( stderr, "ripwire: --pr-context: unknown base ref '{}' in root {}\n", std::string_view( cfg.prContextBase.data(), cfg.prContextBase.size() ), ws[r].arg.c_str() );
+                    rw::emitTo( stderr, "ripwire: --pr-context: unknown base ref '{}' in root {}{}\n", std::string_view( cfg.prContextBase.data(), cfg.prContextBase.size() ), ws[r].arg.c_str(),
+                                 rw::gitstamp::shallowRefHint( ws[r].arg ) );   // 0.6.6: the likeliest cause on a depth-limited clone
                     return 1;
                 }
                 for( char c : masks[r].mask )
@@ -500,7 +501,8 @@ std::optional<int> runChangeViews( const MainDispatch& d )
         // Kept ahead of the `!pcm.ok` degrade below, whose message would misname this failure.
         if( pcm.badRef )
         {
-            rw::emitTo( stderr, "ripwire: --pr-context: unknown base ref '{}'\n", std::string_view( cfg.prContextBase.data(), cfg.prContextBase.size() ) );
+            rw::emitTo( stderr, "ripwire: --pr-context: unknown base ref '{}'{}\n", std::string_view( cfg.prContextBase.data(), cfg.prContextBase.size() ),
+                         rw::gitstamp::shallowRefHint( root ) );   // 0.6.6: the likeliest cause on a depth-limited clone
             return 1;
         }
         if( !pcm.ok )
@@ -1162,7 +1164,7 @@ std::optional<int> runMergeScout( const MainDispatch& d )
             }
             else
             {
-                rw::emitTo( stderr, "ripwire: --merge-scout: unknown ref '{}'\n", result.badRef.c_str() );
+                rw::emitTo( stderr, "ripwire: --merge-scout: unknown ref '{}'{}\n", result.badRef.c_str(), rw::gitstamp::shallowRefHint( root ) );   // 0.6.6: shallow hint
             }
             return 1;
         }
