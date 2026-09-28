@@ -35,6 +35,17 @@ decision, which is still to come. `src/skillscan.h` now names its lineage (NVIDI
 restate, is owed with the flow fix. Gated by `test/skillscan.sh` check 18 and its new
 `test/skillfix/netexfil_severity.md` fixture.
 
+### Fixed — `traceasanlinearcheck` arm B compares medians, so one stalled run no longer reads as quadratic (#352)
+
+The full-matrix run on `3fcd515f` failed arm B1 on one sample per size: 31 / 65 / 637 / 1382 ms for
+40 KB / 160 KB / 640 KB / 2.5 MB. The same run's next step, 640 KB to 2.5 MB, cost 2.2x, which is below linear.
+A real O(k^2) parse would have taken about 10 s at 2.5 MB, so the 640 KB run had stalled once. `--from-trace`'s
+ASan parser is unchanged since its linear rewrite. Locally, five reps at each size from 40 KB to 10 MB measure
+39 / 74 / 184 / 498 / 1838 ms (medians), and the step ratio approaches 4x from below. Arm B now times each size
+five times, round-robin across the sizes, and compares medians. The thresholds are unchanged. Replaying the CI
+stall (one 640 KB run delayed 0.6 s) fails the old arm and passes the new one. A deliberately quadratic per-word
+rescan in `scanAsanWordBoundaries` still fails B1, B2 and B3 (medians 1033 / 14094 ms / timeout).
+
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any
