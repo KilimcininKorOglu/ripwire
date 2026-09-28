@@ -25,7 +25,7 @@ format, exit codes and limits. You do not need it to get started.
 <p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
-<summary><b>Field report: about half the tokens across a two-day, 20-agent coding engagement</b> — one orchestrating agent directing ~20 coding agents over a ~1,500-file C++/Metal codebase. One engagement, on an earlier version; click for the report.</summary>
+<summary><b>Field report: about half the tokens across a two-day, 20-agent coding engagement</b> — one orchestrating agent directing ~20 coding agents over a ~1,500-file C++/Metal codebase. One engagement, on a version before 0.5; click for the report.</summary>
 
 Every agent was told to start with ripwire for orientation and to finish with its quality gates. What the orchestrating
 agent reported afterwards:
@@ -43,7 +43,7 @@ agent reported afterwards:
   contract checker over-counted defaulted trailing parameters; and plain grep still won some broad conceptual queries.
 
 *One engagement, reported by the orchestrating model itself; the token figure is the operator's estimate, not a
-controlled measurement, and ripwire has changed since. Controlled measurements are in [docs/EVALS.md](docs/EVALS.md).*
+controlled measurement, and it predates ripwire 0.5 — the tool has changed a great deal since. Controlled measurements are in [docs/EVALS.md](docs/EVALS.md).*
 
 <p align="center"><a href="docs/assets/field-report-multi-agent.jpg"><img src="docs/assets/field-report-multi-agent.jpg"
   alt="The full field report: what ripwire contributed to a large multi-agent coding engagement — headline numbers, where the value concentrated, the honest boundary, and the bottom line" width="720"></a></p>
