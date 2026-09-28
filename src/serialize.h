@@ -2357,7 +2357,7 @@ inline std::string buildEscapedRootAttr( const CrawlSkips& skips )
     return skips.escapedFiles == 0 ? std::string() : " escaped_root=" + std::to_string( skips.escapedFiles );
 }
 
-// #350 layer 3 — the memory guard stopped this ingest (IngestResult::MemoryStop): memory_stop= names where it first
+// #350 layer 3 — the memory guard stopped this ingest (MemoryStop): memory_stop= names where it first
 // stopped (crawl: files= is what the crawl saw, a floor of the tree; parse: the crawl was whole), memory_parsed= how many
 // of files= carry facts when the parse was cut, memory_limit= the limit as the --max-memory value that would raise it,
 // memory_pressure=1 when the OS pressure signal (not the limit) stopped it. Absent on every run the guard did not stop —
@@ -2365,7 +2365,7 @@ inline std::string buildEscapedRootAttr( const CrawlSkips& skips )
 // spellings, one source.
 inline std::string buildMemoryStopAttr( const IngestResult& ing, bool json )
 {
-    const IngestResult::MemoryStop& m = ing.memoryStop;
+    const MemoryStop& m = ing.memoryStop;
     if( !m.isSet() )
     {
         return {};

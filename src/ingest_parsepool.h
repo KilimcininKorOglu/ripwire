@@ -882,11 +882,11 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
             result.memoryStop.parsedFiles = static_cast<std::uint32_t>( claimed );
             if( memWatch->trippedByPressure() )
             {
-                DISCLOSE( result.memoryStop, IngestResult::MemoryStop::DisclosureWhy::ParseUnderPressure, "ingest: the memory guard stopped the parse pool — the files after the finished prefix carry no facts" );
+                DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseUnderPressure, "ingest: the memory guard stopped the parse pool — the files after the finished prefix carry no facts" );
             }
             else
             {
-                DISCLOSE( result.memoryStop, IngestResult::MemoryStop::DisclosureWhy::ParseOverLimit, "ingest: the memory guard stopped the parse pool — the files after the finished prefix carry no facts" );
+                DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseOverLimit, "ingest: the memory guard stopped the parse pool — the files after the finished prefix carry no facts" );
             }
         }
 

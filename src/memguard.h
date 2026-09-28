@@ -53,7 +53,7 @@
 
 #include "infra/Diagnostics.h"   // VALIDATE — the environment is external input
 #include "infra/os.h"            // rw::os::mem_footprint / mem_physical / mem_cgroup_max / mem_pressure
-#include "model.h"               // IngestResult::MemoryStop — the disclosure sink
+#include "model.h"               // MemoryStop — the disclosure sink
 
 namespace rw::memguard
 {
@@ -151,10 +151,9 @@ inline const TestTrip& testTrip() noexcept
     return trip;
 }
 
-inline std::int64_t steadyNowNs() noexcept
-{
-    return std::int64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now().time_since_epoch() ).count() );
-}
+// the time gate runs on the steady clock's own ticks: no conversion on the hot path, only one at compile time
+using GateClock = std::chrono::steady_clock;
+inline constexpr GateClock::rep kCheckIntervalTicks = std::chrono::duration_cast<GateClock::duration>( std::chrono::nanoseconds( kCheckIntervalNs ) ).count();
 
 // install: main() calls this once, before any thread, with the resolved limit. A zero `bytes` means "the default".
 inline void install( std::uint64_t bytes, Source source )
@@ -177,7 +176,7 @@ public:
         if( !seam_ )
         {
             baseFootprint_ = os::mem_footprint();
-            nextCheckNs_.store( steadyNowNs() + kCheckIntervalNs, std::memory_order_relaxed );
+            nextCheckTick_.store( GateClock::now().time_since_epoch().count() + kCheckIntervalTicks, std::memory_order_relaxed );
         }
     }
     Watch( const Watch& )            = delete;
@@ -262,9 +261,9 @@ private:
     // true for exactly one caller per five-second slot: the one that moves the deadline forward
     [[nodiscard]] bool claimTimeSlot() noexcept
     {
-        const std::int64_t now      = steadyNowNs();
-        std::int64_t       deadline = nextCheckNs_.load( std::memory_order_relaxed );
-        return now >= deadline && nextCheckNs_.compare_exchange_strong( deadline, now + kCheckIntervalNs, std::memory_order_relaxed );
+        const GateClock::rep now      = GateClock::now().time_since_epoch().count();
+        GateClock::rep       deadline = nextCheckTick_.load( std::memory_order_relaxed );
+        return now >= deadline && nextCheckTick_.compare_exchange_strong( deadline, now + kCheckIntervalTicks, std::memory_order_relaxed );
     }
 
     // the first caller to trip records the cause; everyone sees stopped_ afterwards. Always returns true.
@@ -283,7 +282,7 @@ private:
     const std::uint64_t       hardBytes_;
     bool                      seam_          = false;
     std::uint64_t             baseFootprint_ = 0;
-    std::atomic<std::int64_t> nextCheckNs_{ 0 };
+    std::atomic<GateClock::rep> nextCheckTick_{ 0 };
     std::atomic<bool>         stopped_{ false };
     std::atomic<bool>         trippedOnce_{ false };
     bool                      byPressure_    = false;
@@ -329,27 +328,27 @@ inline bool requestOverHardLimit()
 // ingest INSIDE a verb (a --quality-delta HEAD snapshot, --index-out, --dmm) whose verb does not read memoryStop —
 // exits 5 with one line, so a partial secondary ingest can never pass as a whole one. The counters are process-wide
 // and relaxed: every reader runs after the ingests it counts have returned.
-inline std::atomic<std::uint32_t>& stopsRecordedSlot() noexcept
+struct StopCounts
 {
-    static std::atomic<std::uint32_t> recorded{ 0 };
-    return recorded;
-}
-inline std::atomic<std::uint32_t>& stopsAnsweredSlot() noexcept
+    std::atomic<std::uint32_t> recorded{ 0 };
+    std::atomic<std::uint32_t> answered{ 0 };
+};
+inline StopCounts& stopCounts() noexcept
 {
-    static std::atomic<std::uint32_t> answered{ 0 };
-    return answered;
+    static StopCounts counts;
+    return counts;
 }
-inline void recordStop() noexcept { stopsRecordedSlot().fetch_add( 1, std::memory_order_relaxed ); }
-inline void answerStops() noexcept { stopsAnsweredSlot().store( stopsRecordedSlot().load( std::memory_order_relaxed ), std::memory_order_relaxed ); }
+inline void recordStop() noexcept { stopCounts().recorded.fetch_add( 1, std::memory_order_relaxed ); }
+inline void answerStops() noexcept { stopCounts().answered.store( stopCounts().recorded.load( std::memory_order_relaxed ), std::memory_order_relaxed ); }
 [[nodiscard]] inline bool hasUnansweredStop() noexcept
 {
-    return stopsRecordedSlot().load( std::memory_order_relaxed ) > stopsAnsweredSlot().load( std::memory_order_relaxed );
+    return stopCounts().recorded.load( std::memory_order_relaxed ) > stopCounts().answered.load( std::memory_order_relaxed );
 }
 
 // ── the sentences ──────────────────────────────────────────────────────────────────────────────────────────
-inline std::string_view phaseName( IngestResult::MemoryStop::Phase phase ) noexcept
+inline std::string_view phaseName( MemoryStop::Phase phase ) noexcept
 {
-    return phase == IngestResult::MemoryStop::Phase::Crawl ? "crawl" : phase == IngestResult::MemoryStop::Phase::Parse ? "parse" : "graph";
+    return phase == MemoryStop::Phase::Crawl ? "crawl" : phase == MemoryStop::Phase::Parse ? "parse" : "graph";
 }
 
 // every message ends with the override
@@ -367,11 +366,11 @@ inline std::string hardStopLine( std::string_view where )
 // the soft stop's one line (stderr on the CLI, the MCP envelope's _memory_stop)
 inline std::string softStopLine( const IngestResult& ing )
 {
-    const IngestResult::MemoryStop& m = ing.memoryStop;
+    const MemoryStop& m = ing.memoryStop;
     std::string line = "the memory guard stopped the " + std::string( phaseName( m.phase ) )
                      + ( m.byPressure ? " under critical system memory pressure" : " at its line under the " + limitSpelling( m.limitBytes ) + " limit" )
                      + ": this answer covers " + std::to_string( ing.files.size() ) + " files";
-    if( m.phase == IngestResult::MemoryStop::Phase::Parse )
+    if( m.phase == MemoryStop::Phase::Parse )
     {
         line += ", " + std::to_string( m.parsedFiles ) + " of them parsed";
     }

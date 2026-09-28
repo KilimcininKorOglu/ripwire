@@ -4024,7 +4024,7 @@ int main( int argc, char** argv )
 // Returns 0 when the run may continue (no stop, or a map run with its disclosure).
 static int memoryStopExit( const rw::IngestResult& ing, const char* winnerVerb )
 {
-    const rw::IngestResult::MemoryStop& stop = ing.memoryStop;
+    const rw::MemoryStop& stop = ing.memoryStop;
     if( !stop.isSet() )
     {
         return 0;

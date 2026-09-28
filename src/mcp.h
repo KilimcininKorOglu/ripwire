@@ -410,28 +410,18 @@ inline std::string mcpAssumeRootIfOmitted( const McpDispatchPolicy& policy, std:
     return "[assumed root: " + policy.assumedRoot + " — no path was given, so this answer is about the server's launch directory; pass path= to ask about another tree]";
 }
 
-// R2a: the `_assumed_root` envelope-sibling fragment (the mcpReingestField shape): "" when nothing was
-// assumed, else the JSON field ready to splice — keeps the ternary out of the response assembly.
-inline std::string mcpAssumedRootField( const std::string& note )
+// An envelope-sibling note fragment (the mcpReingestField shape): "" when there is nothing to say, else the JSON field
+// `key` ready to splice — keeps the ternary out of the response assembly. Two keys use it: R2a's `_assumed_root` (the
+// request omitted path= and the launch directory answered) and #350's `_memory_stop` (the index answering was cut by
+// the memory guard — every answer from it carries the sentence, because the payloads other than the map have no header
+// of their own to disclose the cut in, and the index is reused until the tree changes).
+inline std::string mcpEnvelopeNoteField( std::string_view key, const std::string& note )
 {
     if( note.empty() )
     {
         return {};
     }
-    return ",\"_assumed_root\":\"" + mcpdetail::jsonEscape( note ) + "\"";
-}
-
-// #350: the `_memory_stop` envelope sibling (the mcpAssumedRootField shape): "" on every answer from a whole index, else
-// the guard's sentence — which phase stopped, how many files the answer covers, the limit and how to raise it. Every
-// answer from a memory-guard partial index carries it, because the MCP payloads other than the map have no header of
-// their own to disclose the cut in, and the index is reused until the tree changes.
-inline std::string mcpMemoryStopField( const std::string& note )
-{
-    if( note.empty() )
-    {
-        return {};
-    }
-    return ",\"_memory_stop\":\"" + mcpdetail::jsonEscape( note ) + "\"";
+    return ",\"" + std::string( key ) + "\":\"" + mcpdetail::jsonEscape( note ) + "\"";
 }
 
 // is `candidatePath` the workspace root itself, or STRICTLY inside it — a path-COMPONENT prefix, so a
@@ -1188,7 +1178,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // stamp FIRST, then the pass count: on a verb that never touched the index, building the
                 // stamp is what forces the rebuild, and one `+` chain would not sequence those two reads.
                 const std::string stamp = indexStamp( path );
-                // R2a: `_assumed_root` — a third envelope sibling (mcpAssumedRootField), emitted ONLY when
+                // R2a: `_assumed_root` — a third envelope sibling (mcpEnvelopeNoteField), emitted ONLY when
                 // the request omitted `path` and the launch-cwd default answered.
                 // Card A3: `_fresh` — a fourth sibling, on EVERY response, because it is the one of these
                 // an agent needs without having asked for it: does this answer still describe the tree I am
@@ -1220,7 +1210,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\""
                      + mcpdetail::jsonEscape( *body ) + "\"}],\"_index\":\"" + mcpdetail::jsonEscape( stamp )
                      + "\"" + mcpReingestField( passesAtEntry ) + mcpFreshFields( passesAtEntry )
-                     + mcpAssumedRootField( assumedRootNote ) + mcpMemoryStopField( memoryStopNote ) + "}}";
+                     + mcpEnvelopeNoteField( "_assumed_root", assumedRootNote ) + mcpEnvelopeNoteField( "_memory_stop", memoryStopNote ) + "}}";
             };
             const auto errResult = [ & ]( int code, const char* msg )
             { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + msg + "\"}}"; };

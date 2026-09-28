@@ -333,11 +333,11 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
             result.memoryStop.limitBytes = memWatch.hardBytes();
             if( memWatch.trippedByPressure() )
             {
-                DISCLOSE( result.memoryStop, IngestResult::MemoryStop::DisclosureWhy::CrawlUnderPressure, "ingest: the memory guard stopped the crawl — files= is what it saw, a floor of the tree" );
+                DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::CrawlUnderPressure, "ingest: the memory guard stopped the crawl — files= is what it saw, a floor of the tree" );
             }
             else
             {
-                DISCLOSE( result.memoryStop, IngestResult::MemoryStop::DisclosureWhy::CrawlOverLimit, "ingest: the memory guard stopped the crawl — files= is what it saw, a floor of the tree" );
+                DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::CrawlOverLimit, "ingest: the memory guard stopped the crawl — files= is what it saw, a floor of the tree" );
             }
         }
     }
