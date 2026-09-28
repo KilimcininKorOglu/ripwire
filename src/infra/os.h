@@ -49,6 +49,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 
@@ -104,6 +105,8 @@ inline constexpr int kDirwatchBatch = 32;
 
 #if defined( __APPLE__ )
   #include <mach-o/dyld.h>          // _NSGetExecutablePath
+  #include <mach/mach.h>            // task_info( TASK_VM_INFO ) — mem_footprint's phys_footprint
+  #include <sys/sysctl.h>           // sysctlbyname — mem_physical (hw.memsize), mem_pressure (kern.memorystatus_vm_pressure_level)
 #elif defined( __linux__ )
   #include <sys/syscall.h>          // SYS_gettid
 #else
@@ -490,6 +493,160 @@ struct dirwatch_event
 [[gnu::always_inline]] inline int dirwatch_open()                                                         { errno = ENOSYS; return -1; }
 [[gnu::always_inline]] inline int dirwatch_add( int, int, dirwatch_event* )                               { errno = ENOSYS; return -1; }
 [[gnu::always_inline]] inline int dirwatch_poll( int, dirwatch_event*, int, const ::timespec* )           { errno = ENOSYS; return -1; }
+#endif
+
+
+// ── memory: the process footprint, the machine's RAM, and the pressure signal (#350's memory guard) ───────────
+// No POSIX call answers any of these, so each is a lowercase helper returning 0 for "this platform cannot say
+// cheaply" — the guard (src/memguard.h) then falls back to what it can read, and says nothing on a normal run.
+// Every body is one syscall or one small /proc read, and the guard calls them at most once per five seconds.
+// mem_footprint: bytes this process holds. macOS: TASK_VM_INFO phys_footprint (what Activity Monitor and the
+//   jetsam killer count — compressed and swapped pages included). Linux: resident pages from /proc/self/statm.
+// mem_physical: bytes of physical RAM. macOS hw.memsize; Linux _SC_PHYS_PAGES x _SC_PAGESIZE.
+// mem_cgroup_max: the cgroup v2 memory.max of this process's cgroup (Linux; 0 = none, "max", or unreadable).
+// mem_pressure: 0 unknown, 1 normal, 2 warning, 3 critical. macOS kern.memorystatus_vm_pressure_level (1/2/4);
+//   Linux /proc/pressure/memory, critical when "full avg10" (every non-idle task stalled on memory, 10 s mean)
+//   reaches 20%, warning when "some avg10" does. Integer percent only — no float parse, no locale.
+
+#if defined( __APPLE__ )
+inline std::uint64_t mem_footprint()
+{
+    task_vm_info_data_t    info {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if( ::task_info( ::mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>( &info ), &count ) != KERN_SUCCESS )
+    {
+        return 0;
+    }
+    return std::uint64_t( info.phys_footprint );
+}
+inline std::uint64_t mem_physical()
+{
+    std::uint64_t bytes = 0;
+    std::size_t   len   = sizeof( bytes );
+    return ::sysctlbyname( "hw.memsize", &bytes, &len, nullptr, 0 ) == 0 && len == sizeof( bytes ) ? bytes : 0;
+}
+inline std::uint64_t mem_cgroup_max() { return 0; }
+inline int mem_pressure()
+{
+    int         level = 0;
+    std::size_t len   = sizeof( level );
+    if( ::sysctlbyname( "kern.memorystatus_vm_pressure_level", &level, &len, nullptr, 0 ) != 0 || len != sizeof( level ) )
+    {
+        return 0;
+    }
+    return level >= 4 ? 3 : level == 2 ? 2 : level == 1 ? 1 : 0;
+}
+#elif defined( __linux__ )
+// the small-file readers the Linux bodies below share. Static members of one struct: they are helpers of those bodies,
+// not names of this layer, and the Windows branch has no /proc to declare them for.
+struct procfs
+{
+    // the first `cap - 1` bytes of a small /proc or /sys file, NUL-terminated; 0 when it cannot be read
+    static std::size_t read_small( const char* path, char* buf, std::size_t cap )
+    {
+        const int fd = ::open( path, O_RDONLY | O_CLOEXEC );
+        if( fd < 0 )
+        {
+            return 0;
+        }
+        const ssize_t got = ::read( fd, buf, cap - 1 );
+        ::close( fd );
+        const std::size_t used = got > 0 ? std::size_t( got ) : 0;
+        buf[ used ] = '\0';
+        return used;
+    }
+    // the unsigned integer at the start of `text` (digits only: "23.45" -> 23); -1 when `text` does not start with one
+    static long long leading_int( std::string_view text )
+    {
+        long long value = 0;
+        bool      any   = false;
+        for( std::size_t i = 0; i < text.size() && text[ i ] >= '0' && text[ i ] <= '9'; ++i )
+        {
+            value = value * 10 + ( text[ i ] - '0' );
+            any   = true;
+            if( value > ( 1LL << 50 ) )
+            {
+                return -1;   // not a number any of these files holds
+            }
+        }
+        return any ? value : -1;
+    }
+    // leading_int of what follows the first `key` in `text` ("avg10=23.45 ..." -> 23); -1 when `key` is absent
+    static long long field_after( std::string_view text, std::string_view key )
+    {
+        const std::size_t at = text.find( key );
+        return at == std::string_view::npos ? -1 : leading_int( text.substr( at + key.size() ) );
+    }
+};
+inline std::uint64_t mem_footprint()
+{
+    char buf[ 128 ];
+    if( procfs::read_small( "/proc/self/statm", buf, sizeof( buf ) ) == 0 )
+    {
+        return 0;
+    }
+    const long long pages    = procfs::field_after( std::string_view( buf ), " " );   // "size resident shared ...": the second field
+    const long      pageSize = ::sysconf( _SC_PAGESIZE );
+    return pages > 0 && pageSize > 0 ? std::uint64_t( pages ) * std::uint64_t( pageSize ) : 0;
+}
+inline std::uint64_t mem_physical()
+{
+    const long pages    = ::sysconf( _SC_PHYS_PAGES );
+    const long pageSize = ::sysconf( _SC_PAGESIZE );
+    return pages > 0 && pageSize > 0 ? std::uint64_t( pages ) * std::uint64_t( pageSize ) : 0;
+}
+inline std::uint64_t mem_cgroup_max()
+{
+    char buf[ 512 ];
+    if( procfs::read_small( "/proc/self/cgroup", buf, sizeof( buf ) ) == 0 )
+    {
+        return 0;
+    }
+    const std::string_view text( buf );
+    const std::size_t      at = text.find( "0::" );   // the cgroup v2 unified line; v1 hierarchies are not read
+    if( at == std::string_view::npos || ( at != 0 && text[ at - 1 ] != '\n' ) )
+    {
+        return 0;
+    }
+    std::string_view group = text.substr( at + 3 );
+    group = group.substr( 0, group.find( '\n' ) );
+    std::string path = "/sys/fs/cgroup";
+    path.append( group );
+    if( path.back() != '/' )
+    {
+        path.push_back( '/' );
+    }
+    path += "memory.max";
+    char limit[ 32 ];
+    if( procfs::read_small( path.c_str(), limit, sizeof( limit ) ) == 0 )
+    {
+        return 0;
+    }
+    const long long bytes = procfs::leading_int( std::string_view( limit ) );   // "max\n" reads as -1: no limit
+    return bytes > 0 ? std::uint64_t( bytes ) : 0;
+}
+inline int mem_pressure()
+{
+    char buf[ 256 ];
+    if( procfs::read_small( "/proc/pressure/memory", buf, sizeof( buf ) ) == 0 )
+    {
+        return 0;
+    }
+    const std::string_view text( buf );
+    const std::size_t      fullAt = text.find( "full " );
+    const long long        some   = procfs::field_after( text.substr( 0, fullAt ), "avg10=" );
+    const long long        full   = fullAt == std::string_view::npos ? -1 : procfs::field_after( text.substr( fullAt ), "avg10=" );
+    if( some < 0 )
+    {
+        return 0;
+    }
+    return full >= 20 ? 3 : some >= 20 ? 2 : 1;
+}
+#else
+inline std::uint64_t mem_footprint()  { return 0; }
+inline std::uint64_t mem_physical()   { return 0; }
+inline std::uint64_t mem_cgroup_max() { return 0; }
+inline int           mem_pressure()   { return 0; }
 #endif
 
 }   // namespace rw::os
@@ -881,6 +1038,96 @@ int dirwatch_open();
 int dirwatch_add( int watchFd, int dirFd, dirwatch_event* change );
 int dirwatch_poll( int watchFd, dirwatch_event* events, int eventCount, const ::timespec* timeout );
 
+// ── memory (see the POSIX branch): PrivateUsage from GetProcessMemoryInfo, ullTotalPhys from GlobalMemoryStatusEx,
+// no cgroup (0), and QueryMemoryResourceNotification on a low-memory notification object created once (3 when the
+// system signals low memory, else 1).
+std::uint64_t mem_footprint();
+std::uint64_t mem_physical();
+[[gnu::always_inline]] inline std::uint64_t mem_cgroup_max() { return 0; }
+int           mem_pressure();
+
 }   // namespace rw::os
 
 #endif
+
+// ── roots nobody chose: shared by every platform (#350 layer 1) ─────────────────────────────────────────────
+namespace rw::os
+{
+// path_is_system_dir: is `path` (canonical — realpath'd — in the program's spelling) an operating-system directory
+// that is never a project root: the filesystem root, a drive root, the parent of the home directories, or one of
+// the system trees below. Only the directory ITSELF — /usr/local/src/proj is an ordinary directory. Used for a root
+// the user did not name (the MCP server's launch directory, a CLI run with no root); a root passed explicitly is
+// always honoured. Pure logic on the constexpr facts, so every list is type-checked on every CI leg.
+inline bool path_is_system_dir( std::string_view path )
+{
+    if( path.empty() || path_is_root( std::string( path ) ) )
+    {
+        return !path.empty();
+    }
+    if( path.size() > 1 && path.back() == '/' )
+    {
+        path.remove_suffix( 1 );
+    }
+    const auto anyOf = [ & ]( std::initializer_list<std::string_view> list )
+    {
+        for( const std::string_view d : list )
+        {
+            if( path == d )
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    if constexpr( kWindows )
+    {
+        // Windows spells these per machine, so they are read from the environment: %WINDIR% (C:/Windows), the two
+        // Program Files trees, ProgramData, and the parent of the profiles. Compared case-insensitively, '\\' == '/'.
+        const auto sameDir = []( std::string_view a, std::string_view b )
+        {
+            if( a.size() != b.size() )
+            {
+                return false;
+            }
+            for( std::size_t i = 0; i < a.size(); ++i )
+            {
+                char x = a[ i ] == '\\' ? '/' : a[ i ];
+                char y = b[ i ] == '\\' ? '/' : b[ i ];
+                x = ( x >= 'A' && x <= 'Z' ) ? char( x - 'A' + 'a' ) : x;
+                y = ( y >= 'A' && y <= 'Z' ) ? char( y - 'A' + 'a' ) : y;
+                if( x != y )
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+        for( const char* name : { "WINDIR", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData" } )
+        {
+            const char* value = std::getenv( name );
+            if( value != nullptr && *value != '\0' && sameDir( path, value ) )
+            {
+                return true;
+            }
+        }
+        if( path.size() == 8 && sameDir( path.substr( 2 ), "/Users" ) && path[ 1 ] == ':' )
+        {
+            return true;   // X:/Users — the parent of every profile
+        }
+        return false;
+    }
+    else if constexpr( kApple )
+    {
+        return anyOf( { "/System", "/Library", "/Applications", "/Users", "/Volumes", "/usr", "/usr/local", "/usr/lib", "/usr/share",
+                        "/bin", "/sbin", "/opt", "/cores", "/dev", "/etc", "/tmp", "/var", "/private", "/private/etc", "/private/tmp",
+                        "/private/var", "/private/var/tmp", "/private/var/folders", "/Library/Developer", "/System/Volumes/Data" } );
+    }
+    else
+    {
+        return anyOf( { "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib32", "/lib64", "/libx32", "/media", "/mnt", "/opt",
+                        "/proc", "/root", "/run", "/sbin", "/snap", "/srv", "/sys", "/tmp", "/usr", "/usr/bin", "/usr/include",
+                        "/usr/lib", "/usr/lib64", "/usr/local", "/usr/sbin", "/usr/share", "/usr/src", "/var", "/var/lib", "/var/log",
+                        "/var/tmp", "/nix", "/nix/store" } );
+    }
+}
+}   // namespace rw::os

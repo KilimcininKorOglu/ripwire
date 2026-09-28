@@ -32,6 +32,7 @@
 #include <cstdlib>         // ::realpath — the workspace-pin canonicalization (mcpCanonRoot)
 #include <climits>         // PATH_MAX
 #include "infra/os.h"      // rw::os::getcwd — R2a: the launch-cwd assumed root (resolved once at startup)
+#include "rootguard.h"      // #350 layer 1: noProjectRootReason — the launch cwd a server may not assume
 
 namespace rw
 {
@@ -346,6 +347,7 @@ struct McpDispatchPolicy
     bool        editsAllowed = true;   // false = refuse the 3 edit verbs (remote default)
     std::string defaultRoot;        // "" = no stdio startup root given; else the canonicalized `ripwire <root> --mcp` root
     std::string assumedRoot;        // "" = no guessable root; else the canonicalized launch cwd (stdio, no startup root) — see above
+    std::string noRootReason;       // #350: why assumedRoot is empty when the launch cwd was a home/system directory, else ""
     bool        pinnedRootHasGit = true;   // see above — only read when pinnedRoot is non-empty
     bool        pinnedRootIsGitDir = false;   // see above — only read when pinnedRootHasGit is false
     // r2-LO: the legend session this transport can hold, or null. The stdio loop owns one (one client, one line at a
@@ -370,18 +372,24 @@ inline std::string mcpCanonRoot( const std::string& root )
 // assumedRoot for the contract. Guarded here, once: "/" and $HOME itself are nobody's workspace (a
 // crawl of either is a mistake, not a smart default), and a getcwd failure degrades to "" — the
 // pre-R2a missing-path refusal, never a guess.
-inline std::string mcpResolveAssumedRoot()
+//
+// #350 layer 1 widened the guard from "/" and $HOME to every directory rootguard.h refuses (system trees, drive roots,
+// the parent of the home directories), and keeps the REASON: `noRootWhy` receives the one-line "no project root"
+// sentence, which the missing-path refusal then carries so a path-less request says why no root was assumed.
+inline std::string mcpResolveAssumedRoot( std::string* noRootWhy = nullptr )
 {
-    char cwdBuf[ PATH_MAX ];
-    if( os::getcwd( cwdBuf, sizeof( cwdBuf ) ) == nullptr )
+    std::string launchCwd = rootGuardCwd();   // not const: returned, and a const local cannot be moved out
+    if( launchCwd.empty() )
     {
         return {};
     }
-    std::string       launchCwd = mcpCanonRoot( cwdBuf );   // not const: returned, and a const local cannot be moved out
-    const char* const homeEnv   = std::getenv( "HOME" );
-    const std::string homeCanon = homeEnv ? mcpCanonRoot( homeEnv ) : std::string{};
-    if( os::path_is_root( launchCwd ) || ( !homeCanon.empty() && launchCwd == homeCanon ) )   // "/", or a drive's "C:/"
+    std::string why = noProjectRootReason( launchCwd );
+    if( !why.empty() )
     {
+        if( noRootWhy != nullptr )
+        {
+            *noRootWhy = std::move( why );
+        }
         return {};
     }
     return launchCwd;
@@ -1510,7 +1518,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             {
                 if( path.empty() )
                 {
-                    return mcprefuse::missingPathRefusal();
+                    // #350: from a home/system launch directory the missing path has a cause worth naming
+                    return policy.noRootReason.empty() ? mcprefuse::missingPathRefusal()
+                                                       : mcprefuse::missingPathRefusal() + "; " + policy.noRootReason;
                 }
                 return mcprefuse::missingFieldRefusal( name, argPresent );
             };
@@ -2321,7 +2331,7 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
     // the guards ("/" and $HOME are nobody's workspace; getcwd failure degrades to the refusal).
     if( defaultRoot.empty() )
     {
-        policy.assumedRoot = mcpResolveAssumedRoot();
+        policy.assumedRoot = mcpResolveAssumedRoot( &policy.noRootReason );
     }
 
     // R4: readByteSafeLineBounded, NOT std::getline( std::cin, ... ) — libc++'s getline narrows

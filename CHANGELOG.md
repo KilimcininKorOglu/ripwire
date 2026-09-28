@@ -15,6 +15,19 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a root nobody chose is not crawled when it is a home or system directory (#350, layer 1)
+
+An MCP server started in a home directory that is not a git repository crawled the whole tree and reached a 67 GB
+footprint. Before this change a server refused to assume its launch directory only when that directory was `/` or
+`$HOME`, and said nothing about why. The implicit roots are now judged by one rule
+(`src/rootguard.h`): a root the user did not name — the MCP server's launch directory, or a CLI run with no
+positional root — is refused when it is `$HOME` itself (a dotfiles git repository included), a filesystem or drive
+root, the parent of the home directories, or an operating-system tree (`/System`, `/usr`, `/etc`, `/proc`,
+`%WINDIR%`, Program Files …; `os::path_is_system_dir`). The refusal is one line — `no project root: <dir> is a
+home/system directory; pass a project path` — on the CLI (exit 1, in place of the usage text) and appended to the
+MCP missing-path refusal; the server stays up. An explicit root is always honoured (`ripwire ~`, `ripwire <root>
+--mcp`, a request's `path=`), and subdirectories are ordinary directories. Gate: `test/memguardcheck.sh` (A).
+
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any

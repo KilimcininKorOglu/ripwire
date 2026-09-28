@@ -318,6 +318,7 @@ gitoracle.h	saveOracleCache	fdopen	1	closes	adopts ExclTempFile's released fd; f
 gitoracle.h	walkGitPatch	popen	1	closes	break-only loops, a drain, then pclose; no return between
 infra/emit.h	open	open_memstream	1	owned	rw::MemoryStream: the destructor fcloses a stream nobody finished and frees the buffer on every path; finish() closes exactly once
 infra/os.h	spawn_sh	open	1	closes	in the forked child: dup2 onto stdin, close, then exec or _exit
+infra/os.h	read_small	open	1	closes	one read, then ::close before the only return past the failed-open one (Linux /proc and /sys files)
 ingest_cache.h	openOnce	open	1	owned	ReadFd's destructor closes it
 ingest_cache.h	saveCache	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 ingest_crawl.h	collectGitIgnored	popen	1	closes	the overflow break still reaches pclose

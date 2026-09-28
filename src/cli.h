@@ -19,6 +19,7 @@
 #include "version.h"  // configure-generated kRipwireVersion + short build info (--version)
 #include "infra/emit.h" // rw::emitTo + kEmitterName — --version discloses the emitter that compiled in (emit=)
 #include "infra/os.h"   // rw::os::normalize_path_arg — path-valued arguments take the program's path spelling at intake
+#include "rootguard.h"  // rw::noProjectRootReason — #350 layer 1: a run with no root, from a home/system directory
 
 namespace rw
 {
@@ -4737,7 +4738,17 @@ inline void validateConfig( Config& c ) noexcept
 {
     if( c.rootPath.empty() && !c.mcp && !c.lsp && !c.scanSkills && c.scanSkillFile.empty() )   // scan / --mcp / --lsp may run without a path
     {
-        usage();
+        // #350 layer 1: run from a home or system directory, the missing root is the one thing to say — the usage
+        // text would invite `ripwire .`, which from there is exactly the crawl nobody meant (rootguard.h).
+        const std::string noRoot = noProjectRootReason( rootGuardCwd() );
+        if( noRoot.empty() )
+        {
+            usage();
+        }
+        else
+        {
+            rw::emitTo( stderr, "ripwire: {}\n", noRoot );
+        }
         c.ok = false;
     }
 
