@@ -4756,7 +4756,7 @@ $ ./build/ripwire . --pin-census=<scratch>/aux/pin_census.tsv --top-k=3
 
 **Answers:** persistent index server (parse once, many warm queries) over stdio persistent index server over stdio.
 
-Roots: `ripwire <root> --mcp` and a request's path= are EXPLICIT and always answered. With neither, a request answers about the directory the server was launched in — unless that directory is $HOME itself (a git repository or not), a filesystem or drive root, or a system tree (/usr, /etc, /System, %WINDIR% ...): then the request is refused with "no project root: <dir> is a home/system directory; pass a project path" and the server stays up. The CLI has no implicit root (a run without <dir> prints usage, or that same line from such a directory). Each tool call over the --max-memory limit is refused by name; an answer from an index the memory guard cut carries _memory_stop in its envelope.
+Roots: a request's path= (or `paths`), else the startup root of `ripwire <root> --mcp`, else the directory the server was launched in. A root that is $HOME itself (a git repository or not), a filesystem or drive root, or a system tree (/usr, /etc, /System, %WINDIR% ...) is refused with "no project root: <dir> is a home/system directory; pass a project path" and the server stays up — an agent fills path= from its session's cwd, so it is judged like the launch directory. The one exception is the startup root itself: `ripwire ~ --mcp` was typed by a human and is answered. On the CLI a typed root (`ripwire ~`) is always answered, and a run without <dir> prints usage, or that same line from such a directory. Each tool call over the --max-memory limit is refused by name; an answer from an index the memory guard cut carries _memory_stop in its envelope.
 
 **Try it**
 
@@ -4775,7 +4775,7 @@ $ ./build/ripwire '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jso
 
 **Caveats (stated by the binary):**
 
-- With neither, a request answers about the directory the server was launched in — unless that directory is $HOME itself (a git repository or not), a filesystem or drive root, or a system tree (/usr, /etc, /System, %WINDIR% ...): then the request is refused with "no project root: <dir> is a home/system directory;
+- A root that is $HOME itself (a git repository or not), a filesystem or drive root, or a system tree (/usr, /etc, /System, %WINDIR% ...) is refused with "no project root: <dir> is a home/system directory;
 - Each tool call over the --max-memory limit is refused by name;
 
 ### `--lsp`

@@ -47,8 +47,13 @@ positional root — is refused when it is `$HOME` itself (a dotfiles git reposit
 root, the parent of the home directories, or an operating-system tree (`/System`, `/usr`, `/etc`, `/proc`,
 `%WINDIR%`, Program Files …; `os::path_is_system_dir`). The refusal is one line — `no project root: <dir> is a
 home/system directory; pass a project path` — on the CLI (exit 1, in place of the usage text) and appended to the
-MCP missing-path refusal; the server stays up. An explicit root is always honoured (`ripwire ~`, `ripwire <root>
---mcp`, a request's `path=`), and subdirectories are ordinary directories. Gate: `test/memguardcheck.sh` (A).
+MCP missing-path refusal; the server stays up. An MCP request's `path=` (or any root of `paths`) is judged the same
+way — an agent fills it from its session's directory, and the #350 incident was exactly `grep path=$HOME` — except the
+root the server was started on (`ripwire ~ --mcp` was typed by a human and is answered). The three hooks that pass the
+session directory to ripwire (`ripwire-claude-route.sh`, `ripwire-codex-route.sh`, `ripwire-claude-toolroute.sh`)
+exit silently, before any git or ripwire call, when that directory is `$HOME` (a dotfiles git repository included),
+`/` or a system tree. A root typed on the CLI (`ripwire ~`) is always answered, under the memory guard, and
+subdirectories are ordinary directories. Gate: `test/memguardcheck.sh` (A).
 
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 

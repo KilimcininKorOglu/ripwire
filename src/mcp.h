@@ -396,6 +396,41 @@ inline std::string mcpResolveAssumedRoot( std::string* noRootWhy = nullptr )
     return launchCwd;
 }
 
+// #350 layer 1, the explicit half: "" when `path` may be answered, else the "no project root" sentence. `path` is a
+// directory, a file, or a registered `paths` workspace key (every member root is judged). A root equal to the server's
+// own startup root (defaultRoot, or the --listen pinnedRoot) is honoured: that one a human chose. Defined after the
+// workspace registry (mcpindex.h, via mcpverbs.h) so a key can be expanded to its roots.
+inline std::string mcpExplicitNoRootReason( const McpDispatchPolicy& policy, const std::string& path )
+{
+    if( path.empty() )
+    {
+        return {};
+    }
+    const std::string pinnedCanon = policy.pinnedRoot.empty() ? std::string() : mcpCanonRoot( policy.pinnedRoot );
+    const auto judge = [ & ]( const std::string& root ) -> std::string
+    {
+        const std::string canon = rootGuardCanon( root.c_str() );
+        if( canon == policy.defaultRoot || ( !pinnedCanon.empty() && canon == pinnedCanon ) )
+        {
+            return {};
+        }
+        return noProjectRootReason( canon );
+    };
+    const auto wsIt = mcpWorkspaceRegistry().find( path );
+    if( wsIt == mcpWorkspaceRegistry().end() )
+    {
+        return judge( path );
+    }
+    for( const WorkspaceRoot& r : wsIt->second )
+    {
+        if( std::string why = judge( r.real ); !why.empty() )
+        {
+            return why;
+        }
+    }
+    return {};
+}
+
 // R2a: rebind an OMITTED `path` to the assumed root (the softest tier — a pre-composed refusal, both
 // harder root tiers, and an explicit path all take precedence). Returns the disclosure sentence for the
 // result envelope's `_assumed_root` sibling, or "" when nothing was assumed — the honesty rule: an
@@ -1347,6 +1382,21 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // disclosed via textResult's `_assumed_root` sibling — precedence + guards live in
             // mcpAssumeRootIfOmitted / mcpResolveAssumedRoot, the full contract on McpDispatchPolicy.
             assumedRootNote = mcpAssumeRootIfOmitted( policy, path, pathsUsageError );
+
+            // ── #350 layer 1, the explicit half: a request's path= (or any root of a `paths` workspace) that IS $HOME, a
+            // filesystem root or a system tree is refused with the implicit case's own sentence — an agent fills path=
+            // from its session's cwd, so over MCP that path is no more a human's choice than the launch directory is
+            // (the #350 incident was exactly `grep path=$HOME`). The one exception is the root the server was STARTED
+            // on (`ripwire <root> --mcp`, or the --listen workspace): a human typed that. The server stays up.
+            if( !pathsUsageError )
+            {
+                if( const std::string noRoot = mcpExplicitNoRootReason( policy, path ); !noRoot.empty() )
+                {
+                    DISCLOSE( Diagnostics::answerRefused, "mcp: a request path that is a home/system directory is refused with an MCP error naming it" );
+                    resp            = errResultMsg( -32602, noRoot );
+                    pathsUsageError = true;   // the skip-flag: no dispatch, no getIndex(), no crawl
+                }
+            }
 
             // ── §B6 M3: does `path` name a readable DIRECTORY? ONE check, every verb, before dispatch ───────
             //

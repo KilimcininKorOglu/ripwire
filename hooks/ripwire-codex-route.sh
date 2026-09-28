@@ -256,6 +256,16 @@ command -v ripwire >/dev/null 2>&1 || exit 0
 prompt="$( printf '%s' "$input" | jq -r '.prompt // .user_prompt // .input // empty' 2>/dev/null )"
 cwd="$( printf '%s' "$input" | jq -r '.cwd // .workdir // empty' 2>/dev/null )"
 [ -n "$prompt" ] && [ -n "$cwd" ] && [ -d "$cwd" ] || exit 0
+# #350: a home directory, a filesystem root or a system tree is nobody's project, whatever git says about it (a
+# dotfiles repository makes $HOME a work tree). A background hook never crawls one: exit silently, before any git or
+# ripwire call. Only the directory itself — a project below it is routed as usual. The list is src/infra/os.h's
+# path_is_system_dir, trimmed to the names a cwd can plausibly be.
+cwdReal="$( cd "$cwd" 2>/dev/null && pwd -P )" || exit 0
+homeReal="$( cd "${HOME:-/nonexistent-home}" 2>/dev/null && pwd -P )"
+[ -n "$homeReal" ] && [ "$cwdReal" = "$homeReal" ] && exit 0
+case "$cwdReal" in
+    /|/System|/Library|/Applications|/Users|/Volumes|/usr|/usr/local|/usr/lib|/usr/share|/bin|/sbin|/opt|/etc|/tmp|/var|/dev|/private|/private/etc|/private/tmp|/private/var|/home|/root|/proc|/sys|/srv|/mnt|/media|/run|/snap|/nix|/nix/store|/boot|/lib|/lib64) exit 0 ;;
+esac
 # Route only inside a git work tree (issue #327). Outside one `--help-task` has no file list from git and
 # walks the whole tree under cwd: a session started in $HOME measured over 30 s for one prompt, on every
 # prompt. The cost is routing in a small non-git project too; a missed recommendation is the direction

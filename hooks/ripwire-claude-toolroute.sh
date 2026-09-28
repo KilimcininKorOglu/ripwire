@@ -99,6 +99,16 @@ esac
 cwd="$( printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null )"
 session="$( printf '%s' "$input" | jq -r '.session_id // .conversation_id // empty' 2>/dev/null )"
 [ -n "$cwd" ] && [ -d "$cwd" ] || exit 0
+# #350: a home directory, a filesystem root or a system tree is nobody's project, whatever git says about it (a
+# dotfiles repository makes $HOME a work tree). A background hook never crawls one: exit silently, before any git or
+# ripwire call. Only the directory itself — a project below it is routed as usual. The list is src/infra/os.h's
+# path_is_system_dir, trimmed to the names a cwd can plausibly be.
+cwdReal="$( cd "$cwd" 2>/dev/null && pwd -P )" || exit 0
+homeReal="$( cd "${HOME:-/nonexistent-home}" 2>/dev/null && pwd -P )"
+[ -n "$homeReal" ] && [ "$cwdReal" = "$homeReal" ] && exit 0
+case "$cwdReal" in
+    /|/System|/Library|/Applications|/Users|/Volumes|/usr|/usr/local|/usr/lib|/usr/share|/bin|/sbin|/opt|/etc|/tmp|/var|/dev|/private|/private/etc|/private/tmp|/private/var|/home|/root|/proc|/sys|/srv|/mnt|/media|/run|/snap|/nix|/nix/store|/boot|/lib|/lib64) exit 0 ;;
+esac
 # The hook answers for the JSON cwd, so git's repository-selection variables inherited from the caller are
 # cleared first, as the two route hooks do (git's own list, plus GIT_DIR/GIT_WORK_TREE if git cannot print
 # it). With GIT_DIR exported, `git -C "$cwd" rev-parse --show-toplevel` prints a non-git cwd as its own top

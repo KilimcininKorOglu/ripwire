@@ -156,14 +156,84 @@ if [ "$rc" = 0 ] && grep -q 'n="hq"' "$TMP/a7b.out"; then
 else
     no "(A7b) rc=$rc"
 fi
-printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$HOMEDIR\",\"symbol\":\"dot\"}}}" \
-    | HOME="$HOMEDIR" mcp_call "$HOMEDIR" >"$TMP/a7c.out"
-case "$( mcp_field "$TMP/a7c.out" 2 text )" in *dot*) ok "(A7c) MCP: an explicit path= to \$HOME is honoured";; *) no "(A7c) $( head -c 300 "$TMP/a7c.out" )";; esac
-( cd "$HOMEDIR" && HOME="$HOMEDIR" "$BIN" "$HOMEDIR" --mcp </dev/null >/dev/null 2>&1 ); rc=$?
-if [ "$rc" = 0 ]; then
-    ok "(A7d) MCP: an explicit startup root equal to \$HOME starts"
+# (A8) MCP: an agent's path= IS the #350 incident (grep path=$HOME) — refused like the implicit case, server stays up;
+#      a git-repo $HOME, "/", a system tree and a `paths` workspace holding $HOME are refused too
+printf '%s\n' \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$HOMEDIR\",\"pattern\":\"dot\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$HOMEDIR/proj\",\"symbol\":\"hp\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"/\",\"symbol\":\"hp\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"/dev\",\"symbol\":\"hp\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"paths\":[\"$HOMEDIR\",\"$FX\"],\"symbol\":\"hp\"}}}" \
+    | HOME="$HOMEDIR" mcp_call "$HOMEDIR/proj" >"$TMP/a8.out"
+case "$( mcp_field "$TMP/a8.out" 2 error )" in *"no project root: $HOMEDIR is a home/system directory; pass a project path"*) ok "(A8) MCP: an explicit path=\$HOME is refused with no-project-root";;
+    *) no "(A8) id=2: $( mcp_field "$TMP/a8.out" 2 error | head -c 200 ) text: $( mcp_field "$TMP/a8.out" 2 text | head -c 120 )";; esac
+case "$( mcp_field "$TMP/a8.out" 3 text )" in *hp*) ok "(A8b) the server stayed up: an explicit subfolder answers next";; *) no "(A8b) id=3: $( head -c 300 "$TMP/a8.out" )";; esac
+for id in 4 5; do
+    case "$( mcp_field "$TMP/a8.out" "$id" error )" in *"no project root: /"*) ok "(A8c) MCP: an explicit system/root path= is refused (id=$id)";;
+        *) no "(A8c) id=$id: $( mcp_field "$TMP/a8.out" "$id" error | head -c 200 )";; esac
+done
+case "$( mcp_field "$TMP/a8.out" 6 error )" in *"no project root: $HOMEDIR"*) ok "(A8d) MCP: a paths workspace holding \$HOME is refused";;
+    *) no "(A8d) id=6: $( mcp_field "$TMP/a8.out" 6 error | head -c 200 )";; esac
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"grep\",\"arguments\":{\"path\":\"$GITHOME\",\"pattern\":\"hp\"}}}" \
+    | HOME="$GITHOME" mcp_call "$GITHOME/proj" >"$TMP/a8e.out"
+case "$( mcp_field "$TMP/a8e.out" 2 error )" in *"no project root: $GITHOME"*) ok "(A8e) MCP: an explicit path= to a git-repo \$HOME is refused";;
+    *) no "(A8e) id=2: $( mcp_field "$TMP/a8e.out" 2 error | head -c 200 )";; esac
+
+# (A9) the ONE exception: the root the server was started on (`ripwire <root> --mcp`) is a human's choice — honoured,
+#      whether the request names it or omits path=
+printf '%s\n' \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$HOMEDIR\",\"symbol\":\"dot\"}}}" \
+    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_symbol","arguments":{"symbol":"dot"}}}' \
+    | HOME="$HOMEDIR" mcp_call "$TMP" "$HOMEDIR" >"$TMP/a9.out"
+case "$( mcp_field "$TMP/a9.out" 2 text )" in *dot*) ok "(A9) MCP started as 'ripwire \$HOME --mcp': path=\$HOME is honoured";; *) no "(A9) id=2: $( head -c 300 "$TMP/a9.out" )";; esac
+case "$( mcp_field "$TMP/a9.out" 3 text )" in *dot*) ok "(A9b) …and a path-less request answers about that startup root";; *) no "(A9b) id=3: $( mcp_field "$TMP/a9.out" 3 error | head -c 200 )";; esac
+
+# (A10) the background hooks that pass the session cwd to ripwire exit silently in $HOME (a git-repo $HOME included)
+#       and in "/", without running ripwire; the control — a project directory — does run it (the arm can fail)
+if command -v jq >/dev/null 2>&1; then
+    SHIM="$TMP/shim"; mkdir -p "$SHIM"
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"%s/shim.calls"\nexec "%s" "$@"\n' "$TMP" "$BIN" >"$SHIM/ripwire"; chmod +x "$SHIM/ripwire"
+    git -C "$HOMEDIR/proj" init -q 2>/dev/null
+    mkdir -p "$TMP/hooktmp"   # the toolroute hook's per-session hint cap lives in $TMPDIR: keep it inside this run
+    hookrun(){   # hookrun HOOK CWD HOMEVAL JSON-EXTRA → stdout in $TMP/hook.out, calls counted
+        rm -f "$TMP/shim.calls"
+        jq -n --arg cwd "$2" --arg p "where is the parser defined" "{cwd:\$cwd, prompt:\$p, session_id:\"s1\"} + $4" \
+            | ( cd "$2" && HOME="$3" PATH="$SHIM:$PATH" RIPWIRE_DATA_HOME="$TMP/data" TMPDIR="$TMP/hooktmp" bash "$ROOT/hooks/$1" ) >"$TMP/hook.out" 2>/dev/null
+        hookrc=$?
+        hookcalls="$( [ -f "$TMP/shim.calls" ] && grep -c . "$TMP/shim.calls" || echo 0 )"
+    }
+    for h in ripwire-claude-route.sh ripwire-codex-route.sh; do
+        for case_ in "$GITHOME:$GITHOME" "/:$HOMEDIR"; do
+            hcwd="${case_%%:*}"; hhome="${case_#*:}"
+            hookrun "$h" "$hcwd" "$hhome" '{}'
+            if [ "$hookrc" = 0 ] && [ "$hookcalls" = 0 ] && [ ! -s "$TMP/hook.out" ]; then
+                ok "(A10) $h in $hcwd (HOME=$( basename "$hhome" )): silent exit 0, ripwire never ran"
+            else
+                no "(A10) $h in $hcwd: rc=$hookrc ripwire calls=$hookcalls stdout=$( head -c 120 "$TMP/hook.out" )"
+            fi
+        done
+        hookrun "$h" "$HOMEDIR/proj" "$HOMEDIR" '{}'
+        if [ "$hookcalls" -gt 0 ]; then
+            ok "(A10) control: $h in a project below \$HOME still runs ripwire ($hookcalls call(s))"
+        else
+            no "(A10) control: $h in $HOMEDIR/proj never ran ripwire — the skip arm above proves nothing"
+        fi
+    done
+    hookrun ripwire-claude-toolroute.sh "$GITHOME" "$GITHOME" '{hook_event_name:"PreToolUse", tool_name:"Grep", tool_input:{pattern:"hp", path:"."}}'
+    if [ "$hookrc" = 0 ] && [ "$hookcalls" = 0 ] && [ ! -s "$TMP/hook.out" ]; then
+        ok "(A10) ripwire-claude-toolroute.sh in a git-repo \$HOME: silent exit 0, ripwire never ran"
+    else
+        no "(A10) ripwire-claude-toolroute.sh in \$HOME: rc=$hookrc calls=$hookcalls stdout=$( head -c 120 "$TMP/hook.out" )"
+    fi
+    # the toolroute hook needs no ripwire call to recommend one, so its control is the recommendation itself
+    hookrun ripwire-claude-toolroute.sh "$HOMEDIR/proj" "$HOMEDIR" '{hook_event_name:"PreToolUse", tool_name:"Grep", tool_input:{pattern:"hp", path:"."}}'
+    if [ -s "$TMP/hook.out" ] || [ "$hookcalls" -gt 0 ]; then
+        ok "(A10) control: ripwire-claude-toolroute.sh in a project below \$HOME still answers"
+    else
+        no "(A10) control: ripwire-claude-toolroute.sh in $HOMEDIR/proj produced nothing — the skip arm above proves nothing"
+    fi
 else
-    no "(A7d) rc=$rc"
+    echo "  SKIP  (A10) jq is not installed — the hooks need it"
 fi
 
 echo "=== (B) layer 3: the memory guard stops cleanly and says so ==="

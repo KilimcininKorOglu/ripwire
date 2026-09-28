@@ -68,8 +68,8 @@ commands, so it is safe to paste for diagnosis; `--agent=codex` alone refuses be
 
 ### "no project root" / "memory limit reached" / `_memory_stop`
 
-A server started in `$HOME`, `/` or a system directory assumes no root: pass `path=` (or start it as
-`ripwire <repo> --mcp`). A tool call refused with "memory limit reached", or an answer carrying `_memory_stop`
+`$HOME`, `/` and system directories are never a project root over MCP — not as the launch directory and not as
+`path=`: pass the project directory itself (a server started as `ripwire ~ --mcp` still answers about `~`). A tool call refused with "memory limit reached", or an answer carrying `_memory_stop`
 in its envelope, means the memory guard cut or refused the work on a tree too large for the machine: point
 `path=` at a smaller root, or raise the limit with `--max-memory=<N>[K|M|G]` (or `RIPWIRE_MAX_MEMORY`) on the
 server's command line. The default (65% of RAM) is silent on real projects.
