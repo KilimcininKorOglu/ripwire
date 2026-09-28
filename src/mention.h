@@ -1431,35 +1431,26 @@ inline std::vector<MentionFileRow> collapseMentionsToFileRows( const IngestResul
 // beside a docs= that is exact for what it measures. A whole-word text match, so it is a CEILING on real mentions
 // of THIS symbol (a namesake elsewhere counts); files that cannot be read are skipped. Single root only (a doc edge
 // never crosses roots); the caller does not ask on a multi-root run.
-// Does `text` hold `name` as a whole identifier (no identifier character on either side)?
-inline bool holdsWholeIdentifier( std::string_view text, std::string_view name ) noexcept
+// Does `text` hold one of `names` as a whole identifier token? One pass over the identifier runs of the text (a run is
+// a maximal stretch of namesplit::isIdentChar bytes), each compared with the few names a selector resolved to. A name
+// that is not itself an identifier (an operator overload) never matches, so the residue below says nothing about it.
+inline bool holdsIdentifierToken( std::string_view text, const std::vector<std::string_view>& names ) noexcept
 {
-    for( std::size_t at = text.find( name ); !name.empty() && at != std::string_view::npos; at = text.find( name, at + 1 ) )
+    std::size_t runStart = 0;
+    for( std::size_t at = 0; at <= text.size(); ++at )
     {
-        const bool leftOk  = at == 0 || !namesplit::isIdentChar( text[ at - 1 ] );
-        const bool rightOk = at + name.size() >= text.size() || !namesplit::isIdentChar( text[ at + name.size() ] );
-        if( leftOk && rightOk )
+        if( at < text.size() && namesplit::isIdentChar( text[ at ] ) )
+        {
+            continue;
+        }
+        const std::string_view run = text.substr( runStart, at - runStart );
+        if( !run.empty() && std::find( names.begin(), names.end(), run ) != names.end() )
         {
             return true;
         }
+        runStart = at + 1;
     }
     return false;
-}
-
-// The indexed markdown files, by id, sorted: every file holding a Markdown symbol (each one has at least its file section).
-inline std::vector<std::uint32_t> markdownFileIds( const IngestResult& ing )
-{
-    std::vector<std::uint32_t> ids;
-    for( const Symbol& s : ing.symbols )
-    {
-        if( s.lang == Lang::Markdown )
-        {
-            ids.push_back( s.fileId );
-        }
-    }
-    std::sort( ids.begin(), ids.end() );
-    ids.erase( std::unique( ids.begin(), ids.end() ), ids.end() );
-    return ids;
 }
 
 inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted )
@@ -1467,29 +1458,31 @@ inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std
     std::vector<std::string_view> names;
     for( const NodeId d : defs )
     {
-        names.push_back( ing.symbols[ d ].name );
+        if( std::find( names.begin(), names.end(), ing.symbols[ d ].name ) == names.end() )
+        {
+            names.push_back( ing.symbols[ d ].name );
+        }
     }
-    std::sort( names.begin(), names.end(), sortutil::svLess );
-    names.erase( std::unique( names.begin(), names.end() ), names.end() );
-    std::vector<std::uint32_t> countedFiles;
+    // a file is a candidate when it holds a Markdown symbol (every indexed markdown file has its file section) and is
+    // not already a row; walked in file-id order, which is the crawl's sorted order, so the count is deterministic
+    std::vector<char> candidate( ing.files.size(), 0 );
+    for( const Symbol& s : ing.symbols )
+    {
+        candidate[ s.fileId ] = static_cast<char>( candidate[ s.fileId ] | ( s.lang == Lang::Markdown ? 1 : 0 ) );
+    }
     for( const MentionFileRow& row : counted )
     {
-        countedFiles.push_back( row.fileId );
+        candidate[ row.fileId ] = 0;
     }
-    std::sort( countedFiles.begin(), countedFiles.end() );
-
     std::size_t residue = 0;
-    for( const std::uint32_t fileId : markdownFileIds( ing ) )
+    for( std::uint32_t fileId = 0; fileId < candidate.size(); ++fileId )
     {
-        if( std::binary_search( countedFiles.begin(), countedFiles.end(), fileId ) )
+        if( candidate[ fileId ] == 0 )
         {
             continue;
         }
         const std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
-        if( bytes && std::any_of( names.begin(), names.end(), [ & ]( std::string_view n ) { return holdsWholeIdentifier( *bytes, n ); } ) )
-        {
-            ++residue;
-        }
+        residue += ( bytes && holdsIdentifierToken( *bytes, names ) ) ? 1u : 0u;
     }
     return residue;
 }
