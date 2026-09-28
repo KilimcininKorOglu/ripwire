@@ -66,6 +66,14 @@ Codex hook roles, and the configured `mcp_servers.ripwire` command plus `--mcp` 
 the exact installer/wrap repair command. The report deliberately emits no config contents or full shell
 commands, so it is safe to paste for diagnosis; `--agent=codex` alone refuses because it modifies doctor.
 
+### "no project root" / "memory limit reached" / `_memory_stop`
+
+A server started in `$HOME`, `/` or a system directory assumes no root: pass `path=` (or start it as
+`ripwire <repo> --mcp`). A tool call refused with "memory limit reached", or an answer carrying `_memory_stop`
+in its envelope, means the memory guard cut or refused the work on a tree too large for the machine: point
+`path=` at a smaller root, or raise the limit with `--max-memory=<N>[K|M|G]` (or `RIPWIRE_MAX_MEMORY`) on the
+server's command line. The default (65% of RAM) is silent on real projects.
+
 ## The read verbs + fetch_body (and when each beats the CLI form)
 
 Every verb takes `path` (the repo root; `memory_recall` takes the docs/memory dir). For a split

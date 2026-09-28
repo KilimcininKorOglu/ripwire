@@ -1102,7 +1102,7 @@ inline bool path_is_system_dir( std::string_view path )
             }
             return true;
         };
-        for( const char* name : { "WINDIR", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData" } )
+        for( const char* name : { "WINDIR", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData" } )
         {
             const char* value = std::getenv( name );
             if( value != nullptr && *value != '\0' && sameDir( path, value ) )
