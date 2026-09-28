@@ -2423,34 +2423,49 @@ struct BuiltinMethodGate
 // collectFileClassEvidence: every class NAME each gated file mentions — the classes it defines, any class a reference
 // there names as callee, receiver or qualifier, or a binding names as type, variable or imported name — and every class
 // an ES import binding in that file resolves to (a default or renamed import names it under another spelling).
+// One class NAME a gated file mentions. A DEFINITION (the class-like symbol, or the bare declared name its statement
+// leaves) names it in fileClasses only; any other mention names it in fileRefClasses too — the list a Python call on a
+// receiver other than self/cls reads (BuiltinMethodGate::judge).
+inline void noteFileClass( BuiltinMethodGate& gate, const std::vector<char>& fileGated, std::uint32_t fileId, const std::string& name, bool definition )
+{
+    if( fileId >= fileGated.size() || fileGated[ fileId ] == 0 || name.empty() )
+    {
+        return;
+    }
+    const auto it = gate.classId.find( name );
+    if( it == gate.classId.end() )
+    {
+        return;
+    }
+    gate.fileClasses[ fileId ].push_back( it->second );
+    if( !definition )
+    {
+        gate.fileRefClasses[ fileId ].push_back( it->second );
+    }
+}
+
+// A bare declared NAME with no type and no import: Python records the `class Pool:` statement's own module-level name
+// this way (a VarDecl), so it is the definition again, not a use of the class.
+inline bool isBareNameDeclaration( const Binding& b ) noexcept
+{
+    return b.kind == LocalBindKind::VarDecl && b.typeName.empty() && b.importedName.empty();
+}
+
 inline void collectFileClassEvidence( const IngestResult& ing, const std::vector<char>& fileGated, const JsImportTables& jsImports, BuiltinMethodGate& gate )
 {
     gate.fileClasses.assign( ing.files.size(), {} );
     gate.fileRefClasses.assign( ing.files.size(), {} );
-    bool definitionPass = true;   // the first loop below: a definition names the class in fileClasses only
-    const auto note = [ & ]( std::uint32_t fileId, const std::string& name )
+    const auto note = [ & ]( std::uint32_t fileId, const std::string& name, bool definition = false )
     {
-        if( fileId >= fileGated.size() || fileGated[ fileId ] == 0 || name.empty() )
-        {
-            return;
-        }
-        if( const auto it = gate.classId.find( name ); it != gate.classId.end() )
-        {
-            gate.fileClasses[ fileId ].push_back( it->second );
-            if( !definitionPass )
-            {
-                gate.fileRefClasses[ fileId ].push_back( it->second );
-            }
-        }
+        noteFileClass( gate, fileGated, fileId, name, definition );
     };
     for( const Symbol& s : ing.symbols )
     {
         if( BuiltinMethodGate::isClassLike( s ) )
         {
-            note( s.fileId, s.name );   // defined here: every call in the file may be on an instance of it
+            note( s.fileId, s.name, /*definition=*/true );   // defined here: every call in the file may be on an instance of it
         }
     }
-    definitionPass = false;
     for( const Reference& r : ing.references )
     {
         if( !r.isDocLink )   // a backtick mention in prose is not code evidence
@@ -2463,11 +2478,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
     for( const Binding& b : ing.bindings )
     {
         note( b.fileId, b.typeName );
-        // a bare declared NAME with no type and no import is the `class Pool:` statement's own module-level name (Python
-        // records it as a VarDecl): a definition, so it names the class in fileClasses only
-        definitionPass = b.kind == LocalBindKind::VarDecl && b.typeName.empty() && b.importedName.empty();
-        note( b.fileId, b.var );
-        definitionPass = false;
+        note( b.fileId, b.var, isBareNameDeclaration( b ) );
         note( b.fileId, b.importedName );
     }
     for( const auto& [ importKey, bound ] : jsImports.targets )   // key "<fileId>#<local name>" (jsImportKey)
@@ -2483,12 +2494,12 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
             note( fileId, ing.symbols[ bound.node ].name );   // order-free: every list is sorted below
         }
     }
-    for( std::vector<std::uint32_t>& named : gate.fileRefClasses )
+    for( std::vector<std::uint32_t>& named : gate.fileClasses )
     {
         std::sort( named.begin(), named.end() );
         named.erase( std::unique( named.begin(), named.end() ), named.end() );
     }
-    for( std::vector<std::uint32_t>& named : gate.fileClasses )
+    for( std::vector<std::uint32_t>& named : gate.fileRefClasses )
     {
         std::sort( named.begin(), named.end() );
         named.erase( std::unique( named.begin(), named.end() ), named.end() );

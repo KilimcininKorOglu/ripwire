@@ -1491,6 +1491,26 @@ inline constexpr const char* kUnbacktickedDocsLegend =
     "<!-- unbackticked_docs=N: N more markdown files name of= as a whole word but not as a clean one-line backtick "
     "span (prose, a code block, a span broken across lines) - not in docs=; a text match, so a ceiling -->";
 
+// The CLI root's share of it: the count, the attribute and the reading, all empty at zero and on a multi-root run.
+struct UnbacktickedDocs
+{
+    std::size_t count = 0;
+    std::string attr;
+    const char* legend = "";
+};
+inline UnbacktickedDocs unbacktickedDocsFor( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted,
+                                             bool singleRoot )
+{
+    UnbacktickedDocs out;
+    out.count = singleRoot ? countUnbacktickedDocFiles( ing, defs, counted ) : 0;
+    if( out.count > 0 )
+    {
+        out.attr   = " unbackticked_docs=\"" + std::to_string( out.count ) + "\"";
+        out.legend = kUnbacktickedDocsLegend;
+    }
+    return out;
+}
+
 // ── R2-AF (round 2, answer-first ordering) — the S4 "named file's decl/impl partner" lookup ────────────
 //
 // --for's ranked rows answer "what is relevant"; they can never answer "what else has to change with the

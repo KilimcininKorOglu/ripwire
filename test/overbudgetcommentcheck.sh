@@ -325,9 +325,14 @@ grep -qF '<!-- truncated -->' "$TMP/pt.xml" \
 grep -qE '<src_cut shown="2" total="4" capped="1" budget_bytes="'"$PB"'"/>' "$TMP/pt.xml" \
     && ok "(B8) <src_cut shown=\"2\" total=\"4\" capped=\"1\" budget_bytes=\"$PB\"/> counts the two files not served" \
     || no "(B8) no <src_cut shown=\"2\" total=\"4\" capped=\"1\"> disclosure: $( grep -oE '<src_cut[^>]*>' "$TMP/pt.xml" )"
-grep -qE '<!-- src_cut: shown= [^>]*budget_bytes=[^>]*truncated=[^>]*lines=' "$TMP/pt.xml" \
-    && ok "(B8) one comment in the same document defines shown=/total=/capped=/budget_bytes=/truncated=/lines=" \
-    || no "(B8) the cut's attributes ride with no definition in the document"
+"$BIN" "$PT" --pack-top-n=4 --pack-budget-bytes=$PB --no-cache --legend=full >"$TMP/pt_full.xml" 2>/dev/null
+grep -qE '<!-- src_cut: shown= [^>]*budget_bytes=[^>]*truncated=[^>]*lines=' "$TMP/pt_full.xml" \
+    && ok "(B8) full dialect: one comment in the document defines shown=/total=/capped=/budget_bytes=/truncated=/lines=" \
+    || no "(B8) full dialect: the cut's attributes ride with no definition in the document"
+LEAD="$( sed -E 's/(-->)<[^!].*/\1/' "$TMP/pt.xml" | head -c 20000 )"
+printf '%s' "$LEAD" | grep -q 'src truncated=1 lines=1-K/T' && printf '%s' "$LEAD" | grep -q 'budget_bytes=' \
+    && ok "(B8) default (compact) dialect: the leading legend defines truncated=/lines= and src_cut's budget_bytes=" \
+    || no "(B8) default dialect: the leading legend does not define the cut's attributes"
 xmllint --noout "$TMP/pt.xml" 2>/dev/null && ok "(B8) the cut document is well-formed" || no "(B8) the cut document is not well-formed"
 if grep -qE 'src_cut|truncated=' "$TMP/pt_whole.xml"; then no "(B8) an uncut --pack-top-n answer carries cut disclosure"
 else ok "(B8) an uncut --pack-top-n answer carries no cut disclosure (4 whole files: $( grep -c '<src ' "$TMP/pt_whole.xml" | tr -d ' ' ) <src>)"; fi

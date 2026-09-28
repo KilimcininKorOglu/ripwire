@@ -3281,6 +3281,69 @@ inline constexpr std::string_view kPackSourceCutLegend =
     "budget_bytes=, the byte ceiling); unreadable=N: files that could not be read. src truncated=\"1\": that file was "
     "cut at a line end, lines=\"1-K/T\" (K of its T lines shown) -->";
 
+// A file's bytes for --pack-top-n, or nullopt when it cannot be opened (gone since the crawl).
+inline std::optional<std::string> readPackFile( const std::string& path )
+{
+    std::FILE* in = std::fopen( path.c_str(), "rb" );
+    if( !in )
+    {
+        return std::nullopt;
+    }
+    std::string body;
+    char        buf[ 4096 ];
+    std::size_t n;
+    while( ( n = std::fread( buf, 1, sizeof( buf ), in ) ) > 0 )
+    {
+        body.append( buf, n );
+    }
+    std::fclose( in );
+    return body;
+}
+
+// Lines in `text`, a last line without its newline included.
+inline std::size_t packLineCount( std::string_view text ) noexcept
+{
+    const std::size_t newlines = static_cast<std::size_t>( std::count( text.begin(), text.end(), '\n' ) );
+    return newlines + ( ( !text.empty() && text.back() != '\n' ) ? 1u : 0u );
+}
+
+// Cut `body` to the whole lines that fit in `room` bytes, never mid-codepoint (a UTF-8 continuation byte is backed
+// off, so the CDATA stays valid UTF-8 and xmllint / the G4 guardrail accept it). Returns the <src> attributes that
+// state the cut — truncated="1" lines="1-K/T" — or "" when not one whole line fits (the caller omits the file).
+inline std::string cutPackBodyAtLineEnd( std::string& body, std::size_t room )
+{
+    std::size_t cut = body.rfind( '\n', room );
+    cut = ( cut == std::string::npos ) ? 0 : cut;
+    while( cut > 0 && ( static_cast<unsigned char>( body[cut] ) & 0xC0 ) == 0x80 )
+    {
+        --cut;
+    }
+    if( cut == 0 )
+    {
+        return std::string();
+    }
+    const std::size_t totalLines = packLineCount( body );
+    body.resize( cut );
+    return " truncated=\"1\" lines=\"1-" + std::to_string( packLineCount( body ) ) + "/" + std::to_string( totalLines ) + "\"";
+}
+
+// What --pack-top-n writes before its first <src>: nothing when the budget cut nothing; the cut's reading when it cut
+// a file; and <src_cut shown= total= capped="1" budget_bytes= [unreadable=]> when a requested file was not served.
+inline std::string packSourceCutHead( bool cutOne, std::size_t shown, std::size_t keep, std::size_t unreadable, std::size_t budgetBytes )
+{
+    if( !cutOne && shown >= keep )
+    {
+        return std::string();
+    }
+    std::string head( kPackSourceCutLegend );
+    if( shown < keep )
+    {
+        head += "<src_cut shown=\"" + std::to_string( shown ) + "\" total=\"" + std::to_string( keep ) + "\" capped=\"1\" budget_bytes=\""
+              + std::to_string( budgetBytes ) + "\"" + ( unreadable > 0 ? " unreadable=\"" + std::to_string( unreadable ) + "\"" : std::string() ) + "/>";
+    }
+    return head;
+}
+
 inline void packSource( std::FILE* out, const IngestResult& ing, const std::vector<float>& rank,
                         int topN, std::size_t budgetBytes, RedactCounts* redact )
 {
@@ -3306,53 +3369,25 @@ inline void packSource( std::FILE* out, const IngestResult& ing, const std::vect
     bool              cutOne     = false;
     const std::size_t keep = std::min<std::size_t>( topN > 0 ? std::size_t( topN ) : 0, F );
 
-    const auto lineCount = []( std::string_view text ) noexcept
-    {
-        const std::size_t newlines = static_cast<std::size_t>( std::count( text.begin(), text.end(), '\n' ) );
-        return newlines + ( ( !text.empty() && text.back() != '\n' ) ? 1u : 0u );
-    };
-
     for( std::size_t k = 0; k < keep && used < budgetBytes && !cutOne; ++k )
     {
-        std::FILE* in = std::fopen( diskPath( ing, order[k] ).c_str(), "rb" );
-        if( !in )
+        std::optional<std::string> read = readPackFile( diskPath( ing, order[k] ) );
+        if( !read )
         {
             ++unreadable;   // graceful (file gone since the crawl), and counted: it is one of the files asked for
             continue;
         }
-
-        std::string body;
-        char        buf[ 4096 ];
-        std::size_t n;
-        while( ( n = std::fread( buf, 1, sizeof( buf ), in ) ) > 0 )
-        {
-            body.append( buf, n );
-        }
-        std::fclose( in );
+        std::string& body = *read;
 
         std::string linesAttr;
-        if( used + body.size() > budgetBytes )                 // truncate at a newline + UTF-8 boundary
+        if( used + body.size() > budgetBytes )
         {
-            const std::size_t room = budgetBytes - used;
-            std::size_t cut = body.rfind( '\n', room );
-            if( cut == std::string::npos )
-            {
-                cut = 0;   // not one whole line fits: the file is omitted below, never served as a fragment
-            }
-            // never cut mid-codepoint: back off any UTF-8 continuation bytes (10xxxxxx) so the
-            // CDATA stays valid UTF-8 (otherwise xmllint / the G4 guardrail rejects it)
-            while( cut > 0 && ( static_cast<unsigned char>( body[cut] ) & 0xC0 ) == 0x80 )
-            {
-                --cut;
-            }
             cutOne = true;   // the first file that does not fit closes the answer, served in part or not at all
-            if( cut == 0 )
+            linesAttr = cutPackBodyAtLineEnd( body, budgetBytes - used );
+            if( linesAttr.empty() )
             {
-                break;
+                break;       // not one whole line fits: omitted (counted by <src_cut>), never served as a fragment
             }
-            const std::size_t totalLines = lineCount( body );
-            body.resize( cut );
-            linesAttr = " truncated=\"1\" lines=\"1-" + std::to_string( lineCount( body ) ) + "/" + std::to_string( totalLines ) + "\"";
         }
 
         // Redact credential shapes from the raw file body BEFORE CDATA-encoding — this is a
@@ -3371,15 +3406,7 @@ inline void packSource( std::FILE* out, const IngestResult& ing, const std::vect
     }
 
     XmlWriter w( out );
-    if( cutOne || shown < keep )
-    {
-        w.write( kPackSourceCutLegend );
-    }
-    if( shown < keep )
-    {
-        w.write( "<src_cut shown=\"" + std::to_string( shown ) + "\" total=\"" + std::to_string( keep ) + "\" capped=\"1\" budget_bytes=\""
-                 + std::to_string( budgetBytes ) + "\"" + ( unreadable > 0 ? " unreadable=\"" + std::to_string( unreadable ) + "\"" : std::string() ) + "/>" );
-    }
+    w.write( packSourceCutHead( cutOne, shown, keep, unreadable, budgetBytes ) );
     w.write( served );
     w.flush();
 }

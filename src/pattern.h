@@ -997,6 +997,23 @@ inline TSNode qualifiedTail( TSNode n ) noexcept
     return TSNode{};
 }
 
+// The second ask's one relaxation (MatchStats::qualifiedUnmatchedCount): a pattern LEAF of another kind than `cand`
+// still matches when `cand` is a qualified name whose final segment is that leaf, kind and text. Records that it did.
+inline bool relaxedQualifiedLeaf( const PatternProgram& prog, const PatNode& pat, TSNode cand, std::string_view src, MatchStats& stats )
+{
+    if( !stats.relaxQualified || pat.childCount != 0 )
+    {
+        return false;
+    }
+    const TSNode tail = qualifiedTail( cand );
+    if( ts_node_is_null( tail ) || ts_node_symbol( tail ) != pat.kindId || nodeText( tail, src ) != prog.textOf( pat ) )
+    {
+        return false;
+    }
+    stats.relaxedLeafHit = true;
+    return true;
+}
+
 // Does the candidate node satisfy pattern node `patIndex`?
 inline bool matchAt( const PatternProgram& prog, std::uint32_t patIndex, TSNode cand, std::string_view src, MatchEnv& env, MatchStats& stats, unsigned depth )
 {
@@ -1025,22 +1042,27 @@ inline bool matchAt( const PatternProgram& prog, std::uint32_t patIndex, TSNode 
     }
     if( ts_node_symbol( cand ) != pat.kindId )
     {
-        if( stats.relaxQualified && pat.childCount == 0 )   // the second ask only: see MatchStats::qualifiedUnmatchedCount
-        {
-            const TSNode tail = qualifiedTail( cand );
-            if( !ts_node_is_null( tail ) && ts_node_symbol( tail ) == pat.kindId && nodeText( tail, src ) == prog.textOf( pat ) )
-            {
-                stats.relaxedLeafHit = true;
-                return true;
-            }
-        }
-        return false;
+        return relaxedQualifiedLeaf( prog, pat, cand, src, stats );   // false outside the second ask
     }
     if( pat.childCount == 0 )
     {
         return nodeText( cand, src ) == prog.textOf( pat );
     }
     return matchChildren( prog, pat, cand, src, env, stats, depth );
+}
+
+// The second ask for a node the exact match refused: would a qualified spelling of a pattern leaf have matched it?
+// Counted, never a hit. Its ellipsis abandons are not the exact answer's, so they are rolled back, not double counted.
+inline void countQualifiedNearMiss( const PatternProgram& prog, TSNode n, std::string_view src, MatchStats& stats )
+{
+    const std::uint64_t ellipsisBefore = stats.ellipsisCappedCount;
+    MatchEnv            relaxedEnv;
+    stats.relaxQualified = true;
+    stats.relaxedLeafHit = false;
+    const bool relaxedMatch = matchAt( prog, 0, n, src, relaxedEnv, stats, 0 );
+    stats.qualifiedUnmatchedCount += ( relaxedMatch && stats.relaxedLeafHit ) ? 1u : 0u;
+    stats.relaxQualified      = false;
+    stats.ellipsisCappedCount = ellipsisBefore;
 }
 
 // Every node in one file's tree that the pattern matches, reported as [startByte,endByte) pairs in
@@ -1072,18 +1094,7 @@ inline void findMatches( const PatternProgram& prog, TSNode root, std::string_vi
             }
             else
             {
-                // the second ask: would a qualified spelling of a pattern leaf have matched? Counted, never a hit. Its
-                // ellipsis abandons are not the exact answer's, so they are rolled back rather than double counted.
-                const std::uint64_t ellipsisBefore = stats.ellipsisCappedCount;
-                MatchEnv            relaxedEnv;
-                stats.relaxQualified = true;
-                stats.relaxedLeafHit = false;
-                if( matchAt( prog, 0, n, src, relaxedEnv, stats, 0 ) && stats.relaxedLeafHit )
-                {
-                    ++stats.qualifiedUnmatchedCount;
-                }
-                stats.relaxQualified      = false;
-                stats.ellipsisCappedCount = ellipsisBefore;
+                countQualifiedNearMiss( prog, n, src, stats );
             }
         }
         // Collected once, then pushed in REVERSE so the stack pops left to right — the same visit order

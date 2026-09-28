@@ -236,6 +236,7 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
     "<!-- extent_suspect=",            // the extent-honesty row reading (serialize.h kExtentSuspectRowLegend)
     "<!-- b truncated=",               // a cut --expand/pack-task body's reading (serialize.h kTruncatedBodyLegend)
     "<!-- b over_ceiling=",            // …and a past-the-budget one's (serialize.h kOverCeilingBodyLegend)
+    "<!-- src_cut: ",                  // --pack-top-n's cut reading (serialize.h kPackSourceCutLegend); the two src rows below
 };
 
 // Comments that share a prose opener and must stay: --for's trailer (est_tokens=/dropped_positive=/weak= are
@@ -561,6 +562,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "truncated",         "<b truncated=1 lines=lo-hi/T>: cut at the byte budget; lines= shown of its T", true, "b" },
     // review M1: a body whose FIRST line alone exceeds the budget is served whole, never as a fragment
     { "over_ceiling",      "<b over_ceiling=1>: its first line alone exceeds the budget, served whole", true, "b" },
+    // lane honesty-cuts-066: --pack-top-n's cut, the <b> rule on raw files (serialize.h kPackSourceCutLegend is the full reading)
+    { "truncated",         "<src truncated=1 lines=1-K/T>: cut at a line end at the byte budget; K of its T lines", true, "src" },
+    { "budget_bytes",      "<src_cut shown= total= capped=1 budget_bytes=>: files served of the top-N asked, the rest over the byte ceiling; unreadable=N not readable", true, "src_cut" },
     { "preview",           "preview=1: an UNWRITTEN payload; <overwrite l= end= bytes=> = the span an apply replaces, CDATA as on disk (shown=/capped=1/elided_lines= when cut)" },
     { "redacted",          "redacted=1: a credential shape rewritten to [REDACTED:kind]; the no-redact flag serves the bytes", true },
     // extent honesty (serialize.h kExtentSuspectRowLegend): a ROW-level term on the map, <d> and <b> rows alike.
