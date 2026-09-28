@@ -48,6 +48,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -346,9 +347,12 @@ inline void answerStops() noexcept { stopCounts().answered.store( stopCounts().r
 }
 
 // ── the sentences ──────────────────────────────────────────────────────────────────────────────────────────
+// indexed by MemoryStop::Phase; None never reaches a sentence that names a phase
+inline constexpr std::string_view kPhaseNames[] = { "ingest", "crawl", "parse" };
+static_assert( std::size( kPhaseNames ) == std::size_t( MemoryStop::Phase::Parse ) + 1, "one name per MemoryStop::Phase" );
 inline std::string_view phaseName( MemoryStop::Phase phase ) noexcept
 {
-    return phase == MemoryStop::Phase::Crawl ? "crawl" : phase == MemoryStop::Phase::Parse ? "parse" : "graph";
+    return kPhaseNames[ std::size_t( phase ) ];
 }
 
 // every message ends with the override
