@@ -21,7 +21,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   that prose, a code block, `callers:SYM` or a span broken across lines never counts. `--mentions=escapeXml` read
   `docs="2"` on this repository while three more files named it. The root now carries `unbackticked_docs=N` (present
   only when non-zero, a whole-word text match and so a ceiling) with its reading in the same answer; the MCP
-  `mentions` twin carries the same count. Here: `docs="2" unbackticked_docs="3"`. Gate: `test/mentionsverbcheck.sh` 7.
+  `mentions` twin carries the same count. On the tree before this change: `docs="2" unbackticked_docs="3"`. Gate: `test/mentionsverbcheck.sh` 7.
 - `--pattern`: the matcher is kind- and text-exact, so `escapeXml($X, ...)` never matched `rw::escapeXml( s, esc )`
   and answered `hits="213"` with 46 qualified calls unmentioned (`--uses` counts 265). Those calls are still not hits
   — the pattern did not say `rw::` — but each candidate the exact match refused is asked once more with a pattern
