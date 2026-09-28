@@ -256,13 +256,6 @@ command -v ripwire >/dev/null 2>&1 || exit 0
 prompt="$( printf '%s' "$input" | jq -r '.prompt // .user_prompt // .input // empty' 2>/dev/null )"
 cwd="$( printf '%s' "$input" | jq -r '.cwd // .workdir // empty' 2>/dev/null )"
 [ -n "$prompt" ] && [ -n "$cwd" ] && [ -d "$cwd" ] || exit 0
-# #350: a home directory, a filesystem root or a system tree is nobody's project, whatever git says about it (a
-# dotfiles repository makes $HOME a work tree), so a background hook never crawls one: exit silently. The rule is the
-# binary's own (src/rootguard.h), not a second list here — run from that directory with no root, ripwire answers
-# "no project root" for exactly those directories and prints its plain usage anywhere else. One exec, no crawl.
-if ( cd "$cwd" 2>/dev/null && ripwire 2>&1 >/dev/null ) | grep -q 'no project root'; then
-    exit 0
-fi
 # Route only inside a git work tree (issue #327). Outside one `--help-task` has no file list from git and
 # walks the whole tree under cwd: a session started in $HOME measured over 30 s for one prompt, on every
 # prompt. The cost is routing in a small non-git project too; a missed recommendation is the direction
@@ -277,6 +270,14 @@ fi
 unset $( git rev-parse --local-env-vars 2>/dev/null ) GIT_DIR GIT_WORK_TREE
 insideWorkTree="$( git -C "$cwd" rev-parse --is-inside-work-tree 2>/dev/null )" || exit 0
 [ "$insideWorkTree" = true ] || exit 0
+# #350: a home directory, a filesystem root or a system tree is nobody's project, whatever git says about it (a
+# dotfiles repository makes $HOME a work tree), so a background hook never crawls one: exit silently. The rule is the
+# binary's own (src/rootguard.h), not a second list here — run from that directory with no root, ripwire answers
+# "no project root" for exactly those directories and prints its plain usage anywhere else. One exec, no crawl, and
+# only inside a work tree: it follows the test above, so a non-git cwd never reaches even this bare call.
+if ( cd "$cwd" 2>/dev/null && ripwire 2>&1 >/dev/null ) | grep -q 'no project root'; then
+    exit 0
+fi
 session="$( printf '%s' "$input" | jq -r '.session_id // .conversation_id // empty' 2>/dev/null )"
 
 promptBytes="$( printf '%s' "$prompt" | wc -c | tr -d ' ' )"
