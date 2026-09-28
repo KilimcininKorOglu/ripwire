@@ -358,7 +358,8 @@ inline bool hasCredentialToken( std::string_view line, std::string_view lowered 
         const std::size_t      end     = std::min( line.find_first_of( kSeparators, i ), line.size() );
         const std::string_view token   = lowered.substr( i, end - i );
         const std::string_view operand = fileOperand( token, prevToken, afterRedirect );
-        const std::string_view base    = operand.substr( operand.find_last_of( '/' ) + 1 );   // npos + 1 == 0: no slash, whole operand
+        const std::size_t      slash   = operand.find_last_of( '/' );   // never `npos + 1`: G1's -fsanitize=integer traps the wrap
+        const std::string_view base    = slash == std::string_view::npos ? operand : operand.substr( slash + 1 );
         if( token == "printenv" || token == "env" || isKeyFileToken( token ) || ( !operand.empty() && isCredentialName( base ) ) )
         {
             return true;
