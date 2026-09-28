@@ -257,15 +257,12 @@ prompt="$( printf '%s' "$input" | jq -r '.prompt // .user_prompt // .input // em
 cwd="$( printf '%s' "$input" | jq -r '.cwd // .workdir // empty' 2>/dev/null )"
 [ -n "$prompt" ] && [ -n "$cwd" ] && [ -d "$cwd" ] || exit 0
 # #350: a home directory, a filesystem root or a system tree is nobody's project, whatever git says about it (a
-# dotfiles repository makes $HOME a work tree). A background hook never crawls one: exit silently, before any git or
-# ripwire call. Only the directory itself — a project below it is routed as usual. The list is src/infra/os.h's
-# path_is_system_dir, trimmed to the names a cwd can plausibly be.
-cwdReal="$( cd "$cwd" 2>/dev/null && pwd -P )" || exit 0
-homeReal="$( cd "${HOME:-/nonexistent-home}" 2>/dev/null && pwd -P )"
-[ -n "$homeReal" ] && [ "$cwdReal" = "$homeReal" ] && exit 0
-case "$cwdReal" in
-    /|/System|/Library|/Applications|/Users|/Volumes|/usr|/usr/local|/usr/lib|/usr/share|/bin|/sbin|/opt|/etc|/tmp|/var|/dev|/private|/private/etc|/private/tmp|/private/var|/home|/root|/proc|/sys|/srv|/mnt|/media|/run|/snap|/nix|/nix/store|/boot|/lib|/lib64) exit 0 ;;
-esac
+# dotfiles repository makes $HOME a work tree), so a background hook never crawls one: exit silently. The rule is the
+# binary's own (src/rootguard.h), not a second list here — run from that directory with no root, ripwire answers
+# "no project root" for exactly those directories and prints its plain usage anywhere else. One exec, no crawl.
+if ( cd "$cwd" 2>/dev/null && ripwire 2>&1 >/dev/null ) | grep -q 'no project root'; then
+    exit 0
+fi
 # Route only inside a git work tree (issue #327). Outside one `--help-task` has no file list from git and
 # walks the whole tree under cwd: a session started in $HOME measured over 30 s for one prompt, on every
 # prompt. The cost is routing in a small non-git project too; a missed recommendation is the direction

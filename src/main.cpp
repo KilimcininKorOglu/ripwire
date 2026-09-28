@@ -4007,9 +4007,12 @@ int main( int argc, char** argv )
     const int rc = runWithCompactLegend( cfg, argv );
     // #350: the backstop — an ingest the memory guard stopped inside a verb that does not read the stop (memguard.h).
     // The servers answer for their own stops per request (the MCP envelope's _memory_stop), so they are exempt.
-    if( rc == 0 && !cfg.mcp && !cfg.lsp && rw::memguard::hasUnansweredStop() )
+    // Whatever exit code the verb chose becomes 5: a verdict (0, a gate's 2, a budget's 3, an obligation's 4) computed
+    // from a partial ingest is not a verdict, and a refusal (1) printed after one may name a false cause (a HEAD tree
+    // the guard only partly read reads as "no git HEAD").
+    if( !cfg.mcp && !cfg.lsp && rw::memguard::hasUnansweredStop() )
     {
-        rw::emitTo( stderr, "ripwire: the memory guard stopped an ingest this answer depends on, so the answer above may be incomplete — {}\n", rw::memguard::kOverride );
+        rw::emitTo( stderr, "ripwire: the memory guard stopped an ingest this answer depends on, so the answer (or refusal) above may be incomplete or wrong — {}\n", rw::memguard::kOverride );
         return 5;
     }
     return rc;
@@ -4022,7 +4025,7 @@ int main( int argc, char** argv )
 // line beside it; every other verb refuses rather than answer from a partial index as if it were the tree. An ingest
 // that stopped before anything was built (no files, or no file parsed) cannot answer at all. Exit 5 for both refusals.
 // Returns 0 when the run may continue (no stop, or a map run with its disclosure).
-static int memoryStopExit( const rw::IngestResult& ing, const char* winnerVerb )
+static int memoryStopExit( const rw::IngestResult& ing, const rw::Config& cfg, const char* winnerVerb )
 {
     const rw::MemoryStop& stop = ing.memoryStop;
     if( !stop.isSet() )
@@ -4033,14 +4036,15 @@ static int memoryStopExit( const rw::IngestResult& ing, const char* winnerVerb )
     if( ing.files.empty() || ( stop.parseCut && stop.parsedFiles == 0 ) )
     {
         DISCLOSE( Diagnostics::answerRefused, "main: the memory guard stopped the ingest before anything was built — exit 5, one stderr line" );
-        rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::hardStopLine( rw::memguard::phaseName( stop.phase ) ) );
+        rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::nothingBuiltLine( stop ) );
         return 5;
     }
-    if( winnerVerb != nullptr )
+    // the map's own renderings with no header to carry memory_stop= (--html, --mermaid) refuse like any other verb
+    const char* const refusingVerb = winnerVerb != nullptr ? winnerVerb : cfg.html ? "--html" : cfg.mermaid ? "--mermaid" : nullptr;
+    if( refusingVerb != nullptr )
     {
         DISCLOSE( Diagnostics::answerRefused, "main: a verb other than the map refuses a memory-guard partial ingest — exit 5, one stderr line" );
-        rw::emitTo( stderr, "ripwire: the memory guard stopped the {} at the {} limit; {} cannot answer from a partial index — {}\n",
-                    rw::memguard::phaseName( stop.phase ), rw::memguard::limitSpelling( stop.limitBytes ), winnerVerb, rw::memguard::kOverride );
+        rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::verbRefusalLine( stop, refusingVerb ) );
         return 5;
     }
     rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::softStopLine( ing ) );
@@ -4934,7 +4938,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::hardStopLine( "ingest" ) );
         return 5;
     }
-    if( const int rc = memoryStopExit( ing, verbPrec.winner ); rc != 0 )
+    if( const int rc = memoryStopExit( ing, cfg, verbPrec.winner ); rc != 0 )
     {
         return rc;
     }

@@ -14,6 +14,7 @@
 
 #include <climits>
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
 
 #include "infra/os.h"   // rw::os::realpath / getcwd / path_is_system_dir
@@ -43,6 +44,22 @@ inline std::string rootGuardCwd()
     return rootGuardCanon( buf );
 }
 
+// the canonical home directory, or "" when none is known: $HOME when it is an ABSOLUTE path (a relative HOME would
+// resolve against the cwd and refuse whatever project the process runs in), else USERPROFILE (native Windows sets that
+// and not HOME), under the same rule.
+inline std::string rootGuardHome()
+{
+    for( const char* name : { "HOME", "USERPROFILE" } )
+    {
+        const char* const value = std::getenv( name );
+        if( value != nullptr && *value != '\0' && os::path_is_absolute( std::string( value ) ) )
+        {
+            return rootGuardCanon( value );
+        }
+    }
+    return {};
+}
+
 // "" when `canonDir` may serve as an implicit root; otherwise the one-line reason it may not. `canonDir` is already
 // canonical (rootGuardCanon / rootGuardCwd), and so is the $HOME it is compared with.
 inline std::string noProjectRootReason( const std::string& canonDir )
@@ -51,8 +68,8 @@ inline std::string noProjectRootReason( const std::string& canonDir )
     {
         return {};
     }
-    const char* const home   = std::getenv( "HOME" );
-    const bool        isHome = home != nullptr && *home != '\0' && canonDir == rootGuardCanon( home );
+    const std::string home   = rootGuardHome();
+    const bool        isHome = !home.empty() && canonDir == home;
     if( !isHome && !os::path_is_system_dir( canonDir ) )
     {
         return {};

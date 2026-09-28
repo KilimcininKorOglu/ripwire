@@ -503,7 +503,9 @@ struct dirwatch_event
 // mem_footprint: bytes this process holds. macOS: TASK_VM_INFO phys_footprint (what Activity Monitor and the
 //   jetsam killer count — compressed and swapped pages included). Linux: resident pages from /proc/self/statm.
 // mem_physical: bytes of physical RAM. macOS hw.memsize; Linux _SC_PHYS_PAGES x _SC_PAGESIZE.
-// mem_cgroup_max: the cgroup v2 memory.max of this process's cgroup (Linux; 0 = none, "max", or unreadable).
+// mem_cgroup_max: the cgroup v2 memory.max of this process's OWN (leaf) cgroup (Linux; 0 = none, "max", or unreadable).
+//   Known floor: a limit set on an ANCESTOR cgroup (a systemd slice's MemoryMax) and cgroup v1's memory.limit_in_bytes
+//   are not read, so there the default falls back to physical RAM.
 // mem_pressure: 0 unknown, 1 normal, 2 warning, 3 critical. macOS kern.memorystatus_vm_pressure_level (1/2/4);
 //   Linux /proc/pressure/memory, critical when "full avg10" (every non-idle task stalled on memory, 10 s mean)
 //   reaches 20%, warning when "some avg10" does. Integer percent only — no float parse, no locale.
@@ -597,7 +599,7 @@ inline std::uint64_t mem_physical()
 }
 inline std::uint64_t mem_cgroup_max()
 {
-    char buf[ 512 ];
+    char buf[ 4096 ];   // a v1 host lists one line per controller before the "0::" line; 4 KiB holds every layout seen
     if( procfs::read_small( "/proc/self/cgroup", buf, sizeof( buf ) ) == 0 )
     {
         return 0;
@@ -1068,11 +1070,45 @@ inline bool path_is_system_dir( std::string_view path )
     {
         path.remove_suffix( 1 );
     }
+    // '\\' == '/', and ASCII case folded only on Windows (case-insensitive paths)
+    const auto sameChar = []( char x, char y )
+    {
+        if constexpr( kWindows )
+        {
+            x = x == '\\' ? '/' : ( x >= 'A' && x <= 'Z' ) ? char( x - 'A' + 'a' ) : x;
+            y = y == '\\' ? '/' : ( y >= 'A' && y <= 'Z' ) ? char( y - 'A' + 'a' ) : y;
+        }
+        return x == y;
+    };
+    const auto sameDir = [ & ]( std::string_view a, std::string_view b )
+    {
+        if( b.size() > 1 && ( b.back() == '/' || b.back() == '\\' ) )
+        {
+            b.remove_suffix( 1 );
+        }
+        if( a.size() != b.size() )
+        {
+            return false;
+        }
+        for( std::size_t i = 0; i < a.size(); ++i )
+        {
+            if( !sameChar( a[ i ], b[ i ] ) )
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+    // the directory itself, or anything below it — for the trees that hold no user project at any depth
+    const auto underDir = [ & ]( std::string_view dir )
+    {
+        return sameDir( path, dir ) || ( path.size() > dir.size() && sameDir( path.substr( 0, dir.size() ), dir ) && ( path[ dir.size() ] == '/' || path[ dir.size() ] == '\\' ) );
+    };
     const auto anyOf = [ & ]( std::initializer_list<std::string_view> list )
     {
         for( const std::string_view d : list )
         {
-            if( path == d )
+            if( sameDir( path, d ) )
             {
                 return true;
             }
@@ -1081,28 +1117,18 @@ inline bool path_is_system_dir( std::string_view path )
     };
     if constexpr( kWindows )
     {
-        // Windows spells these per machine, so they are read from the environment: %WINDIR% (C:/Windows), the two
-        // Program Files trees, ProgramData, and the parent of the profiles. Compared case-insensitively, '\\' == '/'.
-        const auto sameDir = []( std::string_view a, std::string_view b )
+        // Windows spells these per machine, so they are read from the environment. %WINDIR% is a whole subtree (a
+        // service's default cwd is %WINDIR%/System32); the Program Files trees and ProgramData are the directories
+        // themselves; X:/Users is the parent of every profile.
+        for( const char* name : { "WINDIR", "SystemRoot" } )
         {
-            if( a.size() != b.size() )
+            const char* value = std::getenv( name );
+            if( value != nullptr && *value != '\0' && underDir( value ) )
             {
-                return false;
+                return true;
             }
-            for( std::size_t i = 0; i < a.size(); ++i )
-            {
-                char x = a[ i ] == '\\' ? '/' : a[ i ];
-                char y = b[ i ] == '\\' ? '/' : b[ i ];
-                x = ( x >= 'A' && x <= 'Z' ) ? char( x - 'A' + 'a' ) : x;
-                y = ( y >= 'A' && y <= 'Z' ) ? char( y - 'A' + 'a' ) : y;
-                if( x != y )
-                {
-                    return false;
-                }
-            }
-            return true;
-        };
-        for( const char* name : { "WINDIR", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData" } )
+        }
+        for( const char* name : { "ProgramFiles", "ProgramFiles(x86)", "ProgramData" } )
         {
             const char* value = std::getenv( name );
             if( value != nullptr && *value != '\0' && sameDir( path, value ) )
@@ -1110,24 +1136,26 @@ inline bool path_is_system_dir( std::string_view path )
                 return true;
             }
         }
-        if( path.size() == 8 && sameDir( path.substr( 2 ), "/Users" ) && path[ 1 ] == ':' )
-        {
-            return true;   // X:/Users — the parent of every profile
-        }
-        return false;
+        return path.size() == 8 && path[ 1 ] == ':' && sameDir( path.substr( 2 ), "/Users" );
     }
     else if constexpr( kApple )
     {
-        return anyOf( { "/System", "/Library", "/Applications", "/Users", "/Volumes", "/usr", "/usr/local", "/usr/lib", "/usr/share",
-                        "/bin", "/sbin", "/opt", "/cores", "/dev", "/etc", "/tmp", "/var", "/private", "/private/etc", "/private/tmp",
-                        "/private/var", "/private/var/tmp", "/private/var/folders", "/Library/Developer", "/System/Volumes/Data" } );
+        // /System is a whole subtree except the data volume's mirror of the user's files (/System/Volumes/Data/…)
+        if( underDir( "/System" ) && !( path.size() > 21 && underDir( "/System/Volumes/Data" ) && !sameDir( path, "/System/Volumes/Data" ) ) )
+        {
+            return true;
+        }
+        return underDir( "/dev" )
+            || anyOf( { "/Library", "/Applications", "/Users", "/Volumes", "/usr", "/usr/local", "/usr/lib", "/usr/share", "/bin", "/sbin",
+                        "/opt", "/cores", "/etc", "/tmp", "/var", "/private", "/private/etc", "/private/tmp", "/private/var",
+                        "/private/var/tmp", "/private/var/folders", "/Library/Developer" } );
     }
     else
     {
-        return anyOf( { "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib32", "/lib64", "/libx32", "/media", "/mnt", "/opt",
-                        "/proc", "/root", "/run", "/sbin", "/snap", "/srv", "/sys", "/tmp", "/usr", "/usr/bin", "/usr/include",
-                        "/usr/lib", "/usr/lib64", "/usr/local", "/usr/sbin", "/usr/share", "/usr/src", "/var", "/var/lib", "/var/log",
-                        "/var/tmp", "/nix", "/nix/store" } );
+        return underDir( "/proc" ) || underDir( "/sys" ) || underDir( "/dev" )
+            || anyOf( { "/bin", "/boot", "/etc", "/home", "/lib", "/lib32", "/lib64", "/libx32", "/media", "/mnt", "/opt", "/root", "/run",
+                        "/sbin", "/snap", "/srv", "/tmp", "/usr", "/usr/bin", "/usr/include", "/usr/lib", "/usr/lib64", "/usr/local",
+                        "/usr/sbin", "/usr/share", "/usr/src", "/var", "/var/lib", "/var/log", "/var/tmp", "/nix", "/nix/store" } );
     }
 }
 }   // namespace rw::os

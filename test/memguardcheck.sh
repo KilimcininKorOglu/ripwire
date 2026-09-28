@@ -36,7 +36,6 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 echo "memguardcheck: BIN=$BIN"
-unset RIPWIRE_MAX_MEMORY RIPWIRE_TEST_MEMGUARD_UNIT
 
 # ── fixtures ────────────────────────────────────────────────────────────────────────────────────────────────
 # FX: 72 C files in 4 directories, each function calling the previous one (a real call graph to rank).
@@ -58,7 +57,9 @@ git -C "$GITHOME" init -q 2>/dev/null
 
 mcp_call(){   # $1 = cwd, $2.. = extra argv; stdin = request lines (after initialize)
     local cwd="$1"; shift
-    { printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}'; cat; } | ( cd "$cwd" && "$BIN" --mcp "$@" 2>/dev/null )
+    # S7 fence: a regression that let a server crawl "/" or a system tree stops at 2,000 entries and 120 s, never the disk
+    { printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}'; cat; } \
+        | ( cd "$cwd" && RIPWIRE_TEST_MEMGUARD="${RIPWIRE_TEST_MEMGUARD:-crawl:2000}" perl -e 'alarm shift; exec @ARGV' 120 "$BIN" --mcp "$@" 2>/dev/null )
 }
 mcp_field(){  # $1 = response file, $2 = id, $3 = error|text|<envelope key>
     python3 - "$1" "$2" "$3" <<'PY'
@@ -200,7 +201,7 @@ if command -v jq >/dev/null 2>&1; then
         jq -n --arg cwd "$2" --arg p "where is the parser defined" "{cwd:\$cwd, prompt:\$p, session_id:\"s1\"} + $4" \
             | ( cd "$2" && HOME="$3" PATH="$SHIM:$PATH" RIPWIRE_DATA_HOME="$TMP/data" TMPDIR="$TMP/hooktmp" bash "$ROOT/hooks/$1" ) >"$TMP/hook.out" 2>/dev/null
         hookrc=$?
-        hookcalls="$( [ -f "$TMP/shim.calls" ] && grep -c . "$TMP/shim.calls" || echo 0 )"
+        hookcalls="$( grep -c . "$TMP/shim.calls" 2>/dev/null )"; hookcalls="${hookcalls:-0}"   # a bare `ripwire` (the rule probe) logs an empty line: not a crawl
     }
     for h in ripwire-claude-route.sh ripwire-codex-route.sh; do
         for case_ in "$GITHOME:$GITHOME" "/:$HOMEDIR"; do
@@ -287,10 +288,22 @@ if [ "$rc" = 0 ] && case "$hdr" in *"files=72 "*"memory_stop=parse"*) true;; *) 
 else
     no "(B2) rc=$rc header: $hdr"
 fi
-if [ -n "$parsed" ] && [ "$parsed" -ge 10 ] && [ "$parsed" -lt 72 ]; then
-    ok "(B2b) memory_parsed=$parsed of files=72"
+if [ "$parsed" = 10 ]; then
+    ok "(B2b) memory_parsed=10 of files=72: the first 10 files in sorted order, whatever order the pool drew"
 else
-    no "(B2b) memory_parsed=${parsed:-<none>}"
+    no "(B2b) memory_parsed=${parsed:-<none>} (want exactly 10)"
+fi
+run_trip parse:10 "$FX" --max-memory=64M --no-cache >"$TMP/b2r.out" 2>/dev/null
+for i in 2 3 4; do run_trip parse:10 "$FX" --max-memory=64M --no-cache >"$TMP/b2r$i.out" 2>/dev/null; done
+if cmp -s "$TMP/b2.out" "$TMP/b2r.out" && cmp -s "$TMP/b2.out" "$TMP/b2r2.out" && cmp -s "$TMP/b2.out" "$TMP/b2r3.out" && cmp -s "$TMP/b2.out" "$TMP/b2r4.out"; then
+    ok "(B2f) a parse-stopped map is byte-identical across five runs"
+else
+    no "(B2f) parse-stopped runs differ (the kept set followed the pool's draw order)"
+fi
+if grep -q 'f p="a/f00.c"' "$TMP/b2.out" && ! grep -q 'p="d/' "$TMP/b2.out"; then
+    ok "(B2g) the kept files are the head of the sorted list (a/ present, d/ absent)"
+else
+    no "(B2g) the kept set is not the sorted prefix"
 fi
 if xmllint --noout "$TMP/b2.out" 2>/dev/null; then
     ok "(B2c) the parse-stopped map is well-formed"
@@ -302,14 +315,18 @@ if perl -ne 'print $1 if /^(<!-- ripwire map.*?-->)/' "$TMP/b2.out" | grep -q 'm
 else
     no "(B2d) the legend does not define memory_parsed="
 fi
-mkdir -p "$TMP/cachedir"
-TMPDIR="$TMP/cachedir" run_trip parse:10 "$FX" --max-memory=64M >/dev/null 2>&1
-TMPDIR="$TMP/cachedir" "$BIN" "$FX" >"$TMP/b2e.out" 2>/dev/null
-"$BIN" "$FX" --no-cache >"$TMP/b2f.out" 2>/dev/null
-if cmp -s "$TMP/b2e.out" "$TMP/b2f.out"; then
-    ok "(B2e) a partial parse was never cached: the next run is whole"
+# (B2e) the WARM path: a full run fills the cache, half the files change, a parse stop runs on that cache — which must
+#       not be written — and the next warm run equals a cold one (a cut warm run that saved would serve the gap)
+FXW="$TMP/fxw"; cp -R "$FX" "$FXW"; mkdir -p "$TMP/cachedir"
+TMPDIR="$TMP/cachedir" "$BIN" "$FXW" >/dev/null 2>&1
+for f in "$FXW"/a/*.c "$FXW"/b/*.c; do printf 'int %s_extra( void ) { return 0; }\n' "$( basename "${f%.c}" )$( basename "$( dirname "$f" )" )" >>"$f"; done
+TMPDIR="$TMP/cachedir" run_trip parse:5 "$FXW" --max-memory=64M >/dev/null 2>&1
+TMPDIR="$TMP/cachedir" "$BIN" "$FXW" >"$TMP/b2e.out" 2>/dev/null
+"$BIN" "$FXW" --no-cache >"$TMP/b2f.out" 2>/dev/null
+if cmp -s "$TMP/b2e.out" "$TMP/b2f.out" && grep -q 'extra' "$TMP/b2e.out"; then
+    ok "(B2e) a warm partial parse was never cached: the next warm run equals a cold one"
 else
-    no "(B2e) a later run differs from a clean one"
+    no "(B2e) the warm run after a cut differs from a cold one (files= $( grep -oE 'files=[0-9]+ symbols=[0-9]+' "$TMP/b2e.out" | head -1 ) vs $( grep -oE 'files=[0-9]+ symbols=[0-9]+' "$TMP/b2f.out" | head -1 ))"
 fi
 
 # (B3) nothing built yet when the guard trips: exit 5, one line naming the limit and both overrides, no map
@@ -386,6 +403,85 @@ if grep -q '"id":4' "$TMP/b7.out"; then
     ok "(B7c) the server stayed up (tools/list answered)"
 else
     no "(B7c) no answer to id=4"
+fi
+
+# (B8) the REAL reading (no seam): this repo's src/ peaks well over 64M, so the hard line after the ingest fires
+"$BIN" "$ROOT/src" --no-cache --max-memory=64M >"$TMP/b8.out" 2>"$TMP/b8.err"; rc=$?
+if [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ingest' "$TMP/b8.err" && [ ! -s "$TMP/b8.out" ]; then
+    ok "(B8) a real footprint over --max-memory=64M (src/, no seam): exit 5 with the ingest line"
+else
+    no "(B8) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b8.err" | head -c 250 )"
+fi
+# (B8b) the seam is ADDITIVE: a trip that never fires does not switch the real guard off
+RIPWIRE_TEST_MEMGUARD=crawl:999999999 "$BIN" "$ROOT/src" --no-cache --max-memory=64M >/dev/null 2>"$TMP/b8b.err"; rc=$?
+if [ "$rc" = 5 ]; then
+    ok "(B8b) RIPWIRE_TEST_MEMGUARD cannot disable the guard (crawl:999999999 still exits 5 on src/)"
+else
+    no "(B8b) rc=$rc — the test variable turned the real guard off"
+fi
+
+# (B9) the pressure path: a pressure stop is disclosed as such, and a pressure stop with nothing built says pressure
+run_trip pressure:30 "$FX" --no-cache >"$TMP/b9.out" 2>"$TMP/b9.err"; rc=$?
+hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b9.out" | head -1 )"
+if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=crawl"*"memory_pressure=1"*) true;; *) false;; esac \
+   && perl -ne 'print $1 if /^(<!-- ripwire map.*?-->)/' "$TMP/b9.out" | grep -q 'memory_pressure=' \
+   && grep -q '^ripwire: .*critical system memory pressure' "$TMP/b9.err"; then
+    ok "(B9) a pressure stop: memory_pressure=1 in the header, defined in the legend, named on stderr"
+else
+    no "(B9) rc=$rc header: $hdr stderr: $( grep '^ripwire:' "$TMP/b9.err" | head -c 200 )"
+fi
+run_trip pressure:1 "$FX" --no-cache >/dev/null 2>"$TMP/b9b.err"; rc=$?
+if [ "$rc" = 5 ] && grep -q '^ripwire: critical system memory pressure' "$TMP/b9b.err"; then
+    ok "(B9b) a pressure stop with nothing built: exit 5, the line names the pressure, not a limit"
+else
+    no "(B9b) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b9b.err" | head -c 200 )"
+fi
+
+# (B10) nothing derived from a cut ingest is persisted (review B1): a --quality-delta whose HEAD ingest the guard cut
+#       exits 5 with the line, and the NEXT run, with no trip, equals one on a fresh cache directory
+QD="$TMP/qd"; cp -R "$FX" "$QD"
+git -C "$QD" init -q && git -C "$QD" add -A && git -C "$QD" -c user.name=t -c user.email=t@example.com commit -qm base
+rm -rf "$QD/c" "$QD/d"
+mkdir -p "$TMP/qcache" "$TMP/qfresh" "$TMP/qfresh2"
+( cd "$QD" && TMPDIR="$TMP/qcache" RIPWIRE_TEST_MEMGUARD=crawl:50 "$BIN" . --quality-delta >/dev/null 2>"$TMP/b10a.err" ); rc=$?
+if [ "$rc" = 5 ] && grep -q '^ripwire: the memory guard stopped an ingest this answer depends on' "$TMP/b10a.err"; then
+    ok "(B10) --quality-delta over a cut HEAD ingest: exit 5 with the memory line"
+else
+    no "(B10) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b10a.err" | head -c 200 )"
+fi
+( cd "$QD" && TMPDIR="$TMP/qcache" "$BIN" . --quality-delta >"$TMP/b10b.out" 2>/dev/null ); rcb=$?
+( cd "$QD" && TMPDIR="$TMP/qfresh" "$BIN" . --quality-delta >"$TMP/b10c.out" 2>/dev/null ); rcc=$?
+if [ "$rcb" = "$rcc" ] && cmp -s "$TMP/b10b.out" "$TMP/b10c.out"; then
+    ok "(B10b) the next --quality-delta equals a fresh-cache one: no partial snapshot was persisted"
+else
+    no "(B10b) rc=$rcb vs fresh rc=$rcc; the persisted snapshot differs ($( grep -oE 'regressions="[0-9]+"' "$TMP/b10b.out" ) vs $( grep -oE 'regressions="[0-9]+"' "$TMP/b10c.out" ))"
+fi
+# (B10c) MCP quality_baseline over a cut ingest refuses and writes nothing; MCP quality_delta discloses the cut HEAD ingest
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"quality_baseline\",\"arguments\":{\"path\":\"$QD\"}}}" \
+    | TMPDIR="$TMP/qcache" RIPWIRE_TEST_MEMGUARD=crawl:30 mcp_call "$TMP" >"$TMP/b10d.out"
+if case "$( mcp_field "$TMP/b10d.out" 2 error )" in *"memory guard"*) true;; *) false;; esac && [ ! -e "$QD/.ripwire_quality_baseline" ]; then
+    ok "(B10c) MCP quality_baseline over a cut ingest refuses and writes no sidecar"
+else
+    no "(B10c) id=2: $( head -c 300 "$TMP/b10d.out" ); sidecar present: $( [ -e "$QD/.ripwire_quality_baseline" ] && echo yes || echo no )"
+fi
+rm -f "$QD/.ripwire_quality_baseline"
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"quality_delta\",\"arguments\":{\"path\":\"$QD\"}}}" \
+    | TMPDIR="$TMP/qfresh2" RIPWIRE_TEST_MEMGUARD=crawl:50 mcp_call "$TMP" >"$TMP/b10e.out"
+case "$( mcp_field "$TMP/b10e.out" 2 _memory_stop )$( mcp_field "$TMP/b10e.out" 2 error )" in *"memory guard"*) ok "(B10d) MCP quality_delta over a cut HEAD ingest discloses it (_memory_stop or a refusal)";;
+    *) no "(B10d) id=2 carries no memory disclosure: $( head -c 300 "$TMP/b10e.out" )";; esac
+
+# (B11) a verb's non-zero verdict from a partial ingest still gets the line; --html and --index-out never pass silently
+run_trip crawl:30 "$FX" --no-cache --html >/dev/null 2>"$TMP/b11.err"; rc=$?
+if [ "$rc" = 5 ] && grep -q '^ripwire: .*--html cannot answer from a partial index' "$TMP/b11.err"; then
+    ok "(B11) --html over a partial ingest refuses (exit 5, names --html)"
+else
+    no "(B11) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b11.err" | head -c 200 )"
+fi
+run_trip parse:10 "$FX" --no-cache --index-out="$TMP/idx" >/dev/null 2>"$TMP/b11b.err"; rc=$?
+if [ "$rc" = 5 ] && grep -q '^ripwire: the memory guard stopped an ingest this answer depends on' "$TMP/b11b.err"; then
+    ok "(B11b) --index-out over a cut parse: rc=$rc and the memory line (not only 'failed to write')"
+else
+    no "(B11b) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b11b.err" | head -c 250 )"
 fi
 
 echo "=== (C) a default run is byte-identical to the guard made huge ==="

@@ -27,21 +27,29 @@
 //
 // THE COST. Nothing is measured until five seconds after an ingest starts (owner decision, #350: the runaway adds
 // ~15 MB per 5 s), and then at most once per five seconds: the crawl looks every 1,024 entries, the parse on each file
-// completion, and only the thread that wins the time slot pays the syscall. A run shorter than five seconds — every
-// normal run on every tree we measure — reads the footprint once at ingest start and never again, and its output is
-// byte-identical to a run with no guard at all (test/memguardcheck.sh (C)). No thread, no timer, no signal handler.
+// completion, and only the thread that wins the time slot pays the syscall. A CLI run shorter than five seconds reads
+// the footprint three times — at ingest start, after the ingest and after the graph build (the hard line) — and an MCP
+// tool call once more; none of it changes a byte of output unless a line is crossed (test/memguardcheck.sh (C)). No
+// thread, no timer, no signal handler.
 //
 // THE STOP. A soft stop sets an atomic flag the crawl loop and the parse workers read before the next unit of work,
 // records WHY through DISCLOSE on IngestResult::memoryStop, and lets ingest() finish with what it has: the crawl keeps
-// the entries it saw (then sorts them, as always); the parse keeps the unbroken prefix of its work order that
-// finished (a worker checks the flag BEFORE claiming a file, so every claimed file completes). A partial parse is
-// never written to the cache. Whether the partial ingest may answer is the caller's decision — main.cpp answers the
+// the entries it saw (then sorts them, as always); the parse keeps the longest prefix of the SORTED file list whose
+// files were all claimed (a worker checks the flag BEFORE claiming a file, so every claimed file completes; facts of a
+// claimed file past that prefix are dropped). Nothing derived from a partial ingest is ever persisted — not the ingest
+// cache, not a quality snapshot, not a baseline. Whether the partial ingest may answer is the caller's decision — main.cpp answers the
 // default map with memory_stop= in its header and refuses every other verb (exit 5); the MCP server answers with
 // `_memory_stop` in the envelope.
 //
-// THE TEST SEAM. RIPWIRE_TEST_MEMGUARD=crawl:N | parse:N | request:N replaces the footprint READING with a trip at
-// the Nth guarded crawl entry, the Nth parsed file, or the Nth MCP tool-call pre-check, and turns the time gate off, so
-// test/memguardcheck.sh can drive every stop path deterministically. The stops themselves are the real code paths.
+// THE TEST SEAM. RIPWIRE_TEST_MEMGUARD=crawl:N | pressure:N | parse:N | request:N ADDS a trip — at the Nth crawl entry
+// (over the line, or under critical pressure), once the first N files in sorted order are claimed by the parse, or at
+// the Nth and later MCP tool calls — so test/memguardcheck.sh can drive every stop path deterministically. It never
+// replaces a real reading: every real line, the time gate and the hard line still apply, so it can only make a run
+// stricter, never turn the guard off.
+//
+// REPEATABILITY. A crawl stop keeps what the walk had seen, then sorts it. A parse stop keeps the first K files of the
+// sorted list whose parse was claimed — facts of any later file the pool happened to reach first are dropped — so a
+// partial answer is a function of the tree and memory_parsed=K alone: two runs cut at the same K print the same bytes.
 
 #include <algorithm>
 #include <atomic>
@@ -109,9 +117,10 @@ inline std::string limitSpelling( std::uint64_t bytes )
 enum class TripAt : std::uint8_t
 {
     Nowhere,
-    Crawl,
-    Parse,
-    Request,
+    Crawl,      // crawl:N    — the Nth crawl entry reads as over the crawl line
+    Pressure,   // pressure:N — the Nth crawl entry reads as critical OS memory pressure
+    Parse,      // parse:N    — the parse stops once the first N files (sorted order) are claimed: memory_parsed=N exactly
+    Request,    // request:N  — the Nth MCP tool call reads as over the hard limit
 };
 struct TestTrip
 {
@@ -145,7 +154,8 @@ inline const TestTrip& testTrip() noexcept
             n = n * 10 + std::uint64_t( c - '0' );
         }
         const std::string_view phase = v.substr( 0, colon );
-        t.at    = phase == "crawl" ? TripAt::Crawl : phase == "parse" ? TripAt::Parse : phase == "request" ? TripAt::Request : TripAt::Nowhere;
+        t.at    = phase == "crawl" ? TripAt::Crawl : phase == "pressure" ? TripAt::Pressure : phase == "parse" ? TripAt::Parse
+                : phase == "request" ? TripAt::Request : TripAt::Nowhere;
         t.index = n;
         return t;
     }();
@@ -165,7 +175,9 @@ inline void install( std::uint64_t bytes, Source source )
 }
 
 // ── the per-ingest watch ───────────────────────────────────────────────────────────────────────────────────
-// One per ingest() call: the crawl and the parse pool share it, the parse workers from several threads.
+// One per ingest() call: the crawl and the parse pool share it, the parse workers from several threads. The test seam is
+// ADDITIVE: it adds a trip at a fixed unit of work and never removes a real reading, the time gate or the hard line, so
+// the variable can only make a run stricter (the RIPWIRE_TEST_PR_MAXITERS convention: it can only LOWER).
 class Watch
 {
 public:
@@ -173,12 +185,8 @@ public:
         : trip_( testTrip() )
         , hardBytes_( limits().hardBytes )
     {
-        seam_ = trip_.at == TripAt::Crawl || trip_.at == TripAt::Parse;
-        if( !seam_ )
-        {
-            baseFootprint_ = os::mem_footprint();
-            nextCheckTick_.store( GateClock::now().time_since_epoch().count() + kCheckIntervalTicks, std::memory_order_relaxed );
-        }
+        baseFootprint_ = os::mem_footprint();
+        nextCheckTick_.store( GateClock::now().time_since_epoch().count() + kCheckIntervalTicks, std::memory_order_relaxed );
     }
     Watch( const Watch& )            = delete;
     Watch& operator=( const Watch& ) = delete;
@@ -190,9 +198,9 @@ public:
         {
             return true;
         }
-        if( seam_ )
+        if( entryCount + 1 == trip_.index && ( trip_.at == TripAt::Crawl || trip_.at == TripAt::Pressure ) )
         {
-            return trip_.at == TripAt::Crawl && entryCount + 1 >= trip_.index && tripSoft( false );
+            return tripSoft( trip_.at == TripAt::Pressure );
         }
         if( ( entryCount & ( kCrawlStride - 1 ) ) != 0 || !claimTimeSlot() )
         {
@@ -207,22 +215,26 @@ public:
     // the parse: a worker asks BEFORE claiming its next file (a relaxed load, nothing else)
     [[nodiscard]] bool isStopped() const noexcept { return stopped_.load( std::memory_order_relaxed ); }
 
-    // the parse: a worker reports each finished file; may trip the stop for every worker
+    // the parse seam: a worker reports each CLAIM by fileId; the stop trips once every file below N (sorted order) is
+    // claimed, so a seam partial always keeps exactly the first N files whatever order the pool drew them in
+    void parseClaimed( std::size_t fileId ) noexcept
+    {
+        if( trip_.at == TripAt::Parse && fileId < trip_.index
+            && seamPrefixClaimed_.fetch_add( 1, std::memory_order_relaxed ) + 1 == trip_.index )
+        {
+            (void)tripSoft( false );
+        }
+    }
+    // the seam's cutoff in sorted order, or SIZE_MAX when no parse seam is set
+    [[nodiscard]] std::size_t seamParseCutoff() const noexcept
+    {
+        return trip_.at == TripAt::Parse ? std::size_t( trip_.index ) : SIZE_MAX;
+    }
+
+    // the parse: a worker reports each finished file; may trip the stop for every worker (time-gated real reading)
     void parseFileDone() noexcept
     {
-        if( stopped_.load( std::memory_order_relaxed ) )
-        {
-            return;
-        }
-        if( seam_ )
-        {
-            if( trip_.at == TripAt::Parse && parsedSeen_.fetch_add( 1, std::memory_order_relaxed ) + 1 >= trip_.index )
-            {
-                (void)tripSoft( false );
-            }
-            return;
-        }
-        if( !claimTimeSlot() )
+        if( stopped_.load( std::memory_order_relaxed ) || !claimTimeSlot() )
         {
             return;
         }
@@ -279,15 +291,14 @@ private:
         return true;
     }
 
-    const TestTrip&           trip_;
-    const std::uint64_t       hardBytes_;
-    bool                      seam_          = false;
-    std::uint64_t             baseFootprint_ = 0;
+    const TestTrip&             trip_;
+    const std::uint64_t         hardBytes_;
+    std::uint64_t               baseFootprint_ = 0;
     std::atomic<GateClock::rep> nextCheckTick_{ 0 };
-    std::atomic<bool>         stopped_{ false };
-    std::atomic<bool>         trippedOnce_{ false };
-    bool                      byPressure_    = false;
-    std::atomic<std::uint64_t> parsedSeen_{ 0 };
+    std::atomic<bool>           stopped_{ false };
+    std::atomic<bool>           trippedOnce_{ false };
+    bool                        byPressure_    = false;
+    std::atomic<std::uint64_t>  seamPrefixClaimed_{ 0 };
 };
 
 // ── the hard line: between phases (CLI) and before each MCP tool call ──────────────────────────────────────
@@ -300,27 +311,20 @@ inline bool overHardLimit()
     {
         return false;
     }
-    if( testTrip().at == TripAt::Request )
-    {
-        return false;   // the request seam answers through requestOverHardLimit only
-    }
-    if( testTrip().at != TripAt::Nowhere )
-    {
-        return false;   // a crawl/parse seam replaces the reading: the phases between answer from what was built
-    }
     const std::uint64_t footprint = os::mem_footprint();
     return footprint != 0 && footprint >= l.hardBytes;
 }
 
-// the MCP pre-check: overHardLimit, plus the request seam (the Nth tool call reads as over)
-inline bool requestOverHardLimit()
+// the MCP request seam: true for the Nth and later tool calls under request:N (counts one call per invocation). The
+// pre-check is `requestSeamTrips() || overHardLimit()` — additive, like every seam.
+inline bool requestSeamTrips()
 {
-    if( testTrip().at == TripAt::Request )
+    if( testTrip().at != TripAt::Request )
     {
-        static std::atomic<std::uint64_t> requestsSeen{ 0 };
-        return requestsSeen.fetch_add( 1, std::memory_order_relaxed ) + 1 >= testTrip().index;
+        return false;
     }
-    return overHardLimit();
+    static std::atomic<std::uint64_t> requestsSeen{ 0 };
+    return requestsSeen.fetch_add( 1, std::memory_order_relaxed ) + 1 >= testTrip().index;
 }
 
 // ── the backstop: a stop nobody answered for ────────────────────────────────────────────────────────────
@@ -365,6 +369,25 @@ inline std::string hardStopLine( std::string_view where )
     return "memory limit reached during the " + std::string( where ) + " (limit " + limitSpelling( l.hardBytes )
          + ( l.source == Source::Flag ? ", from --max-memory" : l.source == Source::Env ? ", from RIPWIRE_MAX_MEMORY" : ", 65% of this machine's memory" )
          + "); stopped cleanly without an answer — " + std::string( kOverride );
+}
+
+// a stop that left nothing to answer from: a pressure stop names the pressure, a limit stop the limit
+inline std::string nothingBuiltLine( const MemoryStop& stop )
+{
+    if( stop.byPressure )
+    {
+        return "critical system memory pressure stopped the " + std::string( phaseName( stop.phase ) )
+             + " before anything was built; stopped cleanly without an answer — free memory and retry, or pass a smaller root";
+    }
+    return hardStopLine( phaseName( stop.phase ) );
+}
+
+// a verb that cannot carry the disclosure, facing a partial ingest
+inline std::string verbRefusalLine( const MemoryStop& stop, std::string_view verb )
+{
+    const std::string cause = stop.byPressure ? "under critical system memory pressure" : "at its line under the " + limitSpelling( stop.limitBytes ) + " limit";
+    return "the memory guard stopped the " + std::string( phaseName( stop.phase ) ) + " " + cause + "; " + std::string( verb )
+         + " cannot answer from a partial index — " + std::string( kOverride );
 }
 
 // the soft stop's one line (stderr on the CLI, the MCP envelope's _memory_stop)

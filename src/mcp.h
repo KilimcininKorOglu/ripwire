@@ -1208,11 +1208,20 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // tree STATE answered, `_reingest` what the server had to DO to get there. Contract on
             // McpIndex::incrementalPasses, gate test/mcpincrementalcheck.sh. Read BEFORE the verb runs.
             const std::uint64_t passesAtEntry = mcpIndexSlot().incrementalPasses;
+            // #350: ingests INSIDE a tool (a quality snapshot, a baseline, an edit check) and the background prefetch
+            // record their memory-guard stops here; a count that grew during this request means the answer may rest on
+            // a partial ingest even when the resident index is whole, and the envelope says so (textResult).
+            const std::uint32_t stopsAtEntry = memguard::stopCounts().recorded.load( std::memory_order_relaxed );
             const auto textResult = [ & ]( const std::string& text )
             {
                 // stamp FIRST, then the pass count: on a verb that never touched the index, building the
                 // stamp is what forces the rebuild, and one `+` chain would not sequence those two reads.
                 const std::string stamp = indexStamp( path );
+                if( memoryStopNote.empty() && memguard::stopCounts().recorded.load( std::memory_order_relaxed ) > stopsAtEntry )
+                {
+                    memoryStopNote = "the memory guard stopped an ingest this answer depends on (inside this tool, or the "
+                                     "background snapshot), so it may be incomplete — " + std::string( memguard::kOverride );
+                }
                 // R2a: `_assumed_root` — a third envelope sibling (mcpEnvelopeNoteField), emitted ONLY when
                 // the request omitted `path` and the launch-cwd default answered.
                 // Card A3: `_fresh` — a fourth sibling, on EVERY response, because it is the one of these
@@ -1247,12 +1256,26 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                      + "\"" + mcpReingestField( passesAtEntry ) + mcpFreshFields( passesAtEntry )
                      + mcpEnvelopeNoteField( "_assumed_root", assumedRootNote ) + mcpEnvelopeNoteField( "_memory_stop", memoryStopNote ) + "}}";
             };
+            // #350: a refusal composed after an ingest the memory guard cut may name a false cause ("no git HEAD" for a
+            // HEAD tree that was only partly read) — so every error built after a stop carries the guard's sentence too
+            const auto memoryStopSuffix = [ & ]( std::string_view msg ) -> std::string
+            {
+                if( memguard::stopCounts().recorded.load( std::memory_order_relaxed ) <= stopsAtEntry || msg.find( "memory guard" ) != std::string_view::npos )
+                {
+                    return {};
+                }
+                return "; the memory guard stopped an ingest this request ran, which may be the real cause — " + std::string( memguard::kOverride );
+            };
             const auto errResult = [ & ]( int code, const char* msg )
-            { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + msg + "\"}}"; };
+            {
+                const std::string suffix = memoryStopSuffix( msg );
+                return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + msg
+                     + mcpdetail::jsonEscape( suffix ) + "\"}}";
+            };
             // dynamic-message variant (edit verbs build refusal messages that embed symbol names / candidate
             // file:line lists) — JSON-escape so a path with a quote or a control byte can't corrupt the response.
             const auto errResultMsg = [ & ]( int code, const std::string& msg )
-            { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + mcpdetail::jsonEscape( msg ) + "\"}}"; };
+            { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + mcpdetail::jsonEscape( msg + memoryStopSuffix( msg ) ) + "\"}}"; };
             // §B6 M8: the shared not-found renderers, bound to THIS request's index. Seven verbs on both
             // arms answered a bare "symbol not found" — no echo of what the caller typed, no near-miss —
             // while the CLI twin has carried both since A3-F16a and the `flags` verb below carries both
@@ -1595,11 +1618,19 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // #350 layer 3: over the memory guard's hard limit, no tool call starts work — the call is refused by
                 // name and the server stays up (a later call, after memory is released, is served). One footprint
                 // reading per tool call; nothing is measured on any other method.
-                if( !pathsUsageError && memguard::requestOverHardLimit() )
+                // Over the line, the resident index is released first (it is usually most of the footprint) and the
+                // footprint read once more: under the line again, the call proceeds and rebuilds for its own root; still
+                // over, it is refused and the sentence says the server itself must be restarted.
+                if( const bool seamOver = memguard::requestSeamTrips(); !pathsUsageError && ( seamOver || memguard::overHardLimit() ) )
                 {
-                    DISCLOSE( Diagnostics::answerRefused, "mcp: a tool call over the memory guard's hard limit is refused with an MCP error naming the limit" );
-                    resp            = errResultMsg( -32000, memguard::hardStopLine( "session (this server's footprint)" ) );
-                    pathsUsageError = true;   // the skip-flag: no dispatch, no getIndex()
+                    releaseMcpIndexMemory();
+                    if( seamOver || memguard::overHardLimit() )
+                    {
+                        DISCLOSE( Diagnostics::answerRefused, "mcp: a tool call over the memory guard's hard limit, even with the index released, is refused with an MCP error naming the limit" );
+                        resp            = errResultMsg( -32000, memguard::hardStopLine( "session (this server's footprint)" )
+                                                                + "; the resident index was released and the server is still over it — restart the MCP server" );
+                        pathsUsageError = true;   // the skip-flag: no dispatch, no getIndex()
+                    }
                 }
                 if( !pathsUsageError && isMcpEditVerb( name ) )
                 {

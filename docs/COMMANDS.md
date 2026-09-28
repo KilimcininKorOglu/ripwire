@@ -620,7 +620,7 @@ $ ./build/ripwire . --html=<scratch>/aux/map2.html
 (empty)
 ```
 
-**Shaped by:** `--color-by`, `--legend`
+**Shaped by:** `--color-by`, `--legend`, `--max-memory`
 
 **Caveats (stated by the binary):**
 
@@ -2733,7 +2733,7 @@ flowchart LR
 ... [17 more line(s); run it to see the whole thing]
 ```
 
-**Shaped by:** `--zoom`, `--with-graph`, `--legend`, `--limit`
+**Shaped by:** `--zoom`, `--with-graph`, `--legend`, `--limit`, `--max-memory`
 
 ### `--owners[=SYM]`
 
@@ -4389,7 +4389,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=272714e090680fb2 entries=730
+ripwire legend dictionary ripwire.dict/v1 dictv=c36ebba3a250c79d entries=730
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)
@@ -4684,15 +4684,15 @@ $ ./build/ripwire . --max-file-size=8K --top-k=3
 
 **Answers:** the memory guard's limit (default 65% of this machine's memory, env RIPWIRE_MAX_MEMORY) the memory guard is on for every run and silent on normal ones: it measures this process's footprint at most once per 5 s, from 5 s into an ingest.
 
-Past its lines the crawl (growth of limit/8) or the parse (half the limit) stops, and the default map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=, memory_limit=); critical OS memory pressure stops them too. Every other verb refuses a partial index, and at the limit itself ripwire exits 5 with one line naming it. The default is 65% of physical RAM (or of the cgroup's memory.max when lower); this flag, or RIPWIRE_MAX_MEMORY when the flag is absent, replaces it; below 64M is refused.
+Past its lines the crawl (growth of limit/8) or the parse (half the limit) stops, and the default map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=, memory_limit=; a parse stop keeps the first K files in sorted order, so a partial map repeats for a given memory_parsed=K); critical OS memory pressure stops them too. Every other verb (--html and --mermaid included) refuses a partial index, and so does any verb whose own internal ingest was cut; at the limit itself ripwire exits 5 with one line naming it. Nothing derived from a partial ingest is cached. The default is 65% of physical RAM (or of the cgroup's memory.max when lower); this flag, or RIPWIRE_MAX_MEMORY when the flag is absent, replaces it; below 64M is refused.
 
 **Shaped by:** `--mcp`
 
 **Caveats (stated by the binary):**
 
 - the memory guard's limit (default 65% of this machine's memory, env RIPWIRE_MAX_MEMORY) the memory guard is on for every run and silent on normal ones: it measures this process's footprint at most once per 5 s, from 5 s into an ingest.
-- Past its lines the crawl (growth of limit/8) or the parse (half the limit) stops, and the default map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=, memory_limit=);
-- Every other verb refuses a partial index, and at the limit itself ripwire exits 5 with one line naming it.
+- Past its lines the crawl (growth of limit/8) or the parse (half the limit) stops, and the default map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=, memory_limit=;
+- Every other verb (--html and --mermaid included) refuses a partial index, and so does any verb whose own internal ingest was cut;
 
 ### `--refetch`
 
