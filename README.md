@@ -25,28 +25,20 @@ format, exit codes and limits. You do not need it to get started.
 <p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
-<summary><b>Field report: about half the audit and research token spend on a two-day, 20-agent coding engagement</b> — one orchestrating agent directing ~20 coding agents over a ~1,500-file C++/Metal codebase. One engagement, on a version before 0.5; click for the report.</summary>
+<summary><b>Field report: what ripwire contributed to a large multi-agent coding engagement</b> — written by Fable, the frontier model orchestrating ~20 coding agents over two days on a ~1,500-file C++/Metal codebase. Click for the full report.</summary>
 
-Every agent was told to start with ripwire for orientation and to finish with its quality gates. What the orchestrating
-agent reported afterwards:
-
-- **Roughly half the total token spend of the audit and research phase.** This is the operator's estimate for the whole
-  phase, ordinary file reads included. Per call it was steeper: one doc-recall call served the relevant sections of a
-  164 KB planning document in about 6K tokens (~25×), and agents that led with the tool used ~30–40% fewer tool calls.
-- **Two tasks redirected by a single call.** `--callers` found zero production callers for a behaviour the team
-  believed was live. `--edit-check` flagged 5 of 6 call sites of a refactored computation as incompatible, sites a text
-  search had missed.
-- **A dozen-plus real code-quality defects fixed, not waived,** each caught by `--quality-delta` at an agent's
-  "I think I'm done" moment: duplicated routines, a fourth private copy of a shared utility, a near-identical pair with
-  a flipped sign.
-- **Its honest boundary:** the deepest findings came from measurement the agents built, not from the tool; the
-  contract checker over-counted defaulted trailing parameters; and plain grep still won some broad conceptual queries.
-
-*One engagement, reported by the orchestrating model itself; the token figure is the operator's estimate, not a
-controlled measurement, and it predates ripwire 0.5 — the tool has changed a great deal since. Controlled measurements are in [docs/EVALS.md](docs/EVALS.md).*
+> For a single developer, this tool is a good lookup accelerator. For an *orchestrated fleet*, it's load-bearing: it
+> halved the research spend, twice redirected tasks before wasted work, prevented at least one silent-divergence shipped
+> bug, and turned code-quality hygiene from a hope into a per-task mechanical gate. Whole-workflow ~2×; per-lookup
+> 10–25×; and two moments where one call was worth more than the rest of the session's tooling combined.
+>
+> — the report's bottom line
 
 <p align="center"><a href="docs/assets/field-report-multi-agent.jpg"><img src="docs/assets/field-report-multi-agent.jpg"
   alt="The full field report: what ripwire contributed to a large multi-agent coding engagement — headline numbers, where the value concentrated, the honest boundary, and the bottom line" width="720"></a></p>
+
+*The model's own report of one engagement, on a version before 0.5; not a controlled measurement. Controlled
+measurements are in [docs/EVALS.md](docs/EVALS.md).*
 
 </details>
 
