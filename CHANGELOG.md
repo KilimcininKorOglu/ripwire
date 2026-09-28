@@ -13,6 +13,39 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ---
 
+## [Unreleased]
+
+### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
+
+`LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any
+Linux box: libstdc++'s `string_view::_S_compare` computes `n1 - n2` in `size_type`, G1 runs
+`-fsanitize=integer` with no recovery, and the top-level `<string_view>` header is (deliberately) not in
+the libstdc++ ignorelist. Five comparator lambdas ordered string_view operands with `operator<`:
+`pathInIgnoreSet`'s binary_search (the self-run died here on the first ignore probe — `.git` against
+`.github/…`), `changedRowsByDir`'s sort and `hasLexicalSiblingIn`'s lower_bound (`--situ` died here on a
+dirty django clone, measured), and `finalizeNamedIdents`'s two sorts (latent, the `--for`/`--pack-task`
+path). All five now order through `rw::sortutil::svLess` — the same total order, no length subtraction —
+the fix train 21 used for the search side of this family; the ignore-set probe takes the
+`lower_bound`-plus-found-check shape because `--quality-delta` files a third `binary_search( …, svLess )`
+membership wrapper as a duplication clone of docparse's and externalnames' (measured, gating).
+`portablebuildcheck` gains arm #6c, which resolves
+lambda comparator parameter and member types (with planted controls and a disclosed floor), so the shape
+that walked through #6/#6b cannot walk through again. Review hardening: brace-initialized struct members
+resolve, `const string_view&` parameters count as string_view operands, a MIXED comparator (svLess on one
+key, raw operator< on another) is a finding — safe calls blank per call, relational operators judged per
+ternary branch — and `std::ranges::sort( range, comp )` belongs to #6c, so #6b no longer misclassifies it
+as a default-comparator call.
+
+`-DRIPWIRE_ASAN=ON` under GCC — CMakeLists' documented honest-degrade contributor path — failed to BUILD:
+GCC rejects `findByField( … ) != nullptr` in the constant-evaluated table guards under the sanitizer flags
+("not a constant expression") where clang accepts it. `infra/tablelookup.h` gains `findIndexByField`, the
+index-shaped twin (not-found = `std::size( rows )`), and the three `static_assert` predicates in
+ingest_crawl.h now use it; runtime callers keep the pointer form. The row-index diagnostics the asserts
+print are unchanged.
+
+`test/recallpassagecheck.sh` and `test/impactpartitioncheck.sh` are executable now (mode 100755 like every
+other gate); direct `./test/…` invocation exits 126 no more.
+
 ## [0.6.5] — 2026-09-27
 
 
