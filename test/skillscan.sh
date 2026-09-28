@@ -188,17 +188,23 @@ while IFS=: read -r nx_block nx_line nx_text; do
         else nx_bad=1; no "line $nx_line ($nx_text) should stay a net-exfil CRITICAL: ${nx_row:-<no row>}"; fi
     fi
 done < <( awk '/^```bash/ { b++; inb = 1; next } /^```/ { inb = 0; next } inb { print b ":" NR ":" $0 }' "$NX" )
-{ [ "$nx_bad" = 0 ] && [ "$nx_warn" = 7 ] && [ "$nx_crit" = 16 ] && [ "$nx_clean" = 1 ]; } \
-    && ok "(#353) net-exfil: 7 no-credential lines WARN why=\"no-cred-source\", 1 literal-port line clean, 16 credential lines CRITICAL" \
-    || no "(#353) net-exfil severity split: warn=$nx_warn/7 clean=$nx_clean/1 critical=$nx_crit/16"
-[ "$nx_rc" = 2 ] && ok "(#353) a file with a credential-bearing line still exits 2" || no "(#353) netexfil_severity.md exit $nx_rc, want 2"
+if [ "$nx_bad" = 0 ] && [ "$nx_warn" = 7 ] && [ "$nx_crit" = 16 ] && [ "$nx_clean" = 1 ]; then
+    ok "(#353) net-exfil: 7 no-credential lines WARN why=\"no-cred-source\", 1 literal-port line clean, 16 credential lines CRITICAL"
+else
+    no "(#353) net-exfil severity split: warn=$nx_warn/7 clean=$nx_clean/1 critical=$nx_crit/16"
+fi
+if [ "$nx_rc" = 2 ]; then ok "(#353) a file with a credential-bearing line still exits 2"; else no "(#353) netexfil_severity.md exit $nx_rc, want 2"; fi
 # The WARN-only half alone: the issue's own reproduction must not block `wrap` (exit 1, not 2).
 printf '```bash\nfor p in 8080; do curl -sS http://127.0.0.1:$p/v1/models; done\n```\n' >"$TMP/nx_loop.md"
 rc="$( scan_exit "--scan-skill=$TMP/nx_loop.md" )"
-[ "$rc" = 1 ] && ok "(#353) the issue's loopback reproduction exits 1 (WARN), not 2" || no "(#353) the issue's loopback reproduction exits $rc, want 1"
-command -v xmllint >/dev/null 2>&1 \
-    && { xmllint --noout "$TMP/nx_out.txt" 2>/dev/null && ok "(#353) netexfil_severity <skillscan> is xmllint-clean" || no "(#353) netexfil_severity <skillscan> is malformed XML"; } \
-    || ok "xml well-formed (xmllint absent — skipped)"
+if [ "$rc" = 1 ]; then ok "(#353) the issue's loopback reproduction exits 1 (WARN), not 2"; else no "(#353) the issue's loopback reproduction exits $rc, want 1"; fi
+if ! command -v xmllint >/dev/null 2>&1; then
+    ok "xml well-formed (xmllint absent — skipped)"
+elif xmllint --noout "$TMP/nx_out.txt" 2>/dev/null; then
+    ok "(#353) netexfil_severity <skillscan> is xmllint-clean"
+else
+    no "(#353) netexfil_severity <skillscan> is malformed XML"
+fi
 
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then

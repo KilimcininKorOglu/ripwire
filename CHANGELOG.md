@@ -29,7 +29,7 @@ compact and the full legend. On a synthetic 109-line set built from the issue's 
 become 6 CRITICAL (the six `Authorization: Bearer $…` lines) and 103 WARN. Scans with no downgraded row are
 byte-identical. This is a line-local grade and adds no detection. It does not resolve a `$VAR` to its
 assignment, does not tell a token's own service from another host, and does not catch the var-free
-`cat /etc/passwd | curl --data-binary @-` shape the issue also reports. Those need the source-to-sink flow
+`cat /etc/passwd | curl … @-` shape the issue also reports. Those need the source-to-sink flow
 decision, which is still to come. `src/skillscan.h` now names its lineage (NVIDIA SkillSpector), and
 `docs/LINEAGE.md` names it too; its counted row, which moves the repository count README.md and the deck
 restate, is owed with the flow fix. Gated by `test/skillscan.sh` check 18 and its new
