@@ -33,6 +33,7 @@
 #include <climits>         // PATH_MAX
 #include "infra/os.h"      // rw::os::getcwd — R2a: the launch-cwd assumed root (resolved once at startup)
 #include "rootguard.h"      // #350 layer 1: noProjectRootReason — the launch cwd a server may not assume
+#include "memguard.h"       // #350 layer 3: the per-call hard-limit refusal and the _memory_stop sentence
 
 namespace rw
 {
@@ -418,6 +419,19 @@ inline std::string mcpAssumedRootField( const std::string& note )
         return {};
     }
     return ",\"_assumed_root\":\"" + mcpdetail::jsonEscape( note ) + "\"";
+}
+
+// #350: the `_memory_stop` envelope sibling (the mcpAssumedRootField shape): "" on every answer from a whole index, else
+// the guard's sentence — which phase stopped, how many files the answer covers, the limit and how to raise it. Every
+// answer from a memory-guard partial index carries it, because the MCP payloads other than the map have no header of
+// their own to disclose the cut in, and the index is reused until the tree changes.
+inline std::string mcpMemoryStopField( const std::string& note )
+{
+    if( note.empty() )
+    {
+        return {};
+    }
+    return ",\"_memory_stop\":\"" + mcpdetail::jsonEscape( note ) + "\"";
 }
 
 // is `candidatePath` the workspace root itself, or STRICTLY inside it — a path-COMPONENT prefix, so a
@@ -1153,9 +1167,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // tool-call result), costs the same one line, and can never corrupt a verb's own payload format
             // (JSON, XML, or plain text) — so it's the version of "append a trailing marker" that is actually
             // uniform across every verb, per the requirement.
+            std::string memoryStopNote;   // #350: set by indexStamp when the index answering this request is memory-guard partial
             const auto indexStamp = [ & ]( const std::string& root ) -> std::string
             {
                 const McpIndex& mix = getIndex( root );
+                memoryStopNote = mix.ing.memoryStop.isSet() ? memguard::softStopLine( mix.ing ) : std::string();
                 char buf[ 96 ];
                 rw::formatTo( buf, sizeof( buf ), "[index: files={} symbols={} hash={:08x}]",
                                 mix.ing.files.size(), mix.ing.symbols.size(),
@@ -1204,7 +1220,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\""
                      + mcpdetail::jsonEscape( *body ) + "\"}],\"_index\":\"" + mcpdetail::jsonEscape( stamp )
                      + "\"" + mcpReingestField( passesAtEntry ) + mcpFreshFields( passesAtEntry )
-                     + mcpAssumedRootField( assumedRootNote ) + "}}";
+                     + mcpAssumedRootField( assumedRootNote ) + mcpMemoryStopField( memoryStopNote ) + "}}";
             };
             const auto errResult = [ & ]( int code, const char* msg )
             { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + msg + "\"}}"; };
@@ -1536,6 +1552,15 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // try: an allocation excluded from the guard by the guard's own opening line. The
                 // `if( !pathsUsageError )` that used to gate the try from outside is now the first arm of the
                 // dispatch chain below, which is what makes room for this.
+                // #350 layer 3: over the memory guard's hard limit, no tool call starts work — the call is refused by
+                // name and the server stays up (a later call, after memory is released, is served). One footprint
+                // reading per tool call; nothing is measured on any other method.
+                if( !pathsUsageError && memguard::requestOverHardLimit() )
+                {
+                    DISCLOSE( Diagnostics::answerRefused, "mcp: a tool call over the memory guard's hard limit is refused with an MCP error naming the limit" );
+                    resp            = errResultMsg( -32000, memguard::hardStopLine( "session (this server's footprint)" ) );
+                    pathsUsageError = true;   // the skip-flag: no dispatch, no getIndex()
+                }
                 if( !pathsUsageError && isMcpEditVerb( name ) )
                 {
                     if( std::string missingEditArg = missingArgMsg(); !missingEditArg.empty() )

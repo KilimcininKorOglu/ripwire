@@ -200,7 +200,8 @@ if cmp -s "$TMP/b1a.out" "$TMP/b1b.out"; then
 else
     no "(B1f) two runs differ"
 fi
-if [ "$( wc -l <"$TMP/b1a.err" | tr -d ' ' )" = 1 ] && grep -q "memory guard" "$TMP/b1a.err"; then
+# a dev build (no NDEBUG) also traces each DISCLOSE site on stderr as "[math degraded] …"; the user-facing lines are "ripwire: …"
+if [ "$( grep -c '^ripwire:' "$TMP/b1a.err" )" = 1 ] && grep '^ripwire:' "$TMP/b1a.err" | grep -q "memory guard"; then
     ok "(B1g) stderr carries the one-line note too"
 else
     no "(B1g) stderr: $( head -c 300 "$TMP/b1a.err" )"
@@ -252,7 +253,8 @@ if [ ! -s "$TMP/b3.out" ]; then
 else
     no "(B3b) stdout: $( head -c 200 "$TMP/b3.out" )"
 fi
-if [ "$( wc -l <"$TMP/b3.err" | tr -d ' ' )" = 1 ] && grep -q 'memory limit' "$TMP/b3.err" && grep -q '64M' "$TMP/b3.err" && grep -q -- '--max-memory' "$TMP/b3.err" && grep -q 'RIPWIRE_MAX_MEMORY' "$TMP/b3.err"; then
+grep '^ripwire:' "$TMP/b3.err" >"$TMP/b3.line"
+if [ "$( grep -c . "$TMP/b3.line" )" = 1 ] && grep -q 'memory limit' "$TMP/b3.line" && grep -q '64M' "$TMP/b3.line" && grep -q -- '--max-memory' "$TMP/b3.line" && grep -q 'RIPWIRE_MAX_MEMORY' "$TMP/b3.line"; then
     ok "(B3c) one stderr line naming the limit and both overrides"
 else
     no "(B3c) stderr: $( cat "$TMP/b3.err" )"

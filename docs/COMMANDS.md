@@ -50,7 +50,7 @@ Two limits apply to nearly everything here and are not repeated in every section
 
 **security — scan skill files for injection / exfiltration patterns (exit 2 = CRITICAL, 1 = WARN,** — [`--scan-skill`](#--scan-skillfile) · [`--scan-skills`](#--scan-skillsdir) · [`--force`](#--force)
 
-**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--legend-dict`](#--legend-dictroster) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--lsp`](#--lsp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
+**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--legend-dict`](#--legend-dictroster) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--max-memory`](#--max-memorynkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--lsp`](#--lsp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
 
 ---
 
@@ -4389,7 +4389,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=19edccf52334be51 entries=726
+ripwire legend dictionary ripwire.dict/v1 dictv=272714e090680fb2 entries=730
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)
@@ -4680,6 +4680,20 @@ $ ./build/ripwire . --max-file-size=8K --top-k=3
 - default 4MB skip files larger than N bytes (default 4MB;
 - files it drops are counted in the header's skipped_oversize=
 
+### `--max-memory=N[K|M|G]`
+
+**Answers:** the memory guard's limit (default 65% of this machine's memory, env RIPWIRE_MAX_MEMORY) the memory guard is on for every run and silent on normal ones: it measures this process's footprint at most once per 5 s, from 5 s into an ingest.
+
+Past its lines the crawl (growth of limit/8) or the parse (half the limit) stops, and the default map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=, memory_limit=); critical OS memory pressure stops them too. Every other verb refuses a partial index, and at the limit itself ripwire exits 5 with one line naming it. The default is 65% of physical RAM (or of the cgroup's memory.max when lower); this flag, or RIPWIRE_MAX_MEMORY when the flag is absent, replaces it; below 64M is refused.
+
+**Shaped by:** `--mcp`
+
+**Caveats (stated by the binary):**
+
+- the memory guard's limit (default 65% of this machine's memory, env RIPWIRE_MAX_MEMORY) the memory guard is on for every run and silent on normal ones: it measures this process's footprint at most once per 5 s, from 5 s into an ingest.
+- Past its lines the crawl (growth of limit/8) or the parse (half the limit) stops, and the default map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=, memory_limit=);
+- Every other verb refuses a partial index, and at the limit itself ripwire exits 5 with one line naming it.
+
 ### `--refetch`
 
 **Answers:** when the root is a git URL, clone it fresh instead of reusing the cached copy when the root is a git URL, force a fresh clone instead of reusing the cached one (default: reuse forever;
@@ -4740,7 +4754,9 @@ $ ./build/ripwire . --pin-census=<scratch>/aux/pin_census.tsv --top-k=3
 
 ### `--mcp`
 
-**Answers:** persistent index server (parse once, many warm queries) over stdio
+**Answers:** persistent index server (parse once, many warm queries) over stdio persistent index server over stdio.
+
+Roots: `ripwire <root> --mcp` and a request's path= are EXPLICIT and always answered. With neither, a request answers about the directory the server was launched in — unless that directory is $HOME itself (a git repository or not), a filesystem or drive root, or a system tree (/usr, /etc, /System, %WINDIR% ...): then the request is refused with "no project root: <dir> is a home/system directory; pass a project path" and the server stays up. The CLI has no implicit root (a run without <dir> prints usage, or that same line from such a directory). Each tool call over the --max-memory limit is refused by name; an answer from an index the memory guard cut carries _memory_stop in its envelope.
 
 **Try it**
 
@@ -4756,6 +4772,11 @@ $ ./build/ripwire '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jso
 ```
 
 **Shaped by:** `--no-stable`, `--no-redact`, `--agent`, `--lsp`, `--listen`
+
+**Caveats (stated by the binary):**
+
+- With neither, a request answers about the directory the server was launched in — unless that directory is $HOME itself (a git repository or not), a filesystem or drive root, or a system tree (/usr, /etc, /System, %WINDIR% ...): then the request is refused with "no project root: <dir> is a home/system directory;
+- Each tool call over the --max-memory limit is refused by name;
 
 ### `--lsp`
 

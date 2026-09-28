@@ -15,6 +15,28 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
+
+ripwire measured none of its own memory, so a large tree (#350: a non-git home directory, 67 GB) could grow it until
+the machine swapped. `src/memguard.h` now bounds every ingest. The limit is 65% of the machine's memory (physical
+RAM, or the cgroup v2 `memory.max` when lower); `--max-memory=N[K|M|G]` or `RIPWIRE_MAX_MEMORY` replaces it (the flag
+wins; below 64M is refused as a typo). The footprint is read through new `os::` probes — macOS `phys_footprint`,
+Linux `/proc/self/statm`, Windows `PrivateUsage` — at most once per five seconds, from five seconds into an ingest,
+so a run shorter than that performs one footprint read and its output is byte-identical to a run with the guard
+made huge (gate arm (C)). The crawl stops when the footprint has grown by an eighth of the limit, the parse at half
+of it (keeping the unbroken prefix of its work order that finished; a partial parse is never cached), and critical
+OS memory pressure (macOS `kern.memorystatus_vm_pressure_level`, Linux PSI `full avg10` ≥ 20%, Windows the low-memory
+notification) stops either once the process holds at least max(256 MiB, limit/8). The default map then answers from
+what was built with `memory_stop=`, `memory_parsed=`, `memory_limit=` and `memory_pressure=` in its header (each
+defined in the compact legend; absent on every run the guard did not stop) and one stderr line. Every other verb
+refuses a partial index, and past the limit itself — or when nothing was built — ripwire exits **5** (new exit code)
+with one line naming the limit and the override. The MCP server refuses a tool call over the limit by name and stays
+up; every answer from an index the guard cut carries `_memory_stop` in its envelope. A stop inside a verb's own
+secondary ingest that the verb does not read turns a CLI exit into 5 with one line, so it cannot pass as whole.
+Gate: `test/memguardcheck.sh` (B)–(D), driven by the `RIPWIRE_TEST_MEMGUARD=crawl:N|parse:N|request:N` trip seam.
+Deferred: layer 2 (the non-git crawl budget and default heavy-directory pruning) and calibrating the lines against
+llvm-project's measured peak; the per-phase check inside the graph build (main.cpp checks between phases only).
+
 ### Fixed — a root nobody chose is not crawled when it is a home or system directory (#350, layer 1)
 
 An MCP server started in a home directory that is not a git repository crawled the whole tree and reached a 67 GB

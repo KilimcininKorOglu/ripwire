@@ -294,6 +294,26 @@ inline IngestResult mergeWorkspaceIngests( const std::vector<WorkspaceRoot>& roo
                                               //   each root stat-gates against its own blob, so the sum is
                                               //   the honest "files re-extracted this pass" across roots.
     }
+    // #350: a memory-guard stop in ANY root makes the merged corpus partial. The first root to stop names the phase;
+    // memory_parsed= counts the merged files that carry facts (a root whose parse finished contributes all of its own).
+    bool anyParseCut = false;
+    for( const IngestResult& p : parts )
+    {
+        anyParseCut = anyParseCut || p.memoryStop.parseCut;
+    }
+    for( const IngestResult& p : parts )
+    {
+        const IngestResult::MemoryStop& ps = p.memoryStop;
+        IngestResult::MemoryStop&       ms = m.memoryStop;
+        if( ms.phase == IngestResult::MemoryStop::Phase::None )
+        {
+            ms.phase = ps.phase;
+        }
+        ms.parseCut    = ms.parseCut || ps.parseCut;
+        ms.byPressure  = ms.byPressure || ps.byPressure;
+        ms.limitBytes  = std::max( ms.limitBytes, ps.limitBytes );
+        ms.parsedFiles += anyParseCut ? ( ps.parseCut ? ps.parsedFiles : static_cast<std::uint32_t>( p.files.size() ) ) : 0u;
+    }
     m.files.reserve( totFiles );          m.realPaths.reserve( totFiles );   m.fileRoot.reserve( totFiles );
     m.symbols.reserve( totSyms );         m.references.reserve( totRefs );
     m.includes.reserve( totIncs );        m.bindings.reserve( totBinds );    m.bindingAliases.reserve( totFfis );

@@ -104,6 +104,7 @@ struct Config
                                                            // walk. Default OFF: a git root's own ignore rules shape the corpus and
                                                            // the header discloses ignored_files=/ignored_dirs=
     std::size_t      maxFileBytes = kDefaultMaxFileBytes;  // --max-file-size=N[K|M|G]: crawl size ceiling (default 4 MB)
+    std::size_t      maxMemoryBytes = 0;                   // --max-memory=N[K|M|G] (#350): the memory guard's limit; 0 = not given (memguard.h)
     std::string_view scipIndex;                            // --scip=index.scip: SCIP precision overlay — precise edges REPLACE name-based guesses; prov="scip" tags them
     std::string_view pinCensus;                            // --pin-census=FILE: eval-only side file naming, per DECIDED call site, the mechanism
                                                            // that resolved it and the canonical id of every surviving target — the identity
@@ -737,6 +738,21 @@ inline bool parseByteSize( const char* s, std::size_t& out ) noexcept
         return false; // overflow guard
     }
     out = std::size_t( v ) * mult;
+    return true;
+}
+
+// #350: the memory guard's limit — parseByteSize's grammar, and never below the 64 MiB floor (memguard::kFloorBytes,
+// restated here because cli.h does not include the guard): `--max-memory=512` meant 512M, and obeying it would stop
+// every run at once. Shared by the flag and by RIPWIRE_MAX_MEMORY (main.cpp), so the two refuse the same values.
+inline constexpr std::size_t kMaxMemoryFloorBytes = 64ull * 1024 * 1024;
+inline bool parseMemoryLimit( const char* s, std::size_t& out ) noexcept
+{
+    std::size_t bytes = 0;
+    if( !parseByteSize( s, bytes ) || bytes < kMaxMemoryFloorBytes )
+    {
+        return false;
+    }
+    out = bytes;
     return true;
 }
 
@@ -2614,6 +2630,15 @@ inline constexpr char kHelpTail[] =
         "                               .json carries a SECOND, fixed 256KB ceiling this flag does not raise\n"
         "                               (that size of .json is data, not config, and explodes the symbol\n"
         "                               table); files it drops are counted in the header's skipped_oversize=\n"
+        "    --max-memory=N[K|M|G]      the memory guard's limit (default 65% of this machine's memory, env RIPWIRE_MAX_MEMORY)\n"
+        "                               the memory guard is on for every run and silent on normal ones: it measures this\n"
+        "                               process's footprint at most once per 5 s, from 5 s into an ingest. Past its lines\n"
+        "                               the crawl (growth of limit/8) or the parse (half the limit) stops, and the default\n"
+        "                               map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=,\n"
+        "                               memory_limit=); critical OS memory pressure stops them too. Every other verb refuses a\n"
+        "                               partial index, and at the limit itself ripwire exits 5 with one line naming it. The\n"
+        "                               default is 65% of physical RAM (or of the cgroup's memory.max when lower); this flag,\n"
+        "                               or RIPWIRE_MAX_MEMORY when the flag is absent, replaces it; below 64M is refused.\n"
         "    --refetch                  when the root is a git URL, clone it fresh instead of reusing the cached copy\n"
         "                               when the root is a git URL, force a fresh clone instead of reusing the\n"
         "                               cached one (default: reuse forever; stderr notes the cached clone's age)\n"
@@ -2629,6 +2654,15 @@ inline constexpr char kHelpTail[] =
         "                               --scip it also writes the index's covered sites, so a precision join needs no\n"
         "                               protobuf reader. stdout is byte-identical with or without it.\n"
         "    --mcp                      persistent index server (parse once, many warm queries) over stdio\n"
+        "                               persistent index server over stdio. Roots: `ripwire <root> --mcp` and a request's\n"
+        "                               path= are EXPLICIT and always answered. With neither, a request answers about the\n"
+        "                               directory the server was launched in — unless that directory is $HOME itself (a\n"
+        "                               git repository or not), a filesystem or drive root, or a system tree (/usr, /etc,\n"
+        "                               /System, %WINDIR% ...): then the request is refused with \"no project root: <dir> is a\n"
+        "                               home/system directory; pass a project path\" and the server stays up. The CLI has no\n"
+        "                               implicit root (a run without <dir> prints usage, or that same line from such a\n"
+        "                               directory). Each tool call over the --max-memory limit is refused by name; an\n"
+        "                               answer from an index the memory guard cut carries _memory_stop in its envelope.\n"
         "    --lsp                      read-only navigation LSP server over stdio (definition/references/symbols/hover)\n"
         "                               off the warm index; saved-state answers, UTF-8 positions, counts are floors.\n"
         "                               Refuses --mcp/--listen (one protocol per stdin).\n"
@@ -3391,8 +3425,8 @@ inline constexpr IntFlag kIntFlags[] =
 //                              aliases that warn once per RUN, not per flag — state a BoolFlag row has
 //                              nowhere to keep)
 //   • a bare no-op / bare pair --route, --quality-ack (the =REASON form is a kViewFlags row)
-inline constexpr std::size_t kHandWrittenFlagArms = 23;   // +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=); +1 lane/flag-biggest-first (2026-09-23): --readability (deprecation-warning alias, same shape as --stable/--most-important-last/--no-auto-order) — its kBoolFlags row is renamed to --biggest-first (same Config::readability member), so the old spelling moves OUT of the table and becomes a hand-written arm, per the house rule that deprecation-warning aliases stay hand-written
-inline constexpr std::size_t kTotalFlagArms = 213;  // +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
+inline constexpr std::size_t kHandWrittenFlagArms = 24;   // +1 #350 (2026-09-28): --max-memory= (byte-size arm, same shape as --max-file-size=); +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=); +1 lane/flag-biggest-first (2026-09-23): --readability (deprecation-warning alias, same shape as --stable/--most-important-last/--no-auto-order) — its kBoolFlags row is renamed to --biggest-first (same Config::readability member), so the old spelling moves OUT of the table and becomes a hand-written arm, per the house rule that deprecation-warning aliases stay hand-written
+inline constexpr std::size_t kTotalFlagArms = 214;  // +1 #350 (2026-09-28): --max-memory= (hand-written byte-size arm, see kHandWrittenFlagArms); +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
 static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kIntFlags ) + kHandWrittenFlagArms == kTotalFlagArms,
                "a --flag arm was added or removed without updating the ledger above — count the arms in parseArgs and fix the counter" );
 
@@ -5182,6 +5216,9 @@ inline Config parseArgs( int argc, char** argv ) noexcept
             else if( startsWith( a, "--max-file-size=" ) )
             { if( !parseByteSize( a.data() + 16, c.maxFileBytes ) )
               { refuseFlagValue( "--max-file-size", "a positive byte size, plain or with a K/M/G suffix", a.data() + 16, "--max-file-size=10MB" );  c.ok = false; return c; } }
+            else if( startsWith( a, "--max-memory=" ) )   // #350: same std::size_t byte-count reasoning; the floor is the guard's
+            { if( !parseMemoryLimit( a.data() + 13, c.maxMemoryBytes ) )
+              { refuseFlagValue( "--max-memory", "a byte size of at least 64M, plain or with a K/M/G suffix", a.data() + 13, "--max-memory=8G" );  c.ok = false; return c; } }
             else if( startsWith( a, "--exclude=" ) )
             {
                 // M6: the one hand-written value arm that accepted an empty value silently — `--exclude=$X`

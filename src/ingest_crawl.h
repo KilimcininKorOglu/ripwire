@@ -7,6 +7,7 @@
 #endif
 #include "infra/tablelookup.h"   // findByField — the same lookup wrap's agentTarget uses
 #include "infra/sortutil.h"      // svLess — string_view order without libstdc++'s length subtraction (#343)
+#include "memguard.h"            // #350: memguard::Watch — the crawl stops when the memory guard says so
 
 // ingest_crawl.h — crawl + parse setup, moved VERBATIM from ingest.cpp in the 2026-08-29 split: the
 // limits/skip config, the extension -> {lang, grammar, query} table (lookupLang), capture-role and
@@ -1529,8 +1530,12 @@ struct CrawlResult
     CrawlSkips                   skips;
 };
 
+// #350: `memWatch` (null = unguarded) is consulted once per directory entry — memguard::Watch decides how rarely it
+// actually measures — and a stop ends the walk where it is. What was seen so far is sorted and returned exactly as a
+// finished walk's list is, so a partial corpus is still a deterministic one; ingest() discloses the stop.
 CrawlResult collectSources( const char* rootDir, const std::vector<std::string>& excludeSubstr,
-                            std::size_t maxFileBytes, std::string_view excludeLabel = {}, bool respectGitignore = true )
+                            std::size_t maxFileBytes, std::string_view excludeLabel = {}, bool respectGitignore = true,
+                            memguard::Watch* memWatch = nullptr )
 {
     std::vector<std::string>     out;
     std::vector<SkippedOversize> skipped;
@@ -1593,8 +1598,13 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
     const fs::recursive_directory_iterator end;
     {
         PROFILE_SCOPE_DESCRIBE( "ingest/crawl: directory walk (stat + classify)" );
+        std::uint64_t entryCount = 0;
         for( ; it != end; it.increment( ec ) )
         {
+            if( memWatch != nullptr && memWatch->crawlShouldStop( entryCount++ ) )
+            {
+                break;   // #350: the memory guard's crawl line — ingest() records the stop from the watch
+            }
             if( ec )
             {
                 ec.clear();

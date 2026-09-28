@@ -1281,6 +1281,45 @@ struct IngestResult
     //    that must be byte-identical warm-vs-cold may fold it in. Multi-root: the merge sums the per-root
     //    values, so one number describes the whole pass.
     std::size_t                reparsedFiles = 0;
+
+    // ── #350 layer 3: the memory guard stopped this ingest before it finished (src/memguard.h). Unset on every run
+    //    that finished — which is every run whose footprint stayed under the guard's lines, i.e. every normal run —
+    //    so nothing reads it unless the guard fired. Set ONLY through DISCLOSE( memoryStop, … ): the map header's
+    //    memory_stop=/memory_parsed=/memory_limit=/memory_pressure= and the MCP envelope's _memory_stop read it.
+    struct MemoryStop
+    {
+        enum class Phase : std::uint8_t
+        {
+            None,
+            Crawl,   // the crawl stopped first: files= is what it had seen, sorted — a floor of the tree
+            Parse,   // the crawl finished and the parse stopped
+        };
+        Phase         phase       = Phase::None;   // where the guard FIRST stopped work
+        bool          parseCut    = false;         // the parse stopped (after a whole crawl or after a stopped one)
+        bool          byPressure  = false;         // the OS memory-pressure signal stopped it, not the footprint limit
+        std::uint32_t parsedFiles = 0;             // parseCut only: the unbroken prefix of the parse order that finished
+        std::uint64_t limitBytes  = 0;             // the guard's hard limit when it fired (what --max-memory would raise)
+
+        enum class DisclosureWhy : std::uint8_t
+        {
+            CrawlOverLimit,
+            CrawlUnderPressure,
+            ParseOverLimit,
+            ParseUnderPressure,
+        };
+        void disclose( DisclosureWhy why ) noexcept
+        {
+            const bool isCrawl = why == DisclosureWhy::CrawlOverLimit || why == DisclosureWhy::CrawlUnderPressure;
+            if( phase == Phase::None )
+            {
+                phase = isCrawl ? Phase::Crawl : Phase::Parse;
+            }
+            parseCut   = parseCut || !isCrawl;
+            byPressure = byPressure || why == DisclosureWhy::CrawlUnderPressure || why == DisclosureWhy::ParseUnderPressure;
+        }
+        [[nodiscard]] bool isSet() const noexcept { return phase != Phase::None; }
+    };
+    MemoryStop                 memoryStop;
 };
 
 // These aggregates cross the ingest/main translation-unit boundary. The record is emitted once per TU by

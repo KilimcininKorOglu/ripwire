@@ -342,6 +342,7 @@ struct ParsePoolShared
     std::size_t                      nfiles;
     bool                             needsCacheHash;
     bool                             captureValueUses;
+    memguard::Watch*                 memWatch;              // #350: null = unguarded; else checked before each claim
 };
 
 // one worker's whole life: grab files off the shared cursor, reuse cache hits, parse+capture misses,
@@ -418,6 +419,7 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
     };
 
     std::string bytes;
+    bool        claimedAny = false;   // #350: the file this worker claimed last has finished by the loop's top
     for( ;; )   // lock-free work-stealing: grab the next file via the atomic counter (balances the big-file tail)
     {
         if( sh.prewarm.ready.load( std::memory_order_acquire ) && !pendingParsed.empty() )
@@ -425,11 +427,27 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
             flushPendingParsed();
         }
 
+        // #350: the memory guard. The previous file is done (every path through the body below ends its iteration),
+        // so report it; then look at the stop flag BEFORE claiming, which is what keeps the finished set an unbroken
+        // prefix of the work order — a file once claimed is always completed.
+        if( sh.memWatch != nullptr )
+        {
+            if( claimedAny )
+            {
+                sh.memWatch->parseFileDone();
+            }
+            if( sh.memWatch->isStopped() )
+            {
+                break;
+            }
+        }
+
         const std::size_t orderIndex = sh.nextFile.fetch_add( 1, std::memory_order_relaxed );
         if( orderIndex >= sh.nfiles )
         {
             break;
         }
+        claimedAny = true;
         const std::size_t fileId = sh.parseOrder.empty() ? orderIndex : sh.parseOrder[ orderIndex ];
         // per-file try/catch: a throw (bad_alloc, filesystem_error, …) escaping a
         // std::thread entry would std::terminate the whole process. Degrade per file,
@@ -699,7 +717,7 @@ inline RawFacts mergeThreadFacts( std::vector<RawFacts>& tFacts )
 //    the dirty-gated saveCache — everything between the prewarm launch and the doc post-pass.
 inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::string_view cacheFile, bool captureValueUses,
                               HashMap<std::string, FileFacts>& cache, const CacheLoadStats& cacheStats,
-                              IngestFileScan& scan, QueryPrewarm& prewarm )
+                              IngestFileScan& scan, QueryPrewarm& prewarm, memguard::Watch* memWatch = nullptr )
 {
     RawFacts raw;
     const bool needsCacheHash = !cacheFile.empty();
@@ -833,7 +851,8 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
         std::atomic<std::size_t>          nextFile{ 0 };   // lock-free work queue: threads fetch_add for the next parseOrder slot
 
         ParsePoolShared shared{ result.files, cache, scan, prewarm, queryReadyGate, cacheCandidateFacts, cacheHitFacts,
-                                tFacts, parseOrder, nextFile, dirty, reparsedCount, warmGrowths, nfiles, needsCacheHash, captureValueUses };
+                                tFacts, parseOrder, nextFile, dirty, reparsedCount, warmGrowths, nfiles, needsCacheHash, captureValueUses,
+                                memWatch };
 
         for( unsigned t = 0; t < nthreads; ++t )
         {
@@ -851,6 +870,25 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
         }
 
         raw = mergeThreadFacts( tFacts );
+
+        // #350: a stop while claimed files remained. Every claimed file finished (workers look before claiming), so the
+        // parsed set is the first `claimed` entries of the work order — the prefix memory_parsed= counts. A stop that
+        // came after the last claim cost nothing and is not a partial parse.
+        const std::size_t claimed = std::min( nextFile.load( std::memory_order_relaxed ), nfiles );
+        const bool parseCut = memWatch != nullptr && memWatch->tripped() && claimed < nfiles;
+        if( parseCut )
+        {
+            result.memoryStop.limitBytes  = memWatch->hardBytes();
+            result.memoryStop.parsedFiles = static_cast<std::uint32_t>( claimed );
+            if( memWatch->trippedByPressure() )
+            {
+                DISCLOSE( result.memoryStop, IngestResult::MemoryStop::DisclosureWhy::ParseUnderPressure, "ingest: the memory guard stopped the parse pool — the files after the finished prefix carry no facts" );
+            }
+            else
+            {
+                DISCLOSE( result.memoryStop, IngestResult::MemoryStop::DisclosureWhy::ParseOverLimit, "ingest: the memory guard stopped the parse pool — the files after the finished prefix carry no facts" );
+            }
+        }
 
         // The aggregate owns the moved fact payloads now. Release the per-thread vector storage before the
         // cache write and before returning to the model-build tail; keeping these empty-but-capacious vectors
@@ -880,7 +918,11 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
 
         // Win 2: rewrite cache only when at least one file changed (dirty flag set by workers above).
         // Skips the ~11ms / 7 MB serialization+write on a no-change warm run.
-        if( !cacheFile.empty() && dirty.load() )
+        if( parseCut && !cacheFile.empty() && dirty.load() )
+        {
+            DISCLOSE( Diagnostics::answerUnchanged, "ingest: a memory-guard partial parse is not written to the cache — the next run re-parses instead of serving the gap as empty files" );
+        }
+        if( !parseCut && !cacheFile.empty() && dirty.load() )
         {
             forgetNestRefusalsForCache( scan );   // a refused file is written UNKNOWN, so a warm run re-refuses it (ingest_prewarm.h)
             saveCache( std::string( cacheFile ), rootDir, result.files, scan.hash, scan.statSize, scan.statMtime, scan.statCtime, scan.health, raw.defs, raw.refs, raw.incs, raw.binds, raw.ffis, raw.routeDefs, raw.routeUses, raw.constOpens, captureValueUses );

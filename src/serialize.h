@@ -7,6 +7,7 @@
 #include "infra/os.h"   // rw::os::open_memstream — the est_tokens charge buffers
 #include <format>          // std::format_to_n — the appendf lambdas append through it directly
 #include "model.h"
+#include "memguard.h"   // #350: memguard::limitSpelling — memory_limit= is spelled as the --max-memory value that raises it
 #include "extentsuspect.h"   // extent honesty: extent_suspect= reason spellings (extent::extentSuspectReasons)
 #include "nextverb.h"   // P3 (L7): next= on the top-ranked <d> row
 #include "arch.h"        // P3: builtinLayer() — the file-node layer= tag
@@ -2356,6 +2357,34 @@ inline std::string buildEscapedRootAttr( const CrawlSkips& skips )
     return skips.escapedFiles == 0 ? std::string() : " escaped_root=" + std::to_string( skips.escapedFiles );
 }
 
+// #350 layer 3 — the memory guard stopped this ingest (IngestResult::MemoryStop): memory_stop= names where it first
+// stopped (crawl: files= is what the crawl saw, a floor of the tree; parse: the crawl was whole), memory_parsed= how many
+// of files= carry facts when the parse was cut, memory_limit= the limit as the --max-memory value that would raise it,
+// memory_pressure=1 when the OS pressure signal (not the limit) stopped it. Absent on every run the guard did not stop —
+// i.e. every normal run, byte-identical — like every corpus-cut attribute beside it. XML header-comment and JSON
+// spellings, one source.
+inline std::string buildMemoryStopAttr( const IngestResult& ing, bool json )
+{
+    const IngestResult::MemoryStop& m = ing.memoryStop;
+    if( !m.isSet() )
+    {
+        return {};
+    }
+    const std::string phase( memguard::phaseName( m.phase ) );
+    const std::string limit = memguard::limitSpelling( m.limitBytes );
+    if( json )
+    {
+        return "\"memory_stop\":\"" + phase + "\","
+             + ( m.parseCut ? "\"memory_parsed\":" + std::to_string( m.parsedFiles ) + "," : std::string() )
+             + "\"memory_limit\":\"" + limit + "\","
+             + ( m.byPressure ? "\"memory_pressure\":1," : "" );
+    }
+    return " memory_stop=" + phase
+         + ( m.parseCut ? " memory_parsed=" + std::to_string( m.parsedFiles ) : std::string() )
+         + " memory_limit=" + limit
+         + ( m.byPressure ? " memory_pressure=1" : "" );
+}
+
 // The per-symbol honesty counters (graph.h ambOut / unresolvedOut / locPinOut) reach both map dialects as
 // NULLABLE vectors — nullptr ⇒ never measured (a pure sizing pass). These two are the only ways the emitters
 // read them, so "an absent counter reads as zero" is stated once instead of in six hand-rolled chains.
@@ -2712,6 +2741,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const std::string unindexedAttr = buildUnindexedAttr( ing.crawlSkips );
     const std::string ignoredAttr   = buildIgnoredAttr( ing.crawlSkips );   // §N6-C, empty unless the ignore rules cut something
     const std::string escapedAttr   = buildEscapedRootAttr( ing.crawlSkips ); // §SEC1, empty unless a symlink left the root
+    const std::string memoryAttr    = buildMemoryStopAttr( ing, false );      // #350, empty unless the memory guard stopped the ingest
     // §B13.4: --max-tokens=N asked for a TOKEN count and got a BYTE ceiling. Both numbers, on the map that
     // was shaped by them, so the ~10% the headroom leaves unused is a disclosed fact rather than a silent
     // one. Emitted ONLY under --max-tokens (nullptr for every other caller ⇒ byte-identical default map).
@@ -2787,7 +2817,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         {
             stats += " nest_refused=";  stats += std::to_string( ing.crawlSkips.nestRefusedFiles );
         }
-        stats += precAttr;  stats += rootsAttr;  stats += changedAttr;  stats += skippedAttr;  stats += unindexedAttr;
+        stats += precAttr;  stats += rootsAttr;  stats += changedAttr;  stats += skippedAttr;  stats += memoryAttr;  stats += unindexedAttr;
         stats += ignoredAttr;  stats += escapedAttr;  stats += fitAttr;
         stats += " order=";      stats += orderAttr;
         stats += " -->";
@@ -8229,6 +8259,7 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
         rw::formatTo( hdr, sizeof( hdr ), "\"skipped_oversize\":{},", h.ing.skippedOversize.size() );
         w.write( hdr );
     }
+    w.write( buildMemoryStopAttr( h.ing, true ) );   // #350, JSON lane: empty unless the memory guard stopped the ingest
 
     // §SEC1, JSON lane: the crawl-boundary refusal must reach --json/MCP consumers too, by the same argument
     // skipped_oversize= makes one paragraph up — the audience most likely to be a model is the one least able
