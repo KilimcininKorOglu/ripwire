@@ -62,6 +62,12 @@
 #   (J) --impact counts the declines that could have reached the method and lists only the true callers
 #   (K) the predicates can fail: a callers document carrying a plain.py row, and one without declined_calls=
 #   (L) determinism x2 (map and census), xmllint, no degrade alert on stderr
+#   (T) SAME-FILE decoy (a tree built in $TMP, so the fixture's counts above stay put): a Python file that DEFINES the
+#       class is no evidence for a receiver other than self/cls. `data.get( "repos" )` on a json dict and
+#       `entry.get( "alias" )` on a parameter in registry.py bound to ConnectionPool.get (4 of its 9 callers on the
+#       corpus the gate was measured on); they are declined now, while `self.get()` and `cls.get()` inside the class
+#       and the importing file's typed local keep their edges (a construction in the same file is still file-grain
+#       evidence for every call there — floor 2 — so the decoy file constructs nothing)
 #
 # Exits non-zero on any failure.
 
@@ -278,6 +284,56 @@ if command -v xmllint >/dev/null 2>&1; then
 fi
 if [ ! -s "$TMP/err" ]; then ok "(L) nothing on stderr"
 else no "(L) stderr is not empty"; sed 's/^/          /' "$TMP/err"; fi
+
+# ── (T) same-file decoy ───────────────────────────────────────────────────────────────────────────────────────
+echo "=== (T) a same-file class definition is no evidence for a non-self receiver ==="
+T="$TMP/samefile"; mkdir -p "$T/pkg"
+: >"$T/pkg/__init__.py"
+cat >"$T/pkg/registry.py" <<'PY'
+import json
+
+
+def load_repos(text):
+    data = json.loads(text)
+    return data.get("repos", [])
+
+
+def find_alias(entry):
+    return entry.get("alias")
+
+
+class ConnectionPool:
+    def __init__(self):
+        self._pool = {}
+
+    def get(self, key):
+        return self._pool.get(key)
+
+    def warm(self, key):
+        return self.get(key)
+
+    @classmethod
+    def probe(cls, key):
+        return cls.get(cls, key)
+PY
+cat >"$T/pkg/user.py" <<'PY'
+from .registry import ConnectionPool
+
+
+def true_local(key):
+    pool = ConnectionPool()
+    return pool.get(key)
+PY
+TCALL="$( cd "$T" && "$BIN" . --no-cache --callers=pkg/registry.py:get 2>/dev/null )"
+TROWS="$( printf '%s' "$TCALL" | grep -oE '<s [^>]*/>' | grep -oE ' n="[^"]*"' | sed -E 's/ n="([^"]*)"/\1/' | sort | tr '\n' ' ' )"
+case " $TROWS" in *" load_repos "*|*" find_alias "*) no "(T) a same-file dict .get binds to ConnectionPool.get: rows [$TROWS]";;
+    *) ok "(T) data.get / entry.get in the defining file do not bind to ConnectionPool.get";; esac
+[ "$TROWS" = "probe true_local warm " ] \
+    && ok "(T) self.get, cls.get and the importing file's typed local keep their edges" \
+    || no "(T) callers should be exactly probe true_local warm: [$TROWS]"
+[ "$( attr "$( printf '%s' "$TCALL" | grep -oE '<callers [^>]*>' | head -1 )" declined_calls )" = 2 ] \
+    && ok "(T) the two decoys are counted: declined_calls=\"2\"" \
+    || no "(T) declined_calls should be 2: $( printf '%s' "$TCALL" | grep -oE '<callers [^>]*>' | head -1 )"
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$fail"

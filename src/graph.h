@@ -2165,7 +2165,10 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 //     FILE names that class or a class in its inheritance cone (ChaConeMemo) — defines it, or a reference there names it
 //     as callee/receiver/qualifier (constructor, annotation, import, extends, `Cls.new`), or a binding names it (type,
 //     variable, imported name), or an ES import binding there resolves to it (a default or renamed import). Else
-//     NoEvidence. A JS/TS literal receiver (`"a".split`) is a builtin by construction: Impossible.
+//     NoEvidence. A JS/TS literal receiver (`"a".split`) is a builtin by construction: Impossible. Python, a receiver
+//     other than self/cls: the class's own DEFINITION in the caller's file (its `class` statement and the VarDecl of
+//     its name) is not evidence — only a reference, binding or import naming it is (a same-file `data.get( "repos" )`
+//     bound to ConnectionPool.get before; test/builtinbindcheck.sh arm T).
 //   * a NESTED function (its innermost container is a function): reachable only by a bare call in its own file. Admit
 //     there, Impossible otherwise (no member access and no other file can name a closure).
 //   * a top-level FREE function:
@@ -2185,7 +2188,8 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 // STATED FLOORS, each measured or probed:
 //   (1) the evidence is a class NAME, as CHA-lite's is: two same-named classes share it;
 //   (2) the grain is the FILE: a builtin call in a file that also works with the in-repo class keeps its edge (the
-//       gate removes less there, never adds);
+//       gate removes less there, never adds) — in Python "works with" means names it beyond defining it, unless the
+//       receiver is self/cls;
 //   (3) a split with one evidenced arm is kept whole, false arms included;
 //   (4) an object handed to the caller with no mention of its class in the file (an unannotated parameter, dependency
 //       injection, a factory return) no longer reaches the in-repo method by name; the call is declined and counted;
@@ -2215,9 +2219,12 @@ struct BuiltinMethodGate
     HashMap<std::string, std::uint32_t>            classId;       // every class-like definition NAME in the corpus → a dense id
     std::vector<std::string>                       className;     // dense id → name (ChaConeMemo::contains takes a std::string)
     std::vector<std::vector<std::uint32_t>>        fileClasses;   // fileId → the sorted class ids that file names (gated files only)
+    std::vector<std::vector<std::uint32_t>>        fileRefClasses;   // the same, minus the file's own class DEFINITIONS: a reference,
+                                                                     // binding or import names the class (sameFileReceiverEvidence)
     SymbolsByFile                                  containersByFile; // fileId → class-like and function-like symbol ids (ownerOf)
     mutable HashMap<NodeId, std::uint32_t>         ownerMemo;     // target → owning class id, kNoClass or kNested
     mutable HashMap<std::uint64_t, char>           namesMemo;     // (caller file << 32 | class id) → does the file name it (cone included)
+    mutable HashMap<std::uint64_t, char>           refNamesMemo;  // the same question over fileRefClasses
     mutable std::string                            key;           // reused "<fileId>#name" buffer
     bool                                           active = false;
 
@@ -2294,18 +2301,19 @@ struct BuiltinMethodGate
 
     // Does the caller's file name `owner` or a class in its inheritance cone? Memoised per (file, class), so a call site
     // costs one probe per target however many classes its file names.
-    bool fileNames( std::uint32_t fileId, std::uint32_t owner, ChaConeMemo& cones ) const
+    bool fileNames( std::uint32_t fileId, std::uint32_t owner, ChaConeMemo& cones, bool byReferenceOnly = false ) const
     {
         EXPECTS( owner < className.size(), "judge() handles kNoClass and kNested before asking" );
-        const auto [ memo, fresh ] = namesMemo.try_emplace( ( std::uint64_t( fileId ) << 32 ) | owner, char( 0 ) );
+        const std::vector<std::vector<std::uint32_t>>& lists = byReferenceOnly ? fileRefClasses : fileClasses;
+        const auto [ memo, fresh ] = ( byReferenceOnly ? refNamesMemo : namesMemo ).try_emplace( ( std::uint64_t( fileId ) << 32 ) | owner, char( 0 ) );
         if( !fresh )
         {
             return memo->second != 0;
         }
         bool names = false;
-        if( fileId < fileClasses.size() )
+        if( fileId < lists.size() )
         {
-            const std::vector<std::uint32_t>& named = fileClasses[ fileId ];
+            const std::vector<std::uint32_t>& named = lists[ fileId ];
             names = std::binary_search( named.begin(), named.end(), owner );
             if( !names && !named.empty() )
             {
@@ -2370,7 +2378,16 @@ struct BuiltinMethodGate
         }
         if( owner != kNoClass )
         {
-            return fileNames( r.fileId, owner, cones ) ? Verdict::Admit : Verdict::NoEvidence;
+            // Python, a receiver other than self/cls: the class being DEFINED in the caller's file is no evidence that
+            // this receiver is an instance of it. registry.py defines ConnectionPool and calls `data.get( "repos" )` on
+            // a json dict and `entry.get( "alias" )` on a dict row; the file-grain rule bound all four such calls to
+            // ConnectionPool.get (4 of its 9 callers on the Python corpus the gate was measured on). Only a
+            // reference, binding or import naming the class — a construction, an annotation, an import — admits it
+            // there. Python records the receiver shape, so self./cls. calls (ThisObj, the NamedVar `cls`) inside the class keep the
+            // file-grain rule; JS/TS record none (floor 3) and Ruby's bare call IS a self call, so both keep it too.
+            const bool selfOrCls                = r.recv == RecvKind::ThisObj || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" );
+            const bool sameFileReceiverEvidence = r.lang == Lang::Python && !selfOrCls;
+            return fileNames( r.fileId, owner, cones, sameFileReceiverEvidence ) ? Verdict::Admit : Verdict::NoEvidence;
         }
         if( r.lang == Lang::Python )
         {
@@ -2409,6 +2426,8 @@ struct BuiltinMethodGate
 inline void collectFileClassEvidence( const IngestResult& ing, const std::vector<char>& fileGated, const JsImportTables& jsImports, BuiltinMethodGate& gate )
 {
     gate.fileClasses.assign( ing.files.size(), {} );
+    gate.fileRefClasses.assign( ing.files.size(), {} );
+    bool definitionPass = true;   // the first loop below: a definition names the class in fileClasses only
     const auto note = [ & ]( std::uint32_t fileId, const std::string& name )
     {
         if( fileId >= fileGated.size() || fileGated[ fileId ] == 0 || name.empty() )
@@ -2418,6 +2437,10 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
         if( const auto it = gate.classId.find( name ); it != gate.classId.end() )
         {
             gate.fileClasses[ fileId ].push_back( it->second );
+            if( !definitionPass )
+            {
+                gate.fileRefClasses[ fileId ].push_back( it->second );
+            }
         }
     };
     for( const Symbol& s : ing.symbols )
@@ -2427,6 +2450,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
             note( s.fileId, s.name );   // defined here: every call in the file may be on an instance of it
         }
     }
+    definitionPass = false;
     for( const Reference& r : ing.references )
     {
         if( !r.isDocLink )   // a backtick mention in prose is not code evidence
@@ -2439,7 +2463,11 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
     for( const Binding& b : ing.bindings )
     {
         note( b.fileId, b.typeName );
+        // a bare declared NAME with no type and no import is the `class Pool:` statement's own module-level name (Python
+        // records it as a VarDecl): a definition, so it names the class in fileClasses only
+        definitionPass = b.kind == LocalBindKind::VarDecl && b.typeName.empty() && b.importedName.empty();
         note( b.fileId, b.var );
+        definitionPass = false;
         note( b.fileId, b.importedName );
     }
     for( const auto& [ importKey, bound ] : jsImports.targets )   // key "<fileId>#<local name>" (jsImportKey)
@@ -2455,6 +2483,11 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
             note( fileId, ing.symbols[ bound.node ].name );   // order-free: every list is sorted below
         }
     }
+    for( std::vector<std::uint32_t>& named : gate.fileRefClasses )
+    {
+        std::sort( named.begin(), named.end() );
+        named.erase( std::unique( named.begin(), named.end() ), named.end() );
+    }
     for( std::vector<std::uint32_t>& named : gate.fileClasses )
     {
         std::sort( named.begin(), named.end() );
@@ -2466,7 +2499,7 @@ inline BuiltinMethodGate buildBuiltinMethodGate( const IngestResult& ing, const 
                                                  const std::vector<std::vector<std::uint32_t>>& directIncludes, const JsImportTables& jsImports )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: builtin-method name gate" );
-    BuiltinMethodGate gate{ ing, veto, vetoTables, directIncludes, jsImports, {}, {}, {}, {}, {}, {}, {}, false };
+    BuiltinMethodGate gate{ ing, veto, vetoTables, directIncludes, jsImports, {}, {}, {}, {}, {}, {}, {}, {}, {}, false };
     std::vector<char> fileGated( ing.files.size(), 0 );
     for( const Symbol& s : ing.symbols )
     {

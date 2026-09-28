@@ -15,6 +15,19 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — Python: a class defined in the caller's file no longer vouches for a dict's `.get`
+
+The builtin-method gate kept an edge whenever the caller's file named the target's class, and a file that merely
+DEFINES the class counted. So in the file that defines `ConnectionPool`, `data.get( "repos" )` on a json dict and
+`entry.get( "alias" )` on a dict row still bound to `ConnectionPool.get`: 4 of its 9 callers on the public Python
+repository the gate was measured on. For a Python call on a receiver other than `self`/`cls`, the class's own
+definition (its `class` statement and the declared name it leaves) is no longer evidence; a reference, binding or
+import naming the class still is. On that repository `ConnectionPool.get` now lists its 5 real callers, with the
+4 counted in `declined_calls=`. `self.get()` and `cls.get()` inside the class keep their edges, and JavaScript,
+TypeScript and Ruby keep the file-grain rule (the first records no receiver shape; a bare Ruby call is a self call).
+The default map of this repository and of all 38 Python fixture trees under `test/` is byte-identical. Gate:
+`test/builtinbindcheck.sh` arm T (a same-file decoy; red before, green after).
+
 ### Fixed — `--stray-content --plan` and `--merge-scout` stop extracting the subtrees the crawl prunes
 
 Each scouted arm materialised its commit with `git archive` + `tar -x` of EVERY committed byte, then ingested it
