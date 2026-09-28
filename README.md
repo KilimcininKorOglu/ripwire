@@ -25,7 +25,7 @@ format, exit codes and limits. You do not need it to get started.
 <p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
-<summary><b>Field report: about half the tokens across a two-day, 20-agent coding engagement</b> — one orchestrating agent directing ~20 coding agents over a ~1,500-file C++/Metal codebase. One engagement, on a version before 0.5; click for the report.</summary>
+<summary><b>Field report: about half the audit and research token spend on a two-day, 20-agent coding engagement</b> — one orchestrating agent directing ~20 coding agents over a ~1,500-file C++/Metal codebase. One engagement, on a version before 0.5; click for the report.</summary>
 
 Every agent was told to start with ripwire for orientation and to finish with its quality gates. What the orchestrating
 agent reported afterwards:
