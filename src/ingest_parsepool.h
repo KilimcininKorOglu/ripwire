@@ -343,7 +343,6 @@ struct ParsePoolShared
     bool                             needsCacheHash;
     bool                             captureValueUses;
     memguard::Watch*                 memWatch;              // #350: null = unguarded; else checked before each claim
-    std::vector<std::uint8_t>&       claimedFlags;          // #350: 1 = this fileId was claimed (one writer per slot); sized nfiles when memWatch is set
 };
 
 // one worker's whole life: grab files off the shared cursor, reuse cache hits, parse+capture misses,
@@ -448,13 +447,15 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
         {
             break;
         }
+        // #350, the parse seam (parse:N): the claim of work-order slot N and later is abandoned unparsed and trips the
+        // stop, so exactly the first N files of the parse order are parsed (applyMemoryParseCut counts them the same way)
+        if( sh.memWatch != nullptr && orderIndex >= sh.memWatch->seamParseCutoff() )
+        {
+            sh.memWatch->tripParseSeam();
+            break;
+        }
         claimedAny = true;
         const std::size_t fileId = sh.parseOrder.empty() ? orderIndex : sh.parseOrder[ orderIndex ];
-        if( sh.memWatch != nullptr )
-        {
-            sh.claimedFlags[ fileId ] = 1;         // a claimed file always completes: the post-join cut reads these
-            sh.memWatch->parseClaimed( fileId );   // the parse seam trips once the first N (sorted) files are claimed
-        }
         // per-file try/catch: a throw (bad_alloc, filesystem_error, …) escaping a
         // std::thread entry would std::terminate the whole process. Degrade per file,
         // honouring the "never throws" contract (the worse-than-v1 parallel hazard).
@@ -721,60 +722,27 @@ inline RawFacts mergeThreadFacts( std::vector<RawFacts>& tFacts )
 //    model-build tail, so collection order is irrelevant. Also owns the two flags that ride the
 //    pool (the Win-2 dirty flag and the A1 reparsed counter), the install/gate-open moment, and
 //    the dirty-gated saveCache — everything between the prewarm launch and the doc post-pass.
-// #350: after a memory-guard parse stop, forget every fact and per-file scan finding of the files at or past
-// `firstDropped` (sorted order), so the partial answer is the same whichever of them the pool happened to reach.
-inline void dropFactsFrom( RawFacts& raw, IngestFileScan& scan, std::size_t firstDropped )
+// #350: after the pool join, a memory-guard stop while files remained. Workers look at the stop flag BEFORE claiming a
+// file, so every claimed file completed and the parsed set is the first K entries of the parse ORDER (cache misses
+// first, then largest first, then fileId — deterministic for a given tree and cache), which is what memory_parsed=K
+// counts; a partial answer therefore repeats for a given K. Under the parse seam an abandoned claim at slot N or later
+// is not a parse, hence the min with the seam's cutoff. A stop after the last claim cut nothing. Returns whether cut.
+inline bool applyMemoryParseCut( IngestResult& result, memguard::Watch* memWatch, std::size_t claimedSlots, std::size_t nfiles )
 {
-    const auto past = [ firstDropped ]( const auto& fact ) noexcept { return fact.fileId >= firstDropped; };
-    std::erase_if( raw.defs, past );
-    std::erase_if( raw.refs, past );
-    std::erase_if( raw.incs, past );
-    std::erase_if( raw.binds, past );
-    std::erase_if( raw.ffis, past );
-    std::erase_if( raw.routeDefs, past );
-    std::erase_if( raw.routeUses, past );
-    std::erase_if( raw.constOpens, past );
-    for( std::size_t fileId = firstDropped; fileId < scan.health.size(); ++fileId )
-    {
-        scan.health[ fileId ] = FileHealth{};
-    }
-    std::fill( scan.nestRefusedBytes.begin() + std::ptrdiff_t( std::min( firstDropped, scan.nestRefusedBytes.size() ) ), scan.nestRefusedBytes.end(), 0u );
-    std::fill( scan.extractPartial.begin() + std::ptrdiff_t( std::min( firstDropped, scan.extractPartial.size() ) ), scan.extractPartial.end(), std::uint8_t( 0 ) );
-    std::fill( scan.extractPartialBytes.begin() + std::ptrdiff_t( std::min( firstDropped, scan.extractPartialBytes.size() ) ), scan.extractPartialBytes.end(), 0u );
-}
-
-// #350: after the pool join, a memory-guard stop while files remained. The answer keeps the longest prefix of the SORTED
-// file list whose files were all claimed (every claimed file completed: workers look before claiming) and drops the facts
-// of any later file the work order reached first — so a partial answer depends on the tree and that prefix length alone,
-// never on which order the pool drew files in (memory_parsed= is the prefix length). The parse seam fixes the prefix at
-// N. A stop that came after the last claim cut nothing and is not a partial parse. Returns whether the parse was cut.
-inline bool applyMemoryParseCut( IngestResult& result, RawFacts& raw, IngestFileScan& scan, memguard::Watch* memWatch,
-                                 const std::vector<std::uint8_t>& claimedFlags )
-{
-    if( memWatch == nullptr || !memWatch->tripped() )
+    const std::size_t parsed = std::min( { claimedSlots, nfiles, memWatch != nullptr ? memWatch->seamParseCutoff() : nfiles } );
+    if( memWatch == nullptr || !memWatch->tripped() || parsed >= nfiles )
     {
         return false;
     }
-    std::size_t keptPrefix = 0;
-    while( keptPrefix < claimedFlags.size() && claimedFlags[ keptPrefix ] != 0 )
-    {
-        ++keptPrefix;
-    }
-    keptPrefix = std::min( keptPrefix, memWatch->seamParseCutoff() );
-    if( keptPrefix >= claimedFlags.size() )
-    {
-        return false;
-    }
-    dropFactsFrom( raw, scan, keptPrefix );
     result.memoryStop.limitBytes  = memWatch->hardBytes();
-    result.memoryStop.parsedFiles = static_cast<std::uint32_t>( keptPrefix );
+    result.memoryStop.parsedFiles = static_cast<std::uint32_t>( parsed );
     if( memWatch->trippedByPressure() )
     {
-        DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseUnderPressure, "ingest: the memory guard stopped the parse pool — the files after the kept sorted prefix carry no facts" );
+        DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseUnderPressure, "ingest: the memory guard stopped the parse pool — the files after the parsed prefix of the parse order carry no facts" );
     }
     else
     {
-        DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseOverLimit, "ingest: the memory guard stopped the parse pool — the files after the kept sorted prefix carry no facts" );
+        DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseOverLimit, "ingest: the memory guard stopped the parse pool — the files after the parsed prefix of the parse order carry no facts" );
     }
     return true;
 }
@@ -913,11 +881,10 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
             }
         }
         std::atomic<std::size_t>          nextFile{ 0 };   // lock-free work queue: threads fetch_add for the next parseOrder slot
-        std::vector<std::uint8_t>         claimedFlags( memWatch != nullptr ? nfiles : 0, 0 );   // #350: see ParsePoolShared
 
         ParsePoolShared shared{ result.files, cache, scan, prewarm, queryReadyGate, cacheCandidateFacts, cacheHitFacts,
                                 tFacts, parseOrder, nextFile, dirty, reparsedCount, warmGrowths, nfiles, needsCacheHash, captureValueUses,
-                                memWatch, claimedFlags };
+                                memWatch };
 
         for( unsigned t = 0; t < nthreads; ++t )
         {
@@ -936,7 +903,7 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
 
         raw = mergeThreadFacts( tFacts );
 
-        const bool parseCut = applyMemoryParseCut( result, raw, scan, memWatch, claimedFlags );   // #350
+        const bool parseCut = applyMemoryParseCut( result, memWatch, nextFile.load( std::memory_order_relaxed ), nfiles );   // #350
 
         // The aggregate owns the moved fact payloads now. Release the per-thread vector storage before the
         // cache write and before returning to the model-build tail; keeping these empty-but-capacious vectors

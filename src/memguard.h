@@ -34,22 +34,20 @@
 //
 // THE STOP. A soft stop sets an atomic flag the crawl loop and the parse workers read before the next unit of work,
 // records WHY through DISCLOSE on IngestResult::memoryStop, and lets ingest() finish with what it has: the crawl keeps
-// the entries it saw (then sorts them, as always); the parse keeps the longest prefix of the SORTED file list whose
-// files were all claimed (a worker checks the flag BEFORE claiming a file, so every claimed file completes; facts of a
-// claimed file past that prefix are dropped). Nothing derived from a partial ingest is ever persisted — not the ingest
+// the entries it saw (then sorts them, as always); the parse keeps every file it claimed — a prefix of its parse order
+// (a worker checks the flag BEFORE claiming a file, so every claimed file completes). Nothing derived from a partial ingest is ever persisted — not the ingest
 // cache, not a quality snapshot, not a baseline. Whether the partial ingest may answer is the caller's decision — main.cpp answers the
 // default map with memory_stop= in its header and refuses every other verb (exit 5); the MCP server answers with
 // `_memory_stop` in the envelope.
 //
 // THE TEST SEAM. RIPWIRE_TEST_MEMGUARD=crawl:N | pressure:N | parse:N | request:N ADDS a trip — at the Nth crawl entry
-// (over the line, or under critical pressure), once the first N files in sorted order are claimed by the parse, or at
-// the Nth and later MCP tool calls — so test/memguardcheck.sh can drive every stop path deterministically. It never
-// replaces a real reading: every real line, the time gate and the hard line still apply, so it can only make a run
-// stricter, never turn the guard off.
+// (over the line, or under critical pressure), after exactly N files of the parse order are parsed, or at the Nth and
+// later MCP tool calls; eager:1 instead drops the five-second time gate, so every guarded unit takes a REAL reading — so test/memguardcheck.sh can drive every stop path deterministically. It never replaces a real
+// reading: every real line, the time gate and the hard line still apply, so it can only make a run stricter.
 //
 // REPEATABILITY. A crawl stop keeps what the walk had seen, then sorts it. A parse stop keeps the first K files of the
-// sorted list whose parse was claimed — facts of any later file the pool happened to reach first are dropped — so a
-// partial answer is a function of the tree and memory_parsed=K alone: two runs cut at the same K print the same bytes.
+// parse ORDER (cache misses first, then largest first, then fileId), every one of which completed, so a partial answer
+// is a function of the tree, the cache and memory_parsed=K: two runs cut at the same K print the same bytes.
 
 #include <algorithm>
 #include <atomic>
@@ -119,8 +117,9 @@ enum class TripAt : std::uint8_t
     Nowhere,
     Crawl,      // crawl:N    — the Nth crawl entry reads as over the crawl line
     Pressure,   // pressure:N — the Nth crawl entry reads as critical OS memory pressure
-    Parse,      // parse:N    — the parse stops once the first N files (sorted order) are claimed: memory_parsed=N exactly
+    Parse,      // parse:N    — exactly the first N files of the parse order are parsed: memory_parsed=N
     Request,    // request:N  — the Nth MCP tool call reads as over the hard limit
+    Eager,      // eager:1    — no five-second time gate: every guarded unit takes a REAL footprint reading (only stricter)
 };
 struct TestTrip
 {
@@ -155,7 +154,7 @@ inline const TestTrip& testTrip() noexcept
         }
         const std::string_view phase = v.substr( 0, colon );
         t.at    = phase == "crawl" ? TripAt::Crawl : phase == "pressure" ? TripAt::Pressure : phase == "parse" ? TripAt::Parse
-                : phase == "request" ? TripAt::Request : TripAt::Nowhere;
+                : phase == "request" ? TripAt::Request : phase == "eager" ? TripAt::Eager : TripAt::Nowhere;
         t.index = n;
         return t;
     }();
@@ -215,21 +214,12 @@ public:
     // the parse: a worker asks BEFORE claiming its next file (a relaxed load, nothing else)
     [[nodiscard]] bool isStopped() const noexcept { return stopped_.load( std::memory_order_relaxed ); }
 
-    // the parse seam: a worker reports each CLAIM by fileId; the stop trips once every file below N (sorted order) is
-    // claimed, so a seam partial always keeps exactly the first N files whatever order the pool drew them in
-    void parseClaimed( std::size_t fileId ) noexcept
-    {
-        if( trip_.at == TripAt::Parse && fileId < trip_.index
-            && seamPrefixClaimed_.fetch_add( 1, std::memory_order_relaxed ) + 1 == trip_.index )
-        {
-            (void)tripSoft( false );
-        }
-    }
-    // the seam's cutoff in sorted order, or SIZE_MAX when no parse seam is set
+    // the parse seam (parse:N): the work-order slot at which claims are abandoned, or SIZE_MAX when no parse seam is set
     [[nodiscard]] std::size_t seamParseCutoff() const noexcept
     {
         return trip_.at == TripAt::Parse ? std::size_t( trip_.index ) : SIZE_MAX;
     }
+    void tripParseSeam() noexcept { (void)tripSoft( false ); }
 
     // the parse: a worker reports each finished file; may trip the stop for every worker (time-gated real reading)
     void parseFileDone() noexcept
@@ -274,6 +264,10 @@ private:
     // true for exactly one caller per five-second slot: the one that moves the deadline forward
     [[nodiscard]] bool claimTimeSlot() noexcept
     {
+        if( trip_.at == TripAt::Eager )
+        {
+            return true;   // the eager seam: a real reading every time — the gate's way to reach a REAL stop in well under 5 s
+        }
         const GateClock::rep now      = GateClock::now().time_since_epoch().count();
         GateClock::rep       deadline = nextCheckTick_.load( std::memory_order_relaxed );
         return now >= deadline && nextCheckTick_.compare_exchange_strong( deadline, now + kCheckIntervalTicks, std::memory_order_relaxed );
@@ -298,7 +292,6 @@ private:
     std::atomic<bool>           stopped_{ false };
     std::atomic<bool>           trippedOnce_{ false };
     bool                        byPressure_    = false;
-    std::atomic<std::uint64_t>  seamPrefixClaimed_{ 0 };
 };
 
 // ── the hard line: between phases (CLI) and before each MCP tool call ──────────────────────────────────────
@@ -371,22 +364,29 @@ inline std::string hardStopLine( std::string_view where )
          + "); stopped cleanly without an answer — " + std::string( kOverride );
 }
 
-// a stop that left nothing to answer from: a pressure stop names the pressure, a limit stop the limit
-inline std::string nothingBuiltLine( const MemoryStop& stop )
+// which line a soft stop crossed, spelled against the limit that sets it (a soft stop is never the limit itself)
+inline std::string stopCause( const MemoryStop& stop )
 {
     if( stop.byPressure )
     {
-        return "critical system memory pressure stopped the " + std::string( phaseName( stop.phase ) )
-             + " before anything was built; stopped cleanly without an answer — free memory and retry, or pass a smaller root";
+        return "under critical system memory pressure";
     }
-    return hardStopLine( phaseName( stop.phase ) );
+    return stop.phase == MemoryStop::Phase::Crawl
+         ? "at the crawl line (footprint growth of an eighth of the " + limitSpelling( stop.limitBytes ) + " limit)"
+         : "at the parse line (half of the " + limitSpelling( stop.limitBytes ) + " limit)";
+}
+
+// a soft stop that left nothing to answer from — named by its cause, never as the limit it did not reach
+inline std::string nothingBuiltLine( const MemoryStop& stop )
+{
+    return "the memory guard stopped the " + std::string( phaseName( stop.phase ) ) + " " + stopCause( stop )
+         + " before anything was built; stopped cleanly without an answer — " + std::string( kOverride );
 }
 
 // a verb that cannot carry the disclosure, facing a partial ingest
 inline std::string verbRefusalLine( const MemoryStop& stop, std::string_view verb )
 {
-    const std::string cause = stop.byPressure ? "under critical system memory pressure" : "at its line under the " + limitSpelling( stop.limitBytes ) + " limit";
-    return "the memory guard stopped the " + std::string( phaseName( stop.phase ) ) + " " + cause + "; " + std::string( verb )
+    return "the memory guard stopped the " + std::string( phaseName( stop.phase ) ) + " " + stopCause( stop ) + "; " + std::string( verb )
          + " cannot answer from a partial index — " + std::string( kOverride );
 }
 
@@ -394,10 +394,9 @@ inline std::string verbRefusalLine( const MemoryStop& stop, std::string_view ver
 inline std::string softStopLine( const IngestResult& ing )
 {
     const MemoryStop& m = ing.memoryStop;
-    std::string line = "the memory guard stopped the " + std::string( phaseName( m.phase ) )
-                     + ( m.byPressure ? " under critical system memory pressure" : " at its line under the " + limitSpelling( m.limitBytes ) + " limit" )
+    std::string line = "the memory guard stopped the " + std::string( phaseName( m.phase ) ) + " " + stopCause( m )
                      + ": this answer covers " + std::to_string( ing.files.size() ) + " files";
-    if( m.phase == MemoryStop::Phase::Parse )
+    if( m.parseCut )
     {
         line += ", " + std::to_string( m.parsedFiles ) + " of them parsed";
     }

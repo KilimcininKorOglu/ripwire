@@ -289,7 +289,7 @@ else
     no "(B2) rc=$rc header: $hdr"
 fi
 if [ "$parsed" = 10 ]; then
-    ok "(B2b) memory_parsed=10 of files=72: the first 10 files in sorted order, whatever order the pool drew"
+    ok "(B2b) memory_parsed=10 of files=72: exactly the first 10 files of the parse order"
 else
     no "(B2b) memory_parsed=${parsed:-<none>} (want exactly 10)"
 fi
@@ -298,12 +298,7 @@ for i in 2 3 4; do run_trip parse:10 "$FX" --max-memory=64M --no-cache >"$TMP/b2
 if cmp -s "$TMP/b2.out" "$TMP/b2r.out" && cmp -s "$TMP/b2.out" "$TMP/b2r2.out" && cmp -s "$TMP/b2.out" "$TMP/b2r3.out" && cmp -s "$TMP/b2.out" "$TMP/b2r4.out"; then
     ok "(B2f) a parse-stopped map is byte-identical across five runs"
 else
-    no "(B2f) parse-stopped runs differ (the kept set followed the pool's draw order)"
-fi
-if grep -q 'f p="a/f00.c"' "$TMP/b2.out" && ! grep -q 'p="d/' "$TMP/b2.out"; then
-    ok "(B2g) the kept files are the head of the sorted list (a/ present, d/ absent)"
-else
-    no "(B2g) the kept set is not the sorted prefix"
+    no "(B2f) parse-stopped runs differ"
 fi
 if xmllint --noout "$TMP/b2.out" 2>/dev/null; then
     ok "(B2c) the parse-stopped map is well-formed"
@@ -342,8 +337,8 @@ else
     no "(B3b) stdout: $( head -c 200 "$TMP/b3.out" )"
 fi
 grep '^ripwire:' "$TMP/b3.err" >"$TMP/b3.line"
-if [ "$( grep -c . "$TMP/b3.line" )" = 1 ] && grep -q 'memory limit' "$TMP/b3.line" && grep -q '64M' "$TMP/b3.line" && grep -q -- '--max-memory' "$TMP/b3.line" && grep -q 'RIPWIRE_MAX_MEMORY' "$TMP/b3.line"; then
-    ok "(B3c) one stderr line naming the limit and both overrides"
+if [ "$( grep -c . "$TMP/b3.line" )" = 1 ] && grep -q 'at the crawl line' "$TMP/b3.line" && grep -q '64M' "$TMP/b3.line" && grep -q -- '--max-memory' "$TMP/b3.line" && grep -q 'RIPWIRE_MAX_MEMORY' "$TMP/b3.line"; then
+    ok "(B3c) one stderr line naming the line crossed (the crawl line of the 64M limit) and both overrides"
 else
     no "(B3c) stderr: $( cat "$TMP/b3.err" )"
 fi
@@ -431,7 +426,7 @@ else
     no "(B9) rc=$rc header: $hdr stderr: $( grep '^ripwire:' "$TMP/b9.err" | head -c 200 )"
 fi
 run_trip pressure:1 "$FX" --no-cache >/dev/null 2>"$TMP/b9b.err"; rc=$?
-if [ "$rc" = 5 ] && grep -q '^ripwire: critical system memory pressure' "$TMP/b9b.err"; then
+if [ "$rc" = 5 ] && grep -q '^ripwire: the memory guard stopped the crawl under critical system memory pressure before anything was built' "$TMP/b9b.err"; then
     ok "(B9b) a pressure stop with nothing built: exit 5, the line names the pressure, not a limit"
 else
     no "(B9b) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b9b.err" | head -c 200 )"
@@ -482,6 +477,37 @@ if [ "$rc" = 5 ] && grep -q '^ripwire: the memory guard stopped an ingest this a
     ok "(B11b) --index-out over a cut parse: rc=$rc and the memory line (not only 'failed to write')"
 else
     no "(B11b) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b11b.err" | head -c 250 )"
+fi
+
+# (B12) a REAL parse stop keeps what it parsed (review D1). eager:1 only drops the 5 s time gate — the footprint reading,
+#       the parse line and the cut rule are the real ones. The big files sort LAST (z/), and the parse order is largest
+#       first, so a rule that kept a prefix of the SORTED list would keep nothing here (rc 5, "nothing built"); the
+#       claimed-prefix rule keeps the z/ files it parsed. The line crossed is named: the parse line, half the limit.
+EG="$TMP/eg"; mkdir -p "$EG"
+python3 - "$EG" <<'PY2'
+import os, sys
+root = sys.argv[1]
+for d in "abcdefgh":
+    os.makedirs( os.path.join( root, d ), exist_ok=True )
+    for f in range( 40 ):
+        open( os.path.join( root, d, "f%02d.c" % f ), "w" ).write( "int %s_%d(int x){ return x; }\n" % ( d, f ) )
+os.makedirs( os.path.join( root, "z" ), exist_ok=True )
+for f in range( 80 ):
+    open( os.path.join( root, "z", "big%02d.c" % f ), "w" ).write(
+        "".join( "int z%d_%d(int x){ return x>0 ? z%d_%d(x-1)+%d : %d; }\n" % ( f, k, f, ( k + 1 ) % 1500, k, k ) for k in range( 1500 ) ) )
+PY2
+RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG" --no-cache --max-memory=128M --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
+hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b12.out" | head -1 )"
+parsed="$( printf '%s' "$hdr" | grep -oE 'memory_parsed=[0-9]+' | grep -oE '[0-9]+' )"
+if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=parse"*) true;; *) false;; esac && [ "${parsed:-0}" -ge 2 ] && grep -q 'p="z/' "$TMP/b12.out"; then
+    ok "(B12) a real parse stop (128M, eager readings) answers from the $parsed files it parsed — the big z/ files, first in the parse order"
+else
+    no "(B12) rc=$rc header: $hdr stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 200 )"
+fi
+if grep -q '^ripwire: the memory guard stopped the parse at the parse line (half of the 128M limit)' "$TMP/b12.err"; then
+    ok "(B12b) the stop line names the parse line (half of the limit), not the limit it did not reach"
+else
+    no "(B12b) stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 250 )"
 fi
 
 echo "=== (C) a default run is byte-identical to the guard made huge ==="

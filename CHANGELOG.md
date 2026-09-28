@@ -33,15 +33,18 @@ refuses a partial index, and past the limit itself — or when nothing was built
 with one line naming the limit and the override. The MCP server refuses a tool call over the limit by name and stays
 up; every answer from an index the guard cut carries `_memory_stop` in its envelope. A stop inside a verb's own
 secondary ingest that the verb does not read turns a CLI exit into 5 with one line, so it cannot pass as whole.
-A parse stop keeps the first K files of the SORTED list whose parse was claimed and drops the facts of any later file
-the pool reached first, so a partial map is a function of the tree and `memory_parsed=K` alone. Nothing derived from a
+A parse stop keeps every file it parsed — the first K of its parse order (cache misses first, then largest first) — so a
+partial map repeats for a given tree, cache and `memory_parsed=K`; stop messages name the line that was crossed (the
+crawl line, an eighth of the limit; the parse line, half of it; or OS pressure), never the limit a soft stop did not
+reach. Nothing derived from a
 cut ingest is persisted: not the ingest cache, not the `--quality-delta` HEAD snapshot or churn-window body hashes,
 and MCP `quality_baseline` refuses rather than pin a partial floor. Any verb whose own internal ingest was cut (a
 quality snapshot, `--index-out`) exits 5 with the line whatever code it chose, since a verdict or a refusal computed
 from a partial read is not one; `--html` and `--mermaid` refuse a partial index like every verb but the map; over MCP
 an internal cut adds `_memory_stop` to the answer or the guard's sentence to the error. A tool call over the limit
 first releases the resident index and re-reads the footprint, and only then refuses, saying the server must be
-restarted. The trip seam `RIPWIRE_TEST_MEMGUARD=crawl:N|pressure:N|parse:N|request:N` is additive — it only adds a
+restarted (a floor: on macOS the allocator may keep freed pages, so the re-read can stay over and a restart be needed;
+trimming the allocator is deferred). The trip seam `RIPWIRE_TEST_MEMGUARD=crawl:N|pressure:N|parse:N|request:N` is additive — it only adds a
 trip and never replaces a real reading, so it can make a run stricter, never unguarded — and it and
 `RIPWIRE_MAX_MEMORY` are cleared by `test/lib/clean-env.sh`. Gate: `test/memguardcheck.sh` (B)–(D), including a
 real-footprint arm (this repo's `src/` under `--max-memory=64M`), a warm-cache arm and a two-run snapshot arm.
@@ -66,7 +69,7 @@ MCP missing-path refusal; the server stays up. An MCP request's `path=` (or any 
 way — an agent fills it from its session's directory, and the #350 incident was exactly `grep path=$HOME` — except the
 root the server was started on (`ripwire ~ --mcp` was typed by a human and is answered). The three hooks that pass the
 session directory to ripwire (`ripwire-claude-route.sh`, `ripwire-codex-route.sh`, `ripwire-claude-toolroute.sh`)
-exit silently, before any git or ripwire call, when that directory is `$HOME` (a dotfiles git repository included),
+exit silently, before any crawl (after one `git rev-parse` and one bare `ripwire` probe), when that directory is `$HOME` (a dotfiles git repository included),
 `/` or a system tree — they ask the binary (a bare `ripwire` run from that directory names it "no project root"),
 so there is one rule, not a second list. The LSP server's `initialize.rootUri` follows the same rule, except the root
 typed as `ripwire <root> --lsp`. Home is `$HOME` when it is an absolute path, else `USERPROFILE` (native Windows); a
