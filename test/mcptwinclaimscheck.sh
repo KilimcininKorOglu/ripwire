@@ -135,3 +135,5 @@ else:
 print( "%d CHECK(S) FAILED" % fails if fails else "ALL CHECKS PASSED" )
 sys.exit( 1 if fails else 0 )
 PY
+rc=$?
+exit $rc
