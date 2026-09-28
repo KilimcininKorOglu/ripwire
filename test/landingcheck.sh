@@ -285,7 +285,7 @@ g3 update-index --add --cacheinfo "100644,$blob,third_party/$longName"
 g3 commit -q -m "vendored tree with an unextractable path"
 g3 checkout -q -f main
 V3="$( "$BIN" "$R3" --stray-content --plan 2>/dev/null )"; v3rc=$?
-[ "$v3rc" -eq 0 ] && ok "REPO3: --stray-content --plan ran clean (rc=0)" || no "REPO3 run failed (rc=$v3rc)"
+if [ "$v3rc" -eq 0 ]; then ok "REPO3: --stray-content --plan ran clean (rc=0)"; else no "REPO3 run failed (rc=$v3rc)"; fi
 echo "$V3" | grep -q '<arm ref="vend" [^>]*ok="1"' \
     && ok "REPO3: the arm over an unextractable third_party/ path is scouted (ok=1): the prune skips it at archive time" \
     || { no "REPO3: the vend arm refused — the materialization extracted a subtree the crawl prunes"; echo "$V3" | grep -o '<arm [^>]*>'; }

@@ -360,7 +360,6 @@ serialize.h	packHops	fopen	1	closes	if-scoped; fclose after the read loop
 serialize.h	packLego	fopen	1	closes	if-scoped; fclose after the read loop
 serialize.h	packOutline	fopen	1	closes	skips only a failed open; fclose after the read loop
 serialize.h	packSignatures	fopen	2	closes	both skip only a failed open; fclose after each read loop
-serialize.h	packSource	fopen	1	closes	skips only a failed open; fclose after the read loop
 serialize.h	renderWholeFiles	fopen	1	closes	returns only on a failed open; fclose before the empty-body return
 verbs_change.h	readBriefFile	fopen	1	closes	continue-only loop; fclose before the return
 verbs_change.h	readTraceText	fopen	1	closes	returns only on a failed open; fclose after the read loop

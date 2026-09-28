@@ -333,7 +333,7 @@ LEAD="$( sed -E 's/(-->)<[^!].*/\1/' "$TMP/pt.xml" | head -c 20000 )"
 printf '%s' "$LEAD" | grep -q 'src truncated=1 lines=1-K/T' && printf '%s' "$LEAD" | grep -q 'budget_bytes=' \
     && ok "(B8) default (compact) dialect: the leading legend defines truncated=/lines= and src_cut's budget_bytes=" \
     || no "(B8) default dialect: the leading legend does not define the cut's attributes"
-xmllint --noout "$TMP/pt.xml" 2>/dev/null && ok "(B8) the cut document is well-formed" || no "(B8) the cut document is not well-formed"
+if xmllint --noout "$TMP/pt.xml" 2>/dev/null; then ok "(B8) the cut document is well-formed"; else no "(B8) the cut document is not well-formed"; fi
 if grep -qE 'src_cut|truncated=' "$TMP/pt_whole.xml"; then no "(B8) an uncut --pack-top-n answer carries cut disclosure"
 else ok "(B8) an uncut --pack-top-n answer carries no cut disclosure (4 whole files: $( grep -c '<src ' "$TMP/pt_whole.xml" | tr -d ' ' ) <src>)"; fi
 

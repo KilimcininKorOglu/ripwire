@@ -3742,7 +3742,7 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // TmpTreeGuard owns.
     const std::string archiveFile = tmpRoot + ".tar";
     const std::string archiveCmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " --";
+                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " -- ";
     // The pruned archive is an optimisation, never a new way to fail: git refuses an exclude-only pathspec over an
     // EMPTY tree ("pathspec … did not match any files", measured on git 2.50), which is a legal base. Any refusal of
     // the pruned form falls back to the plain archive, whose exit status then decides as it always did.
