@@ -15,6 +15,25 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — three MCP answers no longer claim more than they checked (whereis, uses, find_symbol)
+
+- **MCP `whereis`** labelled HEAD rows with the lexical shape test (`head_labels="lexical"`), and that test
+  reads a call whose line wraps after its closing `)` as a definition: `const auto ep = rw::escapeXml( …`
+  came back `kind="def"` where the CLI said `kind="ref"`. The twin now hands the tree scan the index's
+  definition sites, through the same helper the CLI calls, so HEAD rows and `head_labels=` match the CLI.
+  The lexical fallback is unchanged and still disclosed (`head_labels="lexical"`): no indexed definition of the name,
+  or a working tree that drifted from HEAD.
+- **MCP `uses`** (and the `batch` sub-query) refused a name with "no indexed definition and no use-site under that
+  spelling". The scan behind it reads indexed reference edges only, so a member access on an unindexed field
+  (a TypeScript interface property read as `row.valueToken`) is a use-site it never sees. The refusal now says
+  "no indexed reference" and points at `grep` for text uses. Indexing TypeScript interface properties is not
+  part of this fix.
+- **MCP `find_symbol`** carries two arrays, and `count`/`hop_tested`/`hop_untested` total `calls` only; a leaf read
+  `"count":0` beside `"calledBy_total":67`. A new `"count_of":"calls"` key names the array those keys total.
+  `find_referencing_symbols` has one array and is unchanged.
+
+Gate: `test/mcptwinclaimscheck.sh` (fails on the previous binary with 6 failed checks, passes on this one).
+
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any

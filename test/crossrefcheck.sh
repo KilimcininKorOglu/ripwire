@@ -432,8 +432,8 @@ printf '%s' "$( qz "engine.cpp:computeBudget" --legend=full )" | grep -oE '<!--.
     && ok "§B11.2 the legend defines the selector-note element it emits" \
     || no "§B11.2 selector-note is emitted and defined nowhere in the legend"
 
-# MCP PARITY — the MCP whereis verb never calls getIndex(), so an index-based guard could only ever have
-# covered the CLI. This one lives in the shared writer; assert the MCP arm really does inherit it.
+# MCP PARITY — the MCP whereis verb reads its index only for HEAD labels (§A7), so an index-based guard in the
+# CLI handler would cover the CLI alone. This one lives in the shared writer; assert the MCP arm inherits it.
 if command -v python3 >/dev/null 2>&1; then
     MW="$( printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"whereis","arguments":{"path":"%s","symbol":"engine.cpp:computeBudget"}}}\n' "$R" \
            | "$BIN" --mcp 2>/dev/null \

@@ -523,16 +523,20 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
 // no forked logic. Unlike `merge_scout` (CLI-only: it takes a hand-authored ref LIST), these three take no
 // multi-ref UX — a symbol, an optional substring filter, nothing else — so they carry over cleanly.
 //
-// `stray_content` and `whereis` read OTHER refs' blobs, which the MCP index never ingested; they use `root`
-// only, and deliberately do NOT touch getIndex() (no rebuild, no staleness coupling). `flags` DOES need the
-// crawled file list, so it goes through getIndex() like every other index-backed verb.
+// `stray_content` and `whereis` read OTHER refs' blobs, which the MCP index never ingested. `stray_content`
+// uses `root` only and does NOT touch getIndex(); `whereis` reads the index for one thing, the HEAD rows'
+// def labels (§A7 below), exactly as its CLI twin does. `flags` needs the crawled file list, so it goes
+// through getIndex() like every other index-backed verb.
 
 // `whereis` verb: which ref's tree defines or mentions SYM. "" ⇒ not a git repo (the caller reports it).
 //
-// §A7: this surface passes NO WhereisEvidence, so its HEAD rows keep the lexical shape heuristic and the root
-// says so (head_labels="lexical"). That is deliberate and is the paragraph above's rule, not an oversight:
-// supplying the index's def sites means calling getIndex(), which would couple this verb to index staleness
-// for the sake of a LABEL. The CLI, which has already built an index for the run, supplies them.
+// §A7 (0.6.6 command sweep, reversing the earlier "no index for a label" rule): this surface used to pass NO
+// WhereisEvidence, so its HEAD rows kept the lexical shape heuristic — and that heuristic called a wrapped call
+// site kind="def" (`const auto ep = rw::escapeXml( …` read as a definition) where the CLI, holding the index,
+// said "ref". A false label is not a cheap label. The def sites now come from the same getIndex() every other
+// index-backed verb uses and the same crossref::whereisIndexDefSites the CLI calls, so HEAD rows and
+// head_labels= are identical on both surfaces (test/mcptwinclaimscheck.sh (A)). The lexical fallback is the
+// CLI's own: no indexed def of the name, or a working tree drifted from HEAD, and head_labels="lexical" says so.
 //
 // §B6 M4: `page` is the request's limit/offset (mcpPageArgs, above). writeWhereisPage is the SAME entry
 // point the CLI --whereis calls with cfg.pageLimit/cfg.pageOffset, so the legend's "raise the default cap
@@ -546,11 +550,7 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
 //     true and useless hits="0" shaped exactly like a name this repo never had. An agent holding a diff
 //     hunk or a stack frame — the caller this spelling exists for — got the wrong answer, confidently.
 //   * the near-miss on a zero — "is this a name this repo never had, or a keystroke away from one it has?"
-// The header above says this verb deliberately avoids getIndex(), and that reasoning is intact and kept:
-// it was about supplying def sites for a LABEL (head_labels= stays "lexical" here, which the root still
-// discloses), not about resolving the caller's own selector or explaining a zero. Both calls below are
-// LAZY — the seed one only when the selector starts with '@', the near-miss one only on an empty hit list
-// — so the ordinary request still touches no index and pays nothing. On an unresolvable seed the function
+// Both of those index reads, and the §A7 def sites above, share the one getIndex() build. On an unresolvable seed the function
 // returns "" with `seedFault` set, and the dispatcher speaks the shared refusal triple over -32602 rather
 // than answering a question the caller did not ask.
 inline std::string whereisText( const std::string& root, const std::string& symbol, const std::string& filter,
@@ -569,7 +569,8 @@ inline std::string whereisText( const std::string& root, const std::string& symb
         seedSpec = sel;
         sel      = getIndex( root ).ing.symbols[ seeded.front() ].name;
     }
-    crossref::WhereResult res = crossref::computeWhereis( root, sel, filter );
+    const std::vector<crossref::IndexDefSite> indexDefs = crossref::whereisIndexDefSites( getIndex( root ).ing, sel, root );
+    crossref::WhereResult res = crossref::computeWhereis( root, sel, filter, crossref::WhereisEvidence{ nullptr, indexDefs } );
     if( !res.ok )
     {
         return {};
@@ -754,8 +755,13 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // the UNION of all of their neighbours), count= = the un-windowed row total, hop_tested/hop_untested =
     // the partition over that full set.
     const auto [ chNextSelector, chNextIsBare ] = callHierarchyNextSelector( ing, chRows, name, referencingOnly );
+    // 0.6.6 command sweep: find_symbol carries TWO arrays, and count/hop_tested/hop_untested describe `calls`
+    // only — "count":0 sat beside "calledBy_total":67 on a leaf and read as a contradiction. The CLI key names
+    // stay (mcpattrparitycheck), and count_of names the array they total, right beside them
+    // (test/mcptwinclaimscheck.sh (C)). find_referencing_symbols has one array, so it needs no label.
     out += ",\"defs\":" + std::to_string( chRows.matches.size() )
          + ",\"count\":" + std::to_string( rowTotal )
+         + ( referencingOnly ? "" : ",\"count_of\":\"calls\"" )
          + ",\"hop_tested\":" + std::to_string( chTested.tested )
          + ",\"hop_untested\":" + std::to_string( chTested.untested )
          + declinedCallsKeyJson( chRows.declinedCalls )   // the CLI root's declined_calls=, for the direction count= describes
@@ -2872,9 +2878,14 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
         }
         return {};                                   // external="1" with real sites: a valid answer, not a typo
     }
+    // 0.6.6 command sweep: this used to say "no use-site under that spelling", which the loop above cannot
+    // know — it reads INDEXED reference edges only. A member access on a field the index does not hold (a
+    // TypeScript interface property: `row.valueToken`) is a real use-site this scan never sees. The refusal
+    // names exactly what was checked and where a textual answer lives (test/mcptwinclaimscheck.sh (B)).
     return mcprefuse::notFound( ing, "symbol", symbol,
-                                "no indexed definition and no use-site under that spelling — external names with "
-                                "real use-sites are answered with external=\"1\", this one has neither" );
+                                "no indexed definition and no indexed reference under that spelling (unindexed member "
+                                "accesses are not scanned; the grep verb finds text uses) — external names with indexed "
+                                "references are answered with external=\"1\"" );
 }
 
 // The @FILE:LINE rebind the name-matching scan verbs serve through: a resolvable line-seed becomes the
