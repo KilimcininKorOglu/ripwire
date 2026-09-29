@@ -4030,6 +4030,36 @@ int main( int argc, char** argv )
     return rc;
 }
 
+// #350: the flags on the map's own path (no report verb won) that cannot answer from a memory-guard partial index, in
+// the order they are named: the renderings with no header to carry memory_stop= (--html, --mermaid); the modifiers that
+// resolve a SELECTOR against the index — --expand/--outline a symbol name (one in a file the guard never parsed would
+// read as "matched no symbol", a false none-found), --in=DIR a directory against the crawl's files (only a crawl stop
+// cuts those: a directory it never reached would read as "no indexed file"); and --pin-census, which writes the
+// resolver's census to a file with no header to carry the cut. nullptr: the map answers, disclosed in its header.
+static const char* mapFlagRefusingPartial( const rw::Config& cfg, const rw::MemoryStop& stop )
+{
+    const struct
+    {
+        bool        active;
+        const char* flag;
+    } rows[] = {
+        { cfg.html, "--html" },
+        { cfg.mermaid, "--mermaid" },
+        { !cfg.expand.empty(), "--expand" },
+        { !cfg.outline.empty(), "--outline" },
+        { !cfg.inDir.empty() && stop.phase == rw::MemoryStop::Phase::Crawl, "--in" },
+        { !cfg.pinCensus.empty(), "--pin-census" },
+    };
+    for( const auto& row : rows )
+    {
+        if( row.active )
+        {
+            return row.flag;
+        }
+    }
+    return nullptr;
+}
+
 // Everything main() did after parseArgs — the verb dispatch — behind one seam so --legend=compact can wrap the
 // run's stdout once (runWithCompactLegend above) instead of teaching ~60 emitters a second dialect.
 // #350 layer 3: a memory-guard stop leaves a PARTIAL ingest. Only the default map carries the disclosure in its own
@@ -4051,16 +4081,7 @@ static int memoryStopExit( const rw::IngestResult& ing, const rw::Config& cfg, c
         rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::nothingBuiltLine( stop ) );
         return 5;
     }
-    // the map's own renderings with no header to carry memory_stop= (--html, --mermaid) refuse like any other verb
-    // …and so do the map modifiers that resolve a SELECTOR against the index: --expand/--outline a symbol name (one in a
-    // file the guard never parsed would read as "matched no symbol", a false none-found), --in=DIR a directory against
-    // the crawl's files (only a crawl stop cuts those: a directory it never reached would read as "no indexed file");
-    // --pin-census writes the resolver's census to a file that has no header to carry the cut
-    const bool        inDirCut     = !cfg.inDir.empty() && stop.phase == rw::MemoryStop::Phase::Crawl;
-    const char* const refusingVerb = winnerVerb != nullptr ? winnerVerb
-                                   : cfg.html ? "--html" : cfg.mermaid ? "--mermaid"
-                                   : !cfg.expand.empty() ? "--expand" : !cfg.outline.empty() ? "--outline"
-                                   : inDirCut ? "--in" : !cfg.pinCensus.empty() ? "--pin-census" : nullptr;
+    const char* const refusingVerb = winnerVerb != nullptr ? winnerVerb : mapFlagRefusingPartial( cfg, stop );
     if( refusingVerb != nullptr )
     {
         DISCLOSE( Diagnostics::answerRefused, "main: a verb other than the map refuses a memory-guard partial ingest — exit 5, one stderr line" );
