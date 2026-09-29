@@ -36,7 +36,7 @@ echo "fnliteralcheck: BIN=$BIN  FIX=$FIX"
 # ---- 1. every literal-bound name is ONE definition WITH a body ------------------------------------------
 echo "=== 1. --callees: literal-bound names are bodied definitions (bodyless_defs absent) ==="
 header(){ ( cd "$FIX" && "$BIN" . --callees="$1" --no-cache --legend=compact 2>/dev/null ) | grep -oE '<callees [^>]*>' | head -1; }
-for name in blockArrow conciseArrow fnExprConst exportedArrow castArrow satisfiesArrow firstOfTwo secondOfTwo handle \
+for name in blockArrow conciseArrow bareParam fnExprConst exportedArrow castArrow satisfiesArrow firstOfTwo secondOfTwo handle \
             jsArrow jsConcise jsLegacyVar onPair jsField jsExported \
             luaAssigned luaLocal luaField luaField2 \
             py_lambda; do
@@ -77,6 +77,7 @@ attr firstOfTwo  loc    1 "its own declarator line, not the two-line declaration
 attr secondOfTwo loc    1 "its own declarator line, not the two-line declaration"
 attr luaField    loc    1 "its own table field, not the whole four-line table"
 attr blockArrow  params 2 "block-bodied arrow"
+attr bareParam   params 1 "x => …: a lone parameter without a list"
 attr blockArrow  cx     2 "one if"
 attr luaAssigned params 2 "M.f = function(x, y)"
 attr luaAssigned cx     2 "one if"
@@ -90,7 +91,7 @@ attr py_lambda   cx     1 "the lambda, read from the lambda"
 # ---- 4. a callback passed as an argument never becomes a definition ---------------------------------------
 echo "=== 4. anonymous callbacks are not definitions ==="
 n="$( grep -c '<s t=' "$TMP/m" )"
-[ "$n" = "36" ] && ok "symbol rows = 36 (no anonymous callback minted a def)" || no "expected 36 symbol rows — got $n"
+[ "$n" = "37" ] && ok "symbol rows = 37 (no anonymous callback minted a def)" || no "expected 37 symbol rows — got $n"
 if grep -qE '<s t="[^"]*" n=""' "$TMP/m"; then no "an unnamed symbol row appeared"; else ok "no unnamed symbol rows"; fi
 
 # ---- 5. determinism ---------------------------------------------------------------------------------------

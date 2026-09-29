@@ -19,6 +19,9 @@ const blockArrow = ( a: number, b: number ) => {
 // concise arrow const — the body is an expression, not a statement_block
 const conciseArrow = ( p: string ) => sink( p.length );
 
+// a lone parameter without parens — no formal_parameters list: params=1 all the same
+const bareParam = x => sink( x );
+
 // function_expression bound to a const
 const fnExprConst = function( x: number ) { return sink( x ); };
 
@@ -68,6 +71,6 @@ export function useAll(): number
     w.handle( 1 );
     declaredOnly( 1 );
     declaredConst( 1 );
-    return blockArrow( 1, 2 ) + conciseArrow( "a" ) + fnExprConst( 1 ) + exportedArrow( 1 ) + castArrow( 1, 2, 3 )
+    return blockArrow( 1, 2 ) + conciseArrow( "a" ) + bareParam( 1 ) + fnExprConst( 1 ) + exportedArrow( 1 ) + castArrow( 1, 2, 3 )
            + satisfiesArrow( 1 ) + firstOfTwo( 1 ) + secondOfTwo( 1, 2 ) + overloaded( 1 ) + withCallback( [] ).length;
 }

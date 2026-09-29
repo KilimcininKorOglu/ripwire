@@ -1904,8 +1904,8 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             // defBodyNodeOf = the `body:` field, PLUS the macro-edges round's one addition: a #define's
             // replacement text (`value:` field) is adopted as a macro symbol's body, set before the climb
             // below so the climb is skipped for macros — PLUS a name bound to a function literal
-            // (kFnLiteralBinding): the literal's body, with `fn` the node params/cx/nest read from.
-            const DefBodyNodes own = le.lang == Lang::Elixir ? DefBodyNodes{ elixirBody( roleNode, src ), roleNode, roleNode }
+            // (kFnLiteralBinding): the literal's body, with `literal` the node params/cx/nest read from.
+            const DefBodyNodes own = le.lang == Lang::Elixir ? DefBodyNodes{ elixirBody( roleNode, src ), {}, roleNode }
                                                               : defBodyNodeOf( roleNode, nameNode, kind, le.lang );
             TSNode defNode = own.span;
             TSNode body    = own.body;
@@ -2042,8 +2042,9 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             const bool  fnOrMethod = ( kind == SymKind::Function || kind == SymKind::Method );
             // LB-E: for a testmacroblock the body SIBLING is where the code lives — complexityOf walks
             // INSIDE its root node, so handing it defNode (the bare macro statement) would count nothing.
-            // A literal-bound name measures its LITERAL (own.fn); every other def measures defNode, as before.
-            const TSNode metricNode = ts_node_eq( own.fn, roleNode ) ? defNode : own.fn;
+            // A literal-bound name measures its LITERAL; every other def measures defNode, as before.
+            const bool   literalBound = !ts_node_is_null( own.literal );
+            const TSNode metricNode   = literalBound ? own.literal : defNode;
             const auto [ cxVal, ccxVal, nestVal, localsVal, ppAltVal, humpsVal, deepVal, evVal, evWhyVal ] = fnOrMethod ? complexityOf( spanThroughBody ? body : metricNode, src, le.lang ) : Complexity{ 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, {} };
             d.cx        = cxVal;
             d.ccx       = ccxVal;
@@ -2059,7 +2060,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 const std::uint32_t endRow   = ts_node_end_point( spanThroughBody ? body : defNode ).row;   // LB-E: rows through the sibling block
                 d.loc = ( endRow >= startRow ) ? ( endRow - startRow + 1u ) : 1u;
             }
-            d.params    = fnOrMethod ? ( le.lang == Lang::Elixir ? elixirParams( defNode, src ) : countParams( metricNode ) ) : std::uint16_t( 0 );
+            d.params    = fnOrMethod ? ( le.lang == Lang::Elixir ? elixirParams( defNode, src ) : paramCountOf( metricNode, literalBound ) ) : std::uint16_t( 0 );
             // LB-E: a testmacroblock's parameter surface is the MACRO's business, not visible here — claim
             // inexact so the resolver's arity narrowing never trusts params=0 on a test-title symbol.
             d.arityExact = ( fnOrMethod && !isTestMacroBlock ) ? std::uint8_t( cc_paramArityExact( metricNode, le.lang, kind ) ? 1 : 0 ) : std::uint8_t( 0 );   // B2.2

@@ -25,9 +25,11 @@ assignment, the table) owns no `body:` field, so each read as a bodyless declara
 A name bound to a function literal now owns that literal's body (one data table, `kFnLiteralBinding` in
 `src/ingest_relations.h`: the languages, the literal node kinds, the value-carrying fields, the positional value
 list and the cast/paren wrappers — JS, TS/TSX, Lua and Python today). Params, cx and nest read from the literal, so a
-typed const's annotation no longer lends the arrow its parameter count, and a declaration binding several names
+typed const's annotation no longer lends the arrow its parameter count, a bare `x => …` counts its one parameter, and
+a declaration binding several names
 (`const a = () => …, b = () => …`, a Lua table of function fields) gives each name its own span, so its calls
-attribute to it. On a 583-file TypeScript agent repo: `--biggest-first` measures 2,083 functions (was 63); summed
+attribute to it. On a 583-file TypeScript agent repo: `--biggest-first`, `--ensemble` and `--quality-panel` measure
+2,083 functions (was 63), `--clones` sees 32,714 lines of function body (was 819); summed
 `bodyless_defs` over every function/method name 2,043 → 23 (the 23 are interface signatures and data keys); edges
 3,894 → 3,856 and tier-3 `declined` 55 → 133, because a bodied closure no longer drops out of the candidate set as a
 "declaration" and hands a same-named method elsewhere a guessed edge — the call is now bound locally or declined. A

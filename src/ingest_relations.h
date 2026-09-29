@@ -118,6 +118,7 @@ struct FnLiteralBindingTable
     std::array<NodeField, 2>        valueFields;  // fields that carry the bound value: JS/TS declarator/pair/field `value:`, JS/Python assignment `right:`
     std::array<std::string_view, 1> valueLists;   // positional value lists — Lua `a = v`: the list's FIRST `value:` is the bound value (tags.scm anchors it)
     std::array<std::string_view, 3> wrappers;     // cast/paren wrappers between binding and literal: `((x) => …) as T` / `satisfies T`
+    std::array<NodeField, 1>        bareParam;    // a literal's lone parameter spelled WITHOUT a list — JS/TS `x => …` — counts as one
 };
 inline constexpr FnLiteralBindingTable kFnLiteralBinding = {
     { Lang::JavaScript, Lang::TypeScript, Lang::Lua, Lang::Python },
@@ -125,6 +126,7 @@ inline constexpr FnLiteralBindingTable kFnLiteralBinding = {
     { NodeField::Value, NodeField::Right },
     { "expression_list" },
     { "parenthesized_expression", "as_expression", "satisfies_expression" },
+    { NodeField::Parameter },
 };
 
 // the value `binding` binds, through the wrappers: a value field, else the first `value:` of a positional value
@@ -191,16 +193,16 @@ inline FnLiteralBinding fnLiteralBoundTo( TSNode roleNode, TSNode nameNode, Lang
 // forward decl. Kept out of captureTagsFacts (the file's densest dispatch point) behind one call.
 //
 // A function/method whose def node owns no body and whose name is bound to a function literal
-// (kFnLiteralBinding) takes the LITERAL's body, and `fn` names the literal so params/cx/nest read from the
+// (kFnLiteralBinding) takes the LITERAL's body, and `literal` names it so params/cx/nest read from the
 // function itself rather than from the declaration around it (a typed const's annotation carries its own
-// formal_parameters ahead of the arrow). `span` narrows to the one binding when the def node binds several
+// formal_parameters ahead of the arrow); null for every other def. `span` narrows to the one binding when the def node binds several
 // names (`const a = …, b = …;`, a Lua table of function fields) so each name's calls attribute to it alone;
 // a def node that binds one name keeps its own span, byte-for-byte.
 struct DefBodyNodes
 {
-    TSNode body;   // null: a declaration
-    TSNode fn;     // the node metrics read from
-    TSNode span;   // the node the symbol's byte/row span covers
+    TSNode body;      // null: a declaration
+    TSNode literal;   // the function literal the name is bound to — metrics read from it; null: not literal-bound
+    TSNode span;      // the node the symbol's byte/row span covers
 };
 inline DefBodyNodes defBodyNodeOf( TSNode roleNode, TSNode nameNode, SymKind kind, Lang lang ) noexcept
 {
@@ -211,16 +213,35 @@ inline DefBodyNodes defBodyNodeOf( TSNode roleNode, TSNode nameNode, SymKind kin
     }
     if( !ts_node_is_null( body ) || ( kind != SymKind::Function && kind != SymKind::Method ) )
     {
-        return { body, roleNode, roleNode };
+        return { body, {}, roleNode };
     }
     const auto [ literal, binding ] = fnLiteralBoundTo( roleNode, nameNode, lang );
     if( ts_node_is_null( literal ) )
     {
-        return { body, roleNode, roleNode };
+        return { body, {}, roleNode };
     }
     const bool oneOfSeveral = !ts_node_eq( binding, roleNode ) && ts_node_named_child_count( roleNode ) > 1
                               && ts_node_eq( ts_node_parent( binding ), roleNode );
     return { fieldChild( literal, NodeField::Body ), literal, oneOfSeveral ? binding : roleNode };
+}
+
+// a def's parameter count, read from `metricNode` (the literal for a literal-bound name): its parameter list's
+// count, or one for a literal whose lone parameter has no list (`x => …`), which countParams cannot see.
+inline std::uint16_t paramCountOf( TSNode metricNode, bool literalBound )   // NOT noexcept — countParams allocates
+{
+    const std::uint16_t listed = countParams( metricNode );
+    if( listed != 0 || !literalBound )
+    {
+        return listed;
+    }
+    for( const NodeField f : kFnLiteralBinding.bareParam )
+    {
+        if( !ts_node_is_null( fieldChild( metricNode, f ) ) )
+        {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 // DART's body is a SIBLING, not a field and not a child. tree-sitter-dart emits `function_body` next to
