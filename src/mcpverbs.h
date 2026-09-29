@@ -1619,7 +1619,7 @@ inline std::string mentionsJson( const std::string& root, const std::string& sym
     const std::size_t unbackticked = unbacktickedDocsFor( ing, defs, fileRows, mnSingleRoot ).count;   // the CLI twin's unbackticked_docs=
     out += "\"docs\":" + std::to_string( fileRows.size() )
          + ",\"sections\":" + std::to_string( docs.size() )
-         + ( unbackticked > 0 ? ",\"unbackticked_docs\":" + std::to_string( unbackticked ) : std::string() )
+         + ( unbackticked > 0 ? ",\"unbackticked_docs\":" + std::to_string( unbackticked ) + ",\"unbackticked_docs_ceiling\":true" : std::string() )
          + pageDisclosure( mnPab, sizeof( mnPab ), mnPw.end - mnPw.begin, fileRows.size(), mnPw.end,
                            page.limit, page.offset, /*discloseCap=*/mnPw.end - mnPw.begin < fileRows.size(), kJsonPageSyntax )
          + ",\"files\":[";

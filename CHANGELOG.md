@@ -21,7 +21,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   that prose, a code block, `callers:SYM` or a span broken across lines never counts. `--mentions=escapeXml` read
   `docs="2"` on this repository while three more files named it. The root now carries `unbackticked_docs=N` (present
   only when non-zero, a whole-word text match and so a ceiling) with its reading in the same answer; the MCP
-  `mentions` twin carries the same count. On the tree before this change: `docs="2" unbackticked_docs="3"`. Gate: `test/mentionsverbcheck.sh` 7.
+  `mentions` twin carries the same count with `"unbackticked_docs_ceiling":true`. On the tree before this change: `docs="2" unbackticked_docs="3"`. Gate: `test/mentionsverbcheck.sh` 7.
 - `--pattern`: the matcher is kind- and text-exact, so `escapeXml($X, ...)` never matched `rw::escapeXml( s, esc )`
   and answered `hits="213"` with 46 qualified calls unmentioned (`--uses` counts 265). Those calls are still not hits
   — the pattern did not say `rw::` — but each candidate the exact match refused is asked once more with a pattern
@@ -46,8 +46,11 @@ definition (its `class` statement and the declared name it leaves) is no longer 
 import naming the class still is. On that repository `ConnectionPool.get` now lists its 5 real callers, with the
 4 counted in `declined_calls=`. `self.get()` and `cls.get()` inside the class keep their edges, and JavaScript,
 TypeScript and Ruby keep the file-grain rule (the first records no receiver shape; a bare Ruby call is a self call).
-The default map of this repository and of all 38 Python fixture trees under `test/` is byte-identical. Gate:
-`test/builtinbindcheck.sh` arm T (a same-file decoy; red before, green after).
+Because Python records no annotation as a binding, the class still counts when its name occurs in its own file beyond
+its definition (a parameter or local annotation, a string, `Optional[…]`/`List[…]`, `isinstance`, a return type — or a
+comment), read token-exact from the file; `registry.py` names `ConnectionPool` only on its `class` line. The default map
+of this repository and of all 38 Python fixture trees under `test/` is byte-identical. Gate: `test/builtinbindcheck.sh`
+arm T (a same-file decoy, plus eight same-file annotation shapes that must keep their edge).
 
 ### Fixed — `--stray-content --plan` and `--merge-scout` stop extracting the subtrees the crawl prunes
 
@@ -57,7 +60,8 @@ repository that is 249 MB of a 325 MB archive per arm; `--stray-content --plan` 
 loaded machine and a 60 s caller got no output at all. The archive now carries the denylist as exclude pathspecs
 (`:(exclude,glob)**/<dir>/**`), so an arm writes and deletes only what the crawl reads: one arm 14.4 s → 7.2 s,
 byte-identical output. It also stops an unextractable vendored path (a name component no filesystem accepts) from
-refusing the whole arm. An empty tree (git refuses an exclude-only pathspec over it) falls back to the plain archive. The one prune a pathspec cannot express — a directory holding `CMakeCache.txt` — is still
+refusing the whole arm. A tree holding a tracked symlink is archived whole, since a link into a pruned directory would
+dangle and drop its symbols (landingcheck REPO4). An empty tree (git refuses an exclude-only pathspec over it) falls back to the plain archive. The one prune a pathspec cannot express — a directory holding `CMakeCache.txt` — is still
 extracted and still pruned by the crawl. Gate: `test/landingcheck.sh` REPO3 (red before, green after).
 
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)

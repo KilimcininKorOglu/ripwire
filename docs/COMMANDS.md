@@ -1010,7 +1010,7 @@ $ ./build/ripwire . --verify="frobnicate(x)"
 
 **Answers:** find the markdown docs that name SYM in backticks — the doc-to-code link markdown docs (plans/designs) that name SYM in a `backtick` (doc↔code).
 
-An @FILE:LINE seed rebinds to the innermost enclosing definition and answers, disclosing sym= the pre-PR family — plumbing (--affected) to mid-task report (--situ) to gate (--test-gate):
+An @FILE:LINE seed rebinds to the innermost enclosing definition and answers, disclosing sym= (its name). unbackticked_docs=N (absent at 0): files naming SYM only outside such a span, a ceiling. the pre-PR family — plumbing (--affected) to mid-task report (--situ) to gate (--test-gate):
 
 **Try it**
 
@@ -1424,7 +1424,7 @@ $ ./build/ripwire . --match='(if_statement)'
 
 **Answers:** structural search written in CODE, not in node kinds: --pattern='foo($X, ...)' structural search written in CODE, not in node kinds: --pattern='foo($X, ...)'.
 
-$NAME binds one node (repeat it and both sites must match structurally); $_ binds nothing; ... (or $$$) is an ellipsis over siblings, matched by ONE first-match-wins probe under a hard cap -- both facts on the element. Comments are transparent, everything else is kind- and text-exact ($A + $B does not match a - b). Served: c cpp objc java csharp javascript typescript python go rust swift; ruby, bash and the data tiers are named in unsupported= instead of answered. A pattern no served grammar resolves, or that collapses to a bare token, is REFUSED -- never reported as hits=0.
+$NAME binds one node (repeat it and both sites must match structurally); $_ binds nothing; ... (or $$$) is an ellipsis over siblings, matched by ONE first-match-wins probe under a hard cap -- both facts on the element. Comments are transparent, everything else is kind- and text-exact ($A + $B does not match a - b). Served: c cpp objc java csharp javascript typescript python go rust swift; ruby, bash and the data tiers are named in unsupported= instead of answered. A pattern no served grammar resolves, or that collapses to a bare token, is REFUSED -- never reported as hits=0. A qualified call (ns::foo) is no hit for a bare foo; unmatched_qualified=N counts them.
 
 **Try it**
 
@@ -1645,7 +1645,7 @@ $ ./build/ripwire . --expand=compressBody --top-k=0 --compress
 
 ### `--pack-top-n=N`
 
-**Answers:** pack the N top symbols' bodies  [--pack-budget-bytes=B]
+**Answers:** pack the N top symbols' bodies  [--pack-budget-bytes=B] A budget cut is stated: truncated=1 lines=1-K/T on the cut file, src_cut shown= total= capped=1.
 
 **Try it**
 
@@ -1671,6 +1671,10 @@ $ ./build/ripwire . --pack-top-n=3 --top-k=0
 ```
 
 **Shaped by:** `--top-k`, `--token-budget`, `--for`
+
+**Caveats (stated by the binary):**
+
+- pack the N top symbols' bodies  [--pack-budget-bytes=B] A budget cut is stated: truncated=1 lines=1-K/T on the cut file, src_cut shown= total= capped=1.
 
 ### `--no-redact`
 

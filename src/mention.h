@@ -1489,8 +1489,8 @@ inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std
 
 // unbackticked_docs= (present only when non-zero): its reading, beside the root that carries it.
 inline constexpr const char* kUnbacktickedDocsLegend =
-    "<!-- unbackticked_docs=N: N more markdown files name of= as a whole word but not as a clean one-line backtick "
-    "span (prose, a code block, a span broken across lines) - not in docs=; a text match, so a ceiling -->";
+    "<!-- unbackticked_docs=N: N more markdown files, over readable indexed markdown, name of= as a whole word but not as "
+    "a clean one-line backtick span (prose, a code block, a span broken across lines) - not in docs=; a text match, so a ceiling -->";
 
 // The CLI root's share of it: the count, the attribute and the reading, all empty at zero and on a multi-root run.
 struct UnbacktickedDocs

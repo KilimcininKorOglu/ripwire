@@ -3693,7 +3693,18 @@ struct MaterializedTree
 // (--stray-content --plan: 12 arms, 116 s, timed out a 60 s caller with nothing printed). `glob` magic keeps `*` inside
 // one path component, the leading `**/` matches the root level too, and an exclude-only pathspec list still means
 // "everything else" (git >= 2.13). The one crawl prune a pathspec cannot express — a directory holding CMakeCache.txt —
-// is still extracted and still pruned by the crawl, so the ingest result is the one an unpruned archive gives.
+// is still extracted and still pruned by the crawl. What the prune CAN change is a tracked SYMLINK: one whose target sits
+// under a pruned directory (`src/v.c -> ../vendor/lib/v.c`) dangles in the pruned tree, and the crawl drops a dangling
+// link silently where the full tree indexed it. So a tree holding any symlink (mode 120000) is never pruned
+// (treeHasNoSymlink); with that guard the ingest result is the one an unpruned archive gives.
+// True only when `rev`'s tree provably holds no symlink: `git ls-tree -r` lists every entry's mode, and none is 120000.
+// An empty listing (an empty tree, or a git too old for --format) is not proof, so it answers false: the plain archive.
+inline bool treeHasNoSymlink( const std::string& root, const std::string& rev )
+{
+    const std::string modes = gitOneLine( root, "ls-tree -r " + shSingleQuote( "--format=%(objectmode)" ) + " " + shSingleQuote( rev ) + " 2>/dev/null" );
+    return !modes.empty() && modes.find( "120000" ) == std::string::npos;
+}
+
 inline std::string crawlSkipDirPathspecs()
 {
     std::string specs;
@@ -3746,7 +3757,9 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // The pruned archive is an optimisation, never a new way to fail: git refuses an exclude-only pathspec over an
     // EMPTY tree ("pathspec … did not match any files", measured on git 2.50), which is a legal base. Any refusal of
     // the pruned form falls back to the plain archive, whose exit status then decides as it always did.
-    const bool archivedPruned = pruneCrawlSkipDirs && os::system( ( archiveCmd + crawlSkipDirPathspecs() + " 2>/dev/null" ).c_str() ) == 0;
+    // A tree with a symlink is archived whole (see crawlSkipDirPathspecs: a link into a pruned subtree would dangle).
+    const bool archivedPruned = pruneCrawlSkipDirs && treeHasNoSymlink( root, rev )
+                             && os::system( ( archiveCmd + crawlSkipDirPathspecs() + " 2>/dev/null" ).c_str() ) == 0;
     if( !archivedPruned && os::system( ( archiveCmd + " 2>/dev/null" ).c_str() ) != 0 )
     {
         DISCLOSE( tree, MaterializedTree::DisclosureWhy::ArchiveFailed, "quality: git archive failed — committed tree unavailable" );

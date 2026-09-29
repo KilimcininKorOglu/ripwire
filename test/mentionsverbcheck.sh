@@ -25,6 +25,7 @@
 #    code block or a span broken across lines never counted, and nothing said so (--mentions=escapeXml read docs="2"
 #    while three more files named it). unbackticked_docs=N counts the markdown files that name it only that way,
 #    present only when non-zero, defined in the same document; the two fixture docs above name it only in backticks.
+#    The MCP `mentions` twin carries it as "unbackticked_docs" with "unbackticked_docs_ceiling":true beside it.
 #
 # Exits non-zero on any failure. Self-contained (own temp dir). Does NOT edit test/regression.sh.
 
@@ -144,5 +145,21 @@ printf '%s' "$ROOT7" | grep -q ' docs="2"' && printf '%s' "$ROOT7" | grep -q ' u
     || no "want docs=\"2\" unbackticked_docs=\"2\": $ROOT7"
 printf '%s' "$OUT7" | grep -qE '<!-- unbackticked_docs=N: ' \
     && ok "the same document defines unbackticked_docs=" || no "unbackticked_docs= rides with no reading"
+# the MCP twin carries the same count, marked a ceiling in JSON (the "_floor":true precedent, the other direction)
+MCP7="$( printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mentions","arguments":{"path":"'"$FIX"'","symbol":"widget_pipeline_process"}}}' \
+    | "$BIN" --mcp 2>/dev/null | tail -1 )"
+MCP7V="$( printf '%s' "$MCP7" | python3 -c '
+import sys, json
+try:
+    r = json.loads( sys.stdin.read() )
+    body = json.loads( r["result"]["content"][0]["text"] )
+    ok = body.get( "docs" ) == 2 and body.get( "unbackticked_docs" ) == 2 and body.get( "unbackticked_docs_ceiling" ) is True
+    print( "OK" if ok else "GOT:" + json.dumps( body )[ :300 ] )
+except Exception as e:
+    print( "GOT:unparseable %s" % e )
+' )"
+[ "$MCP7V" = OK ] && ok "MCP mentions: docs=2, unbackticked_docs=2 with unbackticked_docs_ceiling=true" \
+    || no "MCP mentions twin: $MCP7V"
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

@@ -23,6 +23,7 @@
 #include "pincensus.h"           // eval-only per-call-site decision census (--pin-census); inert unless armed
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
 #include "infra/sortutil.h"      // radix edge sorting for large integer-key graph edge lists
+#include "infra/namesplit.h"     // isIdentChar — BuiltinMethodGate::namedBeyondDefinition's identifier-token scan
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 
@@ -2227,6 +2228,8 @@ struct BuiltinMethodGate
     mutable HashMap<std::uint64_t, char>           refNamesMemo;  // the same question over fileRefClasses
     mutable std::string                            key;           // reused "<fileId>#name" buffer
     bool                                           active = false;
+    mutable std::uint32_t                          textFileId = 0xFFFFFFFFu;   // namedBeyondDefinition's one-file byte cache
+    mutable std::optional<std::string>             text;
 
     static bool isClassLike( const Symbol& s ) noexcept
     {
@@ -2321,8 +2324,57 @@ struct BuiltinMethodGate
                 names = std::ranges::any_of( named, [ & ]( std::uint32_t k ) { return cones.contains( cone, className[ owner ], className[ k ] ); } );
             }
         }
+        if( !names && byReferenceOnly && fileId < fileClasses.size() )
+        {
+            // Python records no annotation as a binding or reference, so `def f( p: Pool )`, `x: Pool = …`, `"Pool"`,
+            // `Optional[Pool]`, `isinstance( o, Pool )` and `-> Pool` leave fileRefClasses empty in the file that DEFINES
+            // Pool. A class this file defines (fileClasses holds it, fileRefClasses does not) therefore still counts when
+            // its name occurs in the file beyond its definitions — read off the file's own bytes, token-exact.
+            const ChaConeMemo::Cone cone = cones.coneFor( className[ owner ] );
+            names = std::ranges::any_of( fileClasses[ fileId ], [ & ]( std::uint32_t k )
+            {
+                return ( k == owner || cones.contains( cone, className[ owner ], className[ k ] ) ) && namedBeyondDefinition( fileId, k );
+            } );
+        }
         memo->second = names ? 1 : 0;
         return names;
+    }
+
+    // Does `fileId`'s text hold class `k`'s name as an identifier token more often than the file defines a class of that
+    // name? A `class Pool:` line (and the module-level name Python binds for it) is one token per definition; any other
+    // occurrence — an annotation, a string annotation, a subscript, an isinstance() argument, a return type, and also a
+    // comment or docstring — is evidence. Errs toward keeping the edge: an unreadable file answers true, and a mention in
+    // prose counts, so the gate removes less there, never more. One file's bytes are cached (calls arrive file by file).
+    bool namedBeyondDefinition( std::uint32_t fileId, std::uint32_t k ) const
+    {
+        if( textFileId != fileId )
+        {
+            textFileId = fileId;
+            text       = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
+        }
+        if( !text || fileId >= containersByFile.size() )
+        {
+            return true;
+        }
+        const std::string& name = className[ k ];
+        std::size_t        defs = 0;
+        for( const NodeId tid : containersByFile[ fileId ] )
+        {
+            defs += ( isClassLike( ing.symbols[ tid ] ) && ing.symbols[ tid ].name == name ) ? 1u : 0u;
+        }
+        std::size_t tokens   = 0;
+        std::size_t runStart = 0;
+        const std::string_view bytes( *text );
+        for( std::size_t at = 0; at <= bytes.size() && tokens <= defs; ++at )
+        {
+            if( at < bytes.size() && namesplit::isIdentChar( bytes[ at ] ) )
+            {
+                continue;
+            }
+            tokens  += ( bytes.substr( runStart, at - runStart ) == name ) ? 1u : 0u;
+            runStart = at + 1;
+        }
+        return tokens > defs;
     }
 
     // Python: is the receiver of `x.m()` a MODULE whose file holds `target`? See the struct comment for the three shapes.
