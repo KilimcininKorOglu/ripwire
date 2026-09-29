@@ -269,6 +269,34 @@ inline void mergeCrawlDisclosures( IngestResult& m, IngestResult& part, const Wo
     }
 }
 
+// #350: a memory-guard stop in ANY root makes the merged corpus partial. The first root to stop names the phase;
+// memory_parsed= counts the merged files that carry facts (a root whose parse finished contributes all of its own).
+inline MemoryStop mergeMemoryStops( const std::vector<IngestResult>& parts )
+{
+    MemoryStop merged;
+    bool       anyParseCut = false;
+    for( const IngestResult& p : parts )
+    {
+        anyParseCut = anyParseCut || p.memoryStop.parseCut;
+    }
+    for( const IngestResult& p : parts )
+    {
+        const MemoryStop& ps = p.memoryStop;
+        if( merged.phase == MemoryStop::Phase::None )
+        {
+            merged.phase = ps.phase;
+        }
+        merged.parseCut   = merged.parseCut || ps.parseCut;
+        merged.byPressure = merged.byPressure || ps.byPressure;
+        merged.limitBytes = std::max( merged.limitBytes, ps.limitBytes );
+        if( anyParseCut )
+        {
+            merged.parsedFiles += ps.parseCut ? ps.parsedFiles : static_cast<std::uint32_t>( p.files.size() );
+        }
+    }
+    return merged;
+}
+
 inline IngestResult mergeWorkspaceIngests( const std::vector<WorkspaceRoot>& roots,
                                            std::vector<IngestResult>&        parts )
 {
@@ -294,6 +322,7 @@ inline IngestResult mergeWorkspaceIngests( const std::vector<WorkspaceRoot>& roo
                                               //   each root stat-gates against its own blob, so the sum is
                                               //   the honest "files re-extracted this pass" across roots.
     }
+    m.memoryStop = mergeMemoryStops( parts );   // #350
     m.files.reserve( totFiles );          m.realPaths.reserve( totFiles );   m.fileRoot.reserve( totFiles );
     m.symbols.reserve( totSyms );         m.references.reserve( totRefs );
     m.includes.reserve( totIncs );        m.bindings.reserve( totBinds );    m.bindingAliases.reserve( totFfis );

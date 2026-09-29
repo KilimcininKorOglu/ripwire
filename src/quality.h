@@ -3953,6 +3953,13 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
     }
     if( headIng.symbols.empty() && headIng.files.empty() )
     { DISCLOSE( "quality: HEAD tree ingested empty — falling back to run --quality-baseline first" ); return { Snapshot{}, false }; }
+    // #350: a HEAD tree the memory guard cut is never scored and never persisted as the qsnap — a partial floor would
+    // be served as complete by every later run. The no-snapshot path leaves the stop UNANSWERED, so the CLI backstop
+    // exits 5 with its line and the MCP envelope carries _memory_stop (memguard.h).
+    if( headIng.memoryStop.isSet() )
+    {
+        return { Snapshot{}, false };
+    }
     const Graph headG = buildGraph( headIng, nullptr );
 
     // root = tmpRoot so keys are root-relative and match the working-tree side key-for-key (S2).
@@ -4109,6 +4116,10 @@ computeWindowRefBodyHashes( const std::string& root, std::uint32_t days,
     evictOldHeadSnapCaches( cacheDirLadder(), repoHex, exclHex, ingestCachePath, 2 );
     if( refIng.symbols.empty() && refIng.files.empty() )
     { DISCLOSE( "quality: churn-window ref tree ingested empty — churn evidence unavailable" ); return { {}, false }; }
+    if( refIng.memoryStop.isSet() )   // #350: a cut ref tree is never persisted as the qbody (see computeHeadSnapshot)
+    {
+        return { {}, false };
+    }
 
     Snapshot bodyOnly;
     bodyOnly.bodyHashBySym = bodyHashesBySym( refIng, tmpRoot );   // pathQualifiedKey on EVERY side of the churn join (baseline, this ref, working tree, per-node lookup) — a one-sided keying change makes every symbol read as rewritten   // root = tmpRoot → root-relative keys (S2)

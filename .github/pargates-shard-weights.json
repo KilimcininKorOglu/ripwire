@@ -323,6 +323,7 @@
 "mcpwatchercheck.sh": 5.8,
 "mdembedcheck.sh": 23.0,
 "mdsectioncheck.sh": 3.8,
+"memguardcheck.sh": 6.0,
 "mentioncheck.sh": 1.1,
 "mentionsverbcheck.sh": 0.2,
 "mergechurncheck.sh": 2.6,

@@ -15,6 +15,77 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
+
+ripwire measured none of its own memory, so a large tree (#350: a non-git home directory, 67 GB) could grow it until
+the machine swapped. `src/memguard.h` now bounds every ingest. The limit is 65% of the machine's memory (physical
+RAM, or the cgroup v2 `memory.max` when lower); `--max-memory=N[K|M|G]` or `RIPWIRE_MAX_MEMORY` replaces it (the flag
+wins; below 64M is refused as a typo). The footprint is read through new `os::` probes — macOS `phys_footprint`,
+Linux `/proc/self/statm`, Windows `PrivateUsage` — at most once per five seconds, from five seconds into an ingest,
+so a run shorter than that performs one footprint read and its output is byte-identical to a run with the guard
+made huge (gate arm (C)). The crawl stops when the footprint has grown by an eighth of the limit, the parse at half
+of it (keeping the unbroken prefix of its work order that finished; a partial parse is never cached), and critical
+OS memory pressure (macOS `kern.memorystatus_vm_pressure_level`, Linux PSI `full avg10` ≥ 20%, Windows the low-memory
+notification) stops either once the process holds at least max(256 MiB, limit/8). The default map then answers from
+what was built with `memory_stop=`, `memory_parsed=`, `memory_limit=` and `memory_pressure=` in its header (each
+defined in the compact legend; absent on every run the guard did not stop) and one stderr line. Every other verb
+refuses a partial index, and past the limit itself — or when nothing was built — ripwire exits **5** (new exit code)
+with one line naming the limit and the override. The MCP server refuses a tool call over the limit by name and stays
+up; every answer from an index the guard cut carries `_memory_stop` in its envelope. A stop inside a verb's own
+secondary ingest that the verb does not read turns a CLI exit into 5 with one line, so it cannot pass as whole.
+A parse stop keeps every file it parsed — the first K slots of its work order it claimed (uncached files, then cached,
+then grammarless, each largest first; path order when no grammar-bearing file needed a fresh parse, every one an
+ingest-cache hit; a slot
+may reuse cached facts or fail to read) — so a partial map repeats for a given tree, cache and `memory_parsed=K`, and
+its JSON header adds `counts_floor:true`. `--expand` and `--outline`, and `--in` after a crawl stop, refuse a partial
+index like the other verbs (a selector in an unparsed or uncrawled file would read as "no match"), as do `--batch` (its
+sub-answers carry no disclosure), `--pin-census` (a file with no header) and every edit — the CLI edit verbs,
+`--edit-plan` and the MCP edit tools write nothing when the index was cut, since a same-named definition in an unparsed
+file would make an ambiguous target read as unique — and a multi-root
+workspace checks the hard limit after each root before ingesting the next; stop messages name the line that was crossed (the
+crawl line, an eighth of the limit; the parse line, half of it; or OS pressure), never the limit a soft stop did not
+reach. Nothing derived from a
+cut ingest is persisted: not the ingest cache, not the `--quality-delta` HEAD snapshot or churn-window body hashes,
+and MCP `quality_baseline` refuses rather than pin a partial floor. Any verb whose own internal ingest was cut (a
+quality snapshot, `--index-out`) exits 5 with the line whatever code it chose, since a verdict or a refusal computed
+from a partial read is not one; `--html` and `--mermaid` refuse a partial index like every verb but the map; over MCP
+an internal cut adds `_memory_stop` to the answer or the guard's sentence to the error. A tool call over the limit
+first releases the resident index and re-reads the footprint, and only then refuses, saying the server must be
+restarted (a floor: on macOS the allocator may keep freed pages, so the re-read can stay over and a restart be needed;
+trimming the allocator is deferred). The trip seam `RIPWIRE_TEST_MEMGUARD=crawl:N|pressure:N|parse:N|request:N` is additive — it only adds a
+trip and never replaces a real reading, so it can make a run stricter, never unguarded — and it and
+`RIPWIRE_MAX_MEMORY` are cleared by `test/lib/clean-env.sh`. Gate: `test/memguardcheck.sh` (B)–(D), including a
+real-footprint arm (this repo's `src/` under `--max-memory=64M`), a warm-cache arm and a two-run snapshot arm.
+Known floors: the cgroup limit read is the v2 leaf `memory.max` only — a limit on an ancestor (a systemd slice's
+`MemoryMax`) and cgroup v1 fall back to physical RAM; `HOME` unset (no `USERPROFILE` either) means no home directory is
+recognised; `--legend=full` (the frozen 0.6.1 prose) does not define the `memory_*` attributes; the LSP server answers
+from a partial index without disclosure. Deferred: layer 2 (the non-git crawl budget and default heavy-directory
+pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
+llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
+
+### Fixed — a root nobody chose is not crawled when it is a home or system directory (#350, layer 1)
+
+An MCP server started in a home directory that is not a git repository crawled the whole tree and reached a 67 GB
+footprint. Before this change a server refused to assume its launch directory only when that directory was `/` or
+`$HOME`, and said nothing about why. The implicit roots are now judged by one rule
+(`src/rootguard.h`): a root the user did not name — the MCP server's launch directory, or a CLI run with no
+positional root — is refused when it is `$HOME` itself (a dotfiles git repository included), a filesystem or drive
+root, the parent of the home directories, or an operating-system tree (`/System`, `/usr`, `/etc`, `/proc`,
+`%WINDIR%`, Program Files …; `os::path_is_system_dir`). The refusal is one line — `no project root: <dir> is a
+home/system directory; pass a project path` — on the CLI (exit 1, in place of the usage text) and appended to the
+MCP missing-path refusal; the server stays up. An MCP request's `path=` (or any root of `paths`) is judged the same
+way — an agent fills it from its session's directory, and the #350 incident was exactly `grep path=$HOME` — except the
+root the server was started on (`ripwire ~ --mcp` was typed by a human and is answered). The three hooks that pass the
+session directory to ripwire (`ripwire-claude-route.sh`, `ripwire-codex-route.sh`, `ripwire-claude-toolroute.sh`)
+exit silently, before any crawl (after one `git rev-parse` and one bare `ripwire` probe), when that directory is `$HOME` (a dotfiles git repository included),
+`/` or a system tree — they ask the binary (a bare `ripwire` run from that directory names it "no project root"),
+so there is one rule, not a second list. The LSP server's `initialize.rootUri` follows the same rule, except the root
+typed as `ripwire <root> --lsp`. Home is `$HOME` when it is an absolute path, else `USERPROFILE` (native Windows); a
+relative `HOME` is ignored. Canonical paths are compared, and `%WINDIR%`, `/System` (except the data volume's
+`/System/Volumes/Data/…`), `/proc`, `/sys` and `/dev` are refused as whole subtrees. A root typed on the CLI
+(`ripwire ~`) is always answered, under the memory guard, and subdirectories are ordinary directories. Gate:
+`test/memguardcheck.sh` (A).
+
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any
