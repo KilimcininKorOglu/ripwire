@@ -496,7 +496,13 @@ oracle = re.compile(r"(\b(curl|wget|nc)\b[^\r\n]*(\$[A-Za-z_][A-Za-z0-9_]*|base6
 # written again from its specification — segments at | ; & and line breaks, a verb in command position, a destination-
 # shaped argument after it — so the whole decision stays differential, not only the regex half.
 SEP = ' \t"\'`|;&()<>\r\n'
-PREFIX = {"sudo", "exec", "time", "nohup", "nice", "timeout", "xargs", "env", "then", "do", "else", "if", "elif", "while", "until", "!"}
+# Runner words that leave the next word in command position (`sudo curl`, `stdbuf -oL curl`, `command curl`), each with
+# the options of theirs that take the NEXT word as a value. `command` is a prefix ONLY when not followed by -v/-V.
+PREFIX = {"sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"}, "doas": {"-u", "-C"}, "run0": {"-u", "-g", "-D"},
+          "exec": {"-a"}, "time": {"-f", "-o"}, "nohup": set(), "nice": {"-n"}, "timeout": {"-s", "-k"},
+          "xargs": {"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"}, "env": {"-u", "-C"}, "stdbuf": {"-o", "-e", "-i"},
+          "setsid": set(), "eval": set(), "builtin": set(), "command": set(),
+          "then": set(), "do": set(), "else": set(), "if": set(), "elif": set(), "while": set(), "until": set(), "!": set()}
 def ident_start(ch): return ch.isascii() and (ch.isalpha() or ch == "_")
 def ident_char(ch): return ch.isascii() and (ch.isalnum() or ch == "_")
 SOCKET = ("tcp:", "tcp4:", "tcp6:", "udp:", "udp4:", "udp6:", "openssl:", "ssl:", "tcp-connect:", "openssl-connect:")
@@ -510,14 +516,21 @@ def is_dest(t):
     if not ident_char(t[0]): return False
     if t == "localhost" or t.startswith("localhost:") or "@" in t: return True
     return "." in t and not t.endswith(".")
-def keeps_cmd(t): return t in PREFIX or t.startswith("-") or "=" in t or digits(t)
 def has_dest(line):
+    # Mirror src/skillscan.h NetFlowScan: a network segment (curl/wget/nc/ncat/netcat/socat in COMMAND position, or a
+    # /dev/tcp redirect) that also NAMES a destination. Destination: is_dest, a netcat HOST PORT pair, or a bare word
+    # after curl/wget (a single-label host). The corpus carries no sensitive/credential tokens, so R2/credential grades
+    # cannot fire here and the invariant is exercised by the fixture rows in test/skillfix/netexfil_severity.md.
     low = line.lower(); found = False
-    expect, seg_net, seg_dest, rin, rout, netcat, bare = True, False, False, False, False, False, False
+    expect = seg_net = seg_dest = rin = rout = netcat = curlwget = bare = skip_value = False
+    expect = True
+    active = None   # the active runner-prefix word, or None
     def end():
-        nonlocal expect, seg_net, seg_dest, rin, rout, netcat, bare, found
+        nonlocal expect, seg_net, seg_dest, rin, rout, netcat, curlwget, bare, skip_value, active, found
         found = found or (seg_net and seg_dest)
-        expect, seg_net, seg_dest, rin, rout, netcat, bare = True, False, False, False, False, False, False
+        expect = True
+        seg_net = seg_dest = rin = rout = netcat = curlwget = bare = skip_value = False
+        active = None
     i = 0
     while i < len(line):
         c = line[i]; nx = line[i + 1] if i + 1 < len(line) else ""
@@ -525,24 +538,43 @@ def has_dest(line):
         if c in ";\r\n" or (c == "&" and nx != ">"): end(); i += 2 if (c == "&" and nx == "&") else 1; continue
         if c in ">&": rout = True; i += 2 if nx in ("&", ">") else 1; continue
         if c == "<": rin = True; i += 1; continue
-        if c in "(`" or (c in "\"'" and (i == 0 or line[i - 1] in " \t")): expect = True; i += 1; continue
+        if c in "(`" or (c in "\"'" and (i == 0 or line[i - 1] in " \t")):
+            if not expect: expect = True; active = None; skip_value = False
+            i += 1; continue
         if c in SEP: i += 1; continue
         j = i
         while j < len(line) and line[j] not in SEP: j += 1
         t = low[i:j]
-        if "/dev/tcp/" in t or "/dev/udp/" in t: seg_net = seg_dest = True   # a raw-socket redirect: sink and destination
-        if rout: rout = False; bare = False
-        else:
-            d = digits(t)
-            if seg_net and not rin and (is_dest(t) or (netcat and bare and d and len(t) <= 5)): seg_dest = True   # nc HOST PORT
-            was_cmd = expect and not rin and not keeps_cmd(t)
-            if was_cmd:
-                expect = False
-                verb = t.rsplit("/", 1)[-1]
-                seg_net = seg_net or verb in ("curl", "wget", "socat") + NETCAT
-                netcat = netcat or verb in NETCAT
-            bare = not was_cmd and not rin and not d and not t.startswith("-")
-            rin = False
+        if "/dev/tcp/" in t or "/dev/udp/" in t: seg_net = seg_dest = True   # raw-socket redirect: sink and destination
+        if rout: rout = False; bare = False; i = j; continue
+        # command position: is this still the prefix, or the command itself?
+        was_cmd = False
+        if expect and not rin:
+            if skip_value:
+                skip_value = False
+            elif t in PREFIX:
+                active = t
+            elif t.startswith("-"):
+                if active == "command" and t in ("-v", "-V"):
+                    expect = False   # `command -v curl` names the tool; nothing runs
+                elif active is not None and t in PREFIX[active]:
+                    skip_value = True
+            elif "=" in t or digits(t):
+                pass
+            else:
+                was_cmd = True
+        d = digits(t)
+        netcat_hop = netcat and bare and d and len(t) <= 5
+        bare_host = curlwget and not was_cmd and len(t) > 0 and ident_char(t[0])
+        if seg_net and not rin and (is_dest(t) or netcat_hop or bare_host): seg_dest = True
+        if was_cmd:
+            expect = False; active = None
+            verb = t.rsplit("/", 1)[-1]
+            seg_net = seg_net or verb in ("curl", "wget", "socat") + NETCAT
+            netcat = netcat or verb in NETCAT
+            curlwget = curlwget or verb in ("curl", "wget")
+        bare = not was_cmd and not rin and not d and not t.startswith("-")
+        rin = False
         i = j
     end()
     return found
