@@ -15,25 +15,45 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Fixed — `--scan-skills`: `EXFILTRATE:net-exfil` is CRITICAL only with a credential-shaped source on the line (#353)
+### Fixed — `--scan-skills`: `EXFILTRATE:net-exfil` grades by credential source, needs a destination, and catches var-free uploads (#353)
 
-The rule fires on a fenced line with a network verb (`curl`, `wget`, `nc`) and any `$VAR` or `base64`. That
+The rule fired on a fenced line with a network verb (`curl`, `wget`, `nc`) and any `$VAR` or `base64`. That
 shape says nothing about what is sent, so documented API calls and loopback checks such as
 `curl https://api.airtable.com/v0/$BASE_ID` and `curl http://127.0.0.1:$p/v1/models` were CRITICAL, and a
-CRITICAL blocks `ripwire wrap`. The rule still matches the same lines. It now grades each hit: CRITICAL when a
-credential-shaped source is on the same line (a var whose name reads as a credential, such as `$GITHUB_TOKEN`,
-`$AWS_…` or `$DB_PASSWORD`; an `Authorization:` header with a var; `env`, `printenv` or `/proc/…/environ`; a key
-file such as `~/.ssh/…`, `*.pem`, `.netrc` or `.aws/credentials`; a file operand named like a credential, as in
-`cat secret | base64 | nc …`), and WARN otherwise. A WARN row carries `why="no-cred-source"`, defined in both the
-compact and the full legend. On a synthetic 109-line set built from the issue's destination histogram, 109 CRITICAL
-become 6 CRITICAL (the six `Authorization: Bearer $…` lines) and 103 WARN. Scans with no downgraded row are
-byte-identical. This is a line-local grade and adds no detection. It does not resolve a `$VAR` to its
-assignment, does not tell a token's own service from another host, and does not catch the var-free
-`cat /etc/passwd | curl … @-` shape the issue also reports. Those need the source-to-sink flow
-decision, which is still to come. `src/skillscan.h` now names its lineage (NVIDIA SkillSpector), and
-`docs/LINEAGE.md` names it too; its counted row, which moves the repository count README.md and the deck
-restate, is owed with the flow fix. Gated by `test/skillscan.sh` check 18 and its new
-`test/skillfix/netexfil_severity.md` fixture.
+CRITICAL blocks `ripwire wrap`. Three changes, all decided on the one line:
+
+- **Severity.** A hit is CRITICAL when a credential-shaped source is on the same line: a var whose name reads as
+  a credential, such as `$GITHUB_TOKEN`, `$AWS_…` or `$DB_PASSWORD`; an `Authorization:` header with a var; `env`,
+  `printenv` or `/proc/…/environ`; a key file such as `~/.ssh/…`, `*.pem`, `.netrc` or `.aws/credentials`; or a
+  file operand named like a credential, as in `cat secret | base64 | nc …`. Otherwise it is WARN, and the row
+  carries `why="no-cred-source"`.
+- **A destination is required.** The rule fires only when a network verb in command position names where it
+  sends: a URL, a `$VAR` argument, a host, `localhost` or `user@host`. A verb that is only named, as in the
+  reporter's `for t in jq curl git; do command -v "$t" …` loop, `which curl` or `echo "install curl"`, no longer
+  fires.
+- **Var-free exfiltration is caught.** A sensitive file read that is piped, redirected or passed into an upload
+  is CRITICAL with or without a variable, and the row carries `why="sensitive-read-upload"`. Examples are
+  `cat /etc/passwd | curl … @-`, `curl -d @.env …`, a `wget` post of `/etc/shadow`,
+  `base64 server.pem | nc …`, `security dump-keychain | curl …` and `nc host port < .git-credentials`. Before this
+  change the first of these scanned clean. Sensitive sources are `/etc/passwd` and `/etc/shadow`, `~/.ssh/*`
+  except `*.pub`, `*.pem`, `*.key`, `id_rsa`-style key names, `.netrc`, `.aws/credentials`, `.env` and `.env.*`,
+  `.git-credentials`, a keychain or a keychain dump, a process environment, and a browser cookie store. Reading
+  `README.md` into an upload, or reading `/etc/passwd` and then running `curl` as a separate statement, does not
+  fire. A `~/.ssh` or `~/.aws` path is still claimed first by the older `EXFILTRATE:ssh-aws-creds` rule, which is
+  CRITICAL too.
+
+Both `why=` values are defined in the compact and the full legend. Scans where neither rule applies are
+byte-identical. The reporter published a corrected 107-row histogram; a synthetic set built from it has 106
+firing lines on main, all CRITICAL. On this build 6 are CRITICAL (the `Authorization: Bearer $…` lines), 99 are
+WARN (including the three `http://<host>:<port>` doc placeholders), and the `command -v` loop no longer fires. On
+the first-histogram set, 109 CRITICAL become 6 CRITICAL, 102 WARN and one silent line. The decision is still
+line-local. It does not resolve a `$VAR` to its assignment, does not tell a token's own service from another host,
+and does not follow a read on one line to an upload on the next. That is the source-to-sink flow decision, which
+is still to come. `src/skillscan.h` now names its lineage (NVIDIA SkillSpector), and `docs/LINEAGE.md` names it
+too; its counted row, which moves the repository count README.md and the deck restate, is owed with the flow fix.
+Gated by `test/skillscan.sh` check 18 over the five blocks of `test/skillfix/netexfil_severity.md`, and by
+`test/regexguardcheck.sh` arm (f1), whose oracle now specifies the destination rule too and agrees with the scanner
+on 3,000 generated lines.
 
 ### Fixed — `traceasanlinearcheck` arm B compares medians, so one stalled run no longer reads as quadratic (#352)
 

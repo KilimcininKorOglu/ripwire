@@ -10,7 +10,8 @@
 //   INJECTION   — case-insensitive, word-boundary-anchored prompt-injection phrases (CRITICAL;
 //                 single generic words downgrade to WARN)
 //   EXFILTRATE  — shell snippets that exfiltrate env vars or credentials (CRITICAL; net-exfil is WARN with
-//                 why="no-cred-source" unless a credential-shaped source is on the line — #353, hasCredentialSource)
+//                 why="no-cred-source" unless a credential-shaped source is on the line; CRITICAL why="sensitive-read-upload"
+//                 when a sensitive read feeds an upload; silent with no destination — #353, gradeNetExfil)
 //   SCOPE-CREEP — body requests tools absent from the allowed-tools: frontmatter (WARN)
 //   FRONTMATTER — YAML keys attempting to set model/system/temperature (WARN)
 //
@@ -35,6 +36,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -142,8 +144,10 @@ inline std::vector<InjectionPattern> buildInjectionPatterns()
 //   EXFIL-APIKEY : line contains $ANTHROPIC_API_KEY
 //   EXFIL-SSH    : line contains $HOME/.ssh or ~/.ssh or ~/.aws
 //   EXFIL-NETEXFIL : line contains (curl|wget|nc) AND ($env-var OR base64), in EITHER order,
-//                    fenced-code lines only (prose mentions are not flagged); CRITICAL only with a
-//                    credential-shaped source on the line, else WARN why="no-cred-source" (#353)
+//                    fenced-code lines only (prose mentions are not flagged), AND a network command that names a
+//                    destination; CRITICAL only with a credential-shaped source on the line, else WARN
+//                    why="no-cred-source". Also fires, CRITICAL why="sensitive-read-upload", on a sensitive read fed
+//                    to an upload with no var or base64 at all (#353, gradeNetExfil)
 //
 // "base64 + send" pattern — a line that contains base64 AND (curl|wget|nc), in either order
 // (`… | base64 | nc host port` included) — is covered by EXFIL-NETEXFIL.
@@ -256,8 +260,8 @@ inline bool hasNetExfilShape( std::string_view line ) noexcept
 // ── #353: what grades a net-exfil hit CRITICAL ───────────────────────────────────────────────────────────────────────
 // hasNetExfilShape says a network verb shares a line with SOME `$VAR` or base64. That shape is equally true of
 // `curl https://api.airtable.com/v0/$BASE_ID` and of a token on its way out, so on its own it is a WARN. The hit is
-// CRITICAL only when a CREDENTIAL-SHAPED source sits on the same line (hasCredentialSource). This is the quick
-// severity fix: it grades the lines the rule already matches and detects nothing new. Following a source to its sink
+// CRITICAL only when a CREDENTIAL-SHAPED source sits on the same line (gradeNetExfil). This is the quick
+// severity fix: it grades the lines the rule already matches (netFlow below adds the two follow-up rules). Following a source to its sink
 // across lines, and resolving where `$VAR` points, is the flow decision still to come.
 inline constexpr const char* kNetExfilNoCredWhy = "no-cred-source";
 
@@ -298,11 +302,11 @@ inline bool isKeyFileToken( std::string_view lowered ) noexcept
 }
 
 // The operand a token hands to a reader or a sender, or empty: curl's `@file` (also `--data-binary=@file`, `f=@file`),
-// wget's `--post-file=file`, and the token after `cat`, `-T`/`--upload-file`, or a `<` redirect. `prevToken` keeps its
+// wget's `--post-file=file`, and the token after `cat`, `base64`, `-T`/`--upload-file`, or a `<` redirect. `prevToken` keeps its
 // case (`-T` uploads a file; `-t` is a telnet option).
 inline std::string_view fileOperand( std::string_view token, std::string_view prevToken, bool afterRedirect ) noexcept
 {
-    if( afterRedirect || prevToken == "cat" || prevToken == "-T" || prevToken == "--upload-file" )
+    if( afterRedirect || prevToken == "cat" || prevToken == "base64" || prevToken == "-T" || prevToken == "--upload-file" )
     {
         return token;
     }
@@ -371,15 +375,223 @@ inline bool hasCredentialToken( std::string_view line, std::string_view lowered 
     return false;
 }
 
-// True when a credential-shaped source is on the line: hasCredentialVar (a credential-named var, an Authorization:
-// header with a var) or hasCredentialToken (an env dump, a key file, a credential-named file operand). One case fold,
-// then each test is linear in the line. Line-local like the rule it grades: a token assigned to `$HOST` three lines up
-// is invisible here, and the bare word `env` in `env FOO=1 cmd` counts as a dump — both err toward CRITICAL.
-inline bool hasCredentialSource( std::string_view line )
+
+// ── #353 follow-up: where a network command sends, and whether a sensitive read feeds it ─────────────────────────────
+// Two rules the reporter's corrected histogram asked for, both decided by netFlow in ONE pass over the line:
+//   R1  a network verb with NO destination is not a flow. `command -v curl`, `which curl` and `for t in jq curl git`
+//       name the tool without running it, so net-exfil does not fire on them at all.
+//   R2  a SENSITIVE read piped, redirected or passed into an upload is exfiltration with no variable in sight:
+//       `cat /etc/passwd | curl … --data-binary @-` scanned clean. It is CRITICAL, why="sensitive-read-upload".
+// Still line-local: a read on one line and an upload on the next is the flow fix still to come.
+inline constexpr const char* kNetExfilSensitiveWhy = "sensitive-read-upload";
+
+inline constexpr std::string_view kNetVerbs[]            = { "curl", "wget", "nc" };
+// Words that leave the next token in command position: `sudo curl`, `do curl`, `xargs -n1 curl`.
+inline constexpr std::string_view kCommandPrefixes[]     = { "sudo", "exec", "time", "nohup", "nice", "timeout", "xargs", "env",
+                                                             "then", "do", "else", "if", "elif", "while", "until", "!" };
+inline constexpr std::string_view kSensitiveShapes[]     = { "/etc/passwd", "/etc/shadow", ".ssh/", ".netrc", ".aws/credentials", "/environ",
+                                                             "keychain", ".git-credentials" };
+inline constexpr std::string_view kSensitiveBaseStarts[] = { "id_rsa", "id_ecdsa", "id_ed25519", "id_dsa", "cookies", ".env." };
+inline constexpr std::string_view kKeychainDumps[]       = { "dump-keychain", "find-generic-password", "find-internet-password" };
+
+inline bool containsAny( std::string_view lowered, std::span<const std::string_view> needles ) noexcept
+{
+    return std::any_of( needles.begin(), needles.end(), [ & ]( std::string_view n ) noexcept { return lowered.find( n ) != std::string_view::npos; } );
+}
+
+// A LOWERCASED file operand whose content is a secret: account databases, private keys (a `.pub` key is meant to be
+// shared), .netrc, cloud and git credential stores, a process environment, a keychain, a browser cookie store, `.env`.
+inline bool isSensitivePath( std::string_view lowered ) noexcept
+{
+    if( lowered.find( "://" ) != std::string_view::npos )
+    {
+        return false;
+    }
+    const std::size_t      slash = lowered.find_last_of( '/' );
+    const std::string_view base  = slash == std::string_view::npos ? lowered : lowered.substr( slash + 1 );
+    if( base.ends_with( ".pub" ) )
+    {
+        return false;
+    }
+    return base == ".env" || base == ".ssh" || base.ends_with( ".pem" ) || base.ends_with( ".key" ) || containsAny( lowered, kSensitiveShapes )
+        || std::any_of( std::begin( kSensitiveBaseStarts ), std::end( kSensitiveBaseStarts ), [ & ]( std::string_view s ) noexcept { return base.starts_with( s ); } );
+}
+
+// A LOWERCASED argument of a network command that names where it sends: a URL, a `$VAR` (a host held in a variable),
+// an IPv6 literal, localhost, user@host, or a dotted host. Flags, `@file` data and paths are not destinations.
+inline bool isDestinationToken( std::string_view lowered ) noexcept
+{
+    if( lowered.empty() )
+    {
+        return false;
+    }
+    if( lowered.find( "://" ) != std::string_view::npos )
+    {
+        return true;
+    }
+    const char c = lowered[0];
+    if( c == '$' )
+    {
+        return lowered.size() > 1 && ( lowered[1] == '{' || namesplit::isIdentStart( lowered[1] ) );
+    }
+    if( c == '[' )
+    {
+        return true;
+    }
+    if( !namesplit::isIdentChar( c ) )
+    {
+        return false;
+    }
+    if( lowered == "localhost" || lowered.starts_with( "localhost:" ) || lowered.find( '@' ) != std::string_view::npos )
+    {
+        return true;
+    }
+    return lowered.find( '.' ) != std::string_view::npos && lowered.back() != '.';
+}
+
+// A token that leaves the next one in command position: a prefix word, a flag, an assignment, or a number.
+inline bool keepsCommandPosition( std::string_view lowered ) noexcept
+{
+    return std::find( std::begin( kCommandPrefixes ), std::end( kCommandPrefixes ), lowered ) != std::end( kCommandPrefixes )
+        || lowered.starts_with( '-' ) || lowered.find( '=' ) != std::string_view::npos
+        || std::all_of( lowered.begin(), lowered.end(), []( char ch ) noexcept { return ch >= '0' && ch <= '9'; } );
+}
+
+struct NetFlow
+{
+    bool hasDestination  = false;   // R1: some segment runs a network command that names a destination
+    bool sensitiveUpload = false;   // R2: such a segment also reads, or is piped, a sensitive file
+};
+
+// One pass over the line, split into pipeline SEGMENTS at `|` (whose output feeds the next segment) and into
+// statements at `||`, `;`, `&`, `&&` and line breaks (which feed nothing). A segment is a network segment when a
+// network verb (curl, wget, nc, by base name) stands in COMMAND position — first in the segment, after a prefix word,
+// or first inside `$(`, a backtick or an opening quote; `command -v curl` and `echo "install curl"` name the verb as
+// an argument, so they are not. A segment's sensitive read is a sensitive file operand anywhere in it (fileOperand:
+// cat, base64, `<`, `@file`, `-T`, `--post-file=`) or a keychain dump; it carries across `|` to the next segment.
+// `line` and `lowered` are the same bytes, one case-folded.
+inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexcept
+{
+    constexpr std::string_view kFlowSeparators = " \t\"'`|;&()<>\r\n";
+    NetFlow          flow;
+    bool             expectCommand = true, segNet = false, segDest = false, segSensitive = false, stdinSensitive = false;
+    bool             redirectIn = false, redirectOut = false;
+    std::string_view prevToken;
+    const auto endSegment = [ & ]( bool piped ) noexcept
+    {
+        if( segNet && segDest )
+        {
+            flow.hasDestination  = true;
+            flow.sensitiveUpload = flow.sensitiveUpload || segSensitive || stdinSensitive;
+        }
+        stdinSensitive = piped && ( stdinSensitive || segSensitive );
+        segNet = segDest = segSensitive = redirectIn = redirectOut = false;
+        expectCommand = true;
+        prevToken     = {};
+    };
+    for( std::size_t i = 0; i < line.size(); )
+    {
+        const char c    = line[i];
+        const char next = i + 1 < line.size() ? line[ i + 1 ] : '\0';
+        if( c == '|' )
+        {
+            endSegment( next != '|' );
+            i += next == '|' ? 2 : 1;
+            continue;
+        }
+        if( c == ';' || c == '\r' || c == '\n' || ( c == '&' && next != '>' ) )
+        {
+            endSegment( false );
+            i += ( c == '&' && next == '&' ) ? 2 : 1;
+            continue;
+        }
+        if( c == '>' || c == '&' )   // `>`, `>>`, `>&2`, `&>`: an output target follows — neither a read nor a destination
+        {
+            redirectOut = true;
+            i += ( next == '&' || next == '>' ) ? 2 : 1;
+            continue;
+        }
+        if( c == '<' )
+        {
+            redirectIn = true;
+            ++i;
+            continue;
+        }
+        if( c == '(' || c == '`' || ( ( c == '"' || c == '\'' ) && ( i == 0 || line[ i - 1 ] == ' ' || line[ i - 1 ] == '\t' ) ) )
+        {
+            expectCommand = true;
+            ++i;
+            continue;
+        }
+        if( kFlowSeparators.find( c ) != std::string_view::npos )
+        {
+            ++i;
+            continue;
+        }
+        const std::size_t      end   = std::min( line.find_first_of( kFlowSeparators, i ), line.size() );
+        const std::string_view token = line.substr( i, end - i );
+        const std::string_view low   = lowered.substr( i, end - i );
+        if( redirectOut )
+        {
+            redirectOut = false;
+        }
+        else
+        {
+            const std::string_view operand = fileOperand( low, prevToken, redirectIn );
+            if( ( !operand.empty() && isSensitivePath( operand ) ) || containsAny( low, kKeychainDumps ) )
+            {
+                segSensitive = true;
+            }
+            if( segNet && !redirectIn && isDestinationToken( low ) )
+            {
+                segDest = true;
+            }
+            if( expectCommand && !redirectIn && !keepsCommandPosition( low ) )
+            {
+                expectCommand = false;
+                const std::size_t slash = low.find_last_of( '/' );
+                const std::string_view verb = slash == std::string_view::npos ? low : low.substr( slash + 1 );
+                segNet = segNet || std::find( std::begin( kNetVerbs ), std::end( kNetVerbs ), verb ) != std::end( kNetVerbs );
+            }
+            redirectIn = false;
+        }
+        prevToken = token;
+        i         = end;
+    }
+    endSegment( false );
+    return flow;
+}
+
+// The net-exfil decision for one line: whether the rule fires, and at which severity and why. A credential-shaped
+// source is hasCredentialVar (a credential-named var, an Authorization: header with a var) or hasCredentialToken (an env
+// dump, a key file, a credential-named file operand). One case fold, then each test is linear in the line. Line-local like
+// the rule it grades: a token assigned to `$HOST` three lines up is invisible, and the bare word `env` in `env FOO=1 cmd`
+// counts as a dump — both err toward CRITICAL.
+struct NetExfilGrade
+{
+    bool          fires;
+    SkillSeverity sev;
+    const char*   why;   // null = CRITICAL by a credential-shaped source, the rule's plain reading
+};
+
+inline NetExfilGrade gradeNetExfil( std::string_view line )
 {
     std::string lowered( line );
     std::transform( lowered.begin(), lowered.end(), lowered.begin(), []( char c ) noexcept { return char( std::tolower( static_cast<unsigned char>( c ) ) ); } );
-    return hasCredentialVar( lowered ) || hasCredentialToken( line, lowered );
+    const NetFlow flow = netFlow( line, lowered );
+    if( flow.sensitiveUpload )
+    {
+        return { true, SkillSeverity::Critical, kNetExfilSensitiveWhy };
+    }
+    if( !flow.hasDestination || !hasNetExfilShape( line ) )
+    {
+        return { false, SkillSeverity::Info, nullptr };
+    }
+    if( hasCredentialVar( lowered ) || hasCredentialToken( line, lowered ) )
+    {
+        return { true, SkillSeverity::Critical, nullptr };
+    }
+    return { true, SkillSeverity::Warn, kNetExfilNoCredWhy };
 }
 
 inline std::vector<ExfilPattern> buildExfilPatterns()
@@ -933,7 +1145,10 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
             // fenceOnly patterns (net-exfil) fire only inside a fenced code block — see buildExfilPatterns().
             for( const ExfilPattern& p : exfilPats )
             {
-                const bool matched = p.isNetExfilShape ? hasNetExfilShape( ln ) : isHit( skillSearch( p.re, ln, stackBytes ), lineNum, ln );
+                // net-exfil: gradeNetExfil decides firing (a destination required, R1; a sensitive read into an upload
+                // fires with or without the var-or-base64 shape, R2) and grade together — see there.
+                const NetExfilGrade netGrade = p.isNetExfilShape ? gradeNetExfil( ln ) : NetExfilGrade{ false, SkillSeverity::Info, nullptr };
+                const bool matched = p.isNetExfilShape ? netGrade.fires : isHit( skillSearch( p.re, ln, stackBytes ), lineNum, ln );
                 if( !matched )
                 {
                     continue;
@@ -946,15 +1161,9 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
                 {
                     continue;
                 }
-                // #353: net-exfil's shape is a verb plus ANY var; only a credential-shaped source on the line makes it CRITICAL.
-                if( p.isNetExfilShape && !hasCredentialSource( ln ) )
-                {
-                    addFinding( SkillSeverity::Warn, lineNum, p.rule, ln, kNetExfilNoCredWhy );
-                }
-                else
-                {
-                    addFinding( SkillSeverity::Critical, lineNum, p.rule, ln );
-                }
+                // #353: net-exfil's shape is a verb plus ANY var; only a credential-shaped source or a sensitive read into the
+                // upload makes it CRITICAL (gradeNetExfil). Every other pattern here is CRITICAL as matched.
+                addFinding( p.isNetExfilShape ? netGrade.sev : SkillSeverity::Critical, lineNum, p.rule, ln, p.isNetExfilShape ? netGrade.why : nullptr );
                 break;   // one EXFILTRATE finding per line
             }
 
@@ -1256,9 +1465,9 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // `scan-skills | skillscan@*` lines). `fullLegend=true` (only when cfg.legend=="full") writes the missing
 // comment; false (every existing caller) is byte-identical.
 //
-// #353: a row graded below its rule's usual severity carries why= (today only why="no-cred-source" on an
-// EXFILTRATE:net-exfil WARN). The full legend defines it only when a row carries it, so every scan without one
-// stays byte-identical.
+// #353: an EXFILTRATE:net-exfil row graded by more than its match carries why= — why="no-cred-source" on a WARN,
+// why="sensitive-read-upload" on a CRITICAL fed by a sensitive read. The full legend defines it only when a row carries
+// it, so every scan without one stays byte-identical.
 inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, int filesScanned, int filesSkipped = 0, bool fullLegend = false ) noexcept
 {
     if( fullLegend )
@@ -1269,8 +1478,10 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
                           "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
                           "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
                           "worst finding's severity, the same read as the exit code (0/1/2).{} -->", kSkillScanFindingCap,
-                          anyWhy ? " An f row's why=no-cred-source: EXFILTRATE:net-exfil matched a network verb plus a $VAR or "
-                                   "base64, but no credential-shaped source is on the line, so it is WARN, not CRITICAL." : "" );
+                          anyWhy ? " An f row's why= says why EXFILTRATE:net-exfil graded as it did: why=no-cred-source, a network "
+                                   "verb plus a $VAR or base64 but no credential-shaped source on the line, so WARN, not CRITICAL; "
+                                   "why=sensitive-read-upload, a sensitive file read (a key, /etc/passwd, .netrc, .env, a credential "
+                                   "or cookie store) piped, redirected or passed into an upload, CRITICAL." : "" );
     }
     int maxSev = 0;
     for( const SkillScanRow& r : rows )

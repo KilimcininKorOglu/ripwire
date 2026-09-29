@@ -42,7 +42,8 @@
 #       interval on every standard library. That rule used to be skipped silently for the edge (exit 0, violations
 #       unreported); it must refuse by name, quoting the substituted text, with the other edges' rules still judged.
 #   (f) THE SKILL SCANNER READS UNTRUSTED FILES, so its constant patterns go through the same boundary: (f1) the
-#       linear EXFILTRATE:net-exfil decision agrees line for line with the regex it replaced, over generated lines
+#       linear EXFILTRATE:net-exfil decision agrees line for line with the regex it replaced (plus #353's destination
+#       rule, re-specified in the oracle), over generated lines
 #       judged by an independent oracle (python's re, with `.` spelled [^\r\n] as ECMAScript reads it); (f2) a 200,000-byte
 #       fenced `curl curl …` line scans in bounded time (the regex was quadratic: >60 s); (f3) an abandoned match
 #       fails CLOSED — a CRITICAL SCAN-INCOMPLETE:regex-abandoned finding at exit 2, never a clean exit 0 and never an
@@ -491,14 +492,62 @@ python3 - "$SK" <<'PY'
 import random, re, sys
 sk = sys.argv[1]
 oracle = re.compile(r"(\b(curl|wget|nc)\b[^\r\n]*(\$[A-Za-z_][A-Za-z0-9_]*|base64))|((\$[A-Za-z_][A-Za-z0-9_]*|base64)[^\r\n]*\b(curl|wget|nc)\b)", re.ASCII)
+# #353 R1: the rule also needs a network command that NAMES A DESTINATION (src/skillscan.h netFlow). This is that scan,
+# written again from its specification — segments at | ; & and line breaks, a verb in command position, a destination-
+# shaped argument after it — so the whole decision stays differential, not only the regex half.
+SEP = ' \t"\'`|;&()<>\r\n'
+PREFIX = {"sudo", "exec", "time", "nohup", "nice", "timeout", "xargs", "env", "then", "do", "else", "if", "elif", "while", "until", "!"}
+def ident_start(ch): return ch.isascii() and (ch.isalpha() or ch == "_")
+def ident_char(ch): return ch.isascii() and (ch.isalnum() or ch == "_")
+def is_dest(t):
+    if not t: return False
+    if "://" in t: return True
+    if t[0] == "$": return len(t) > 1 and (t[1] == "{" or ident_start(t[1]))
+    if t[0] == "[": return True
+    if not ident_char(t[0]): return False
+    if t == "localhost" or t.startswith("localhost:") or "@" in t: return True
+    return "." in t and not t.endswith(".")
+def keeps_cmd(t): return t in PREFIX or t.startswith("-") or "=" in t or all("0" <= ch <= "9" for ch in t)
+def has_dest(line):
+    low = line.lower(); found = False
+    expect, seg_net, seg_dest, rin, rout = True, False, False, False, False
+    def end():
+        nonlocal expect, seg_net, seg_dest, rin, rout, found
+        found = found or (seg_net and seg_dest)
+        expect, seg_net, seg_dest, rin, rout = True, False, False, False, False
+    i = 0
+    while i < len(line):
+        c = line[i]; nx = line[i + 1] if i + 1 < len(line) else ""
+        if c == "|": end(); i += 2 if nx == "|" else 1; continue
+        if c in ";\r\n" or (c == "&" and nx != ">"): end(); i += 2 if (c == "&" and nx == "&") else 1; continue
+        if c in ">&": rout = True; i += 2 if nx in ("&", ">") else 1; continue
+        if c == "<": rin = True; i += 1; continue
+        if c in "(`" or (c in "\"'" and (i == 0 or line[i - 1] in " \t")): expect = True; i += 1; continue
+        if c in SEP: i += 1; continue
+        j = i
+        while j < len(line) and line[j] not in SEP: j += 1
+        t = low[i:j]
+        if rout: rout = False
+        else:
+            if seg_net and not rin and is_dest(t): seg_dest = True
+            if expect and not rin and not keeps_cmd(t):
+                expect = False
+                seg_net = seg_net or t.rsplit("/", 1)[-1] in ("curl", "wget", "nc")
+            rin = False
+        i = j
+    end()
+    return found
 tokens = ["curl", "wget", "nc", "ncx", "xnc", "curl_", "_wget", "$A", "$_b", "$1", "$", "$$x", "base64", "xbase64y", "base6",
-          " ", " ", "|", "-", "\r", "a", "_", "0", "=", "'", '"', "$nc", "nc$", "base64nc", "c\rurl", "\t"]
+          " ", " ", "|", "-", "\r", "a", "_", "0", "=", "'", '"', "$nc", "nc$", "base64nc", "c\rurl", "\t",
+          # #353 R1: destinations and command-position shapes, so the destination half of the oracle is exercised both ways
+          "curl ", "nc ", " $H", " https://h.example", " h.example", " localhost", "; ", " && ", "command -v ", "echo ", "(", "<", ">"]
 rng = random.Random(20260916)
 expected = []
-for chunk in range(8):
+shapeOnly = [0]
+for chunk in range(20):
     lines = []
     while len(lines) < 150:
-        line = "".join(rng.choice(tokens) for _ in range(rng.randint(1, 9)))
+        line = "".join(rng.choice(tokens) for _ in range(rng.randint(1, 16)))
         if "\n" in line or line.strip() in ("", "```") or line.lstrip(" \t").startswith(("```", "~~~")):
             continue
         lines.append(line)
@@ -507,9 +556,13 @@ for chunk in range(8):
         fh.write("# probe\n```bash\n" + "\n".join(lines) + "\n```\n")
     for i, line in enumerate(lines):
         if oracle.search(line):
-            expected.append(f"chunk{chunk}.md:{i + 3}")
+            shapeOnly[0] += 1
+            if has_dest(line):
+                expected.append(f"chunk{chunk}.md:{i + 3}")
 with open(f"{sk}/expected.txt", "w") as fh:
     fh.write("\n".join(sorted(expected)) + "\n")
+with open(f"{sk}/shape.txt", "w") as fh:
+    fh.write(str(shapeOnly[0]) + "\n")
 PY
 : >"$SK/got.txt"
 for f in "$SK"/chunk*.md; do
@@ -517,8 +570,9 @@ for f in "$SK"/chunk*.md; do
 done
 sort -o "$SK/got.txt" "$SK/got.txt"
 expectedCount="$( grep -c . "$SK/expected.txt" )"; gotCount="$( grep -c . "$SK/got.txt" )"
-if [ "$expectedCount" -ge 100 ] && cmp -s "$SK/expected.txt" "$SK/got.txt"; then
-    ok "(f1) net-exfil agrees with the regex oracle on all 1,200 generated fenced lines ($expectedCount positives)"
+shapeCount="$( cat "$SK/shape.txt" )"
+if [ "$expectedCount" -ge 100 ] && [ "$shapeCount" -gt "$expectedCount" ] && cmp -s "$SK/expected.txt" "$SK/got.txt"; then
+    ok "(f1) net-exfil agrees with the regex-plus-destination oracle on all 3,000 generated fenced lines ($expectedCount positives; $shapeCount regex hits, $(( shapeCount - expectedCount )) without a destination)"
 else
     no "(f1) net-exfil disagrees with the regex oracle: expected $expectedCount positives, got $gotCount — $( diff "$SK/expected.txt" "$SK/got.txt" | head -4 | tr '\n' ' ' )"
 fi

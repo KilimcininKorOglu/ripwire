@@ -4199,9 +4199,9 @@ $ ./build/ripwire . --skipped
 
 ### `--scan-skill=FILE`
 
-**Answers:** scan a single skill file before installing (any file, not just .md) EXFILTRATE:net-exfil (a network verb plus a $VAR or base64 on one fenced line) is CRITICAL only when a credential-shaped source is on that line: a credential-named var, an Authorization: header with a var, an env dump or a key file.
+**Answers:** scan a single skill file before installing (any file, not just .md) EXFILTRATE:net-exfil (a network verb plus a $VAR or base64 on one fenced line) needs a destination: a verb named but not run, as in command -v curl, does not fire.
 
-Otherwise it is WARN and the row says why="no-cred-source".
+It is CRITICAL only when a credential-shaped source is on that line: a credential-named var, an Authorization: header with a var, an env dump or a key file. Otherwise it is WARN and the row says why="no-cred-source". A sensitive file read fed into an upload (cat /etc/passwd | curl ... @-, curl -d @.env ...) is CRITICAL with or without a var: why="sensitive-read-upload".
 
 **Try it**
 
@@ -4391,7 +4391,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=192da2ab852c12e0 entries=727
+ripwire legend dictionary ripwire.dict/v1 dictv=d4a8c4099b83e6e4 entries=727
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)
