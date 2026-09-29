@@ -491,6 +491,55 @@ if [ "$rc" = 0 ] && grep -q 'memory_stop=parse' "$TMP/b13c.out" && ! grep -q 'ca
 else
     no "(B13c) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b13c.err" | head -c 250 )"
 fi
+# (B16) --query --format=candidates is a report verb, so it refuses a partial index like the rest (pinned: its
+#       <candidates> root has no header to carry the cut)
+run_trip parse:10 "$FX" --no-cache --query=d_17 --format=candidates >"$TMP/b16.out" 2>"$TMP/b16.err"; rc=$?
+if [ "$rc" = 5 ] && [ ! -s "$TMP/b16.out" ] && grep -q '^ripwire: .*--query cannot answer from a partial index' "$TMP/b16.err"; then
+    ok "(B16) --query --format=candidates over a partial parse refuses (exit 5, names --query)"
+else
+    no "(B16) rc=$rc stdout=$( wc -c <"$TMP/b16.out" | tr -d ' ' )B stderr: $( grep '^ripwire:' "$TMP/b16.err" | head -c 250 )"
+fi
+# (B17) --batch sub-answers carry no memory disclosure, so a batch over a cut index refuses whole (callers:d_17 would
+#       otherwise answer "symbol not found" for a symbol in a file the guard never parsed)
+printf 'callers:d_17\ngrep:d_17\n' >"$TMP/b17.batch"
+run_trip parse:10 "$FX" --no-cache --batch="$TMP/b17.batch" >"$TMP/b17.out" 2>"$TMP/b17.err"; rc=$?
+if [ "$rc" = 5 ] && [ ! -s "$TMP/b17.out" ] && grep -q '^ripwire: .*--batch cannot answer from a partial index' "$TMP/b17.err"; then
+    ok "(B17) --batch over a partial parse refuses whole (exit 5, empty stdout), never a false 'not found'"
+else
+    no "(B17) rc=$rc stdout=$( wc -c <"$TMP/b17.out" | tr -d ' ' )B stderr: $( grep '^ripwire:' "$TMP/b17.err" | head -c 250 )"
+fi
+# (B18) an edit resolves its target against the index: over a cut index it refuses and writes nothing (a same-named
+#       definition in an unparsed file would make an ambiguous target read as unique). CLI verb, --edit-plan, MCP tool.
+FXE="$TMP/fxe"; cp -R "$FX" "$FXE"; cp "$FXE/a/f00.c" "$TMP/b18.orig"
+printf 'int a_00( int x ) { return x + 1; }\n' >"$TMP/b18.body"
+run_trip parse:10 "$FXE" --no-cache --replace-symbol-body=a_00 --edit-payload="$TMP/b18.body" >"$TMP/b18.out" 2>"$TMP/b18.err"; rc=$?
+if [ "$rc" = 5 ] && [ ! -s "$TMP/b18.out" ] && cmp -s "$FXE/a/f00.c" "$TMP/b18.orig" \
+   && grep -q '^ripwire: --replace-symbol-body: .*cannot answer from a partial index' "$TMP/b18.err" && [ "$( grep -c '^ripwire' "$TMP/b18.err" )" = 1 ]; then
+    ok "(B18) --replace-symbol-body over a partial parse refuses (exit 5, one line), file byte-unchanged"
+else
+    no "(B18) rc=$rc stdout=$( wc -c <"$TMP/b18.out" | tr -d ' ' )B unchanged=$( cmp -s "$FXE/a/f00.c" "$TMP/b18.orig" && echo 1 || echo 0 ) stderr: $( grep '^ripwire' "$TMP/b18.err" | head -c 250 )"
+fi
+mkdir -p "$TMP/b18plan"; cp "$TMP/b18.body" "$TMP/b18plan/body.c"
+printf '{"version":1,"edits":[{"op":"replace_symbol_body","target":"a_00","payload":"body.c"}]}\n' >"$TMP/b18plan/plan.json"
+run_trip parse:10 "$FXE" --no-cache --edit-plan="$TMP/b18plan/plan.json" --apply >"$TMP/b18b.out" 2>"$TMP/b18b.err"; rc=$?
+if [ "$rc" = 5 ] && [ ! -s "$TMP/b18b.out" ] && cmp -s "$FXE/a/f00.c" "$TMP/b18.orig" && grep -q -- '--edit-plan cannot answer from a partial index' "$TMP/b18b.err"; then
+    ok "(B18b) --edit-plan --apply over a partial parse refuses (exit 5), nothing written"
+else
+    no "(B18b) rc=$rc unchanged=$( cmp -s "$FXE/a/f00.c" "$TMP/b18.orig" && echo 1 || echo 0 ) stderr: $( grep '^ripwire' "$TMP/b18b.err" | head -c 250 )"
+fi
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"replace_symbol_body\",\"arguments\":{\"path\":\"$FXE\",\"symbol\":\"a_00\",\"new_body\":\"int a_00( int x ) { return x + 1; }\"}}}" \
+    | RIPWIRE_TEST_MEMGUARD=parse:10 mcp_call "$TMP" >"$TMP/b18c.out"
+case "$( mcp_field "$TMP/b18c.out" 2 error )" in *"cannot answer from a partial index"*)
+        if cmp -s "$FXE/a/f00.c" "$TMP/b18.orig"; then ok "(B18c) MCP replace_symbol_body over a cut index refuses, file byte-unchanged"
+        else no "(B18c) refused but the file changed"; fi;;
+    *) no "(B18c) id=2 no refusal: $( head -c 300 "$TMP/b18c.out" )";; esac
+# (B19) --pin-census writes the resolver census to a file with no header to carry the cut: refused, nothing written
+run_trip parse:10 "$FX" --no-cache --pin-census="$TMP/b19.census" >"$TMP/b19.out" 2>"$TMP/b19.err"; rc=$?
+if [ "$rc" = 5 ] && [ ! -e "$TMP/b19.census" ] && grep -q '^ripwire: .*--pin-census cannot answer from a partial index' "$TMP/b19.err"; then
+    ok "(B19) --pin-census over a partial parse refuses (exit 5), no census file"
+else
+    no "(B19) rc=$rc census=$( [ -e "$TMP/b19.census" ] && echo written || echo absent ) stderr: $( grep '^ripwire:' "$TMP/b19.err" | head -c 250 )"
+fi
 # (B14) a workspace checks the hard line after EACH root (review CR3): src/ alone is over 64M, so root 2 is never ingested
 mkdir -p "$TMP/zzroot" && cp "$FX/a/f00.c" "$TMP/zzroot/"   # labels order the roots: src before zzroot
 "$BIN" "$ROOT/src" "$TMP/zzroot" --no-cache --max-memory=64M >"$TMP/b14.out" 2>"$TMP/b14.err"; rc=$?

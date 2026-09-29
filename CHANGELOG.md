@@ -37,7 +37,10 @@ A parse stop keeps every file it parsed — the first K slots of its work order 
 then grammarless, each largest first; path order when the process had already compiled every grammar query; a slot
 may reuse cached facts or fail to read) — so a partial map repeats for a given tree, cache and `memory_parsed=K`, and
 its JSON header adds `counts_floor:true`. `--expand` and `--outline`, and `--in` after a crawl stop, refuse a partial
-index like the other verbs (a selector in an unparsed or uncrawled file would read as "no match"), and a multi-root
+index like the other verbs (a selector in an unparsed or uncrawled file would read as "no match"), as do `--batch` (its
+sub-answers carry no disclosure), `--pin-census` (a file with no header) and every edit — the CLI edit verbs,
+`--edit-plan` and the MCP edit tools write nothing when the index was cut, since a same-named definition in an unparsed
+file would make an ambiguous target read as unique — and a multi-root
 workspace checks the hard limit after each root before ingesting the next; stop messages name the line that was crossed (the
 crawl line, an eighth of the limit; the parse line, half of it; or OS pressure), never the limit a soft stop did not
 reach. Nothing derived from a

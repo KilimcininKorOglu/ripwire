@@ -3417,6 +3417,18 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     return 0;
 }
 
+// #350: an edit over an index the memory guard cut refuses first (runEditVerb / editplan::run), and that refusal line
+// already names the guard — so it answers for the stop and exits 5, rather than 1 plus the backstop's second line
+int editRefusalExit() noexcept
+{
+    if( !rw::memguard::hasUnansweredStop() )
+    {
+        return 1;
+    }
+    rw::memguard::answerStops();
+    return 5;
+}
+
 std::optional<int> runCliEditPlan( const rw::Config& cfg )
 {
     const bool hasMode = cfg.editPlanDryRun || cfg.editPlanApply;
@@ -3445,7 +3457,7 @@ std::optional<int> runCliEditPlan( const rw::Config& cfg )
     if( !outcome.ok )
     {
         rw::emitTo( stderr, "ripwire edit-plan: {}\n", outcome.message.c_str() );
-        return 1;
+        return editRefusalExit();
     }
     std::puts( outcome.receipt.c_str() );
     return 0;
@@ -3526,7 +3538,7 @@ std::optional<int> runCliEdit( const rw::Config& cfg )
         const char* const editFlag = !cfg.replaceSymbolBody.empty() ? "--replace-symbol-body"
                                        : !cfg.insertBeforeSymbol.empty() ? "--insert-before-symbol" : "--insert-after-symbol";
         rw::emitTo( stderr, "ripwire: {}: {}\n", editFlag, outcome.message.c_str() );
-        return 1;
+        return editRefusalExit();
     }
 
     std::fputs( outcome.resultJson.c_str(), stdout );
@@ -4042,12 +4054,13 @@ static int memoryStopExit( const rw::IngestResult& ing, const rw::Config& cfg, c
     // the map's own renderings with no header to carry memory_stop= (--html, --mermaid) refuse like any other verb
     // …and so do the map modifiers that resolve a SELECTOR against the index: --expand/--outline a symbol name (one in a
     // file the guard never parsed would read as "matched no symbol", a false none-found), --in=DIR a directory against
-    // the crawl's files (only a crawl stop cuts those: a directory it never reached would read as "no indexed file")
+    // the crawl's files (only a crawl stop cuts those: a directory it never reached would read as "no indexed file");
+    // --pin-census writes the resolver's census to a file that has no header to carry the cut
     const bool        inDirCut     = !cfg.inDir.empty() && stop.phase == rw::MemoryStop::Phase::Crawl;
     const char* const refusingVerb = winnerVerb != nullptr ? winnerVerb
                                    : cfg.html ? "--html" : cfg.mermaid ? "--mermaid"
                                    : !cfg.expand.empty() ? "--expand" : !cfg.outline.empty() ? "--outline"
-                                   : inDirCut ? "--in" : nullptr;
+                                   : inDirCut ? "--in" : !cfg.pinCensus.empty() ? "--pin-census" : nullptr;
     if( refusingVerb != nullptr )
     {
         DISCLOSE( Diagnostics::answerRefused, "main: a verb other than the map refuses a memory-guard partial ingest — exit 5, one stderr line" );
@@ -4681,6 +4694,16 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         // (measured on the fixture, uses+slice: 8,840 B full, 8,645 B outer-only, 4,478 B with the subs). The
         // whole-stdout layer cannot do it — it must not rewrite inside CDATA — so the batch assembler does,
         // through the SAME helper the MCP twin calls. Gate: batchcheck (a)/(h) and compactlegendcheck.
+        // #350: the sub-answers carry no memory disclosure of their own, so a batch whose index the guard cut
+        // refuses whole (a sub-answer's "not found" could be a file the guard never parsed) — nothing on stdout
+        if( rw::memguard::hasUnansweredStop() )
+        {
+            rw::memguard::answerStops();
+            DISCLOSE( Diagnostics::answerRefused, "main: --batch over a memory-guard partial ingest refuses — exit 5, one stderr line" );
+            rw::emitTo( stderr, "ripwire: the memory guard stopped the ingest --batch reads; --batch cannot answer from a partial index — {}\n",
+                        rw::memguard::kOverride );
+            return 5;
+        }
         if( cfg.legend == "compact" )
         {
             rw::applyCompactToBatchSubs( subs );

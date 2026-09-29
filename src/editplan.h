@@ -304,6 +304,8 @@ inline Outcome prepare( const std::string& root, const std::string& planPath, st
     if( objects.empty() || objects.size() > 64 || !objectOnlyArray( editArray, objects ) ) { out.message = "edit plan needs 1..64 edit objects and no other array values"; return out; }
 
     const McpIndex& ix = getIndex( root );
+    // #350: every target resolves against the index — a memory-guard partial one refuses the whole plan, nothing staged
+    if( ix.ing.memoryStop.isSet() ) { out.message = memguard::verbRefusalLine( ix.ing.memoryStop, "--edit-plan" ); return out; }
     edits.reserve( objects.size() );
     for( const std::string& object : objects )
     {

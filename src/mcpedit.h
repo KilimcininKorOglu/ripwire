@@ -21,6 +21,7 @@
 #include "nextverb.h"         // E2: ONE next= on the receipt (nextFlag / nextFieldJson)
 #include "redact.h"           // R1 (V3): kRedactRules — the marker table the write gate's predicate is derived FROM
 #include "pathguard.h"        // A4-F14: rw::pathguard::isSymlink — THE symlink predicate, shared with the sidecar writers
+#include "memguard.h"         // #350: an edit refuses an index the memory guard cut (verbRefusalLine)
 
 #include <climits>            // PATH_MAX — the AbsHintFrame realpath/getcwd buffers (A2)
 
@@ -1202,6 +1203,14 @@ inline mcpedit::Outcome runEditVerb( const std::string& root, mcpedit::Op op, co
 
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
+    // #350: a target resolved against a memory-guard partial index can be a false "not found", or a false "unique"
+    // when a same-named definition sits in a file the guard never parsed — refuse before anything is written
+    if( ing.memoryStop.isSet() )
+    {
+        oc.ok = false; oc.errCode = -32602;
+        oc.message = memguard::verbRefusalLine( ing.memoryStop, "an edit" );
+        return oc;
+    }
 
     // 1. resolve either a plain name or a grep-issued, freshness-pinned handle to exactly one definition.
     const mcpedit::EditTarget target = mcpedit::resolveTarget( ix, symbol, pathHint );
