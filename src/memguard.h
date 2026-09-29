@@ -130,6 +130,26 @@ struct TestTrip
     TripAt        at    = TripAt::Nowhere;
     std::uint64_t index = 0;   // 1-based: the Nth guarded unit trips
 };
+// the seam's phase spellings (an unknown one is no seam at all)
+inline TripAt tripAtFor( std::string_view phase ) noexcept
+{
+    constexpr struct
+    {
+        std::string_view name;
+        TripAt           at;
+    } kPhases[] = {
+        { "crawl", TripAt::Crawl }, { "pressure", TripAt::Pressure }, { "parse", TripAt::Parse },
+        { "request", TripAt::Request }, { "hard", TripAt::Hard }, { "eager", TripAt::Eager },
+    };
+    for( const auto& p : kPhases )
+    {
+        if( p.name == phase )
+        {
+            return p.at;
+        }
+    }
+    return TripAt::Nowhere;
+}
 // RIPWIRE_TEST_MEMGUARD, read once. A malformed value is no seam at all (the variable is for gates only).
 inline const TestTrip& testTrip() noexcept
 {
@@ -157,9 +177,7 @@ inline const TestTrip& testTrip() noexcept
             n = n * 10 + std::uint64_t( c - '0' );
         }
         const std::string_view phase = v.substr( 0, colon );
-        t.at    = phase == "crawl" ? TripAt::Crawl : phase == "pressure" ? TripAt::Pressure : phase == "parse" ? TripAt::Parse
-                : phase == "request" ? TripAt::Request : phase == "hard" ? TripAt::Hard : phase == "eager" ? TripAt::Eager
-                : TripAt::Nowhere;
+        t.at    = tripAtFor( phase );
         t.index = n;
         return t;
     }();
