@@ -279,7 +279,15 @@ constexpr std::uint32_t kCacheVersion = 25;           // 25: #150 AND #157 (trai
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 124;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 128;          // bump on any grammar/.scm/extraction change
+                                                      // 128 = 2026-09-29 (test/fnliteralcheck.sh): a name bound
+                                                      //   to a function literal (JS/TS `const f = (x) => …`, Lua
+                                                      //   `M.f = function … end`, a Python class-body lambda) owns
+                                                      //   the LITERAL's body (ingest_relations.h kFnLiteralBinding):
+                                                      //   bodyByte/sigEnd, params/cx/nest from the literal, and a
+                                                      //   multi-name binding's span narrows to its own binding.
+                                                      //   123/125/126/127 stay reserved for community PRs.
+                                                      //   No record layout change: kCacheVersion stays 25.
                                                       // 124 = 2026-09-26 (#220 part 2, test/depsprecisecheck.sh
                                                       //   P2-O): a TS/JS RE-EXPORT (`export … from './y'`) is an
                                                       //   Include like an import (ingest_relations.h

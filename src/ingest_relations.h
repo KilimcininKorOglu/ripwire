@@ -98,19 +98,129 @@ TSNode preprocValueNode( TSNode defineNode ) noexcept
     return fieldChild( defineNode, NodeField::Value );
 }
 
+// ---- a NAME BOUND TO A FUNCTION LITERAL owns that literal's body ------------------------------------------
+// `const f = (x) => {…}`, `M.f = function(x) … end`, a class-body `f = lambda self, x: g(x)`: the tags query
+// captures the BINDING (lexical_declaration / assignment_statement / assignment / pair / field) as the
+// definition, and none of those nodes owns a `body:` field. Before this table the symbol read as bodyless
+// everywhere — sigEndByte == endByte, `--callees=f` answered bodyless_defs="1", and every quality verb that
+// skips bodyless symbols skipped it (measured on a TS agent repo: ~2,100 arrow-const functions, 63 measured).
+//
+// ONE table, not a branch per language (CONTRIBUTING "Adding a language: common stays common"): which
+// languages capture such bindings, which node kinds are function literals, which fields carry a bound value,
+// which positional lists carry one, and which wrappers sit between the binding and the literal. A language
+// joins by adding its literal kind (and, if its grammar spells the value differently, its field) — never code.
+// Languages that do NOT capture `name = <literal>` as a definition at all (Go `var f = func…`, Kotlin, Swift,
+// Dart, PHP, Ruby, C# lambdas) are a different gap — the definition is missing, not its body — and stay out.
+struct FnLiteralBindingTable
+{
+    std::array<Lang, 4>             langs;        // grammars whose tags.scm captures `name = <function literal>` as a def (TSX parses as TypeScript)
+    std::array<std::string_view, 4> literals;     // node kinds that ARE a function literal — each owns its params and a `body:` field
+    std::array<NodeField, 2>        valueFields;  // fields that carry the bound value: JS/TS declarator/pair/field `value:`, JS/Python assignment `right:`
+    std::array<std::string_view, 1> valueLists;   // positional value lists — Lua `a = v`: the list's FIRST `value:` is the bound value (tags.scm anchors it)
+    std::array<std::string_view, 3> wrappers;     // cast/paren wrappers between binding and literal: `((x) => …) as T` / `satisfies T`
+};
+inline constexpr FnLiteralBindingTable kFnLiteralBinding = {
+    { Lang::JavaScript, Lang::TypeScript, Lang::Lua, Lang::Python },
+    { "arrow_function", "function_expression", "function_definition", "lambda" },
+    { NodeField::Value, NodeField::Right },
+    { "expression_list" },
+    { "parenthesized_expression", "as_expression", "satisfies_expression" },
+};
+
+// the value `binding` binds, through the wrappers: a value field, else the first `value:` of a positional value
+// list child. Null when the node binds nothing.
+inline TSNode fnLiteralBoundValue( TSNode binding ) noexcept
+{
+    TSNode value = {};
+    for( const NodeField f : kFnLiteralBinding.valueFields )
+    {
+        if( value = fieldChild( binding, f ); !ts_node_is_null( value ) )
+        {
+            break;
+        }
+    }
+    for( std::uint32_t i = 0, n = ts_node_named_child_count( binding ); ts_node_is_null( value ) && i < n && i < 4; ++i )
+    {
+        // i < 4: a value list is a direct child of the assignment, after the name list — never deep in a long child run
+        if( const TSNode c = ts_node_named_child( binding, i ); extent::inSet( kFnLiteralBinding.valueLists, std::string_view( ts_node_type( c ) ) ) )
+        {
+            value = fieldChild( c, NodeField::Value );
+        }
+    }
+    for( int guard = 0; !ts_node_is_null( value ) && guard < 4 && extent::inSet( kFnLiteralBinding.wrappers, std::string_view( ts_node_type( value ) ) ); ++guard )
+    {
+        value = ts_node_named_child( value, 0 );   // the wrapped expression is a wrapper's first named child; the type follows it
+    }
+    return value;
+}
+
+// The literal a definition's @name is bound to, and the node that binds it. Walks UP from the name — the
+// binding for THIS name, so `const a = () => 1, b = () => 2` hands each name its own literal — and stops at the
+// captured def node. Null literal when the language is not in the table or the name binds no function literal.
+struct FnLiteralBinding
+{
+    TSNode literal;
+    TSNode binding;
+};
+inline FnLiteralBinding fnLiteralBoundTo( TSNode roleNode, TSNode nameNode, Lang lang ) noexcept
+{
+    if( !extent::inSet( kFnLiteralBinding.langs, lang ) )
+    {
+        return {};
+    }
+    TSNode binding = ts_node_parent( nameNode );
+    for( int hop = 0; !ts_node_is_null( binding ) && hop < 6; ++hop )
+    {
+        if( const TSNode value = fnLiteralBoundValue( binding ); !ts_node_is_null( value ) && extent::inSet( kFnLiteralBinding.literals, std::string_view( ts_node_type( value ) ) ) )
+        {
+            return { value, binding };
+        }
+        if( ts_node_eq( binding, roleNode ) )
+        {
+            break;
+        }
+        binding = ts_node_parent( binding );
+    }
+    return {};
+}
+
 // the def's body node: the `body:` field for every function/class grammar, and — macro-edges round — a
 // #define's `value:` (preproc_arg) replacement text. Adopting the value as the body gives a macro symbol a
 // real signature/body split (sigEnd = replacement start), which is ALSO what makes graph.h's decl/def
 // collapse treat an indexed macro as a DEFINITION (hasBody: endByte > sigEndByte) instead of a shadowable
 // forward decl. Kept out of captureTagsFacts (the file's densest dispatch point) behind one call.
-TSNode defBodyNodeOf( TSNode roleNode, SymKind kind ) noexcept
+//
+// A function/method whose def node owns no body and whose name is bound to a function literal
+// (kFnLiteralBinding) takes the LITERAL's body, and `fn` names the literal so params/cx/nest read from the
+// function itself rather than from the declaration around it (a typed const's annotation carries its own
+// formal_parameters ahead of the arrow). `span` narrows to the one binding when the def node binds several
+// names (`const a = …, b = …;`, a Lua table of function fields) so each name's calls attribute to it alone;
+// a def node that binds one name keeps its own span, byte-for-byte.
+struct DefBodyNodes
+{
+    TSNode body;   // null: a declaration
+    TSNode fn;     // the node metrics read from
+    TSNode span;   // the node the symbol's byte/row span covers
+};
+inline DefBodyNodes defBodyNodeOf( TSNode roleNode, TSNode nameNode, SymKind kind, Lang lang ) noexcept
 {
     TSNode body = fieldChild( roleNode, NodeField::Body );
     if( ts_node_is_null( body ) && kind == SymKind::Macro )
     {
         body = fieldChild( roleNode, NodeField::Value );
     }
-    return body;
+    if( !ts_node_is_null( body ) || ( kind != SymKind::Function && kind != SymKind::Method ) )
+    {
+        return { body, roleNode, roleNode };
+    }
+    const auto [ literal, binding ] = fnLiteralBoundTo( roleNode, nameNode, lang );
+    if( ts_node_is_null( literal ) )
+    {
+        return { body, roleNode, roleNode };
+    }
+    const bool oneOfSeveral = !ts_node_eq( binding, roleNode ) && ts_node_named_child_count( roleNode ) > 1
+                              && ts_node_eq( ts_node_parent( binding ), roleNode );
+    return { fieldChild( literal, NodeField::Body ), literal, oneOfSeveral ? binding : roleNode };
 }
 
 // DART's body is a SIBLING, not a field and not a child. tree-sitter-dart emits `function_body` next to

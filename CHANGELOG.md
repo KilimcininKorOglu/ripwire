@@ -15,6 +15,25 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality verbs measure it
+
+`const f = (x) => {…}`, `export const f = function(…) {…}`, a class-field arrow, an object-literal arrow, a CommonJS
+`module.exports.f = function`, Lua's `M.f = function(x) … end` / `local f = function` / `{ f = function … }`, and a
+Python class-body `f = lambda self, x: g(x)` were captured as definitions whose def node (the declaration, the
+assignment, the table) owns no `body:` field, so each read as a bodyless declaration: `--callees=f` and MCP
+`find_symbol` answered `bodyless_defs="1"` — false — and every verb that measures only bodied functions skipped them.
+A name bound to a function literal now owns that literal's body (one data table, `kFnLiteralBinding` in
+`src/ingest_relations.h`: the languages, the literal node kinds, the value-carrying fields, the positional value
+list and the cast/paren wrappers — JS, TS/TSX, Lua and Python today). Params, cx and nest read from the literal, so a
+typed const's annotation no longer lends the arrow its parameter count, and a declaration binding several names
+(`const a = () => …, b = () => …`, a Lua table of function fields) gives each name its own span, so its calls
+attribute to it. On a 583-file TypeScript agent repo: `--biggest-first` measures 2,083 functions (was 63); summed
+`bodyless_defs` over every function/method name 2,043 → 23 (the 23 are interface signatures and data keys); edges
+3,894 → 3,856 and tier-3 `declined` 55 → 133, because a bodied closure no longer drops out of the candidate set as a
+"declaration" and hands a same-named method elsewhere a guessed edge — the call is now bound locally or declined. A
+real declaration (`declare function`, an overload signature, an interface member) stays bodyless. `kParserVer` 128.
+Gate: `test/fnliteralcheck.sh`.
+
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
 ripwire measured none of its own memory, so a large tree (#350: a non-git home directory, 67 GB) could grow it until

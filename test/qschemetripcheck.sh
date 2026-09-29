@@ -34,6 +34,9 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-29, lane/fn-literal-bodies-066: RE-DERIVED with UPDATE_GOLDEN=1 (hash 6105b18fb8…b20fd5). kParserVer 124 -> 128
+#   (a name bound to a function literal owns the literal's body; 125/126/127 and 123 stay reserved for community PRs).
+#   Only the extraction-identity declaration moves — kCacheVersion stays 25, kQSnapCacheScheme stays 15.
 # 2026-09-27, train 21 (#220 part 2 + builtin-bind merged): RE-DERIVED on the merged tree with UPDATE_GOLDEN=1 — the
 #   hash is c451a79f1c…40c2cf, unchanged from #220's entry below: builtin-bind's kQSnapCacheScheme 14 -> 15 and its
 #   declinedCallMayReach exemption move no hashed declaration, and #220's kParserVer 124 is already in the pin.
