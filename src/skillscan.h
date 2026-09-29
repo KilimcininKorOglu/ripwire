@@ -36,7 +36,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -394,11 +393,6 @@ inline constexpr std::string_view kSensitiveShapes[]     = { "/etc/passwd", "/et
 inline constexpr std::string_view kSensitiveBaseStarts[] = { "id_rsa", "id_ecdsa", "id_ed25519", "id_dsa", "cookies", ".env." };
 inline constexpr std::string_view kKeychainDumps[]       = { "dump-keychain", "find-generic-password", "find-internet-password" };
 
-inline bool containsAny( std::string_view lowered, std::span<const std::string_view> needles ) noexcept
-{
-    return std::any_of( needles.begin(), needles.end(), [ & ]( std::string_view n ) noexcept { return lowered.find( n ) != std::string_view::npos; } );
-}
-
 // A LOWERCASED file operand whose content is a secret: account databases, private keys (a `.pub` key is meant to be
 // shared), .netrc, cloud and git credential stores, a process environment, a keychain, a browser cookie store, `.env`.
 inline bool isSensitivePath( std::string_view lowered ) noexcept
@@ -413,7 +407,8 @@ inline bool isSensitivePath( std::string_view lowered ) noexcept
     {
         return false;
     }
-    return base == ".env" || base == ".ssh" || base.ends_with( ".pem" ) || base.ends_with( ".key" ) || containsAny( lowered, kSensitiveShapes )
+    return base == ".env" || base == ".ssh" || base.ends_with( ".pem" ) || base.ends_with( ".key" )
+        || std::any_of( std::begin( kSensitiveShapes ), std::end( kSensitiveShapes ), [ & ]( std::string_view s ) noexcept { return lowered.find( s ) != std::string_view::npos; } )
         || std::any_of( std::begin( kSensitiveBaseStarts ), std::end( kSensitiveBaseStarts ), [ & ]( std::string_view s ) noexcept { return base.starts_with( s ); } );
 }
 
@@ -538,7 +533,7 @@ inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexce
         else
         {
             const std::string_view operand = fileOperand( low, prevToken, redirectIn );
-            if( ( !operand.empty() && isSensitivePath( operand ) ) || containsAny( low, kKeychainDumps ) )
+            if( ( !operand.empty() && isSensitivePath( operand ) ) || std::find( std::begin( kKeychainDumps ), std::end( kKeychainDumps ), low ) != std::end( kKeychainDumps ) )
             {
                 segSensitive = true;
             }
