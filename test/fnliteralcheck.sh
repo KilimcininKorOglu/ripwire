@@ -26,7 +26,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 FIX="$ROOT/test/fnliteralfix"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
@@ -51,9 +51,9 @@ done
 # ---- 2. real bodyless declarations stay bodyless ----------------------------------------------------------
 echo "=== 2. declarations without a body stay bodyless ==="
 h="$( header declaredOnly )"
-printf '%s' "$h" | grep -q ' defs="1".* bodyless_defs="1"' && ok "declaredOnly: bodyless_defs=1" || no "declaredOnly: expected bodyless — got: $h"
+if printf '%s' "$h" | grep -q ' defs="1".* bodyless_defs="1"'; then ok "declaredOnly: bodyless_defs=1"; else no "declaredOnly: expected bodyless — got: $h"; fi
 h="$( header overloaded )"
-printf '%s' "$h" | grep -q ' defs="3".* bodyless_defs="2"' && ok "overloaded: 2 signatures bodyless, 1 bodied" || no "overloaded: expected defs=3 bodyless_defs=2 — got: $h"
+if printf '%s' "$h" | grep -q ' defs="3".* bodyless_defs="2"'; then ok "overloaded: 2 signatures bodyless, 1 bodied"; else no "overloaded: expected defs=3 bodyless_defs=2 — got: $h"; fi
 # `declare const f: (x) => void;` binds a TYPE, not a literal: it is not a function definition at all (the
 # tags query needs a value:), so --callees refuses it — never a bodied def.
 if ( cd "$FIX" && "$BIN" . --callees=declaredConst --no-cache --legend=compact 2>&1 >/dev/null ) | grep -q 'symbol not found: declaredConst'; then
@@ -91,12 +91,12 @@ attr py_lambda   cx     1 "the lambda, read from the lambda"
 # ---- 4. a callback passed as an argument never becomes a definition ---------------------------------------
 echo "=== 4. anonymous callbacks are not definitions ==="
 n="$( grep -c '<s t=' "$TMP/m" )"
-[ "$n" = "37" ] && ok "symbol rows = 37 (no anonymous callback minted a def)" || no "expected 37 symbol rows — got $n"
+if [ "$n" = "37" ]; then ok "symbol rows = 37 (no anonymous callback minted a def)"; else no "expected 37 symbol rows — got $n"; fi
 if grep -qE '<s t="[^"]*" n=""' "$TMP/m"; then no "an unnamed symbol row appeared"; else ok "no unnamed symbol rows"; fi
 
 # ---- 5. determinism ---------------------------------------------------------------------------------------
 ( cd "$FIX" && "$BIN" . --no-cache >"$TMP/a" 2>/dev/null; "$BIN" . --no-cache >"$TMP/b" 2>/dev/null )
-diff -q "$TMP/a" "$TMP/b" >/dev/null && ok "default map byte-identical run-to-run" || no "non-deterministic default map"
+if diff -q "$TMP/a" "$TMP/b" >/dev/null; then ok "default map byte-identical run-to-run"; else no "non-deterministic default map"; fi
 
 echo
 if [ "$fail" = 0 ]; then echo "fnliteralcheck: ALL PASS"; else echo "fnliteralcheck: FAIL"; fi
