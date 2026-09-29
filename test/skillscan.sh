@@ -213,13 +213,13 @@ while IFS=: read -r nx_block nx_line nx_text; do
     esac
 done < <( awk '/^```bash/ { b++; inb = 1; next } /^```/ { inb = 0; next } inb { print b ":" NR ":" $0 }' "$NX" )
 nx_why3="$( grep -c . < <( grep -o 'why="sensitive-read-upload"' "$TMP/nx_out.txt" ) )"
-if [ "$nx_bad" = 0 ] && [ "$nx_n1" = 18 ] && [ "$nx_clean" = 1 ] && [ "$nx_n2" = 17 ] && [ "$nx_n3" = 38 ] && [ "$nx_n4" = 11 ] && [ "$nx_n5" = 1 ]; then
-    ok "(#353) net-exfil: 18 WARN no-cred-source + 1 clean, 17 credential CRITICAL, 38 sensitive-upload CRITICAL ($nx_why3 by why=\"sensitive-read-upload\"), 11 no-destination/near-miss clean, 1 placeholder non-critical"
+if [ "$nx_bad" = 0 ] && [ "$nx_n1" = 18 ] && [ "$nx_clean" = 1 ] && [ "$nx_n2" = 17 ] && [ "$nx_n3" = 40 ] && [ "$nx_n4" = 11 ] && [ "$nx_n5" = 1 ]; then
+    ok "(#353) net-exfil: 18 WARN no-cred-source + 1 clean, 17 credential CRITICAL, 40 sensitive-upload CRITICAL ($nx_why3 by why=\"sensitive-read-upload\"), 11 no-destination/near-miss clean, 1 placeholder non-critical"
 else
-    no "(#353) net-exfil split: b1 warn=$nx_n1/18 clean=$nx_clean/1, b2 critical=$nx_n2/17, b3 critical=$nx_n3/38, b4 clean=$nx_n4/11, b5 non-critical=$nx_n5/1"
+    no "(#353) net-exfil split: b1 warn=$nx_n1/18 clean=$nx_clean/1, b2 critical=$nx_n2/17, b3 critical=$nx_n3/40, b4 clean=$nx_n4/11, b5 non-critical=$nx_n5/1"
 fi
-if [ "$nx_why3" -ge 34 ]; then ok "(#353) at least 34 of block 3's rows are caught by the new sensitive-read-upload grade ($nx_why3), not only by ssh-aws-creds"
-else no "(#353) only $nx_why3 block-3 rows carry why=\"sensitive-read-upload\" (want >= 34)"; fi
+if [ "$nx_why3" -ge 36 ]; then ok "(#353) at least 36 of block 3's rows are caught by the new sensitive-read-upload grade ($nx_why3), not only by ssh-aws-creds"
+else no "(#353) only $nx_why3 block-3 rows carry why=\"sensitive-read-upload\" (want >= 36)"; fi
 if [ "$nx_rc" = 2 ]; then ok "(#353) a file with a credential-bearing line still exits 2"; else no "(#353) netexfil_severity.md exit $nx_rc, want 2"; fi
 # The WARN-only half alone: the issue's own reproduction must not block `wrap` (exit 1, not 2).
 printf '```bash\nfor p in 8080; do curl -sS http://127.0.0.1:$p/v1/models; done\n```\n' >"$TMP/nx_loop.md"

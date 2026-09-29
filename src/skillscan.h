@@ -381,7 +381,8 @@ inline bool hasCredentialToken( std::string_view lowered ) noexcept
 //       `cat /etc/passwd | curl … --data-binary @-` scanned clean. It is CRITICAL, why="sensitive-read-upload", whether
 //       or not the destination could be read — a sensitive read reaching a network verb is exfiltration wherever it goes.
 // THE INVARIANT (gradeNetExfil): R1 and R2 only ever silence or downgrade a line that carries NO credential token and NO
-// sensitive read. A line main graded CRITICAL that carries either stays CRITICAL — test/regexguardcheck.sh arm (f1b).
+// sensitive read. A line main graded CRITICAL that carries either stays CRITICAL — pinned by test/skillscan.sh check 18's
+// block-2 (credential) and block-3 (sensitive-read) fixture rows.
 // Still line-local: a read on one line and an upload on the next is the flow fix still to come.
 inline constexpr const char* kNetExfilSensitiveWhy = "sensitive-read-upload";
 
@@ -558,6 +559,13 @@ struct NetFlowScan
         {
             endSegment( false );
             return ( c == '&' && next == '&' ) ? 2 : 1;
+        }
+        if( ( c == '<' || c == '>' ) && next == '(' )
+        {   // `<( … )` / `>( … )` process substitution: a NESTED command, not a redirect — open a command context
+            expectCommand = true;
+            activePrefix  = nullptr;
+            skipValue     = false;
+            return 2;
         }
         if( c == '>' || c == '&' )   // `>`, `>>`, `>&2`, `&>`: an output target follows — neither a read nor a destination
         {

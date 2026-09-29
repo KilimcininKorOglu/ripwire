@@ -536,6 +536,10 @@ def has_dest(line):
         c = line[i]; nx = line[i + 1] if i + 1 < len(line) else ""
         if c == "|": end(); i += 2 if nx == "|" else 1; continue
         if c in ";\r\n" or (c == "&" and nx != ">"): end(); i += 2 if (c == "&" and nx == "&") else 1; continue
+        if c in "<>" and nx == "(":   # `<( )` / `>( )` process substitution: a nested command, not a redirect
+            if not expect: expect = True; active = None; skip_value = False
+            else: active = None; skip_value = False
+            i += 2; continue
         if c in ">&": rout = True; i += 2 if nx in ("&", ">") else 1; continue
         if c == "<": rin = True; i += 1; continue
         if c in "(`" or (c in "\"'" and (i == 0 or line[i - 1] in " \t")):
