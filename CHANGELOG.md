@@ -34,7 +34,8 @@ with one line naming the limit and the override. The MCP server refuses a tool c
 up; every answer from an index the guard cut carries `_memory_stop` in its envelope. A stop inside a verb's own
 secondary ingest that the verb does not read turns a CLI exit into 5 with one line, so it cannot pass as whole.
 A parse stop keeps every file it parsed — the first K slots of its work order it claimed (uncached files, then cached,
-then grammarless, each largest first; path order when the process had already compiled every grammar query; a slot
+then grammarless, each largest first; path order when no grammar-bearing file needed a fresh parse, every one an
+ingest-cache hit; a slot
 may reuse cached facts or fail to read) — so a partial map repeats for a given tree, cache and `memory_parsed=K`, and
 its JSON header adds `counts_floor:true`. `--expand` and `--outline`, and `--in` after a crawl stop, refuse a partial
 index like the other verbs (a selector in an unparsed or uncrawled file would read as "no match"), as do `--batch` (its

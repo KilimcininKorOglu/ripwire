@@ -725,7 +725,8 @@ inline RawFacts mergeThreadFacts( std::vector<RawFacts>& tFacts )
 // #350: after the pool join, a memory-guard stop while files remained. Workers look at the stop flag BEFORE claiming a
 // file, so every claimed file completed and the parsed set is the first K entries of the parse ORDER (cache misses,
 // then cache hits, then grammarless files, each largest first, then fileId — or plain fileId order when the query
-// prewarm was already ready, i.e. this process had compiled every grammar's query in an earlier ingest; deterministic
+// prewarm was already ready, i.e. no grammar-bearing file needed a fresh parse (every one an ingest-cache hit, so the
+// prewarm had nothing to compile: ingest_prewarm.h builds toCompile from cache-miss files only); deterministic
 // for a given tree and cache), which is what memory_parsed=K counts (claimed slots: one may reuse cached facts or fail
 // to read); a partial answer therefore repeats for a given K. Under the parse seam an abandoned claim at slot N or later
 // is not a parse, hence the min with the seam's cutoff. A stop after the last claim cut nothing. Returns whether cut.

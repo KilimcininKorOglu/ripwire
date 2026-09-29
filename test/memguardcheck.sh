@@ -540,6 +540,24 @@ if [ "$rc" = 5 ] && [ ! -e "$TMP/b19.census" ] && grep -q '^ripwire: .*--pin-cen
 else
     no "(B19) rc=$rc census=$( [ -e "$TMP/b19.census" ] && echo written || echo absent ) stderr: $( grep '^ripwire:' "$TMP/b19.err" | head -c 250 )"
 fi
+# (B20) memory_parsed=K counts the first K slots of the parse's work order, and the order is what the legend says
+#       (review CR2): cold, cache misses largest first (z/big.c); every grammar file an ingest-cache hit, path order
+#       (a/f00.c); one changed file makes it a miss again and it leads (a/f01.c)
+FXO="$TMP/fxo"; mkdir -p "$FXO/a" "$FXO/z"
+for i in 0 1 2; do printf 'int a_%s( int x ) { return x; }\n' "$i" >"$FXO/a/f0$i.c"; done
+for i in $( seq 1 40 ); do printf 'int z_%s( int x ) { return x + %s; }\n' "$i" "$i"; done >"$FXO/z/big.c"
+"$BIN" "$FXO" --cache="$TMP/b20.cache" >/dev/null 2>&1   # a whole run warms the cache (a cut run never writes it)
+kept(){ grep -oE '<f p="[^"]*"' "$1" | tr '\n' ' '; }
+run_trip parse:1 "$FXO" --no-cache >"$TMP/b20a.out" 2>/dev/null
+run_trip parse:1 "$FXO" --cache="$TMP/b20.cache" >"$TMP/b20b.out" 2>/dev/null
+printf 'int a_1( int x ) { return x * 2; }\n' >"$FXO/a/f01.c"
+run_trip parse:1 "$FXO" --cache="$TMP/b20.cache" >"$TMP/b20c.out" 2>/dev/null
+if [ "$( kept "$TMP/b20a.out" )" = '<f p="z/big.c" ' ] && [ "$( kept "$TMP/b20b.out" )" = '<f p="a/f00.c" ' ] \
+   && [ "$( kept "$TMP/b20c.out" )" = '<f p="a/f01.c" ' ]; then
+    ok "(B20) parse:1 keeps the largest miss cold, the first path when all hit, and the one changed file when it misses"
+else
+    no "(B20) cold='$( kept "$TMP/b20a.out" )' warm='$( kept "$TMP/b20b.out" )' one-miss='$( kept "$TMP/b20c.out" )'"
+fi
 # (B14) a workspace checks the hard line after EACH root (review CR3): src/ alone is over 64M, so root 2 is never ingested
 mkdir -p "$TMP/zzroot" && cp "$FX/a/f00.c" "$TMP/zzroot/"   # labels order the roots: src before zzroot
 "$BIN" "$ROOT/src" "$TMP/zzroot" --no-cache --max-memory=64M >"$TMP/b14.out" 2>"$TMP/b14.err"; rc=$?

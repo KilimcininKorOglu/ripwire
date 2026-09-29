@@ -2360,10 +2360,10 @@ inline std::string buildEscapedRootAttr( const CrawlSkips& skips )
 // #350 layer 3 — the memory guard stopped this ingest (MemoryStop): memory_stop= names where it first stopped (crawl:
 // files= is what the crawl saw, a floor of the tree; parse: the crawl was whole), memory_parsed= how many work-order
 // slots the parse claimed before it stopped (uncached files, then cached, then grammarless, each largest first — or
-// fileId order when every grammar query was already compiled in this process; a slot may reuse cached facts or fail to
-// read), memory_limit= the limit as the --max-memory value that would raise it, memory_pressure=1 when the OS pressure
-// signal (not a line) stopped it. The JSON spelling adds counts_floor:true. Absent on every run the guard did not stop — i.e. every normal run, byte-identical — like every
-// corpus-cut attribute beside it. XML header-comment and JSON spellings, one source.
+// fileId order when no grammar-bearing file needed a fresh parse, every one an ingest-cache hit; a slot may reuse cached
+// facts or fail to read), memory_limit= the limit as the --max-memory value that would raise it, memory_pressure=1 when
+// the OS pressure signal (not a line) stopped it. The JSON spelling adds counts_floor:true. Absent on every run the
+// guard did not stop — i.e. every normal run, byte-identical — like every corpus-cut attribute beside it. XML header-comment and JSON spellings, one source.
 inline std::string buildMemoryStopAttr( const IngestResult& ing, bool json )
 {
     const MemoryStop& m = ing.memoryStop;

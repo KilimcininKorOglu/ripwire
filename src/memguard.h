@@ -47,9 +47,10 @@
 //
 // REPEATABILITY. A crawl stop keeps what the walk had seen, then sorts it. A parse stop keeps the first K slots of the
 // parse ORDER (cache misses, then cache hits, then grammarless files, each largest first, then fileId — or plain fileId
-// order when this process had already compiled every grammar's query, a repeat ingest), every one of which completed
-// (a slot may reuse cached facts or fail to read), so a partial answer is a function of the tree, the cache, the
-// process's earlier ingests and memory_parsed=K: two runs cut at the same K print the same bytes.
+// order when no grammar-bearing file needed a fresh parse, every one an ingest-cache hit: the query prewarm then has
+// nothing to compile, ingest_prewarm.h), every one of which completed (a slot may reuse cached facts or fail to read),
+// so a partial answer is a function of the tree, the cache and memory_parsed=K: two runs cut at the same K print the
+// same bytes.
 
 #include <algorithm>
 #include <atomic>
