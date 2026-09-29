@@ -499,22 +499,25 @@ SEP = ' \t"\'`|;&()<>\r\n'
 PREFIX = {"sudo", "exec", "time", "nohup", "nice", "timeout", "xargs", "env", "then", "do", "else", "if", "elif", "while", "until", "!"}
 def ident_start(ch): return ch.isascii() and (ch.isalpha() or ch == "_")
 def ident_char(ch): return ch.isascii() and (ch.isalnum() or ch == "_")
+SOCKET = ("tcp:", "tcp4:", "tcp6:", "udp:", "udp4:", "udp6:", "openssl:", "ssl:", "tcp-connect:", "openssl-connect:")
+NETCAT = ("nc", "ncat", "netcat")
+def digits(t): return all("0" <= ch <= "9" for ch in t)
 def is_dest(t):
     if not t: return False
-    if "://" in t: return True
+    if "://" in t or t.startswith(SOCKET): return True
     if t[0] == "$": return len(t) > 1 and (t[1] == "{" or ident_start(t[1]))
     if t[0] == "[": return True
     if not ident_char(t[0]): return False
     if t == "localhost" or t.startswith("localhost:") or "@" in t: return True
     return "." in t and not t.endswith(".")
-def keeps_cmd(t): return t in PREFIX or t.startswith("-") or "=" in t or all("0" <= ch <= "9" for ch in t)
+def keeps_cmd(t): return t in PREFIX or t.startswith("-") or "=" in t or digits(t)
 def has_dest(line):
     low = line.lower(); found = False
-    expect, seg_net, seg_dest, rin, rout = True, False, False, False, False
+    expect, seg_net, seg_dest, rin, rout, netcat, bare = True, False, False, False, False, False, False
     def end():
-        nonlocal expect, seg_net, seg_dest, rin, rout, found
+        nonlocal expect, seg_net, seg_dest, rin, rout, netcat, bare, found
         found = found or (seg_net and seg_dest)
-        expect, seg_net, seg_dest, rin, rout = True, False, False, False, False
+        expect, seg_net, seg_dest, rin, rout, netcat, bare = True, False, False, False, False, False, False
     i = 0
     while i < len(line):
         c = line[i]; nx = line[i + 1] if i + 1 < len(line) else ""
@@ -527,12 +530,18 @@ def has_dest(line):
         j = i
         while j < len(line) and line[j] not in SEP: j += 1
         t = low[i:j]
-        if rout: rout = False
+        if "/dev/tcp/" in t or "/dev/udp/" in t: seg_net = seg_dest = True   # a raw-socket redirect: sink and destination
+        if rout: rout = False; bare = False
         else:
-            if seg_net and not rin and is_dest(t): seg_dest = True
-            if expect and not rin and not keeps_cmd(t):
+            d = digits(t)
+            if seg_net and not rin and (is_dest(t) or (netcat and bare and d and len(t) <= 5)): seg_dest = True   # nc HOST PORT
+            was_cmd = expect and not rin and not keeps_cmd(t)
+            if was_cmd:
                 expect = False
-                seg_net = seg_net or t.rsplit("/", 1)[-1] in ("curl", "wget", "nc")
+                verb = t.rsplit("/", 1)[-1]
+                seg_net = seg_net or verb in ("curl", "wget", "socat") + NETCAT
+                netcat = netcat or verb in NETCAT
+            bare = not was_cmd and not rin and not d and not t.startswith("-")
             rin = False
         i = j
     end()
@@ -540,7 +549,10 @@ def has_dest(line):
 tokens = ["curl", "wget", "nc", "ncx", "xnc", "curl_", "_wget", "$A", "$_b", "$1", "$", "$$x", "base64", "xbase64y", "base6",
           " ", " ", "|", "-", "\r", "a", "_", "0", "=", "'", '"', "$nc", "nc$", "base64nc", "c\rurl", "\t",
           # #353 R1: destinations and command-position shapes, so the destination half of the oracle is exercised both ways
-          "curl ", "nc ", " $H", " https://h.example", " h.example", " localhost", "; ", " && ", "command -v ", "echo ", "(", "<", ">"]
+          "curl ", "nc ", " $H", " https://h.example", " h.example", " localhost", "; ", " && ", "command -v ", "echo ", "(", "<", ">",
+          # the netcat HOST PORT pair, a -l listener, ncat/socat, a socat address and a /dev/tcp redirect
+          " attacker", " 4444", " -l", "ncat ", "socat ", " TCP:h:1", " /dev/tcp/h/80",
+          "echo $A | ", "; nc attacker 4444", "; nc -l 4444", "| nc h 80", "; curl attacker 4444"]
 rng = random.Random(20260916)
 expected = []
 shapeOnly = [0]

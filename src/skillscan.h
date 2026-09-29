@@ -384,7 +384,14 @@ inline bool hasCredentialToken( std::string_view line, std::string_view lowered 
 // Still line-local: a read on one line and an upload on the next is the flow fix still to come.
 inline constexpr const char* kNetExfilSensitiveWhy = "sensitive-read-upload";
 
-inline constexpr std::string_view kNetVerbs[]            = { "curl", "wget", "nc" };
+inline constexpr std::string_view kNetVerbs[]            = { "curl", "wget", "nc", "ncat", "netcat", "socat" };
+// The netcat family names its destination positionally: `nc [flags] HOST PORT`. A bare word followed by a number is that
+// pair; `nc -l 4444` (a number after a flag) listens and names none.
+inline constexpr std::string_view kNetcatVerbs[]         = { "nc", "ncat", "netcat" };
+// socat addresses that connect somewhere, and those that read a file (`FILE:/etc/shadow`).
+inline constexpr std::string_view kSocketAddressPrefixes[] = { "tcp:", "tcp4:", "tcp6:", "udp:", "udp4:", "udp6:", "openssl:", "ssl:",
+                                                               "tcp-connect:", "openssl-connect:" };
+inline constexpr std::string_view kSocatFilePrefixes[]   = { "file:", "open:", "gopen:" };
 // Words that leave the next token in command position: `sudo curl`, `do curl`, `xargs -n1 curl`.
 inline constexpr std::string_view kCommandPrefixes[]     = { "sudo", "exec", "time", "nohup", "nice", "timeout", "xargs", "env",
                                                              "then", "do", "else", "if", "elif", "while", "until", "!" };
@@ -412,15 +419,17 @@ inline bool isSensitivePath( std::string_view lowered ) noexcept
         || std::any_of( std::begin( kSensitiveBaseStarts ), std::end( kSensitiveBaseStarts ), [ & ]( std::string_view s ) noexcept { return base.starts_with( s ); } );
 }
 
-// A LOWERCASED argument of a network command that names where it sends: a URL, a `$VAR` (a host held in a variable),
-// an IPv6 literal, localhost, user@host, or a dotted host. Flags, `@file` data and paths are not destinations.
+// A LOWERCASED argument of a network command that names where it sends: a URL, a socat socket address (`TCP:h:p`), a
+// `$VAR` (a host held in a variable), an IPv6 literal, localhost, user@host, or a dotted host. Flags, `@file` data and
+// paths are not destinations. netFlow adds the two that need context: an `nc HOST PORT` pair and a `/dev/tcp/` redirect.
 inline bool isDestinationToken( std::string_view lowered ) noexcept
 {
     if( lowered.empty() )
     {
         return false;
     }
-    if( lowered.find( "://" ) != std::string_view::npos )
+    if( lowered.find( "://" ) != std::string_view::npos
+        || std::any_of( std::begin( kSocketAddressPrefixes ), std::end( kSocketAddressPrefixes ), [ & ]( std::string_view p ) noexcept { return lowered.starts_with( p ); } ) )
     {
         return true;
     }
@@ -444,13 +453,18 @@ inline bool isDestinationToken( std::string_view lowered ) noexcept
     return lowered.find( '.' ) != std::string_view::npos && lowered.back() != '.';
 }
 
+inline bool isAllDigits( std::string_view s ) noexcept
+{
+    return std::all_of( s.begin(), s.end(), []( char ch ) noexcept { return ch >= '0' && ch <= '9'; } );
+}
+
 // A token that leaves the next one in command position: a prefix word, a flag, an assignment, or a number.
 inline bool keepsCommandPosition( std::string_view lowered ) noexcept
 {
     return std::find( std::begin( kCommandPrefixes ), std::end( kCommandPrefixes ), lowered ) != std::end( kCommandPrefixes )
-        || lowered.starts_with( '-' ) || lowered.find( '=' ) != std::string_view::npos
-        || std::all_of( lowered.begin(), lowered.end(), []( char ch ) noexcept { return ch >= '0' && ch <= '9'; } );
+        || lowered.starts_with( '-' ) || lowered.find( '=' ) != std::string_view::npos || isAllDigits( lowered );
 }
+
 
 struct NetFlow
 {
@@ -460,19 +474,43 @@ struct NetFlow
 
 // One pass over the line, split into pipeline SEGMENTS at `|` (whose output feeds the next segment) and into
 // statements at `||`, `;`, `&`, `&&` and line breaks (which feed nothing). A segment is a network segment when a
-// network verb (curl, wget, nc, by base name) stands in COMMAND position — first in the segment, after a prefix word,
-// or first inside `$(`, a backtick or an opening quote; `command -v curl` and `echo "install curl"` name the verb as
-// an argument, so they are not. A segment's sensitive read is a sensitive file operand anywhere in it (fileOperand:
-// cat, base64, `<`, `@file`, `-T`, `--post-file=`) or a keychain dump; it carries across `|` to the next segment.
+// network verb (curl, wget, nc, ncat, netcat, socat, by base name) stands in COMMAND position — first in the segment,
+// after a prefix word, or first inside `$(`, a backtick or an opening quote; `command -v curl` and `echo "install curl"`
+// name the verb as an argument, so they are not. A `/dev/tcp/` or `/dev/udp/` redirect is a network segment with its
+// destination wherever it stands. A segment's sensitive read is a sensitive file operand anywhere in it (fileOperand:
+// cat, base64, `<`, `@file`, `-T`, `--post-file=`; socat's `FILE:`) or a keychain dump; it carries across `|` to the
+// next segment.
 // `line` and `lowered` are the same bytes, one case-folded.
-inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexcept
+// The operand a token reads, for netFlow: fileOperand's, or the path of a socat file address (`FILE:/etc/shadow,ignoreeof`
+// reads /etc/shadow — the path runs to the first comma).
+inline std::string_view flowReadOperand( std::string_view low, std::string_view prevToken, bool redirectIn ) noexcept
 {
-    constexpr std::string_view kFlowSeparators = " \t\"'`|;&()<>\r\n";
+    const std::string_view operand = fileOperand( low, prevToken, redirectIn );
+    if( !operand.empty() )
+    {
+        return operand;
+    }
+    for( const std::string_view prefix : kSocatFilePrefixes )
+    {
+        if( low.starts_with( prefix ) )
+        {
+            const std::string_view path = low.substr( prefix.size() );
+            return path.substr( 0, path.find( ',' ) );
+        }
+    }
+    return {};
+}
+
+// netFlow's state, one pipeline segment at a time. Split out so each step reads alone: punctuation() consumes the
+// separators and redirects, word() classifies one shell word, endSegment() settles a segment.
+struct NetFlowScan
+{
     NetFlow          flow;
     bool             expectCommand = true, segNet = false, segDest = false, segSensitive = false, stdinSensitive = false;
-    bool             redirectIn = false, redirectOut = false;
+    bool             redirectIn = false, redirectOut = false, segNetcat = false, prevBareWord = false;
     std::string_view prevToken;
-    const auto endSegment = [ & ]( bool piped ) noexcept
+
+    void endSegment( bool piped ) noexcept
     {
         if( segNet && segDest )
         {
@@ -480,81 +518,94 @@ inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexce
             flow.sensitiveUpload = flow.sensitiveUpload || segSensitive || stdinSensitive;
         }
         stdinSensitive = piped && ( stdinSensitive || segSensitive );
-        segNet = segDest = segSensitive = redirectIn = redirectOut = false;
+        segNet = segDest = segSensitive = redirectIn = redirectOut = segNetcat = prevBareWord = false;
         expectCommand = true;
         prevToken     = {};
-    };
-    for( std::size_t i = 0; i < line.size(); )
+    }
+
+    // Bytes of punctuation consumed at line[i], or 0 when a shell word starts there.
+    std::size_t punctuation( std::string_view line, std::size_t i ) noexcept
     {
+        constexpr std::string_view kOtherSeparators = " \t\"')";
         const char c    = line[i];
         const char next = i + 1 < line.size() ? line[ i + 1 ] : '\0';
         if( c == '|' )
         {
             endSegment( next != '|' );
-            i += next == '|' ? 2 : 1;
-            continue;
+            return next == '|' ? 2 : 1;
         }
         if( c == ';' || c == '\r' || c == '\n' || ( c == '&' && next != '>' ) )
         {
             endSegment( false );
-            i += ( c == '&' && next == '&' ) ? 2 : 1;
-            continue;
+            return ( c == '&' && next == '&' ) ? 2 : 1;
         }
         if( c == '>' || c == '&' )   // `>`, `>>`, `>&2`, `&>`: an output target follows — neither a read nor a destination
         {
             redirectOut = true;
-            i += ( next == '&' || next == '>' ) ? 2 : 1;
-            continue;
+            return ( next == '&' || next == '>' ) ? 2 : 1;
         }
-        if( c == '<' )
-        {
-            redirectIn = true;
-            ++i;
-            continue;
+        redirectIn    = redirectIn || c == '<';
+        expectCommand = expectCommand || c == '(' || c == '`' || ( ( c == '"' || c == '\'' ) && ( i == 0 || line[ i - 1 ] == ' ' || line[ i - 1 ] == '\t' ) );
+        return ( c == '<' || c == '(' || c == '`' || kOtherSeparators.find( c ) != std::string_view::npos ) ? 1 : 0;
+    }
+
+    // A network verb in command position opens a network segment; netcat's also arms the HOST PORT pair.
+    void noteCommand( std::string_view low ) noexcept
+    {
+        expectCommand = false;
+        const std::size_t      slash    = low.find_last_of( '/' );
+        const std::string_view verb     = slash == std::string_view::npos ? low : low.substr( slash + 1 );
+        const bool             isNetcat = std::find( std::begin( kNetcatVerbs ), std::end( kNetcatVerbs ), verb ) != std::end( kNetcatVerbs );
+        segNet    = segNet || isNetcat || std::find( std::begin( kNetVerbs ), std::end( kNetVerbs ), verb ) != std::end( kNetVerbs );
+        segNetcat = segNetcat || isNetcat;
+    }
+
+    void word( std::string_view token, std::string_view low ) noexcept
+    {
+        if( low.find( "/dev/tcp/" ) != std::string_view::npos || low.find( "/dev/udp/" ) != std::string_view::npos )
+        {   // bash's raw-socket redirect, `/dev/tcp/HOST/PORT`: a network sink with its destination in the path
+            segNet = segDest = true;
         }
-        if( c == '(' || c == '`' || ( ( c == '"' || c == '\'' ) && ( i == 0 || line[ i - 1 ] == ' ' || line[ i - 1 ] == '\t' ) ) )
-        {
-            expectCommand = true;
-            ++i;
-            continue;
-        }
-        if( kFlowSeparators.find( c ) != std::string_view::npos )
-        {
-            ++i;
-            continue;
-        }
-        const std::size_t      end   = std::min( line.find_first_of( kFlowSeparators, i ), line.size() );
-        const std::string_view token = line.substr( i, end - i );
-        const std::string_view low   = lowered.substr( i, end - i );
         if( redirectOut )
         {
-            redirectOut = false;
+            redirectOut = prevBareWord = false;
+            prevToken   = token;
+            return;
         }
-        else
+        const std::string_view operand = flowReadOperand( low, prevToken, redirectIn );
+        segSensitive = segSensitive || ( !operand.empty() && isSensitivePath( operand ) )
+                    || std::find( std::begin( kKeychainDumps ), std::end( kKeychainDumps ), low ) != std::end( kKeychainDumps );
+        const bool digits    = isAllDigits( low );
+        const bool netcatHop = segNetcat && prevBareWord && digits && low.size() <= 5;   // netcat's `HOST PORT` pair
+        segDest = segDest || ( segNet && !redirectIn && ( isDestinationToken( low ) || netcatHop ) );
+        const bool wasCommand = expectCommand && !redirectIn && !keepsCommandPosition( low );
+        if( wasCommand )
         {
-            const std::string_view operand = fileOperand( low, prevToken, redirectIn );
-            if( ( !operand.empty() && isSensitivePath( operand ) ) || std::find( std::begin( kKeychainDumps ), std::end( kKeychainDumps ), low ) != std::end( kKeychainDumps ) )
-            {
-                segSensitive = true;
-            }
-            if( segNet && !redirectIn && isDestinationToken( low ) )
-            {
-                segDest = true;
-            }
-            if( expectCommand && !redirectIn && !keepsCommandPosition( low ) )
-            {
-                expectCommand = false;
-                const std::size_t slash = low.find_last_of( '/' );
-                const std::string_view verb = slash == std::string_view::npos ? low : low.substr( slash + 1 );
-                segNet = segNet || std::find( std::begin( kNetVerbs ), std::end( kNetVerbs ), verb ) != std::end( kNetVerbs );
-            }
-            redirectIn = false;
+            noteCommand( low );
         }
-        prevToken = token;
-        i         = end;
+        prevBareWord = !wasCommand && !redirectIn && !digits && !low.starts_with( '-' );
+        redirectIn   = false;
+        prevToken    = token;
     }
-    endSegment( false );
-    return flow;
+};
+
+inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexcept
+{
+    constexpr std::string_view kFlowSeparators = " \t\"'`|;&()<>\r\n";
+    NetFlowScan scan;
+    for( std::size_t i = 0; i < line.size(); )
+    {
+        if( const std::size_t consumed = scan.punctuation( line, i ); consumed > 0 )
+        {
+            i += consumed;
+            continue;
+        }
+        const std::size_t end = std::min( line.find_first_of( kFlowSeparators, i ), line.size() );
+        scan.word( line.substr( i, end - i ), lowered.substr( i, end - i ) );
+        i = end;
+    }
+    scan.endSegment( false );
+    return scan.flow;
 }
 
 // The net-exfil decision for one line: whether the rule fires, and at which severity and why. A credential-shaped

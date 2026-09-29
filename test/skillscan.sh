@@ -170,10 +170,12 @@ command -v xmllint >/dev/null 2>&1 \
 #      with why="no-cred-source" each, except the literal-port loopback line, which stays clean.
 #   2  a credential-shaped source on the line (credential-named var, Authorization header with a var, env dump,
 #      credential-named file operand): a CRITICAL net-exfil row, no why=.
-#   3  a SENSITIVE read piped, redirected or passed into an upload, mostly var-free (the issue's
+#   3  a SENSITIVE read piped, redirected or passed into an upload — curl, wget, nc HOST PORT, ncat, socat TCP:,
+#      a /dev/tcp redirect — mostly var-free (the issue's
 #      `cat /etc/passwd | curl … @-` scanned clean): CRITICAL — net-exfil with why="sensitive-read-upload", or the
 #      older ssh-aws-creds rule, which claims a ~/.ssh or ~/.aws path first.
-#   4  no row at all: a network verb with NO destination (the issue's `command -v … curl` tool-discovery loop), and
+#   4  no row at all: a network verb with NO destination (the issue's `command -v … curl` tool-discovery loop,
+#      `command -v nc`, `nc -h`), and
 #      near misses — a non-sensitive file uploaded, a sensitive read not fed to the upload, a public key.
 #   5  a doc placeholder `http://<host>:<port>`: reported, never CRITICAL.
 NX="$ROOT/test/skillfix/netexfil_severity.md"
@@ -206,13 +208,13 @@ while IFS=: read -r nx_block nx_line nx_text; do
     esac
 done < <( awk '/^```bash/ { b++; inb = 1; next } /^```/ { inb = 0; next } inb { print b ":" NR ":" $0 }' "$NX" )
 nx_why3="$( grep -c . < <( grep -o 'why="sensitive-read-upload"' "$TMP/nx_out.txt" ) )"
-if [ "$nx_bad" = 0 ] && [ "$nx_n1" = 7 ] && [ "$nx_clean" = 1 ] && [ "$nx_n2" = 12 ] && [ "$nx_n3" = 16 ] && [ "$nx_n4" = 7 ] && [ "$nx_n5" = 1 ]; then
-    ok "(#353) net-exfil: 7 WARN no-cred-source + 1 clean, 12 credential CRITICAL, 16 sensitive-upload CRITICAL ($nx_why3 by why=\"sensitive-read-upload\"), 7 no-destination/near-miss clean, 1 placeholder non-critical"
+if [ "$nx_bad" = 0 ] && [ "$nx_n1" = 7 ] && [ "$nx_clean" = 1 ] && [ "$nx_n2" = 12 ] && [ "$nx_n3" = 24 ] && [ "$nx_n4" = 9 ] && [ "$nx_n5" = 1 ]; then
+    ok "(#353) net-exfil: 7 WARN no-cred-source + 1 clean, 12 credential CRITICAL, 24 sensitive-upload CRITICAL ($nx_why3 by why=\"sensitive-read-upload\"), 9 no-destination/near-miss clean, 1 placeholder non-critical"
 else
-    no "(#353) net-exfil split: b1 warn=$nx_n1/7 clean=$nx_clean/1, b2 critical=$nx_n2/12, b3 critical=$nx_n3/16, b4 clean=$nx_n4/7, b5 non-critical=$nx_n5/1"
+    no "(#353) net-exfil split: b1 warn=$nx_n1/7 clean=$nx_clean/1, b2 critical=$nx_n2/12, b3 critical=$nx_n3/24, b4 clean=$nx_n4/9, b5 non-critical=$nx_n5/1"
 fi
-if [ "$nx_why3" -ge 11 ]; then ok "(#353) at least 11 of block 3's rows are caught by the new sensitive-read-upload grade ($nx_why3), not only by ssh-aws-creds"
-else no "(#353) only $nx_why3 block-3 rows carry why=\"sensitive-read-upload\" (want >= 11)"; fi
+if [ "$nx_why3" -ge 20 ]; then ok "(#353) at least 20 of block 3's rows are caught by the new sensitive-read-upload grade ($nx_why3), not only by ssh-aws-creds"
+else no "(#353) only $nx_why3 block-3 rows carry why=\"sensitive-read-upload\" (want >= 20)"; fi
 if [ "$nx_rc" = 2 ]; then ok "(#353) a file with a credential-bearing line still exits 2"; else no "(#353) netexfil_severity.md exit $nx_rc, want 2"; fi
 # The WARN-only half alone: the issue's own reproduction must not block `wrap` (exit 1, not 2).
 printf '```bash\nfor p in 8080; do curl -sS http://127.0.0.1:$p/v1/models; done\n```\n' >"$TMP/nx_loop.md"
