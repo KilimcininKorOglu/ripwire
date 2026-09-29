@@ -723,9 +723,11 @@ inline RawFacts mergeThreadFacts( std::vector<RawFacts>& tFacts )
 //    pool (the Win-2 dirty flag and the A1 reparsed counter), the install/gate-open moment, and
 //    the dirty-gated saveCache — everything between the prewarm launch and the doc post-pass.
 // #350: after the pool join, a memory-guard stop while files remained. Workers look at the stop flag BEFORE claiming a
-// file, so every claimed file completed and the parsed set is the first K entries of the parse ORDER (cache misses
-// first, then largest first, then fileId — deterministic for a given tree and cache), which is what memory_parsed=K
-// counts; a partial answer therefore repeats for a given K. Under the parse seam an abandoned claim at slot N or later
+// file, so every claimed file completed and the parsed set is the first K entries of the parse ORDER (cache misses,
+// then cache hits, then grammarless files, each largest first, then fileId — or plain fileId order when the query
+// prewarm was already ready, i.e. this process had compiled every grammar's query in an earlier ingest; deterministic
+// for a given tree and cache), which is what memory_parsed=K counts (claimed slots: one may reuse cached facts or fail
+// to read); a partial answer therefore repeats for a given K. Under the parse seam an abandoned claim at slot N or later
 // is not a parse, hence the min with the seam's cutoff. A stop after the last claim cut nothing. Returns whether cut.
 inline bool applyMemoryParseCut( IngestResult& result, memguard::Watch* memWatch, std::size_t claimedSlots, std::size_t nfiles )
 {

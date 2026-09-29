@@ -4040,7 +4040,14 @@ static int memoryStopExit( const rw::IngestResult& ing, const rw::Config& cfg, c
         return 5;
     }
     // the map's own renderings with no header to carry memory_stop= (--html, --mermaid) refuse like any other verb
-    const char* const refusingVerb = winnerVerb != nullptr ? winnerVerb : cfg.html ? "--html" : cfg.mermaid ? "--mermaid" : nullptr;
+    // …and so do the map modifiers that resolve a SELECTOR against the index: --expand/--outline a symbol name (one in a
+    // file the guard never parsed would read as "matched no symbol", a false none-found), --in=DIR a directory against
+    // the crawl's files (only a crawl stop cuts those: a directory it never reached would read as "no indexed file")
+    const bool        inDirCut     = !cfg.inDir.empty() && stop.phase == rw::MemoryStop::Phase::Crawl;
+    const char* const refusingVerb = winnerVerb != nullptr ? winnerVerb
+                                   : cfg.html ? "--html" : cfg.mermaid ? "--mermaid"
+                                   : !cfg.expand.empty() ? "--expand" : !cfg.outline.empty() ? "--outline"
+                                   : inDirCut ? "--in" : nullptr;
     if( refusingVerb != nullptr )
     {
         DISCLOSE( Diagnostics::answerRefused, "main: a verb other than the map refuses a memory-guard partial ingest — exit 5, one stderr line" );
@@ -4914,6 +4921,16 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             }
             parts.push_back( ingest( r.arg.c_str(), cfg.excludes, cachePath, cfg.maxFileBytes, needsValueUses,
                                      /*excludeLabel=*/r.label, /*respectGitignore=*/!cfg.noIgnore ) );
+            // #350: the hard line after EACH root, so an over-limit workspace stops before ingesting the next one
+            // (the post-merge check below still runs for the last root and the merge itself)
+            if( parts.size() < ws.size() && rw::memguard::overHardLimit() )
+            {
+                rw::memguard::answerStops();   // this refusal answers for any stop the roots so far recorded
+                DISCLOSE( Diagnostics::answerRefused, "main: over the memory guard's hard limit between workspace roots — exit 5, one stderr line" );
+                rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::hardStopLine( "ingest of workspace root " + std::to_string( parts.size() ) + " of "
+                                                                                   + std::to_string( ws.size() ) + " (" + r.label + ")" ) );
+                return 5;
+            }
         }
         ing = mergeWorkspaceIngests( ws, parts );
     }

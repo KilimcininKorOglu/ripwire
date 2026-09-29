@@ -33,8 +33,12 @@ refuses a partial index, and past the limit itself — or when nothing was built
 with one line naming the limit and the override. The MCP server refuses a tool call over the limit by name and stays
 up; every answer from an index the guard cut carries `_memory_stop` in its envelope. A stop inside a verb's own
 secondary ingest that the verb does not read turns a CLI exit into 5 with one line, so it cannot pass as whole.
-A parse stop keeps every file it parsed — the first K of its parse order (cache misses first, then largest first) — so a
-partial map repeats for a given tree, cache and `memory_parsed=K`; stop messages name the line that was crossed (the
+A parse stop keeps every file it parsed — the first K slots of its work order it claimed (uncached files, then cached,
+then grammarless, each largest first; path order when the process had already compiled every grammar query; a slot
+may reuse cached facts or fail to read) — so a partial map repeats for a given tree, cache and `memory_parsed=K`, and
+its JSON header adds `counts_floor:true`. `--expand` and `--outline`, and `--in` after a crawl stop, refuse a partial
+index like the other verbs (a selector in an unparsed or uncrawled file would read as "no match"), and a multi-root
+workspace checks the hard limit after each root before ingesting the next; stop messages name the line that was crossed (the
 crawl line, an eighth of the limit; the parse line, half of it; or OS pressure), never the limit a soft stop did not
 reach. Nothing derived from a
 cut ingest is persisted: not the ingest cache, not the `--quality-delta` HEAD snapshot or churn-window body hashes,

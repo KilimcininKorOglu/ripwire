@@ -2357,12 +2357,13 @@ inline std::string buildEscapedRootAttr( const CrawlSkips& skips )
     return skips.escapedFiles == 0 ? std::string() : " escaped_root=" + std::to_string( skips.escapedFiles );
 }
 
-// #350 layer 3 — the memory guard stopped this ingest (MemoryStop): memory_stop= names where it first
-// stopped (crawl: files= is what the crawl saw, a floor of the tree; parse: the crawl was whole), memory_parsed= how many
-// of files= carry facts when the parse was cut, memory_limit= the limit as the --max-memory value that would raise it,
-// memory_pressure=1 when the OS pressure signal (not the limit) stopped it. Absent on every run the guard did not stop —
-// i.e. every normal run, byte-identical — like every corpus-cut attribute beside it. XML header-comment and JSON
-// spellings, one source.
+// #350 layer 3 — the memory guard stopped this ingest (MemoryStop): memory_stop= names where it first stopped (crawl:
+// files= is what the crawl saw, a floor of the tree; parse: the crawl was whole), memory_parsed= how many work-order
+// slots the parse claimed before it stopped (uncached files, then cached, then grammarless, each largest first — or
+// fileId order when every grammar query was already compiled in this process; a slot may reuse cached facts or fail to
+// read), memory_limit= the limit as the --max-memory value that would raise it, memory_pressure=1 when the OS pressure
+// signal (not a line) stopped it. The JSON spelling adds counts_floor:true. Absent on every run the guard did not stop — i.e. every normal run, byte-identical — like every
+// corpus-cut attribute beside it. XML header-comment and JSON spellings, one source.
 inline std::string buildMemoryStopAttr( const IngestResult& ing, bool json )
 {
     const MemoryStop& m = ing.memoryStop;
@@ -2374,7 +2375,9 @@ inline std::string buildMemoryStopAttr( const IngestResult& ing, bool json )
     const std::string limit = memguard::limitSpelling( m.limitBytes );
     if( json )
     {
-        return "\"memory_stop\":\"" + phase + "\","
+        // counts_floor (the JSON dialect's floor marker, graphlegend.h kGraphCountFloorAttrJson) rides a cut ingest:
+        // every count beside it is a floor of the tree
+        return "\"counts_floor\":true,\"memory_stop\":\"" + phase + "\","
              + ( m.parseCut ? "\"memory_parsed\":" + std::to_string( m.parsedFiles ) + "," : std::string() )
              + "\"memory_limit\":\"" + limit + "\","
              + ( m.byPressure ? "\"memory_pressure\":1," : "" );

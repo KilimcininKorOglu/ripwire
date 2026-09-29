@@ -45,9 +45,11 @@
 // later MCP tool calls; eager:1 instead drops the five-second time gate, so every guarded unit takes a REAL reading — so test/memguardcheck.sh can drive every stop path deterministically. It never replaces a real
 // reading: every real line, the time gate and the hard line still apply, so it can only make a run stricter.
 //
-// REPEATABILITY. A crawl stop keeps what the walk had seen, then sorts it. A parse stop keeps the first K files of the
-// parse ORDER (cache misses first, then largest first, then fileId), every one of which completed, so a partial answer
-// is a function of the tree, the cache and memory_parsed=K: two runs cut at the same K print the same bytes.
+// REPEATABILITY. A crawl stop keeps what the walk had seen, then sorts it. A parse stop keeps the first K slots of the
+// parse ORDER (cache misses, then cache hits, then grammarless files, each largest first, then fileId — or plain fileId
+// order when this process had already compiled every grammar's query, a repeat ingest), every one of which completed
+// (a slot may reuse cached facts or fail to read), so a partial answer is a function of the tree, the cache, the
+// process's earlier ingests and memory_parsed=K: two runs cut at the same K print the same bytes.
 
 #include <algorithm>
 #include <atomic>

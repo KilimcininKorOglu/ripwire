@@ -465,6 +465,55 @@ printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\
 case "$( mcp_field "$TMP/b10e.out" 2 _memory_stop )$( mcp_field "$TMP/b10e.out" 2 error )" in *"memory guard"*) ok "(B10d) MCP quality_delta over a cut HEAD ingest discloses it (_memory_stop or a refusal)";;
     *) no "(B10d) id=2 carries no memory disclosure: $( head -c 300 "$TMP/b10e.out" )";; esac
 
+# (B13) the selector-bearing map modifiers refuse a partial index (review CR1): d_17 lives in a file parse:10 never parsed,
+#       so an answer would be a false "no match"
+for mod in "--expand=d_17" "--outline=d_17"; do
+    run_trip parse:10 "$FX" --no-cache "$mod" >"$TMP/b13.out" 2>"$TMP/b13.err"; rc=$?
+    if [ "$rc" = 5 ] && [ ! -s "$TMP/b13.out" ] && grep -q "^ripwire: .*${mod%%=*} cannot answer from a partial index" "$TMP/b13.err"; then
+        ok "(B13) $mod over a partial parse refuses (exit 5, names ${mod%%=*}), never a false no-match"
+    else
+        no "(B13) $mod rc=$rc stdout=$( wc -c <"$TMP/b13.out" | tr -d ' ' )B stderr: $( grep '^ripwire:' "$TMP/b13.err" | head -c 200 )"
+    fi
+done
+# (B13b) --in=DIR resolves a directory against the crawl's files, so a crawl stop refuses it (a directory the crawl never
+#        reached would read as "no indexed file"); a parse stop leaves the crawl whole and --in still answers
+FXG="$TMP/fxg"; cp -R "$FX" "$FXG"
+git -C "$FXG" init -q && git -C "$FXG" add -A && git -C "$FXG" -c user.name=t -c user.email=t@t commit -qm init
+run_trip crawl:30 "$FXG" --no-cache --rank-by=churn-decay --in=d >"$TMP/b13b.out" 2>"$TMP/b13b.err"; rc=$?
+if [ "$rc" = 5 ] && [ ! -s "$TMP/b13b.out" ] && grep -q '^ripwire: .*--in cannot answer from a partial index' "$TMP/b13b.err"; then
+    ok "(B13b) --in=d over a crawl stop refuses (exit 5, names --in), never a false \"no indexed file\""
+else
+    no "(B13b) rc=$rc stdout=$( wc -c <"$TMP/b13b.out" | tr -d ' ' )B stderr: $( grep '^ripwire:' "$TMP/b13b.err" | head -c 250 )"
+fi
+run_trip parse:10 "$FXG" --no-cache --rank-by=churn-decay --in=d >"$TMP/b13c.out" 2>"$TMP/b13c.err"; rc=$?
+if [ "$rc" = 0 ] && grep -q 'memory_stop=parse' "$TMP/b13c.out" && ! grep -q 'cannot answer from a partial index' "$TMP/b13c.err"; then
+    ok "(B13c) --in=d over a parse stop (crawl whole) still answers, disclosed memory_stop=parse"
+else
+    no "(B13c) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b13c.err" | head -c 250 )"
+fi
+# (B14) a workspace checks the hard line after EACH root (review CR3): src/ alone is over 64M, so root 2 is never ingested
+mkdir -p "$TMP/zzroot" && cp "$FX/a/f00.c" "$TMP/zzroot/"   # labels order the roots: src before zzroot
+"$BIN" "$ROOT/src" "$TMP/zzroot" --no-cache --max-memory=64M >"$TMP/b14.out" 2>"$TMP/b14.err"; rc=$?
+if [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ingest of workspace root 1 of 2' "$TMP/b14.err"; then
+    ok "(B14) a two-root workspace over the limit stops after root 1 of 2 (exit 5)"
+else
+    no "(B14) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b14.err" | head -c 200 )"
+fi
+# (B15) the JSON map header of a cut ingest carries the floor marker (review CR4)
+run_trip parse:10 "$FX" --no-cache --json >"$TMP/b15.out" 2>/dev/null; rc=$?
+if [ "$rc" = 0 ] && grep -q '"counts_floor":true' "$TMP/b15.out" && grep -q '"memory_stop":"parse"' "$TMP/b15.out" \
+   && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP/b15.out" 2>/dev/null; then
+    ok "(B15) --json over a partial parse: counts_floor:true beside memory_stop, valid JSON"
+else
+    no "(B15) rc=$rc head: $( head -c 250 "$TMP/b15.out" )"
+fi
+"$BIN" "$FX" --no-cache --json >"$TMP/b15b.out" 2>/dev/null
+if grep -q '"counts_floor"\|"memory_' "$TMP/b15b.out"; then
+    no "(B15b) a normal --json map carries counts_floor/memory_"
+else
+    ok "(B15b) a normal --json map carries neither counts_floor nor memory_*"
+fi
+
 # (B11) a verb's non-zero verdict from a partial ingest still gets the line; --html and --index-out never pass silently
 run_trip crawl:30 "$FX" --no-cache --html >/dev/null 2>"$TMP/b11.err"; rc=$?
 if [ "$rc" = 5 ] && grep -q '^ripwire: .*--html cannot answer from a partial index' "$TMP/b11.err"; then
