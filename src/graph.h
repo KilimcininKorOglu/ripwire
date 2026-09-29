@@ -2205,6 +2205,29 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 //       `Get` by name, and needs the declared-type evidence Go's extractor does not record either); C and C++ (they
 //       carry declared-type evidence, so the fix there is an evidence-AGAINST rule for a receiver of a std or builtin
 //       type, not a name list).
+// THE SAME-FILE ANNOTATION RULE (BuiltinMethodGate::fileNames, byReferenceOnly). Python records no annotation as a binding
+// or reference, so `def f( p: Pool )`, `x: Pool = …`, `"Pool"`, `Optional[Pool]`, `isinstance( o, Pool )` and `-> Pool`
+// leave fileRefClasses empty in the file that DEFINES Pool. A class the file defines still counts there when its name
+// occurs as an identifier token more often than the file defines a class of that name: a `class Pool:` line (and the
+// module-level name Python binds for it) is one token per definition, and any other occurrence — including a comment or a
+// docstring — is evidence. Errs toward keeping the edge: an unreadable file admits, and prose counts, so the gate removes
+// less there, never more. The gate caches one file's bytes (its calls arrive file by file). Stops at limit + 1.
+inline bool identifierTokenCountExceeds( std::string_view text, std::string_view name, std::size_t limit ) noexcept
+{
+    std::size_t tokens   = 0;
+    std::size_t runStart = 0;
+    for( std::size_t at = 0; at <= text.size() && tokens <= limit; ++at )
+    {
+        if( at < text.size() && namesplit::isIdentChar( text[ at ] ) )
+        {
+            continue;
+        }
+        tokens  += ( text.substr( runStart, at - runStart ) == name ) ? 1u : 0u;
+        runStart = at + 1;
+    }
+    return tokens > limit;
+}
+
 struct BuiltinMethodGate
 {
     static constexpr std::uint32_t kNoClass  = 0xFFFFFFFFu;   // a top-level free definition
@@ -2324,12 +2347,8 @@ struct BuiltinMethodGate
                 names = std::ranges::any_of( named, [ & ]( std::uint32_t k ) { return cones.contains( cone, className[ owner ], className[ k ] ); } );
             }
         }
-        if( !names && byReferenceOnly && fileId < fileClasses.size() )
+        if( !names && byReferenceOnly && fileId < fileClasses.size() )   // identifierTokenCountExceeds: why
         {
-            // Python records no annotation as a binding or reference, so `def f( p: Pool )`, `x: Pool = …`, `"Pool"`,
-            // `Optional[Pool]`, `isinstance( o, Pool )` and `-> Pool` leave fileRefClasses empty in the file that DEFINES
-            // Pool. A class this file defines (fileClasses holds it, fileRefClasses does not) therefore still counts when
-            // its name occurs in the file beyond its definitions — read off the file's own bytes, token-exact.
             const ChaConeMemo::Cone cone = cones.coneFor( className[ owner ] );
             names = std::ranges::any_of( fileClasses[ fileId ], [ & ]( std::uint32_t k )
             {
@@ -2340,12 +2359,7 @@ struct BuiltinMethodGate
         return names;
     }
 
-    // Does `fileId`'s text hold class `k`'s name as an identifier token more often than the file defines a class of that
-    // name? A `class Pool:` line (and the module-level name Python binds for it) is one token per definition; any other
-    // occurrence — an annotation, a string annotation, a subscript, an isinstance() argument, a return type, and also a
-    // comment or docstring — is evidence. Errs toward keeping the edge: an unreadable file answers true, and a mention in
-    // prose counts, so the gate removes less there, never more. One file's bytes are cached (calls arrive file by file).
-    bool namedBeyondDefinition( std::uint32_t fileId, std::uint32_t k ) const
+    bool namedBeyondDefinition( std::uint32_t fileId, std::uint32_t k ) const   // unreadable: true (keep the edge)
     {
         if( textFileId != fileId )
         {
@@ -2356,25 +2370,9 @@ struct BuiltinMethodGate
         {
             return true;
         }
-        const std::string& name = className[ k ];
-        std::size_t        defs = 0;
-        for( const NodeId tid : containersByFile[ fileId ] )
-        {
-            defs += ( isClassLike( ing.symbols[ tid ] ) && ing.symbols[ tid ].name == name ) ? 1u : 0u;
-        }
-        std::size_t tokens   = 0;
-        std::size_t runStart = 0;
-        const std::string_view bytes( *text );
-        for( std::size_t at = 0; at <= bytes.size() && tokens <= defs; ++at )
-        {
-            if( at < bytes.size() && namesplit::isIdentChar( bytes[ at ] ) )
-            {
-                continue;
-            }
-            tokens  += ( bytes.substr( runStart, at - runStart ) == name ) ? 1u : 0u;
-            runStart = at + 1;
-        }
-        return tokens > defs;
+        const auto defs = std::ranges::count_if( containersByFile[ fileId ], [ & ]( NodeId t )
+                                                 { return isClassLike( ing.symbols[ t ] ) && ing.symbols[ t ].name == className[ k ]; } );
+        return identifierTokenCountExceeds( *text, className[ k ], static_cast<std::size_t>( defs ) );
     }
 
     // Python: is the receiver of `x.m()` a MODULE whose file holds `target`? See the struct comment for the three shapes.
