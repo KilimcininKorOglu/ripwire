@@ -558,13 +558,20 @@ if [ "$( kept "$TMP/b20a.out" )" = '<f p="z/big.c" ' ] && [ "$( kept "$TMP/b20b.
 else
     no "(B20) cold='$( kept "$TMP/b20a.out" )' warm='$( kept "$TMP/b20b.out" )' one-miss='$( kept "$TMP/b20c.out" )'"
 fi
-# (B14) a workspace checks the hard line after EACH root (review CR3): src/ alone is over 64M, so root 2 is never ingested
-mkdir -p "$TMP/zzroot" && cp "$FX/a/f00.c" "$TMP/zzroot/"   # labels order the roots: src before zzroot
-"$BIN" "$ROOT/src" "$TMP/zzroot" --no-cache --max-memory=64M >"$TMP/b14.out" 2>"$TMP/b14.err"; rc=$?
-if [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ingest of workspace root 1 of 2' "$TMP/b14.err"; then
-    ok "(B14) a two-root workspace over the limit stops after root 1 of 2 (exit 5)"
+# (B14) a workspace checks the hard line after EACH root (review CR3). hard:1 makes the FIRST hard-line reading of the
+#       run read as over — a real footprint reading is timing-dependent (on a slow runner the 5 s soft line cuts root 1
+#       first and the hard line is only crossed after the merge). With the per-root check that first reading is the
+#       one after root 1; without it, it is the post-merge one, whose line names "the ingest" alone. Root 2 is never
+#       ingested: each root's whole ingest writes its own cache blob under TMPDIR, so exactly one blob exists afterwards.
+mkdir -p "$TMP/b14r1" "$TMP/b14r2" "$TMP/b14tmp"
+printf 'int one( void ) { return 1; }\n' >"$TMP/b14r1/a.c"; printf 'int two( void ) { return 2; }\n' >"$TMP/b14r2/b.c"
+TMPDIR="$TMP/b14tmp" RIPWIRE_TEST_MEMGUARD=hard:1 "$BIN" "$TMP/b14r1" "$TMP/b14r2" >"$TMP/b14.out" 2>"$TMP/b14.err"; rc=$?
+blobs="$( find "$TMP/b14tmp" -type f -name 'ripwire-*.bin' | wc -l | tr -d ' ' )"
+if [ "$rc" = 5 ] && [ ! -s "$TMP/b14.out" ] && grep -q '^ripwire: memory limit reached during the ingest of workspace root 1 of 2 (b14r1)' "$TMP/b14.err" \
+   && [ "$( grep -c '^ripwire:' "$TMP/b14.err" )" = 1 ] && [ "$blobs" = 1 ]; then
+    ok "(B14) a two-root workspace over the hard line stops after root 1 of 2 (exit 5, one line), root 2 never ingested"
 else
-    no "(B14) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b14.err" | head -c 200 )"
+    no "(B14) rc=$rc cache_blobs=$blobs (want 1) stderr: $( grep '^ripwire:' "$TMP/b14.err" | head -c 250 )"
 fi
 # (B15) the JSON map header of a cut ingest carries the floor marker (review CR4)
 run_trip parse:10 "$FX" --no-cache --json >"$TMP/b15.out" 2>/dev/null; rc=$?

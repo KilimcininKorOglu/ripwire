@@ -40,9 +40,9 @@
 // default map with memory_stop= in its header and refuses every other verb (exit 5); the MCP server answers with
 // `_memory_stop` in the envelope.
 //
-// THE TEST SEAM. RIPWIRE_TEST_MEMGUARD=crawl:N | pressure:N | parse:N | request:N ADDS a trip — at the Nth crawl entry
+// THE TEST SEAM. RIPWIRE_TEST_MEMGUARD=crawl:N | pressure:N | parse:N | request:N | hard:N ADDS a trip — at the Nth crawl entry
 // (over the line, or under critical pressure), after exactly N files of the parse order are parsed, or at the Nth and
-// later MCP tool calls; eager:1 instead drops the five-second time gate, so every guarded unit takes a REAL reading — so test/memguardcheck.sh can drive every stop path deterministically. It never replaces a real
+// later MCP tool calls, or at the Nth and later hard-line readings (hard:N); eager:1 instead drops the five-second time gate, so every guarded unit takes a REAL reading — so test/memguardcheck.sh can drive every stop path deterministically. It never replaces a real
 // reading: every real line, the time gate and the hard line still apply, so it can only make a run stricter.
 //
 // REPEATABILITY. A crawl stop keeps what the walk had seen, then sorts it. A parse stop keeps the first K slots of the
@@ -122,6 +122,7 @@ enum class TripAt : std::uint8_t
     Pressure,   // pressure:N — the Nth crawl entry reads as critical OS memory pressure
     Parse,      // parse:N    — exactly the first N files of the parse order are parsed: memory_parsed=N
     Request,    // request:N  — the Nth MCP tool call reads as over the hard limit
+    Hard,       // hard:N     — the Nth hard-line reading (overHardLimit: between CLI phases, per workspace root) reads as over
     Eager,      // eager:1    — no five-second time gate: every guarded unit takes a REAL footprint reading (only stricter)
 };
 struct TestTrip
@@ -157,7 +158,8 @@ inline const TestTrip& testTrip() noexcept
         }
         const std::string_view phase = v.substr( 0, colon );
         t.at    = phase == "crawl" ? TripAt::Crawl : phase == "pressure" ? TripAt::Pressure : phase == "parse" ? TripAt::Parse
-                : phase == "request" ? TripAt::Request : phase == "eager" ? TripAt::Eager : TripAt::Nowhere;
+                : phase == "request" ? TripAt::Request : phase == "hard" ? TripAt::Hard : phase == "eager" ? TripAt::Eager
+                : TripAt::Nowhere;
         t.index = n;
         return t;
     }();
@@ -306,6 +308,14 @@ inline bool overHardLimit()
     if( l.hardBytes == 0 )
     {
         return false;
+    }
+    if( testTrip().at == TripAt::Hard )   // the seam: additive, so a real reading below still applies before the Nth
+    {
+        static std::atomic<std::uint64_t> readingsSeen{ 0 };
+        if( readingsSeen.fetch_add( 1, std::memory_order_relaxed ) + 1 >= testTrip().index )
+        {
+            return true;
+        }
     }
     const std::uint64_t footprint = os::mem_footprint();
     return footprint != 0 && footprint >= l.hardBytes;
