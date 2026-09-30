@@ -92,8 +92,9 @@
 #       lowest-id bodied C/C++ match of the same scope: --around reaches the caller (E3a), --connect joins it and names the
 #       definition's file on its terminal row (E3b), --lego counts the implementor (E3c), and among several definitions the
 #       lowest id wins (E3d). Kept as they were: a set of declarations only (the dropping selector still carries its
-#       residue), a TypeScript overload signature beside its implementation (E3e), and a C++ pure virtual beside an override
-#       of another class (E3f).
+#       residue). A TypeScript overload signature beside its implementation (E3e) and a C++ pure virtual beside an override
+#       of another class (E3f) keep resolveFocus's pick, but since 0.6.6 --connect searches from the definition that JOINS
+#       the other terminal (graph.h joinTerminalPicks), so its terminal row there names the implementation / the override.
 #   (E3g) THE READING OF THAT PICK. The compact reading of --around's defs= said "a C/C++ body over its declaration" with no
 #       condition, which on (E3f)'s corpus describes a pick the answer did not make: the body there is another class's, and
 #       the declaration kept the focus. Every legend that describes the pick — the compact --around reading, the full
@@ -1740,19 +1741,22 @@ run "$TMP/free" --connect=helper,unrelatedCaller >"$TMP/e3_cn_free.xml"
 e3Pick "(E3d) --connect=helper,unrelatedCaller over api.h, other.cpp, third.cpp" "$TMP/e3_cn_free.xml" helper other.cpp:2 1
 
 echo
-echo "=== (E3e, E3f) kept as they were: a TypeScript overload signature, and a C++ pure virtual beside another class's override ==="
+echo "=== (E3e, E3f) a TypeScript overload signature, and a C++ pure virtual beside another class's override: --connect searches from the definition that JOINS ==="
+# 0.6.6 D1: resolveFocus keeps its pick on these corpora (E3g's --around=area still answers from Base's pure virtual), but
+# --connect no longer searches from that pick alone: every definition of the name is scored by the terminals it reaches
+# (graph.h joinTerminalPicks), so the implementation / the override that useDescribe / total actually call is the terminal.
 run "$TMP/tsovl" --connect=describe,useDescribe >"$TMP/e3_cn_ts.xml"
 run "$TMP/pvirt" --connect=area,total           >"$TMP/e3_cn_pv.xml"
-for triple in "e3_cn_ts.xml:describe:ovl.ts:1:(E3e) TypeScript overload signature" "e3_cn_pv.xml:area:a_base.h:5:(E3f) C++ pure virtual, override in Derived"; do
+for triple in "e3_cn_ts.xml:describe:ovl.ts:2:(E3e) TypeScript overload signature" "e3_cn_pv.xml:area:derived.h:6:(E3f) C++ pure virtual, override in Derived"; do
     f="${triple%%:*}"; rest="${triple#*:}"; n="${rest%%:*}"; rest="${rest#*:}"; wp="${rest%%:*}"; rest="${rest#*:}"; wp="$wp:${rest%%:*}"; what="${rest#*:}"
     D="$( paste -d '|' <( elNC "$TMP/$f" t n ) <( elNC "$TMP/$f" t defs ) | awk -F'|' -v n="$n" '$1 == n { print $2; exit }' )"
     P="$( termP "$TMP/$f" "$n" )"
     if [ "$D" != "2" ]; then
         no "$what: premise broken — the $n terminal carries defs=\"$D\", expected 2; with one definition there is no pick to keep"
     elif [ "$P" = "$wp" ]; then
-        ok "$what: the $n terminal is still $P, the lowest id"
+        ok "$what: the $n terminal is $P, the definition that joins"
     else
-        no "$what: the $n terminal moved to ${P:-<none>} (expected $wp) — the pick changed outside the C/C++ same-scope case"
+        no "$what: the $n terminal is ${P:-<none>} (expected $wp, the definition the other terminal reaches)"
     fi
 done
 

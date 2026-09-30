@@ -288,6 +288,18 @@ struct TraceSuspect
     std::size_t                 nameLadderTotal  = 0;
 };
 
+// 0.6.6 D2: a name-bound frame whose own path is a DIFFERENT indexed file than the def its name bound to. Its line then
+// counts lines of the frame's file, not the def's, so no FILE:LINE built from the def's file and the frame's line is a
+// place the trace names. Line-bound frames never qualify (their def is the one enclosing that line in that file).
+inline bool traceLineMismatch( const IngestResult& ing, const TraceSuspect& sus )
+{
+    if( !sus.isResolvedByName || sus.frame == nullptr || sus.symbolId >= ing.symbols.size() )
+    {
+        return false;
+    }
+    return traceMatchFile( ing, sus.frame->path ) != ing.symbols[ sus.symbolId ].fileId;
+}
+
 // §A2b: the WHOLE partition of one trace's parsed frames — every frame lands in exactly one bucket, and the
 // counters close: in_corpus = suspects + merged + unresolved. `skipped` is the out-of-every-root bucket
 // (listed, never ranked); `unresolved` is the third bucket that used to vanish — file indexed, but no symbol
@@ -1087,11 +1099,21 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
         // (--slice=@FILE:LINE, FILE as the index spells it); absent when no frame landed in the corpus.
         if( !part.suspects.empty() && h.size() > 1 && h.back() == '>' )
         {
-            const TraceSuspect& top  = part.suspects[ 0 ];
-            const std::string_view file = ing.files[ ing.symbols[ top.symbolId ].fileId ];
-            const std::string   loc  = std::string( inArg.rootArg.empty() ? file : rw::sarif::rootRelativeUri( file, rw::sarif::rootPrefixOf( inArg.rootArg ) ) )
-                                     + ":" + std::to_string( top.frame->line );
-            h.insert( h.size() - 1, nextAttrXml( nextFlag( "--slice=@", loc ) ) );
+            const TraceSuspect& top    = part.suspects[ 0 ];
+            const Symbol&       topSym = ing.symbols[ top.symbolId ];
+            const std::string_view file = ing.files[ topSym.fileId ];
+            const std::string   rel  = std::string( inArg.rootArg.empty() ? file : rw::sarif::rootRelativeUri( file, rw::sarif::rootPrefixOf( inArg.rootArg ) ) );
+            if( traceLineMismatch( ing, top ) )
+            {
+                // 0.6.6 D2: the frame's NAME bound to a def in ANOTHER file, so its line numbers that other file — splicing
+                // it onto the def's file (`--slice=@src/serialize.h:304` for a frame at verbs_doctor.h:304) named a line
+                // the frame never meant. Hand over the def's handle, no line, and say the line was not carried.
+                h.insert( h.size() - 1, nextAttrXml( nextFlag( "--expand=", rel + ":" + topSym.name ) ) + " line_mismatch=\"1\"" );
+            }
+            else
+            {
+                h.insert( h.size() - 1, nextAttrXml( nextFlag( "--slice=@", rel + ":" + std::to_string( top.frame->line ) ) ) );
+            }
         }
         h += "<!-- ripwire trace-to-locus for ";
         if( withSrcEcho ) { h += "\"";  h += srcNote;  h += "\""; }
@@ -1124,6 +1146,12 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
              "names the different symbol today's line sits in: the tell that the trace predates this checkout); "
              "resolved_by=\"line\" means the name was absent, unknown or ambiguous, so the def enclosing that line was used. ";
         h += ladderLegendOf( part );                  // empty unless a ladder ran out (byte-identical otherwise)
+        if( !part.suspects.empty() && traceLineMismatch( ing, part.suspects[ 0 ] ) )
+        {
+            // 0.6.6 D2: present only beside the attribute it defines (byte-identical otherwise)
+            h += "line_mismatch=\"1\" on the root: the innermost frame's name bound to a def in a DIFFERENT file than the frame's own "
+                 "path, so its line belongs to that other file; next= names the def (--expand=FILE:NAME) instead of a line. ";
+        }
         h += "p= on a frame is the FRAME's own locator (the trace's path:line, verbatim); definition sites live in <sigs> l=. ";
         // §B7.5 (CA4): the <sigs> rows this verb emits carry the same ranking-row vocabulary --pack-task
         // spells out, and this legend defined only the frame half — a reader met cx=/ccx=/in= on the

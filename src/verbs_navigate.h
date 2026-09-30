@@ -992,7 +992,9 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                     source.resize( bytesRead );
                 }
                 std::fclose( file );
-                deadCodeCandidate = sourceHasStaticToken( source, only.sigStartByte, only.sigEndByte );
+                // 0.6.6 D4: the dead-code verb's own shape — a Python test-runner or decorator root is never a candidate
+                deadCodeCandidate = sourceHasStaticToken( source, only.sigStartByte, only.sigEndByte )
+                                    && !quality::pythonDecoratedDef( only, source ) && !quality::pythonRunnerRoot( ing.files[ only.fileId ], only, source );
             }
         }
     }
@@ -2203,8 +2205,9 @@ std::optional<int> runConnect( const MainDispatch& d )
         // crash, not a guard).
         static_assert( rw::kConnectRadiusMax == int( rw::connectcfg::kMaxRadius ),
                        "--connect-radius' refusal band drifted from the core's clamp band — the refusal would name a range the core does not honor" );
-        const rw::ConnectResult res = rw::connectSubgraph( g, terminals, std::uint32_t( cfg.connectRadius ) );
-        rw::packConnect( stdout, ing, g, res, d.redactPtr, cfg.maxTokens, cnRootArg, cnUnprovenDefs );
+        // 0.6.6 D1: a many-definition name is searched from the definition that JOINS (graph.h joinTerminalPicks)
+        const std::string cnAmbiguous = rw::joinTerminalPicks( ing, g, specs, terminals, std::uint32_t( cfg.connectRadius ) );
+        rw::packConnect( stdout, ing, g, rw::connectSubgraph( g, terminals, std::uint32_t( cfg.connectRadius ) ), d.redactPtr, cfg.maxTokens, cnRootArg, cnUnprovenDefs, cnAmbiguous );
         return 0;
     }
     return std::nullopt;

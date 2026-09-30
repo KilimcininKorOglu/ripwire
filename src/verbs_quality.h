@@ -2003,6 +2003,8 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             return quality::startsWithRegisteredMacro( std::string_view( src ).substr( symbol.sigStartByte ), registerMacroNames );
         };
         std::size_t registerMacroExcluded = 0;   // P2.2: disclosed count — see the header comment below
+        std::size_t runnerRootExcluded    = 0;   // 0.6.6 D4: disclosed count (runner-root-excluded=, absent at 0)
+        std::size_t decoratedExcluded     = 0;   // 0.6.6 D4 review: decorated Python defs, counted apart (decorated-excluded=)
 
         // Optional path filter (--dead-code=DIR). §P0.3: this was a bare SUFFIX test, so it could only ever
         // match a FILENAME — every directory argument produced count="0" with confidence="high", and a typo'd
@@ -2084,6 +2086,16 @@ std::optional<int> runQualityViews( const MainDispatch& d )
                 ++registerMacroExcluded;   // P2.2: self-registers via a static initializer — never dead-code
                 continue;
             }
+            if( quality::pythonDecoratedDef( s, sourceFor( s.fileId ) ) )
+            {
+                ++decoratedExcluded;   // 0.6.6 D4: decorated — a decorator may register it; its only "linkage" was a token
+                continue;
+            }
+            if( quality::pythonRunnerRoot( ing.files[ s.fileId ], s, sourceFor( s.fileId ) ) )
+            {
+                ++runnerRootExcluded;   // 0.6.6 D4: a test runner reaches it — never dead-code
+                continue;
+            }
             candidates.push_back( s.id );
         }
 
@@ -2115,6 +2127,12 @@ std::optional<int> runQualityViews( const MainDispatch& d )
                      "config-warnings= counts two DISCLOSED .ripwire_config problems, each also written to stderr — an "
                      "unrecognized key, and a register_macros= name matching no indexed symbol — never gating, present "
                      "only when non-zero. "
+                     "runner-root-excluded= counts Python defs excluded because a test runner reaches them (pytest "
+                     "test*/xunit hooks in test_*.py or *_test.py; test*/setUp-family methods of a class whose own bases name a "
+                     "TestCase); decorated-excluded= counts decorated Python defs, excluded because a decorator MAY register "
+                     "them (wrappers such as @staticmethod/@property/@lru_cache are included, and register nothing): Python has "
+                     "no internal linkage, so such a row rested on a `static` token alone. Both are FLOORS, never findings, "
+                     "absent at 0. A `static` inside a comment is not linkage evidence. "
                      "Graph evidence is local to the indexed tree; verify before deleting. {}-->", rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str() );
         // §P15/§P16: candidates is already deterministically sorted (path asc, line asc, name asc) and used to
         // print every candidate unconditionally — completeness was the whole contract, matching --uses' shape,
@@ -2130,8 +2148,11 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             std::vector<char> dcFiltEsc;
             dcFilterAttr = " filter=\"" + std::string( escapeXml( cfg.deadCodeDir, dcFiltEsc ) ) + "\"";
         }
-        rw::emitTo( stdout, "<dead-code count=\"{}\" evidence=\"internal-linkage+zero-callers\" register-macro-excluded=\"{}\"{}{}{}{}{}>",
-                     candidates.size(), registerMacroExcluded,
+        // 0.6.6 D4: runner-root-excluded= is absent at 0, so a tree with no Python test/decorated root is byte-identical
+        const std::string runnerRootAttr = ( runnerRootExcluded == 0 ? std::string() : std::format( " runner-root-excluded=\"{}\"", runnerRootExcluded ) )
+                                         + ( decoratedExcluded == 0 ? std::string() : std::format( " decorated-excluded=\"{}\"", decoratedExcluded ) );
+        rw::emitTo( stdout, "<dead-code count=\"{}\" evidence=\"internal-linkage+zero-callers\" register-macro-excluded=\"{}\"{}{}{}{}{}{}>",
+                     candidates.size(), registerMacroExcluded, runnerRootAttr,
                      dcFilterAttr.c_str(),
                      pageDisclosure( dcAb, sizeof( dcAb ), dcPw.end - dcPw.begin, candidates.size(), dcPw.end,
                                      cfg.pageLimit, cfg.pageOffset, false ),

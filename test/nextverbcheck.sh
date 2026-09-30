@@ -10,6 +10,8 @@
 #   --callees      → --expand=SYM                       --quality-delta gating ROW → --expand=FILE:NAME (on the row)
 #   --test-gate    → its first run= command (a shell line, so it is checked against the rows, not run)
 #   --situ         → a `next: --test-gate` line          --from-trace → --slice=@FILE:LINE of the innermost frame
+#                                                        (--expand=FILE:NAME + line_mismatch="1" when its name bound
+#                                                        to a def in another file, or its line sits in another def)
 #   --grep         → --at=FILE:LINE of the top hit | the next page under --legend=compact when capped | --for=PAT on zero hits
 #   --for          → the r=1 row carries --expand=FILE:NAME
 # Every next= that starts with `--` is split with shlex and run through the argv parser on the same tree: exit 0
@@ -171,6 +173,14 @@ python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isins
 echo "=== (5) --situ → next: --test-gate; --from-trace → --slice=@FILE:LINE ==="
 if rrun --situ >"$TMP/si"; grep -q '^  next: --test-gate' "$TMP/si"; then ok "situ: prose ends with 'next: --test-gate'"; else no "situ: no 'next: --test-gate' line"; fi
 rrun --from-trace="$TMP/trace.txt" >"$TMP/ft"; checkNext "from-trace" "$TMP/ft" '^--slice=@geometry\.cpp:5$'
+# 0.6.6 D2: a frame whose NAME binds to a def in another file (resolved_by="name") must not splice the frame's line
+# onto the def's file (the base printed `--slice=@sub/consumer.cpp:16`, a line past diagonal's end); it hands over the
+# symbol handle instead and says so with line_mismatch="1". The same-file frame above keeps --slice=@FILE:LINE, no marker.
+printf 'at diagonal (geometry.cpp:16)\n' > "$TMP/trace2.txt"
+rrun --from-trace="$TMP/trace2.txt" >"$TMP/ft2"; checkNext "from-trace cross-file frame" "$TMP/ft2" '^--expand=sub/consumer\.cpp:diagonal$'
+grep -q '<ctx [^>]*line_mismatch="1"' "$TMP/ft2" && ok "from-trace cross-file frame: line_mismatch=\"1\" on the root" \
+    || no "from-trace cross-file frame: no line_mismatch=\"1\" ($( grep -o '<ctx [^>]*>' "$TMP/ft2" | head -1 | cut -c1-200 ))"
+grep -q 'line_mismatch=' "$TMP/ft" && no "from-trace same-file frame must not carry line_mismatch=" || ok "from-trace same-file frame carries no line_mismatch="
 
 echo "=== (6) --grep: top hit → --at=FILE:LINE; capped → next page under --legend=compact; zero hits → --for=PAT ==="
 rrun --grep=distance >"$TMP/g1"; checkNext "grep top hit" "$TMP/g1" '^--at=[^ ]+:[0-9]+$'

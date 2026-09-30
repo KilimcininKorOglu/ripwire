@@ -58,7 +58,7 @@
 // made at a time, in four escalating strengths (most specific evidence wins):
 //   rec="line"   the anchor's own line hedges it ("…`kMcpVerbCount = 22` at the time of this note; 30 as of
 //                2026-07-24"), or the line OPENS with an ISO date (a changelog / ledger row)
-//   rec="block"  the nearest markdown heading at or above it carries an ISO date ("### §2b — … (2026-07-11
+//   rec="block"  the nearest markdown heading at or above it (or a level-2+ heading enclosing it) carries an ISO date ("### §2b — … (2026-07-11
 //                addendum)")
 //   rec="title"  the doc's FILENAME or its H1 carries an ISO date — the author saying "this document IS the
 //                artifact of that day"
@@ -102,6 +102,7 @@
 #include "ingest.h"             // isSkippedCrawlDir — the SHARED crawl denylist, for the on-disk existence probe
 #include "mention.h"            // mention_detail::pathSuffixMatches — the whole-segment suffix match
 #include "workspace.h"          // wsdetail::segmentsOf
+#include "infra/sortutil.h"     // svLess — the language-builtin tables sort and search in byte order, never through operator<
 #include "smallvec.h"           // rw::SmallVec — small basename→path lists
 #include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 #include "gitstamp.h"           // r26-stamp Task A: gitstamp::stampAt — the at="<sha>[+dirty]" root anchor
@@ -178,7 +179,7 @@ inline const char* driftTag( Drift d ) noexcept { return kDriftTag[ std::size_t(
 enum class Unchecked : std::uint8_t
 {
     WeakFileLine = 0, NamedElsewhere, NotIndexed, NotADefinition, ForeignScope, Uncorroborated, AmbiguousValue, NoDefSite,
-    NeverInHistory, HistoryNoAnswer, Count
+    NeverInHistory, HistoryNoAnswer, LanguageBuiltin, Count
 };
 
 struct UncheckedSpec { const char* tag; const char* note; };
@@ -194,6 +195,7 @@ inline constexpr UncheckedSpec kUncheckedTable[] = {
     { "no-def-site",     "the name occurs in the code but never in a declaration-shaped integer literal (computed, expression-valued, or declared in a form this verb does not read)" },
     { "never-in-history",  "the name is defined nowhere in the code AND no commit reachable from HEAD ever removed a line carrying it, so this repo never had it as code: a plan or design doc naming work that was not built, which is not rot" },
     { "history-no-answer", "the name is defined nowhere and the history probe makes no claim about it — either the walk hit its bound, or the name is shorter than the length the probe tracks — so nothing is asserted either way" },
+    { "language-builtin",  "the name is a built-in of a language this corpus is written in (a Python exception or warning, a JavaScript/TypeScript global), so the language defines it, not this code" },
 };
 
 static_assert( sizeof( kUncheckedTable ) / sizeof( kUncheckedTable[0] ) == std::size_t( Unchecked::Count ),
@@ -208,7 +210,7 @@ struct RecordSpec { const char* tag; const char* note; };
 inline constexpr RecordSpec kRecordTable[] = {
     { "live",  "no dating mark was found on the line, its heading, the title or the front matter, so the doc reads as claiming this NOW" },
     { "line",  "the anchor's own line dates the claim — an at-the-time / as-of-DATE hedge, or a line that opens with an ISO date (a changelog or ledger row)" },
-    { "block", "the nearest markdown heading at or above the anchor carries an ISO date, so the whole section is an observation made on that day" },
+    { "block", "the nearest markdown heading at or above the anchor, or a level-2+ heading enclosing it, carries an ISO date, so the whole section is an observation made on that day" },
     { "title", "the doc's filename or its H1 title carries an ISO date: the document IS the artifact of that day, and its anchors are what was true then" },
     { "stamp", "the doc's front matter carries a LABELLED self-date (Date: / Written / Generated / Recorded …), which dates the document rather than something it discusses" },
 };
@@ -795,10 +797,43 @@ struct ValueClaimDialect
 {
     bool allowsBacktickGap;
     bool ( *terminates )( std::string_view, std::size_t );
+    bool allowsThousandsCommas;   // 0.6.6 D3: prose writes 15,000 for the code's 15_000; in code `15, 000` is two values
 };
 
-inline constexpr ValueClaimDialect kProseClaim = { true,  literalTerminatesInProse };   // what a DOC writes
-inline constexpr ValueClaimDialect kCodeClaim  = { false, literalTerminates        };   // what the CODE declares
+inline constexpr ValueClaimDialect kProseClaim = { true,  literalTerminatesInProse, true  };   // what a DOC writes
+inline constexpr ValueClaimDialect kCodeClaim  = { false, literalTerminates,        false };   // what the CODE declares
+
+// 0.6.6 D3: a prose integer written with thousands commas — `15,000`, `1,048,576` — read WHOLE. A doc's `= 15,000` was
+// read as 15 and reported as a const-value drift against the code's `15_000`. Only the grouping shape continues the
+// literal: a 1-3 digit plain decimal lead, then `,ddd` groups, each followed by a non-digit (so `10,20`, `1,2345` and a
+// hex or `_`-separated lead stop where they did). `end` is one past the lead literal; the new end is returned, `value`
+// updated in place. The digit cap is parseIntLiteral's, so the accumulate cannot wrap.
+inline std::size_t extendThousandsGroups( std::string_view s, std::size_t begin, std::size_t end, std::uint64_t& value )
+{
+    EXPECTS( begin <= end && end <= s.size() );
+    const std::size_t leadDigits = end - begin;
+    if( leadDigits == 0 || leadDigits > 3 )
+    {
+        return end;
+    }
+    for( std::size_t i = begin; i < end; ++i )
+    {
+        if( !std::isdigit( (unsigned char)s[i] ) )
+        {
+            return end;
+        }
+    }
+    std::size_t digits = leadDigits;
+    while( end + 3 < s.size() && s[end] == ',' && std::isdigit( (unsigned char)s[end + 1] ) && std::isdigit( (unsigned char)s[end + 2] )
+           && std::isdigit( (unsigned char)s[end + 3] ) && ( end + 4 == s.size() || !std::isdigit( (unsigned char)s[end + 4] ) )
+           && digits + 3 <= kMaxDecDigits )
+    {
+        value = value * 1000u + std::uint64_t( ( s[end + 1] - '0' ) * 100 + ( s[end + 2] - '0' ) * 10 + ( s[end + 3] - '0' ) );
+        digits += 3;
+        end += 4;
+    }
+    return end;
+}
 
 // What a value-claim match found. `isMatch` false ⇒ the other two fields are meaningless.
 struct ValueClaim
@@ -823,10 +858,15 @@ inline ValueClaim matchValueClaim( std::string_view line, std::size_t afterName,
         v = skipClaimGap( line, v, dialect.allowsBacktickGap );
     }
 
-    std::uint64_t value = 0;
+    std::uint64_t     value        = 0;
+    const std::size_t literalBegin = v;
     if( !parseIntLiteral( line, v, value ) )
     {
         return {};
+    }
+    if( dialect.allowsThousandsCommas )
+    {
+        v = extendThousandsGroups( line, literalBegin, v, value );
     }
     if( !dialect.terminates( line, v ) )
     {
@@ -1486,6 +1526,27 @@ inline Record recordOf( std::string_view line, bool isHeadingDated, const DocDat
 // resolution) rather than growing a fifth concern every time a lane is added. Three interleaved states live
 // here and nowhere else: the fence toggle, the heading's dated-ness, and the doc's own dating. `resolving`
 // grows alongside — it is the corroboration signal collectNamedSpans appends to, in ascending line order.
+// 0.6.6 D3: a section inherits the ISO date of the heading it sits UNDER. Keep a Changelog writes
+// `## [1.8.2] - 2026-03-17` then `### Fixed`, and the rename recorded under `### Fixed` was read as a live claim
+// because only the NEAREST heading was consulted. datedAtLevel[L] = the last level-L heading carried a date; a heading
+// clears every deeper level. Level 1 does not propagate: an H1 date is the doc's title date (rec="title").
+struct HeadingDates
+{
+    std::array<bool, 7> datedAtLevel{};
+
+    // Record the heading line `t` (leading '#'s, trimmed); returns whether its section is dated.
+    bool enter( std::string_view t ) noexcept
+    {
+        const std::size_t hashes   = t.find_first_not_of( '#' );
+        const std::size_t level    = std::min<std::size_t>( hashes == std::string_view::npos ? t.size() : hashes, datedAtLevel.size() - 1 );
+        const bool        ownDated = hasDatingIsoDate( t );
+        const bool        enclosed = level > 2 && std::any_of( datedAtLevel.begin() + 2, datedAtLevel.begin() + std::ptrdiff_t( level ), []( bool d ) { return d; } );
+        datedAtLevel[ level ] = ownDated;
+        std::fill( datedAtLevel.begin() + std::ptrdiff_t( level ) + 1, datedAtLevel.end(), false );
+        return ownDated || enclosed;
+    }
+};
+
 inline std::vector<Anchor> collectDocAnchors( std::string_view rel, std::string_view bytes,
                                               const HashMap<std::string, std::uint32_t>& defined,
                                               std::vector<std::uint32_t>& resolving )
@@ -1495,13 +1556,14 @@ inline std::vector<Anchor> collectDocAnchors( std::string_view rel, std::string_
     std::vector<Anchor> anchors;
     bool                inFence        = false;
     bool                isHeadingDated = false;
+    HeadingDates        headingDates;
     darkflags::forEachLine( bytes, [ & ]( std::string_view line, std::uint32_t lineNo )
     {
         const std::string_view t = darkflags::trimView( line );
         if( t.size() >= 3 && ( t.compare( 0, 3, "```" ) == 0 || t.compare( 0, 3, "~~~" ) == 0 ) ) { inFence = !inFence; return; }
         if( !inFence && !t.empty() && t.front() == '#' )
         {
-            isHeadingDated = hasDatingIsoDate( t );
+            isHeadingDated = headingDates.enter( t );
         }
 
         // The record classifier runs ONLY over the anchors THIS line produced, so a doc line that anchors
@@ -1822,7 +1884,46 @@ struct ResolveContext
                                                              //   resolve pass is threaded — see computeDocDrift)
     const std::vector<std::uint32_t>&          resolving;    // THIS doc's lines that name something we define
     const gitoracle::HistoryIndex*             history;      // --with-history only; nullptr ⇒ the lane behaves as before
+    bool                                       hasPython = false;   // 0.6.6 D3: the corpus indexes Python / JS or TS —
+    bool                                       hasJsTs   = false;   //   which languages' built-in names are "defined"
 };
+
+// 0.6.6 D3: built-in names a doc may cite that no repository defines. Only CODE-SHAPED names are listed (the mention lane
+// reads nothing else): Python's built-in exceptions and warnings, and the ECMAScript / Node global constructors. Sorted,
+// for binary_search; kept per language so a Python name is only exempt where the corpus is Python.
+inline constexpr std::string_view kPythonBuiltinNames[] = {
+    "ArithmeticError", "AssertionError", "AttributeError", "BaseException", "BaseExceptionGroup", "BlockingIOError",
+    "BrokenPipeError", "BufferError", "BytesWarning", "ChildProcessError", "ConnectionAbortedError", "ConnectionError",
+    "ConnectionRefusedError", "ConnectionResetError", "DeprecationWarning", "EOFError", "EncodingWarning", "EnvironmentError",
+    "ExceptionGroup", "FileExistsError", "FileNotFoundError", "FloatingPointError", "FutureWarning", "GeneratorExit",
+    "IOError", "ImportError", "ImportWarning", "IndentationError", "IndexError", "InterruptedError", "IsADirectoryError",
+    "KeyError", "KeyboardInterrupt", "LookupError", "MemoryError", "ModuleNotFoundError", "NameError", "NotADirectoryError",
+    "NotImplemented", "NotImplementedError", "OSError", "OverflowError", "PendingDeprecationWarning", "PermissionError",
+    "ProcessLookupError", "RecursionError", "ReferenceError", "ResourceWarning", "RuntimeError", "RuntimeWarning",
+    "StopAsyncIteration", "StopIteration", "SyntaxError", "SyntaxWarning", "SystemError", "SystemExit", "TabError",
+    "TimeoutError", "TypeError", "UnboundLocalError", "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeError",
+    "UnicodeTranslateError", "UnicodeWarning", "UserWarning", "ValueError", "ZeroDivisionError", "__import__",
+};
+inline constexpr std::string_view kJsTsBuiltinNames[] = {
+    "AbortController", "AggregateError", "ArrayBuffer", "AsyncFunction", "BigInt64Array", "BigUint64Array", "DataView",
+    "EvalError", "FinalizationRegistry", "Float32Array", "Float64Array", "Int16Array", "Int32Array", "Int8Array", "RangeError",
+    "ReferenceError", "SharedArrayBuffer", "SyntaxError", "TextDecoder", "TextEncoder", "TypeError", "URIError",
+    "URLSearchParams", "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray", "WeakMap", "WeakRef", "WeakSet",
+    "clearInterval", "clearTimeout", "decodeURIComponent", "encodeURIComponent", "globalThis", "queueMicrotask",
+    "setInterval", "setTimeout", "structuredClone",
+};
+
+static_assert( std::is_sorted( std::begin( kPythonBuiltinNames ), std::end( kPythonBuiltinNames ), sortutil::svLess ), "kPythonBuiltinNames must stay sorted (binary_search)" );
+static_assert( std::is_sorted( std::begin( kJsTsBuiltinNames ), std::end( kJsTsBuiltinNames ), sortutil::svLess ), "kJsTsBuiltinNames must stay sorted (binary_search)" );
+
+inline bool isLanguageBuiltinName( bool hasPython, bool hasJsTs, std::string_view name ) noexcept
+{
+    const auto listed = []( std::span<const std::string_view> table, std::string_view n ) noexcept
+    {
+        return std::binary_search( table.begin(), table.end(), n, sortutil::svLess );   // portablebuildcheck #6: never the default sv comparator
+    };
+    return ( hasPython && listed( kPythonBuiltinNames, name ) ) || ( hasJsTs && listed( kJsTsBuiltinNames, name ) );
+}
 
 // Is there a name this repo DOES define within kCorroborateWin lines of `at`? `resolving` is built in
 // ascending line order by the doc walk, so this is a plain binary search, no sort needed.
@@ -1946,6 +2047,7 @@ inline void resolveMention( const ResolveContext& ctx, Anchor& a )
     if( !a.scope.empty() && ctx.defined.find( a.scope ) == ctx.defined.end() ) { a.skip = Unchecked::ForeignScope; return; }
     const auto f = ctx.facts.find( a.name );
     if( f != ctx.facts.end() && f->second.presentInCode ) { a.skip = Unchecked::NotADefinition; return; }
+    if( isLanguageBuiltinName( ctx.hasPython, ctx.hasJsTs, a.name ) ) { a.skip = Unchecked::LanguageBuiltin; return; }   // 0.6.6 D3
     if( !isCorroborated( ctx, a.line ) ) { a.skip = Unchecked::Uncorroborated; return; }
 
     // The history lane. Reached ONLY by a mention that would otherwise be reported as drift, so every
@@ -2424,12 +2526,19 @@ inline DriftResult computeDocDrift( const IngestResult& ing, const std::string& 
 
     // ── resolution ───────────────────────────────────────────────────────────────────────────────────────
     const HashMap<std::string, std::uint32_t> pathMemo = buildPathMemo( ing, perDoc );
+    // 0.6.6 D3: which languages' built-in names count as defined — read once, off the index's own symbols
+    bool corpusHasPython = false, corpusHasJsTs = false;
+    for( const Symbol& s : ing.symbols )
+    {
+        corpusHasPython = corpusHasPython || s.lang == Lang::Python;
+        corpusHasJsTs   = corpusHasJsTs || s.lang == Lang::JavaScript || s.lang == Lang::TypeScript;
+    }
 
     // SLOT-DISJOINT: `resolveAnchor` is a pure function of the read-only context and the anchor it is handed,
     // and doc d's anchors live only in perDoc[d]. The ordered accumulation stays in the serial loop below.
     forEachIndexParallel( perDoc.size(), "anchor resolve", [ & ]( std::size_t d )
     {
-        const ResolveContext ctx{ ing, root, repo, defined, facts, lineCounts, pathMemo, perDocResolving[d], history };
+        const ResolveContext ctx{ ing, root, repo, defined, facts, lineCounts, pathMemo, perDocResolving[d], history, corpusHasPython, corpusHasJsTs };
         for( Anchor& a : perDoc[d] )
         {
             resolveAnchor( ctx, a );

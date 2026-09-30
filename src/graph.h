@@ -7892,6 +7892,173 @@ inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>&
     return res;
 }
 
+// 0.6.6 D1: WHICH definition of a many-definition terminal name --connect searches from. connectSubgraph takes one node
+// per terminal, and the callers used to hand it resolveFocus's single pick (the lowest id), so `--connect=main,escapeXml`
+// searched from the one `main` of 107 that happened to sort first (a Python bench script) and printed every terminal
+// <unconnected> beside a --path that joins main to escapeXml in 2 hops. The pick is now the definition that JOINS: every
+// definition of the name is scored by how many OTHER terminals it reaches within the radius on the same undirected view
+// connectSubgraph walks, then by the fewest summed hops; resolveFocus's pick wins a tie it is part of, the lowest id any
+// other tie. Two passes: the first scores against every definition of the other names, the second re-scores against the
+// picks the first made — the nodes connectSubgraph will actually search from. A name none of whose definitions reaches
+// another terminal keeps resolveFocus's pick (so <unconnected> there is true of EVERY definition). tiedOut[i] > 1 says
+// that many definitions joined exactly as well as the pick: the answer is about one of them, disclosed by the emitter
+// (ambiguous_terminal=), never a silent choice.
+inline std::vector<std::uint16_t> connectUndirectedDistances( const Graph& g, std::span<const NodeId> sources, std::uint32_t radius )
+{
+    const std::size_t N = g.wOutDeg.size();
+    std::vector<std::uint16_t> dist( N, connectcfg::kUnreachable );
+    const auto* inRo   = g.inEdges.rowOffsets();
+    const auto* inCi   = g.inEdges.colIndices();
+    const bool  haveIn = g.inEdges.rows() == N;                // the same degrade connectSubgraph takes
+    std::vector<NodeId> q;
+    q.reserve( 256 );
+    for( const NodeId src : sources )
+    {
+        if( src < N && dist[ src ] != 0 )
+        {
+            dist[ src ] = 0;
+            q.push_back( src );
+        }
+    }
+    const auto relax = [ & ]( std::uint16_t du, NodeId v )
+    {
+        if( v < N && dist[ v ] == connectcfg::kUnreachable )
+        {
+            dist[ v ] = std::uint16_t( du + 1 );
+            q.push_back( v );
+        }
+    };
+    for( std::size_t head = 0; head < q.size(); ++head )
+    {
+        const NodeId        u  = q[ head ];
+        const std::uint16_t du = dist[ u ];
+        if( du >= radius )
+        {
+            continue;
+        }
+        for( std::uint32_t k = g.outOff[ u ]; k < g.outOff[ u + 1 ]; ++k )
+        {
+            relax( du, g.outTargets[ k ] );
+        }
+        if( haveIn )
+        {
+            for( std::uint32_t k = inRo[ u ]; k < inRo[ u + 1 ]; ++k )
+            {
+                relax( du, inCi[ k ] );
+            }
+        }
+    }
+    return dist;
+}
+
+// One terminal's choice among its definitions, against the other terminals' distance maps: the candidate reaching the
+// most of them, then the fewest summed hops; `preferred` (resolveFocus's pick) wins a tie it is part of, the lowest id any
+// other tie (candidates ascend by id). reached == 0 ⇒ no candidate joins anything, and `chosen` is `preferred`.
+struct TerminalChoice { NodeId chosen = kNoNode; std::uint32_t reached = 0, hops = 0, tied = 1; };
+
+inline TerminalChoice scoreTerminalCandidates( std::span<const NodeId> candidates, NodeId preferred, std::size_t self,
+                                               const std::vector<std::vector<std::uint16_t>>& distFrom )
+{
+    TerminalChoice best{ preferred, 0, 0, 1 };
+    bool           bestIsPreferred = false;
+    for( const NodeId candidate : candidates )
+    {
+        std::uint32_t reached = 0, hops = 0;
+        for( std::size_t j = 0; j < distFrom.size(); ++j )
+        {
+            const bool reaches = j != self && candidate < distFrom[ j ].size() && distFrom[ j ][ candidate ] != connectcfg::kUnreachable;
+            reached += reaches ? 1u : 0u;
+            hops    += reaches ? distFrom[ j ][ candidate ] : 0u;
+        }
+        const bool isTie = reached > 0 && reached == best.reached && hops == best.hops;
+        if( reached > best.reached || ( reached > 0 && reached == best.reached && hops < best.hops ) )
+        {
+            best            = TerminalChoice{ candidate, reached, hops, 1 };
+            bestIsPreferred = candidate == preferred;
+        }
+        else if( isTie )
+        {
+            ++best.tied;
+            best.chosen     = ( candidate == preferred && !bestIsPreferred ) ? candidate : best.chosen;
+            bestIsPreferred = bestIsPreferred || candidate == preferred;
+        }
+    }
+    if( best.reached == 0 )
+    {
+        best = TerminalChoice{ preferred, 0, 0, 1 };
+    }
+    ENSURES( best.tied >= 1 );
+    return best;
+}
+
+inline void chooseJoiningTerminals( const Graph& g, const std::vector<std::vector<NodeId>>& defsPerTerminal, std::vector<NodeId>& picks,
+                                    std::vector<std::uint32_t>& tiedOut, std::uint32_t radius )
+{
+    EXPECTS( defsPerTerminal.size() == picks.size() );
+    const std::size_t T = picks.size();
+    tiedOut.assign( T, 1u );
+    const bool anyMany = std::any_of( defsPerTerminal.begin(), defsPerTerminal.end(), []( const std::vector<NodeId>& d ) { return d.size() > 1; } );
+    if( !anyMany || T < 2 )
+    {
+        return;   // one definition per name: nothing to choose, and no BFS is paid for
+    }
+    const std::uint32_t r = std::clamp( radius, connectcfg::kMinRadius, connectcfg::kMaxRadius );
+    const std::vector<NodeId> firstPicks = picks;
+    for( int pass = 0; pass < 2; ++pass )
+    {
+        std::vector<std::vector<std::uint16_t>> distFrom( T );
+        for( std::size_t j = 0; j < T; ++j )
+        {
+            distFrom[ j ] = pass == 0 ? connectUndirectedDistances( g, defsPerTerminal[ j ], r )
+                                      : connectUndirectedDistances( g, std::span<const NodeId>( &picks[ j ], 1 ), r );
+        }
+        std::vector<NodeId> next = picks;
+        for( std::size_t i = 0; i < T; ++i )
+        {
+            if( defsPerTerminal[ i ].size() > 1 )
+            {
+                const TerminalChoice choice = scoreTerminalCandidates( defsPerTerminal[ i ], firstPicks[ i ], i, distFrom );
+                next[ i ]    = choice.chosen;
+                tiedOut[ i ] = choice.tied;
+            }
+        }
+        picks = std::move( next );
+    }
+    ENSURES( picks.size() == T && tiedOut.size() == T );
+}
+
+// The CLI --connect and the MCP connect verb both resolve their specs with resolveFocus, then hand the picks here: one
+// call re-reads every spec's full definition set (the same resolver, so `file:name` narrows it exactly as before),
+// lets chooseJoiningTerminals move a many-definition pick onto the definition that joins, and returns the names whose
+// pick tied with another equally-joining definition, comma-joined in spec order ("" when none) — the root's
+// ambiguous_terminal= attribute. Specs whose name has one definition cost nothing and never move.
+template<class SpecList>
+inline std::string joinTerminalPicks( const IngestResult& ing, const Graph& g, const SpecList& specs, std::vector<NodeId>& picks, std::uint32_t radius )
+{
+    EXPECTS( specs.size() == picks.size() );
+    std::vector<std::vector<NodeId>> defsPerTerminal;
+    defsPerTerminal.reserve( specs.size() );
+    for( const auto& spec : specs )
+    {
+        defsPerTerminal.push_back( resolveAllByNameQualified( ing, std::string_view( spec ), nullptr ) );
+    }
+    std::vector<std::uint32_t> tied;
+    chooseJoiningTerminals( g, defsPerTerminal, picks, tied, radius );
+    std::string ambiguous;
+    for( std::size_t i = 0; i < picks.size(); ++i )
+    {
+        if( tied[ i ] > 1 && picks[ i ] < ing.symbols.size() )
+        {
+            if( !ambiguous.empty() )
+            {
+                ambiguous += ',';
+            }
+            ambiguous += ing.symbols[ picks[ i ] ].name;
+        }
+    }
+    return ambiguous;
+}
+
 // ---- community detection (--communities): one level of Louvain local-moving on the UNDIRECTED projection
 //      of the call graph (unit edge weights). Deterministic: nodes processed in id order; on a (near-)tie
 //      the move resolves to the LOWER community id; fixed pass cap; ankerl insertion-ordered maps. Returns

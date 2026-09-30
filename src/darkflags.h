@@ -14,7 +14,7 @@
 //   compile — `#ifndef NAME` immediately followed by `#define NAME VALUE` (the build-dark-then-flip idiom:
 //             the guard is what lets `-DNAME=1` win from the command line without editing the header).
 //   cmake   — `option( NAME "doc" ON|OFF )` in CMakeLists.txt / *.cmake.
-//   env     — `getenv("NAME")` / `std::getenv` / Python `os.environ.get` / `os.getenv`. Default: unset.
+//   env     — `getenv("NAME")` / `std::getenv` / Python `os.environ.get` / `os.getenv` / JS/TS `process.env.NAME`. Default: unset.
 //
 // ── the override rule (the actual bug this verb catches) ─────────────────────────────────────────────────
 // A name is routinely BOTH a header gate defaulting to 0 AND a CMake option defaulting to ON — the header
@@ -433,7 +433,18 @@ struct LineSyntax
                                      //   shift in Python and Ruby and mistaking one for a heredoc would blind
                                      //   the rest of the file
     bool isProse          = false;   // markdown or an extracted-doc format: the env lane skips it entirely
+    bool hasTemplates     = false;   // 0.6.6 D5: a backtick template literal — JavaScript / TypeScript ONLY (a shell `…` is
+                                     //   a command substitution, a Go `…` a raw string: neither changes here)
 };
+
+inline constexpr std::string_view kTemplateLiteralExtTable[] = { ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts" };
+
+// 0.6.6 D5 (review B1): the per-file state of the JS/TS template literals that are open at a line boundary. Each entry
+// is one open construct, innermost last: kTemplateText = inside a template's TEXT (a string), n >= 0 = inside a `${…}`
+// substitution (CODE) with n unclosed `{` of its own. Empty = plain code. A template spans lines, so the caller keeps
+// this per file, like the block-comment flag.
+using TemplateStack = std::vector<std::int32_t>;
+inline constexpr std::int32_t kTemplateText = -1;
 
 inline constexpr std::string_view kShellExtTable[] = { ".sh", ".bash", ".zsh" };
 
@@ -465,14 +476,50 @@ inline LineSyntax lineSyntaxFor( std::string_view path )
     {
         syn.isProse = true;
     }
+    syn.hasTemplates = std::find( std::begin( kTemplateLiteralExtTable ), std::end( kTemplateLiteralExtTable ), ext ) != std::end( kTemplateLiteralExtTable );
     return syn;
+}
+
+// 0.6.6 D5 (review B1): one byte of a JS/TS template construct. Returns true when the byte was consumed as template
+// TEXT or template punctuation (never code), false when it is code the caller classifies as usual. `i` may advance
+// past an escaped byte or the `{` of `${`.
+inline bool stepTemplate( std::string_view line, std::size_t& i, TemplateStack& templates )
+{
+    const char c = line[i];
+    if( !templates.empty() && templates.back() == kTemplateText )
+    {
+        if( c == '\\' ) { ++i; }                                            // an escaped byte closes nothing
+        else if( c == '`' ) { templates.pop_back(); }                        // the template ends
+        else if( c == '$' && i + 1 < line.size() && line[ i + 1 ] == '{' ) { templates.push_back( 0 ); ++i; }   // `${` opens code
+        return true;
+    }
+    if( c == '`' )
+    {
+        templates.push_back( kTemplateText );
+        return true;
+    }
+    if( !templates.empty() && c == '{' )
+    {
+        ++templates.back();
+    }
+    else if( !templates.empty() && c == '}' )
+    {
+        if( templates.back() == 0 )
+        {
+            templates.pop_back();                                            // `}` closes the `${`: back to the text
+            return true;
+        }
+        --templates.back();
+    }
+    return false;
 }
 
 // Visit every byte of `line` that is CODE — outside every comment and outside every string literal — handing
 // its index to `onCode`. `isInBlockComment` carries `/* … */` across lines, so it is the caller's per-file
 // state, not a per-line local. Classification and probing are fused so no per-line buffer is allocated.
+// `templates` (JS/TS only, syn.hasTemplates) carries open template literals the same way — see TemplateStack.
 template<class OnCode>
-inline void forEachCodeByte( std::string_view line, const LineSyntax& syn, bool& isInBlockComment, OnCode&& onCode )
+inline void forEachCodeByte( std::string_view line, const LineSyntax& syn, bool& isInBlockComment, TemplateStack& templates, OnCode&& onCode )
 {
     char quote = 0;
     for( std::size_t i = 0; i < line.size(); ++i )
@@ -481,6 +528,10 @@ inline void forEachCodeByte( std::string_view line, const LineSyntax& syn, bool&
         if( isInBlockComment )
         {
             if( c == '*' && i + 1 < line.size() && line[ i + 1 ] == '/' ) { isInBlockComment = false; ++i; }
+            continue;
+        }
+        if( syn.hasTemplates && quote == 0 && stepTemplate( line, i, templates ) )
+        {
             continue;
         }
         if( quote != 0 )
@@ -527,6 +578,28 @@ inline constexpr std::string_view kEnvProbeTable[] = { "getenv", "environ.get", 
 // leaves the ONE call (the old reader crossed a `"` that closed one literal and entered the next, which is
 // how the commas separating kEnvProbeTable's own spellings became gates named `,` and `, `), and the name it
 // finds must be identifier-shaped.
+// The identifier-shaped name inside ONE quoted literal that opens at `i` (after optional whitespace), with an opening
+// quote from `quotes`, closed by the same quote; "" otherwise (a computed name, an unclosed literal, a non-name).
+// Shared by the getenv-family call shape and Node's `process.env[...]` subscript.
+inline std::string_view quotedEnvNameAt( std::string_view line, std::size_t i, std::string_view quotes )
+{
+    while( i < line.size() && std::isspace( (unsigned char)line[i] ) )
+    {
+        ++i;
+    }
+    if( i >= line.size() || quotes.find( line[i] ) == std::string_view::npos )
+    {
+        return {}; // computed name — cannot be named
+    }
+    const std::size_t close = line.find( line[i], i + 1 );
+    if( close == std::string_view::npos )
+    {
+        return {};
+    }
+    const std::string_view name = line.substr( i + 1, close - i - 1 );
+    return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
+}
+
 inline std::string_view envNameAt( std::string_view line, std::size_t at, std::string_view probe )
 {
     if( line.compare( at, probe.size(), probe ) != 0 )
@@ -547,29 +620,38 @@ inline std::string_view envNameAt( std::string_view line, std::size_t at, std::s
         }
         ++i;
     }
-    while( i < line.size() && std::isspace( (unsigned char)line[i] ) )
-    {
-        ++i;
-    }
-    if( i >= line.size() || line[i] != '"' )
-    {
-        return {}; // computed name — cannot be named
-    }
+    return quotedEnvNameAt( line, i, "\"" );
+}
 
-    const std::size_t close = line.find( '"', i + 1 );
-    if( close == std::string_view::npos )
+// 0.6.6 D5: Node's environment read — `process.env.NAME`, `process.env["NAME"]`, `process.env['NAME']` — is the getenv of
+// JavaScript and TypeScript, and a TS repo whose switches are all `process.env.X === "1"` answered gates="0" env="0".
+// The name after the dot (or the one quoted literal in the brackets) must be identifier-shaped; `process.env` alone
+// (`const env = process.env`, a spread) names nothing and is not a read. Same CODE-only filter as the probes above.
+inline std::string_view processEnvNameAt( std::string_view line, std::size_t at )
+{
+    constexpr std::string_view probe = "process.env";
+    if( line.compare( at, probe.size(), probe ) != 0 )
     {
         return {};
     }
-
-    const std::string_view name = line.substr( i + 1, close - i - 1 );
-    return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
+    std::size_t i = at + probe.size();
+    if( i < line.size() && line[i] == '.' )
+    {
+        std::size_t end = i + 1;
+        while( end < line.size() && identByte( (unsigned char)line[end] ) )
+        {
+            ++end;
+        }
+        const std::string_view name = line.substr( i + 1, end - i - 1 );
+        return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
+    }
+    return ( i < line.size() && line[i] == '[' ) ? quotedEnvNameAt( line, i + 1, "\"'`" ) : std::string_view{};
 }
 
 inline void harvestEnvReads( std::string_view line, std::uint32_t lineNo, FileHarvest& fh,
-                             const LineSyntax& syn, bool& isInBlockComment )
+                             const LineSyntax& syn, bool& isInBlockComment, TemplateStack& templates )
 {
-    forEachCodeByte( line, syn, isInBlockComment, [ & ]( std::size_t at )
+    forEachCodeByte( line, syn, isInBlockComment, templates, [ & ]( std::size_t at )
                      {
         if( at > 0 && identByte( (unsigned char)line[ at - 1 ] ) ) { return;   // mid-identifier — not a call of ours
 }
@@ -581,6 +663,11 @@ inline void harvestEnvReads( std::string_view line, std::uint32_t lineNo, FileHa
             fh.reads.push_back( FileHarvest::Read{ std::string( name ), lineNo } );
             fh.defs.push_back( FileHarvest::Def{ std::string( name ), "unset", lineNo, GateKind::Env } );
             return;
+        }
+        if( const std::string_view nodeName = processEnvNameAt( line, at ); !nodeName.empty() )   // 0.6.6 D5
+        {
+            fh.reads.push_back( FileHarvest::Read{ std::string( nodeName ), lineNo } );
+            fh.defs.push_back( FileHarvest::Def{ std::string( nodeName ), "unset", lineNo, GateKind::Env } );
         } } );
 }
 
@@ -684,6 +771,7 @@ inline FileHarvest harvestFile( std::string_view bytes, std::string_view path, b
     std::string           pendingIfndef;
     std::string           heredocDelimiter;              // non-empty ⇒ this line is heredoc BODY, i.e. data
     bool                  isInBlockComment = false;
+    TemplateStack         templates;                     // 0.6.6 D5: open JS/TS template literals across lines
 
     forEachLine( bytes, [ & ]( std::string_view line, std::uint32_t lineIndex )
     {
@@ -715,7 +803,7 @@ inline FileHarvest harvestFile( std::string_view bytes, std::string_view path, b
         // The block-comment state must be read BEFORE the env lane advances it, so a `#define` on the first
         // line of a `/* … */` block is judged by the state the line OPENED in.
         const bool wasInBlockComment = isInBlockComment;
-        harvestEnvReads( line, lineIndex, fh, syn, isInBlockComment );
+        harvestEnvReads( line, lineIndex, fh, syn, isInBlockComment, templates );
 
         // The opener line itself IS code (it can carry a real call); only what follows it is data. A `#`
         // comment mentioning a heredoc must not open one, or the rest of the file goes dark.
@@ -1214,8 +1302,9 @@ inline void writeFlags( std::FILE* out, const FlagsResult& res, std::size_t maxS
 
     rw::emitRaw( out, "<!-- ripwire flags: what is BUILT but DARK here. Three gate patterns in one report: ifndef/define "
                        "header gates (kind=\"compile\"), CMake option() switches (kind=\"cmake\"), and getenv reads "
-                       "(kind=\"env\", default unset). dark=\"1\" means the default keeps the guarded code out of the build; "
-                       "regions/loc size what it turns off. When one name is BOTH a header gate and a CMake option the CMake "
+                       "(kind=\"env\", default unset; os.environ in Python, process.env in JavaScript/TypeScript). dark=\"1\" means the default keeps the guarded code out of the build; "
+                       "regions/loc size what it turns off, and are measured only for #if/#ifdef regions: an env gate (getenv, "
+                       "os.environ, process.env) guards a runtime branch this verb does not size, so it reads regions=0 loc=0. When one name is BOTH a header gate and a CMake option the CMake "
                        "default wins (that is what the build passes) and the header shows as an also row. Lexical, not "
                        "preprocessed: this reports the in-repo default, never the value your build used. dark_gates on this root "
                        "is the COUNT of dark gates; it was spelled dark until that collided with the child bool. files= is THIS "

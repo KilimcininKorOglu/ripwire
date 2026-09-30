@@ -3313,9 +3313,10 @@ inline constexpr char kConnectHeader[] =
     " edges=, groups=) is a FLOOR, never a total; read a zero as \"none found\", never as \"none exists\"."
     " graph_ambiguous=/graph_unresolved= are the whole graph's resolver gauge (calls split over several defs / calls"
     " whose in-repo defs were all language-filtered), the map header's ambiguous=/unresolved=."
-    " defs= on a terminal row = that NAME has N definitions and the lowest-id one was used (a C/C++ declaration without"
-    " a body yields to the lowest-id definition of its scope that has one); qualify with file:name"
-    " to pick another. Steiner rows never carry it."
+    " defs= on a terminal row = that NAME has N definitions; every one is scored and the one reaching the most other"
+    " terminals within radius= (fewest hops) is used, else the lowest id (a C/C++ declaration without a body yields to the"
+    " definition of its scope); ambiguous_terminal= on the root names terminals whose pick tied with another equally-joining"
+    " definition. Qualify with file:name to pick another. Steiner rows never carry it."
     " connects= on a Steiner row = how many DISTINCT symbols that intermediary joins (its callers plus its"
     " callees, the undirected view this search walks), so you can see how much the join actually explains;"
     " hub=\"1\" says connects= is at or above hub_floor= on the root, and hub_floor= is DERIVED from this graph,"
@@ -3361,7 +3362,8 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
                          std::string_view rootArg = {},    // R-E (2026-08-17): same single-root-only root
                                                            // argument serialize() takes — see its comment.
                                                            // Shared by CLI --connect and the MCP connect verb.
-                         std::size_t unprovenDefs = 0 )    // H1: the terminals' decl→def residue, SUMMED by the caller
+                         std::size_t unprovenDefs = 0,     // H1: the terminals' decl→def residue, SUMMED by the caller
+                         std::string_view ambiguousTerminals = {} )   // 0.6.6 D1: joinTerminalPicks' tied names, "" when none
 {
     std::vector<char> escBuf;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, escBuf ) ); };
@@ -3389,8 +3391,11 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     // at zero, so an answer that dropped nothing prices and emits byte-identically.
     const std::string  connectUnprovenAttr   = unprovenDefsAttrXml( unprovenDefs );
     const std::string  connectUnprovenLegend = unprovenDefsVerbComment( UnprovenDefsVerb::Connect, unprovenDefs > 0, "<!-- ripwire connect: " );
+    // 0.6.6 D1: the tied-terminal names, charged like the residue attribute above; absent (0 bytes) when no pick tied
+    const std::string  connectAmbiguousAttr = ambiguousTerminals.empty() ? std::string() : ( " ambiguous_terminal=\"" + ex( ambiguousTerminals ) + "\"" );
     const std::size_t  connectExtraBytes = connectRootAttr.size() + std::strlen( rootRelPathsLegend( !rootArg.empty() ) )
-                                         + connectUnindexedLegend.size() + connectUnprovenAttr.size() + connectUnprovenLegend.size();
+                                         + connectUnindexedLegend.size() + connectUnprovenAttr.size() + connectUnprovenLegend.size()
+                                         + connectAmbiguousAttr.size();
 
     // §2.4a: the derived hub threshold every Steiner row's connects= is read against, computed ONCE (it is a
     // property of the graph, not of a row) and named on the root so the label is never a bare assertion.
@@ -3603,9 +3608,10 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     }
     rw::emitTo( out, "{}{}{}{}", rw::cstr( kConnectHeader ), connectUnindexedLegend.c_str(), connectUnprovenLegend.c_str(),
                 rootRelPathsLegend( !rootArg.empty() ) );
-    rw::emitTo( out, "<connect terminals=\"{}\" nodes=\"{}\" edges=\"{}\" radius=\"{}\" groups=\"{}\"{} est_tokens=\"{}\" hub_floor=\"{}\"{}{}{}{}{}>",
+    rw::emitTo( out, "<connect terminals=\"{}\" nodes=\"{}\" edges=\"{}\" radius=\"{}\" groups=\"{}\"{}{} est_tokens=\"{}\" hub_floor=\"{}\"{}{}{}{}{}>",
                   res.terminals.size(), nodeTotal, edgeTotal, res.radius, connectedGroups,
                   connectUnprovenAttr.c_str(),   // H1: beside the counts it qualifies; absent at zero
+                  connectAmbiguousAttr,          // 0.6.6 D1: absent when no many-definition pick tied
                   estTokens, hubFloor,
                   rw::cstr( connectCeiling ), connectOverAttr,
                   truncated ? " truncated=\"paths\"" : "", connectRootAttr.c_str(),
@@ -3638,13 +3644,14 @@ inline std::string connectText( const std::string& root, const std::vector<std::
         unprovenDefs += termUnprovenDefs;
     }
 
+    const std::string   ambiguous = joinTerminalPicks( ing, g, symbolSpecs, terminals, radius );   // 0.6.6 D1: the CLI's pick, same call
     const ConnectResult res = connectSubgraph( g, terminals, radius );
     rw::MemoryStream stream;
     std::FILE* const mem = stream.open();
     if( !mem ) { err = "internal error"; return {}; }
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h).
     packConnect( mem, ing, g, res, redact, /*maxTokens=*/0, ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),
-                 unprovenDefs );
+                 unprovenDefs, ambiguous );
     std::optional<std::string> answer = mcpAnswerText( stream );
     if( !answer )
     {

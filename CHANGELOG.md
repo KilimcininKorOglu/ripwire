@@ -115,6 +115,67 @@ from a partial index without disclosure. Deferred: layer 2 (the non-git crawl bu
 pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
 llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
 
+### Fixed — `--flags` reads JavaScript and TypeScript `process.env` switches
+
+A TypeScript repository whose switches are all `process.env.X === "1"` checks answered `gates="0" env="0"`. The env
+lane now reads `process.env.NAME`, `process.env["NAME"]` and `process.env['NAME']` in code as `kind="env"` gates
+(default unset), the same way it reads `getenv("NAME")` and Python's `os.environ`; a read inside a comment or a
+string, and `process.env` without a name (`const env = process.env`), are not gates. In JavaScript and TypeScript
+files a backtick template literal is a string: its text — on one line, across lines, or nested inside a `${…}` — is
+not code, while the code inside `${…}` is (so `${process.env.X}` is a gate). Other languages' quote handling is
+unchanged. As for Python env gates, `regions=` and `loc=` stay 0, and both legends now say so: they are measured
+only for `#if` regions. On the aislop TypeScript repository the verb now reports 20 env gates (a 21st read sits in
+the text of a generated-source template). Gate: `flagscheck` arms 12 and 12t.
+
+### Fixed — `--doc-drift`: three false drifts on a Python repository
+
+- A doc's `NAME = 15,000` was read as 15 and reported against the code's `15_000`. In prose, a 1–3 digit lead
+  followed by `,ddd` groups is now read whole (code keeps reading `15, 000` as two values). This also clears two
+  rows on this repository (`kForPayloadBudgetBytes` = 7,500 and `kGrepCollectionBudget`=4,000,000).
+- A Python built-in exception (`NameError`) or a JavaScript/TypeScript global (`TypeError`, `structuredClone`)
+  named in a doc was "undefined". It is now counted as `<unchecked r="language-builtin">` when the corpus indexes
+  that language.
+- A section inherits the ISO date of the heading it sits under (levels 2 and deeper), so a Keep a Changelog rename
+  under `### Fixed` below `## [1.8.2] - 2026-03-17` is a dated record (`rec="block"`), not live drift. On this
+  repository 23 rows move from `drift=` to `dated=`.
+
+Gate: `docdriftcheck` arm FD.
+
+### Fixed — `--from-trace` no longer pairs one file's line with another file's definition in `next=`
+
+When the innermost frame's function name bound to a definition in a different file than the frame's own path
+(`resolved_by="name"`), `next=` spliced the frame's line onto the definition's file: a frame at
+`src/verbs_doctor.h:304` naming `escapeXml` produced `next="--slice=@src/serialize.h:304"`, a line inside another
+function. That case now hands over the definition's handle, `next="--expand=src/serialize.h:escapeXml"`, and marks
+the root `line_mismatch="1"` (present only then; defined in both legends). A frame in the definition's own file
+keeps `--slice=@FILE:LINE` byte-identically, the MCP `from_trace` twin included. Gate: `nextverbcheck` arm (5).
+
+### Fixed — `--connect` searches a many-definition terminal from the definition that joins
+
+`--connect` resolved each terminal to one definition, the lowest id, before searching. On this repository
+`--connect=main,escapeXml,Graph` took `main` from a Python bench script (one of 107 definitions) and printed every
+terminal `<unconnected>`, while `--path` joined `main` to `escapeXml` in two hops. Each definition of a terminal's
+name is now scored by how many other terminals it reaches within `radius=` on the same undirected view, then by
+the fewest hops, and the best one is searched from (CLI and MCP `connect` alike, `graph.h` `joinTerminalPicks`).
+A name none of whose definitions joins keeps the old pick, so `<unconnected>` there holds for every definition.
+When several definitions join equally well, the root names that terminal in `ambiguous_terminal=` (present only
+then). The full legend's `defs=` sentence, which said the lowest-id definition was used, now states the rule; the
+header change moves `est_tokens=` on `--connect` answers by a few tokens. Gate: `connectcheck` arm 10.
+
+### Fixed — `--dead-code` no longer reports a pytest test method as an internal-linkage orphan
+
+A Python def's signature span runs on through the comment lines that open its body, so a test method whose first
+comment contained the word `static` ("the static type is unchanged") met `--dead-code`'s internal-linkage rule and
+was reported. Two changes, shared by `--dead-code` and `--safe-delete`'s `dead_code_candidate=`: a `static` inside a
+comment (`#`, `//`, an unclosed `/*`) is no longer linkage evidence; a Python def that a test runner reaches is not a
+candidate — a pytest `test*` function or method or xunit hook in a `test_*.py` / `*_test.py` file, and a `test*` or
+setUp-family method of a class whose own bases name a `TestCase`; and a decorated Python def is not a candidate either
+(a decorator may register it; plain wrappers such as `@staticmethod`, `@property` and `@lru_cache` are included, and
+their only "linkage" evidence was a `static` token, which Python never means as linkage). `--dead-code` counts the two
+reasons apart, `runner-root-excluded=N` and `decorated-excluded=N` (floors, each absent at 0, defined in both legends).
+Not covered: a `TestCase` subclass reached only through an intermediate base, and pytest name overrides from a
+config file. Gate: `deadprecisioncheck` arms R1–R4.
+
 ### Fixed — a root nobody chose is not crawled when it is a home or system directory (#350, layer 1)
 
 An MCP server started in a home directory that is not a git repository crawled the whole tree and reached a 67 GB
