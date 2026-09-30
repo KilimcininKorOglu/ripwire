@@ -334,20 +334,26 @@ module", "fix the worst of it"), run this instead — bounded, one finding at a 
    by how many independent families agree, not by payoff — no validated value × cost ranking ships yet — so between
    near-ties take the cheapest: small, tested, few `--callers=SYM`.
 2. **Untested? Write the test first.** `join="deep+untested"` on the row, or `ripwire <dir> --affected=SYM --legend=compact`
-   naming no test file, means the refactor has no safety net. Write one against the UNCHANGED code
+   naming no `<test>` row that carries `hops=` (a `partner="1"` row without `hops=` is co-change, not reach), means
+   the refactor has no safety net. Write one against the UNCHANGED code
    (→ **ripwire-write-tests**), see it pass, commit it alone. A test written after the refactor pins the new
    behavior, not the old.
 3. **Apply the recipe the shape calls for** — the drill-down table's Fix column for a regression kind, the playbook
    row (precondition first) for a measured shape. The one recipe neither table carries:
    a `--lint --lint-select=magic-number` finding (C/C++/ObjC) → a named constant. "Leave it alone" is still on the menu.
 4. **Prove it** — the closed fix loop above, all four steps, with one rule stricter than its step 2 (**anti-gaming**):
-   the fix must not worsen ANY other kind. Commit each fix separately so the default `git HEAD` baseline measures
-   exactly this one (re-pin `--quality-baseline` after each commit if you pinned one); then `regressions=` must be `0`,
-   not just `gating=`. A fix that trades its target for a row of any other kind — a `duplication`, a `params`, a
-   public `api-surface` helper that should have been file-local — is a lateral move: revert it, don't ack it.
+   the fix must not worsen ANY other kind. Measure BEFORE you commit, one fix per commit, so a bare `--quality-delta`
+   (working tree vs `git HEAD`; re-pin after each commit if you pinned `--quality-baseline`) covers exactly this fix — after the commit it reads `regressions="0"` trivially
+   (`head_basis="identity"`); to check a fix already committed, run `ripwire <dir> --quality-delta=HEAD --legend=compact`
+   (that commit vs its parent). Then `regressions=` must be `0`, not just `gating=`, and `acked=` must not rise (a
+   pre-ack hides a row). The one exemption: a `kind="short-horizon-churn"` row with `churn="self"` on a function this
+   session already fixed is the loop's own commits, not a regression — better, take the next row from a different
+   function. A fix that trades its target for a row of any other kind — a `duplication`, a `params`, a public
+   `api-surface` helper that should have been file-local — is a lateral move: revert it, don't ack it.
    `--quality-delta` only lists what got worse, so confirm the target moved by re-running the command that ranked it.
-5. **Stop at 3 fixes per session.** Guardrail 3 bounds each fix to 1–2 rounds; this bounds the session. End by
-   naming the next row, not starting it — a long unreviewed chain of mechanical refactors is where gaming hides.
+5. **Stop at 3 fixes per session** (a default, not a measured optimum). Guardrail 3 bounds each fix to 1–2 rounds;
+   this bounds the session. End by naming the next row, not starting it — a long unreviewed chain of mechanical
+   refactors is where gaming hides.
 
 ## The four guardrails (why this loop converges instead of degrading)
 1. **Deterministic oracle, not self-critique.** The delta is *computed* — it cannot hallucinate or reinforce
