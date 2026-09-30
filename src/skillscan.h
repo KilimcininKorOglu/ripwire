@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <sstream>
 #include <string>
@@ -1453,71 +1454,62 @@ enum class SkillFileKind : std::uint8_t
     OtherCode,
 };
 
+// The interpreter a `#!` first line names, as a base name: `#!/bin/sh` -> sh, `#!/usr/bin/env -S bash -e` -> bash (through
+// `env`, options and VAR=value operands are skipped). Empty when the text has no `#!` line or it names nothing.
+inline std::string_view skillShebangInterpreter( std::string_view text ) noexcept
+{
+    if( !text.starts_with( "#!" ) )
+    {
+        return {};
+    }
+    const std::size_t eol = text.find( '\n' );
+    ASSUME( eol == std::string_view::npos || eol >= 2, "the text starts with \"#!\", so a newline is at index 2 or later" );
+    std::string_view line     = text.substr( 2, eol == std::string_view::npos ? std::string_view::npos : eol - 2 );
+    bool             afterEnv = false;
+    for( std::size_t start = line.find_first_not_of( " \t\r" ); start != std::string_view::npos; start = line.find_first_not_of( " \t\r" ) )
+    {
+        line.remove_prefix( start );
+        const std::size_t      end   = line.find_first_of( " \t\r" );
+        const std::string_view token = line.substr( 0, end );
+        line.remove_prefix( token.size() );
+        const std::string_view name = namesplit::afterLast( token, "/" );
+        if( !afterEnv && name == "env" )
+        {
+            afterEnv = true;
+        }
+        else if( !afterEnv || !( token.starts_with( "-" ) || token.find( '=' ) != std::string_view::npos ) )
+        {
+            return name;
+        }
+    }
+    return {};
+}
+
 inline SkillFileKind skillFileKindOf( std::string_view path, std::string_view text ) noexcept
 {
-    const auto lowerAscii = []( std::string_view s ) noexcept
-    {
-        std::string out( s );
-        for( char& c : out )
-        {
-            c = char( std::tolower( static_cast<unsigned char>( c ) ) );
-        }
-        return out;
-    };
-    const auto isShellName = []( std::string_view n ) noexcept { return n == "sh" || n == "bash" || n == "zsh" || n == "dash" || n == "ksh"; };
-
     // the extension: the base name's text after its last '.', lowercased (a dotfile `.bashrc` has none)
     const std::string_view base = namesplit::afterLast( path, "/" );
     const std::size_t      dot  = base.rfind( '.' );
-    const std::string      ext  = ( dot == std::string_view::npos || dot == 0 ) ? std::string() : lowerAscii( base.substr( dot + 1 ) );
-    if( ext == "md" || ext == "markdown" )
+    std::string            ext( ( dot == std::string_view::npos || dot == 0 ) ? std::string_view() : base.substr( dot + 1 ) );
+    for( char& c : ext )
+    {
+        c = char( std::tolower( static_cast<unsigned char>( c ) ) );
+    }
+    const auto extIs = [ & ]( std::initializer_list<std::string_view> names ) noexcept
+    {
+        return std::find( names.begin(), names.end(), std::string_view( ext ) ) != names.end();
+    };
+    if( extIs( { "md", "markdown" } ) )
     {
         return SkillFileKind::Markdown;   // a markdown file is read as markdown whatever its first line says: .md is byte-identical
     }
-    if( ext == "sh" || ext == "bash" || ext == "zsh" || ext == "ksh" )
+    const std::string_view interpreter = skillShebangInterpreter( text );
+    if( extIs( { "sh", "bash", "zsh", "ksh" } ) || interpreter == "sh" || interpreter == "bash" || interpreter == "zsh" || interpreter == "dash"
+        || interpreter == "ksh" )
     {
         return SkillFileKind::ShellScript;
     }
-
-    // the #! line: the interpreter's base name, or with `env` the first operand that is not an option or VAR=value
-    std::string_view interpreter;
-    if( text.starts_with( "#!" ) )
-    {
-        const std::size_t eol = text.find( '\n' );
-        ASSUME( eol == std::string_view::npos || eol >= 2, "the text starts with \"#!\", so a newline is at index 2 or later" );
-        std::string_view line     = text.substr( 2, eol == std::string_view::npos ? std::string_view::npos : eol - 2 );
-        bool             afterEnv = false;
-        while( !line.empty() )
-        {
-            const std::size_t start = line.find_first_not_of( " \t\r" );
-            if( start == std::string_view::npos )
-            {
-                break;
-            }
-            line.remove_prefix( start );
-            const std::size_t      end   = line.find_first_of( " \t\r" );
-            const std::string_view token = line.substr( 0, end );
-            line.remove_prefix( end == std::string_view::npos ? line.size() : end );
-            const std::string_view name = namesplit::afterLast( token, "/" );
-            if( !afterEnv && name == "env" )
-            {
-                afterEnv = true;
-                continue;
-            }
-            if( afterEnv && ( token.starts_with( "-" ) || token.find( '=' ) != std::string_view::npos ) )
-            {
-                continue;
-            }
-            interpreter = name;
-            break;
-        }
-    }
-    if( isShellName( interpreter ) )
-    {
-        return SkillFileKind::ShellScript;
-    }
-    if( !interpreter.empty() || text.starts_with( "#!" )
-        || ext == "py" || ext == "js" || ext == "mjs" || ext == "cjs" || ext == "ts" || ext == "rb" || ext == "pl" || ext == "ps1" )
+    if( text.starts_with( "#!" ) || extIs( { "py", "js", "mjs", "cjs", "ts", "rb", "pl", "ps1" } ) )
     {
         return SkillFileKind::OtherCode;
     }
@@ -1720,6 +1712,26 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // #353: an EXFILTRATE:net-exfil row graded by more than its match carries why= — why="no-cred-source" on a WARN,
 // why="sensitive-read-upload" on a CRITICAL fed by a sensitive read. The full legend defines it only when a row carries
 // it, so every scan without one stays byte-identical.
+// The --legend=full prose for <skillscan>: its present-only clauses (code_not_flow_scanned=, an f row's why=) ride only when
+// the answer carries the attribute, so a scan without them prints the legend it always printed.
+inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillScanRow>& rows, int codeNotFlowScanned ) noexcept
+{
+    const bool anyWhy = std::any_of( rows.begin(), rows.end(), []( const SkillScanRow& r ) noexcept { return r.finding.why != nullptr; } );
+    rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
+                      "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
+                      "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
+                      "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
+                      "worst finding's severity, the same read as the exit code (0/1/2).{}{} -->", kSkillScanFindingCap,
+                      codeNotFlowScanned > 0 ? " code_not_flow_scanned=N (present only then): N scanned files are code in a language this "
+                                               "scanner has no network-flow model for (.py .js .mjs .cjs .ts .rb .pl .ps1, or a non-shell #!); "
+                                               "they were read line by line like markdown, so an upload of a secret written in that language "
+                                               "is not detected: clean does not cover them. Shell scripts are scanned as code." : "",
+                      anyWhy ? " An f row's why= says why EXFILTRATE:net-exfil graded as it did: why=no-cred-source, a network "
+                               "verb plus a $VAR or base64 but no credential-shaped source on the line, so WARN, not CRITICAL; "
+                               "why=sensitive-read-upload, a sensitive file read (a key, /etc/passwd, .netrc, .env, a credential "
+                               "or cookie store) piped, redirected or passed into an upload, CRITICAL." : "" );
+}
+
 // codeNotFlowScanned: readable files of SkillFileKind::OtherCode (present-only: absent when 0, so every answer without one
 // is byte-identical to before the attribute existed).
 inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, int filesScanned, int filesSkipped = 0, bool fullLegend = false,
@@ -1727,20 +1739,7 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
 {
     if( fullLegend )
     {
-        const bool anyWhy = std::any_of( rows.begin(), rows.end(), []( const SkillScanRow& r ) noexcept { return r.finding.why != nullptr; } );
-        rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
-                          "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
-                          "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
-                          "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
-                          "worst finding's severity, the same read as the exit code (0/1/2).{}{} -->", kSkillScanFindingCap,
-                          codeNotFlowScanned > 0 ? " code_not_flow_scanned=N (present only then): N scanned files are code in a language this "
-                                                   "scanner has no network-flow model for (.py .js .mjs .cjs .ts .rb .pl .ps1, or a non-shell #!); "
-                                                   "they were read line by line like markdown, so an upload of a secret written in that language "
-                                                   "is not detected: clean does not cover them. Shell scripts are scanned as code." : "",
-                          anyWhy ? " An f row's why= says why EXFILTRATE:net-exfil graded as it did: why=no-cred-source, a network "
-                                   "verb plus a $VAR or base64 but no credential-shaped source on the line, so WARN, not CRITICAL; "
-                                   "why=sensitive-read-upload, a sensitive file read (a key, /etc/passwd, .netrc, .env, a credential "
-                                   "or cookie store) piped, redirected or passed into an upload, CRITICAL." : "" );
+        printSkillScanFullLegend( out, rows, codeNotFlowScanned );
     }
     int maxSev = 0;
     for( const SkillScanRow& r : rows )
