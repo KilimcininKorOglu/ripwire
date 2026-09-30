@@ -629,6 +629,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // dead-code: src/verbs_quality.h (the <dead-code> root emit)
     { "evidence", "evidence=: the rule every row met, internal linkage and no caller in the index; verify before deleting", false, "dead-code", MapHeaderRead::No, {}, "dead-code" },
     { "register-macro-excluded", "register-macro-excluded=N: symbols skipped as self-registering test/bench macros (TEST, BENCHMARK...); a floor", false, "dead-code", MapHeaderRead::No, {}, "dead-code" },
+    // 0.6.6 D4: present-only — absent at 0, so a tree with no Python runner root is byte-identical
+    { "runner-root-excluded", "runner-root-excluded=N: Python defs skipped as test-runner (pytest/unittest) or decorator roots; a floor", true, "dead-code", MapHeaderRead::No, {}, "dead-code" },
     // edit-check: src/editcheck.h (the <edit-check> root emit)
     { "defs", "defs=N: overloads at this site (same file, scope, name) folded into one contract; params compared by MAX", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     { "shown_unflagged", "shown_unflagged=N: unflagged callers on this page; flagged ones always print, total= counts unflagged only", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },

@@ -988,7 +988,9 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                     source.resize( bytesRead );
                 }
                 std::fclose( file );
-                deadCodeCandidate = sourceHasStaticToken( source, only.sigStartByte, only.sigEndByte );
+                // 0.6.6 D4: the dead-code verb's own shape — a Python test-runner or decorator root is never a candidate
+                deadCodeCandidate = sourceHasStaticToken( source, only.sigStartByte, only.sigEndByte )
+                                    && !quality::pythonRunnerRoot( ing.files[ only.fileId ], only, source );
             }
         }
     }

@@ -63,6 +63,18 @@ from a partial index without disclosure. Deferred: layer 2 (the non-git crawl bu
 pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
 llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
 
+### Fixed — `--dead-code` no longer reports a pytest test method as an internal-linkage orphan
+
+A Python def's signature span runs on through the comment lines that open its body, so a test method whose first
+comment contained the word `static` ("the static type is unchanged") met `--dead-code`'s internal-linkage rule and
+was reported. Two changes, shared by `--dead-code` and `--safe-delete`'s `dead_code_candidate=`: a `static` inside a
+comment (`#`, `//`, an unclosed `/*`) is no longer linkage evidence, and a Python def that a test runner or a
+decorator reaches is not a candidate — any decorated def, a pytest `test*` function or method or xunit hook in a
+`test_*.py` / `*_test.py` file, and a `test*` or setUp-family method of a class whose own bases name a `TestCase`.
+`--dead-code` counts the second group as `runner-root-excluded=N` (a floor, absent at 0, defined in both legends).
+Not covered: a `TestCase` subclass reached only through an intermediate base, and pytest name overrides from a
+config file. Gate: `deadprecisioncheck` arms R1–R4.
+
 ### Fixed — a root nobody chose is not crawled when it is a home or system directory (#350, layer 1)
 
 An MCP server started in a home directory that is not a git repository crawled the whole tree and reached a 67 GB

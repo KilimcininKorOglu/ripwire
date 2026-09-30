@@ -8667,6 +8667,28 @@ inline bool isHeaderPath( std::string_view path ) noexcept
 // re-deriving it. The --dead-code block below keeps only what is its own — the per-file sourceFor() cache
 // that amortizes this scan across every candidate in the tree; a single-symbol check has nothing to
 // amortize, so it calls this directly on its own one-off read.
+//
+// 0.6.6 D4: a `static` inside a COMMENT is not a linkage specifier. A Python def's signature span runs on through the
+// comment lines that open its body, so `# the static type is unchanged` there made a pytest method a "high-confidence"
+// internal-linkage row. offsetInComment answers, for a byte of the span, whether a line comment (`//` or `#`) opened
+// earlier on its line or a `/*` opened earlier in the span is still unclosed — language-agnostic, because a sig span
+// opens at the def itself, so a `#` or `//` before the token on its line is a comment in every grammar that has one
+// (a `#` inside a string literal reads as a comment too: the conservative side, one row fewer, never one more).
+inline bool offsetInComment( std::string_view source, std::size_t spanBegin, std::size_t position ) noexcept
+{
+    EXPECTS( spanBegin <= position && position <= source.size() );
+    const std::size_t newline   = position == 0 ? std::string_view::npos : source.rfind( '\n', position - 1 );
+    const std::size_t lineBegin = std::max( spanBegin, newline == std::string_view::npos ? std::size_t( 0 ) : newline + 1 );
+    const std::string_view head = source.substr( lineBegin, position - lineBegin );
+    if( head.find( '#' ) != std::string_view::npos || head.find( "//" ) != std::string_view::npos )
+    {
+        return true;
+    }
+    const std::string_view span  = source.substr( spanBegin, position - spanBegin );
+    const std::size_t      open  = span.rfind( "/*" );
+    return open != std::string_view::npos && span.find( "*/", open + 2 ) == std::string_view::npos;
+}
+
 inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartByte, std::size_t sigEndByte ) noexcept
 {
     const std::size_t begin = std::min( sigStartByte, source.size() );
@@ -8682,11 +8704,108 @@ inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartB
         const auto isIdentifier = []( char c ) noexcept { return std::isalnum( static_cast<unsigned char>( c ) ) || c == '_'; };
         const bool leftBoundary  = position == begin || !isIdentifier( source[ position - 1 ] );
         const bool rightBoundary = position + token.size() == end || !isIdentifier( source[ position + token.size() ] );
-        if( leftBoundary && rightBoundary )
+        if( leftBoundary && rightBoundary && !offsetInComment( source, begin, position ) )
         {
             return true;
         }
         position += token.size();
+    }
+    return false;
+}
+
+// 0.6.6 D4: a Python def that a TEST RUNNER or a DECORATOR reaches with no call the index can see — so zero in-edges on
+// it is not evidence of anything, and --dead-code / --safe-delete's dead_code_candidate= must not name it. The roots:
+//   * any decorated def (`@pytest.fixture`, `@app.route`, `@property`, `@click.command` … — a decorator registers or
+//     wraps the def, and the registry's call is invisible to the graph);
+//   * pytest discovery in a test_*.py / *_test.py file: a `test*` function or method, and the xunit-style hooks
+//     (setup_module, setup_method, teardown_class …);
+//   * unittest: a `test*` method or a setUp/tearDown/setUpClass/tearDownClass/asyncSetUp/asyncTearDown hook of a class
+//     whose OWN base list names a *TestCase (unittest.TestCase, IsolatedAsyncioTestCase, a framework's TestCase).
+// Not covered, all on the "still reported" side: a TestCase subclass reached only through an intermediate base class,
+// and pytest's python_files/python_functions overrides from a config file. Python only; every other language is false.
+inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::string_view source ) noexcept
+{
+    if( s.lang != Lang::Python || s.sigStartByte > source.size() )
+    {
+        return false;
+    }
+    // decorated: the nearest non-blank, non-comment line above the def (or the def's own first byte) opens with '@'
+    std::size_t cursor = s.sigStartByte;
+    while( cursor < source.size() && ( source[ cursor ] == ' ' || source[ cursor ] == '\t' ) )
+    {
+        ++cursor;
+    }
+    if( cursor < source.size() && source[ cursor ] == '@' )
+    {
+        return true;
+    }
+    std::size_t lineStart = source.rfind( '\n', s.sigStartByte == 0 ? 0 : s.sigStartByte - 1 );
+    while( lineStart != std::string_view::npos && lineStart > 0 )
+    {
+        const std::size_t prevStart = source.rfind( '\n', lineStart - 1 );
+        const std::size_t textStart = prevStart == std::string_view::npos ? 0 : prevStart + 1;
+        std::string_view  line      = source.substr( textStart, lineStart - textStart );
+        while( !line.empty() && ( line.front() == ' ' || line.front() == '\t' ) )
+        {
+            line.remove_prefix( 1 );
+        }
+        if( line.empty() || line.front() == '#' || line.front() == '\r' )
+        {
+            if( prevStart == std::string_view::npos )
+            {
+                break;
+            }
+            lineStart = prevStart;
+            continue;
+        }
+        if( line.front() == '@' )
+        {
+            return true;
+        }
+        break;
+    }
+
+    const std::size_t      slash    = path.rfind( '/' );
+    const std::string_view baseName = slash == std::string_view::npos ? path : path.substr( slash + 1 );
+    const bool pytestFile = ( baseName.starts_with( "test_" ) || baseName.ends_with( "_test.py" ) ) && baseName.ends_with( ".py" );
+    const std::string_view name = s.name;
+    if( pytestFile )
+    {
+        constexpr std::array<std::string_view, 8> kXunitHooks = { "setup_module", "teardown_module", "setup_function", "teardown_function",
+                                                                  "setup_class",  "teardown_class",  "setup_method",   "teardown_method" };
+        if( name.starts_with( "test" ) || std::find( kXunitHooks.begin(), kXunitHooks.end(), name ) != kXunitHooks.end() )
+        {
+            return true;
+        }
+    }
+    if( s.scope.empty() )
+    {
+        return false;
+    }
+    constexpr std::array<std::string_view, 6> kUnittestHooks = { "setUp", "tearDown", "setUpClass", "tearDownClass", "asyncSetUp", "asyncTearDown" };
+    if( !name.starts_with( "test" ) && std::find( kUnittestHooks.begin(), kUnittestHooks.end(), name ) == kUnittestHooks.end() )
+    {
+        return false;
+    }
+    // the enclosing class's own header, `class <Scope>(…):`, the nearest one above the def
+    const std::size_t      scopeSep  = s.scope.rfind( "::" );
+    const std::string_view className = scopeSep == std::string::npos ? std::string_view( s.scope ) : std::string_view( s.scope ).substr( scopeSep + 2 );
+    const std::string      header    = "class " + std::string( className );
+    std::size_t            at        = source.rfind( header, s.sigStartByte );
+    while( at != std::string_view::npos )
+    {
+        const std::size_t after = at + header.size();
+        if( after < source.size() && ( source[ after ] == '(' || source[ after ] == ':' || source[ after ] == ' ' ) )
+        {
+            const std::size_t colon = source.find( ':', after );
+            const std::string_view bases = source.substr( after, colon == std::string_view::npos ? 0 : colon - after );
+            return bases.find( "TestCase" ) != std::string_view::npos;
+        }
+        if( at == 0 )
+        {
+            break;
+        }
+        at = source.rfind( header, at - 1 );
     }
     return false;
 }
