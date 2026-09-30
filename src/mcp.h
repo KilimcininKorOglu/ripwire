@@ -32,6 +32,8 @@
 #include <cstdlib>         // ::realpath — the workspace-pin canonicalization (mcpCanonRoot)
 #include <climits>         // PATH_MAX
 #include "infra/os.h"      // rw::os::getcwd — R2a: the launch-cwd assumed root (resolved once at startup)
+#include "rootguard.h"      // #350 layer 1: noProjectRootReason — the launch cwd a server may not assume
+#include "memguard.h"       // #350 layer 3: the per-call hard-limit refusal and the _memory_stop sentence
 
 namespace rw
 {
@@ -346,6 +348,7 @@ struct McpDispatchPolicy
     bool        editsAllowed = true;   // false = refuse the 3 edit verbs (remote default)
     std::string defaultRoot;        // "" = no stdio startup root given; else the canonicalized `ripwire <root> --mcp` root
     std::string assumedRoot;        // "" = no guessable root; else the canonicalized launch cwd (stdio, no startup root) — see above
+    std::string noRootReason;       // #350: why assumedRoot is empty when the launch cwd was a home/system directory, else ""
     bool        pinnedRootHasGit = true;   // see above — only read when pinnedRoot is non-empty
     bool        pinnedRootIsGitDir = false;   // see above — only read when pinnedRootHasGit is false
     // r2-LO: the legend session this transport can hold, or null. The stdio loop owns one (one client, one line at a
@@ -370,21 +373,62 @@ inline std::string mcpCanonRoot( const std::string& root )
 // assumedRoot for the contract. Guarded here, once: "/" and $HOME itself are nobody's workspace (a
 // crawl of either is a mistake, not a smart default), and a getcwd failure degrades to "" — the
 // pre-R2a missing-path refusal, never a guess.
-inline std::string mcpResolveAssumedRoot()
+//
+// #350 layer 1 widened the guard from "/" and $HOME to every directory rootguard.h refuses (system trees, drive roots,
+// the parent of the home directories), and keeps the REASON: `noRootWhy` receives the one-line "no project root"
+// sentence, which the missing-path refusal then carries so a path-less request says why no root was assumed.
+inline std::string mcpResolveAssumedRoot( std::string* noRootWhy = nullptr )
 {
-    char cwdBuf[ PATH_MAX ];
-    if( os::getcwd( cwdBuf, sizeof( cwdBuf ) ) == nullptr )
+    std::string launchCwd = rootGuardCwd();   // not const: returned, and a const local cannot be moved out
+    if( launchCwd.empty() )
     {
         return {};
     }
-    std::string       launchCwd = mcpCanonRoot( cwdBuf );   // not const: returned, and a const local cannot be moved out
-    const char* const homeEnv   = std::getenv( "HOME" );
-    const std::string homeCanon = homeEnv ? mcpCanonRoot( homeEnv ) : std::string{};
-    if( os::path_is_root( launchCwd ) || ( !homeCanon.empty() && launchCwd == homeCanon ) )   // "/", or a drive's "C:/"
+    std::string why = noProjectRootReason( launchCwd );
+    if( !why.empty() )
     {
+        if( noRootWhy != nullptr )
+        {
+            *noRootWhy = std::move( why );
+        }
         return {};
     }
     return launchCwd;
+}
+
+// #350 layer 1, the explicit half: "" when `path` may be answered, else the "no project root" sentence. `path` is a
+// directory, a file, or a registered `paths` workspace key (every member root is judged). A root equal to the server's
+// own startup root (defaultRoot, or the --listen pinnedRoot) is honoured: that one a human chose. Defined after the
+// workspace registry (mcpindex.h, via mcpverbs.h) so a key can be expanded to its roots.
+inline std::string mcpExplicitNoRootReason( const McpDispatchPolicy& policy, const std::string& path )
+{
+    if( path.empty() )
+    {
+        return {};
+    }
+    const std::string pinnedCanon = policy.pinnedRoot.empty() ? std::string() : mcpCanonRoot( policy.pinnedRoot );
+    const auto judge = [ & ]( const std::string& root ) -> std::string
+    {
+        const std::string canon = rootGuardCanon( root.c_str() );
+        if( canon == policy.defaultRoot || ( !pinnedCanon.empty() && canon == pinnedCanon ) )
+        {
+            return {};
+        }
+        return noProjectRootReason( canon );
+    };
+    const auto wsIt = mcpWorkspaceRegistry().find( path );
+    if( wsIt == mcpWorkspaceRegistry().end() )
+    {
+        return judge( path );
+    }
+    for( const WorkspaceRoot& r : wsIt->second )
+    {
+        if( std::string why = judge( r.real ); !why.empty() )
+        {
+            return why;
+        }
+    }
+    return {};
 }
 
 // R2a: rebind an OMITTED `path` to the assumed root (the softest tier — a pre-composed refusal, both
@@ -401,15 +445,18 @@ inline std::string mcpAssumeRootIfOmitted( const McpDispatchPolicy& policy, std:
     return "[assumed root: " + policy.assumedRoot + " — no path was given, so this answer is about the server's launch directory; pass path= to ask about another tree]";
 }
 
-// R2a: the `_assumed_root` envelope-sibling fragment (the mcpReingestField shape): "" when nothing was
-// assumed, else the JSON field ready to splice — keeps the ternary out of the response assembly.
-inline std::string mcpAssumedRootField( const std::string& note )
+// An envelope-sibling note fragment (the mcpReingestField shape): "" when there is nothing to say, else the JSON field
+// `key` ready to splice — keeps the ternary out of the response assembly. Two keys use it: R2a's `_assumed_root` (the
+// request omitted path= and the launch directory answered) and #350's `_memory_stop` (the index answering was cut by
+// the memory guard — every answer from it carries the sentence, because the payloads other than the map have no header
+// of their own to disclose the cut in, and the index is reused until the tree changes).
+inline std::string mcpEnvelopeNoteField( std::string_view key, const std::string& note )
 {
     if( note.empty() )
     {
         return {};
     }
-    return ",\"_assumed_root\":\"" + mcpdetail::jsonEscape( note ) + "\"";
+    return ",\"" + std::string( key ) + "\":\"" + mcpdetail::jsonEscape( note ) + "\"";
 }
 
 // is `candidatePath` the workspace root itself, or STRICTLY inside it — a path-COMPONENT prefix, so a
@@ -1145,9 +1192,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // tool-call result), costs the same one line, and can never corrupt a verb's own payload format
             // (JSON, XML, or plain text) — so it's the version of "append a trailing marker" that is actually
             // uniform across every verb, per the requirement.
+            std::string memoryStopNote;   // #350: set by indexStamp when the index answering this request is memory-guard partial
             const auto indexStamp = [ & ]( const std::string& root ) -> std::string
             {
                 const McpIndex& mix = getIndex( root );
+                memoryStopNote = mix.ing.memoryStop.isSet() ? memguard::softStopLine( mix.ing ) : std::string();
                 char buf[ 96 ];
                 rw::formatTo( buf, sizeof( buf ), "[index: files={} symbols={} hash={:08x}]",
                                 mix.ing.files.size(), mix.ing.symbols.size(),
@@ -1159,12 +1208,21 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // tree STATE answered, `_reingest` what the server had to DO to get there. Contract on
             // McpIndex::incrementalPasses, gate test/mcpincrementalcheck.sh. Read BEFORE the verb runs.
             const std::uint64_t passesAtEntry = mcpIndexSlot().incrementalPasses;
+            // #350: ingests INSIDE a tool (a quality snapshot, a baseline, an edit check) and the background prefetch
+            // record their memory-guard stops here; a count that grew during this request means the answer may rest on
+            // a partial ingest even when the resident index is whole, and the envelope says so (textResult).
+            const std::uint32_t stopsAtEntry = memguard::stopCounts().recorded.load( std::memory_order_relaxed );
             const auto textResult = [ & ]( const std::string& text )
             {
                 // stamp FIRST, then the pass count: on a verb that never touched the index, building the
                 // stamp is what forces the rebuild, and one `+` chain would not sequence those two reads.
                 const std::string stamp = indexStamp( path );
-                // R2a: `_assumed_root` — a third envelope sibling (mcpAssumedRootField), emitted ONLY when
+                if( memoryStopNote.empty() && memguard::stopCounts().recorded.load( std::memory_order_relaxed ) > stopsAtEntry )
+                {
+                    memoryStopNote = "the memory guard stopped an ingest this answer depends on (inside this tool, or the "
+                                     "background snapshot), so it may be incomplete — " + std::string( memguard::kOverride );
+                }
+                // R2a: `_assumed_root` — a third envelope sibling (mcpEnvelopeNoteField), emitted ONLY when
                 // the request omitted `path` and the launch-cwd default answered.
                 // Card A3: `_fresh` — a fourth sibling, on EVERY response, because it is the one of these
                 // an agent needs without having asked for it: does this answer still describe the tree I am
@@ -1196,14 +1254,28 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\""
                      + mcpdetail::jsonEscape( *body ) + "\"}],\"_index\":\"" + mcpdetail::jsonEscape( stamp )
                      + "\"" + mcpReingestField( passesAtEntry ) + mcpFreshFields( passesAtEntry )
-                     + mcpAssumedRootField( assumedRootNote ) + "}}";
+                     + mcpEnvelopeNoteField( "_assumed_root", assumedRootNote ) + mcpEnvelopeNoteField( "_memory_stop", memoryStopNote ) + "}}";
+            };
+            // #350: a refusal composed after an ingest the memory guard cut may name a false cause ("no git HEAD" for a
+            // HEAD tree that was only partly read) — so every error built after a stop carries the guard's sentence too
+            const auto memoryStopSuffix = [ & ]( std::string_view msg ) -> std::string
+            {
+                if( memguard::stopCounts().recorded.load( std::memory_order_relaxed ) <= stopsAtEntry || msg.find( "memory guard" ) != std::string_view::npos )
+                {
+                    return {};
+                }
+                return "; the memory guard stopped an ingest this request ran, which may be the real cause — " + std::string( memguard::kOverride );
             };
             const auto errResult = [ & ]( int code, const char* msg )
-            { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + msg + "\"}}"; };
+            {
+                const std::string suffix = memoryStopSuffix( msg );
+                return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + msg
+                     + mcpdetail::jsonEscape( suffix ) + "\"}}";
+            };
             // dynamic-message variant (edit verbs build refusal messages that embed symbol names / candidate
             // file:line lists) — JSON-escape so a path with a quote or a control byte can't corrupt the response.
             const auto errResultMsg = [ & ]( int code, const std::string& msg )
-            { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + mcpdetail::jsonEscape( msg ) + "\"}}"; };
+            { return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string( code ) + ",\"message\":\"" + mcpdetail::jsonEscape( msg + memoryStopSuffix( msg ) ) + "\"}}"; };
             // §B6 M8: the shared not-found renderers, bound to THIS request's index. Seven verbs on both
             // arms answered a bare "symbol not found" — no echo of what the caller typed, no near-miss —
             // while the CLI twin has carried both since A3-F16a and the `flags` verb below carries both
@@ -1333,6 +1405,21 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // disclosed via textResult's `_assumed_root` sibling — precedence + guards live in
             // mcpAssumeRootIfOmitted / mcpResolveAssumedRoot, the full contract on McpDispatchPolicy.
             assumedRootNote = mcpAssumeRootIfOmitted( policy, path, pathsUsageError );
+
+            // ── #350 layer 1, the explicit half: a request's path= (or any root of a `paths` workspace) that IS $HOME, a
+            // filesystem root or a system tree is refused with the implicit case's own sentence — an agent fills path=
+            // from its session's cwd, so over MCP that path is no more a human's choice than the launch directory is
+            // (the #350 incident was exactly `grep path=$HOME`). The one exception is the root the server was STARTED
+            // on (`ripwire <root> --mcp`, or the --listen workspace): a human typed that. The server stays up.
+            if( !pathsUsageError )
+            {
+                if( const std::string noRoot = mcpExplicitNoRootReason( policy, path ); !noRoot.empty() )
+                {
+                    DISCLOSE( Diagnostics::answerRefused, "mcp: a request path that is a home/system directory is refused with an MCP error naming it" );
+                    resp            = errResultMsg( -32602, noRoot );
+                    pathsUsageError = true;   // the skip-flag: no dispatch, no getIndex(), no crawl
+                }
+            }
 
             // ── §B6 M3: does `path` name a readable DIRECTORY? ONE check, every verb, before dispatch ───────
             //
@@ -1510,7 +1597,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             {
                 if( path.empty() )
                 {
-                    return mcprefuse::missingPathRefusal();
+                    // #350: from a home/system launch directory the missing path has a cause worth naming
+                    return policy.noRootReason.empty() ? mcprefuse::missingPathRefusal()
+                                                       : mcprefuse::missingPathRefusal() + "; " + policy.noRootReason;
                 }
                 return mcprefuse::missingFieldRefusal( name, argPresent );
             };
@@ -1526,6 +1615,23 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // try: an allocation excluded from the guard by the guard's own opening line. The
                 // `if( !pathsUsageError )` that used to gate the try from outside is now the first arm of the
                 // dispatch chain below, which is what makes room for this.
+                // #350 layer 3: over the memory guard's hard limit, no tool call starts work — the call is refused by
+                // name and the server stays up (a later call, after memory is released, is served). One footprint
+                // reading per tool call; nothing is measured on any other method.
+                // Over the line, the resident index is released first (it is usually most of the footprint) and the
+                // footprint read once more: under the line again, the call proceeds and rebuilds for its own root; still
+                // over, it is refused and the sentence says the server itself must be restarted.
+                if( const bool seamOver = memguard::requestSeamTrips(); !pathsUsageError && ( seamOver || memguard::overHardLimit() ) )
+                {
+                    releaseMcpIndexMemory();
+                    if( seamOver || memguard::overHardLimit() )
+                    {
+                        DISCLOSE( Diagnostics::answerRefused, "mcp: a tool call over the memory guard's hard limit, even with the index released, is refused with an MCP error naming the limit" );
+                        resp            = errResultMsg( -32000, memguard::hardStopLine( "session (this server's footprint)" )
+                                                                + "; the resident index was released and the server is still over it — restart the MCP server" );
+                        pathsUsageError = true;   // the skip-flag: no dispatch, no getIndex()
+                    }
+                }
                 if( !pathsUsageError && isMcpEditVerb( name ) )
                 {
                     if( std::string missingEditArg = missingArgMsg(); !missingEditArg.empty() )
@@ -2321,7 +2427,7 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
     // the guards ("/" and $HOME are nobody's workspace; getcwd failure degrades to the refusal).
     if( defaultRoot.empty() )
     {
-        policy.assumedRoot = mcpResolveAssumedRoot();
+        policy.assumedRoot = mcpResolveAssumedRoot( &policy.noRootReason );
     }
 
     // R4: readByteSafeLineBounded, NOT std::getline( std::cin, ... ) — libc++'s getline narrows

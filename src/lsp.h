@@ -939,10 +939,22 @@ inline int runLsp( const std::string& cliRoot )
             {
                 std::string cand = lspUriToPath( rw::mcpdetail::findString( params, "rootUri" ) );
                 if( cand.empty() ) cand = cliRoot;
-                if( cand.empty() ) cand = rw::mcpResolveAssumedRoot();
+                std::string noRootWhy;   // #350: why the launch cwd was not assumed, when it was a home/system directory
+                if( cand.empty() ) cand = rw::mcpResolveAssumedRoot( &noRootWhy );
                 const std::string canon = cand.empty() ? std::string() : rw::mcpCanonRoot( cand );
+                // #350 layer 1: an editor's rootUri is the window it opened, not a project a human named for ripwire —
+                // $HOME, a filesystem root or a system tree is refused like the MCP path=, unless it IS the root typed on
+                // the command line (`ripwire <root> --lsp`)
+                if( noRootWhy.empty() && !canon.empty() && ( cliRoot.empty() || canon != rw::mcpCanonRoot( cliRoot ) ) )
+                {
+                    noRootWhy = rw::noProjectRootReason( rw::rootGuardCanon( canon.c_str() ) );
+                }
                 rw::os::stat_t    st;
-                if( canon.empty() || rw::os::stat( canon.c_str(), &st ) != 0 || !S_ISDIR( st.st_mode ) )
+                if( !noRootWhy.empty() )
+                {
+                    respond( -32002, "ripwire --lsp: " + noRootWhy );
+                }
+                else if( canon.empty() || rw::os::stat( canon.c_str(), &st ) != 0 || !S_ISDIR( st.st_mode ) )
                 {
                     respond( -32002, "ripwire --lsp: no readable workspace root (initialize.rootUri, the command-line root, or the launch cwd)" );
                 }

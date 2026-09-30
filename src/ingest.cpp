@@ -308,10 +308,13 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
         maxFileBytes = kDefaultMaxFileBytes;
     }
 
+    // #350 layer 3: one memory watch for this ingest, shared by the crawl and the parse pool (memguard.h)
+    memguard::Watch memWatch;
+
     // 1) deterministic crawl -> sorted file list (this list IS result.files / the fileId space)
     {
         PROFILE_SCOPE_DESCRIBE( "ingest: crawl (collectSources)" );
-        auto [ crawledPaths, oversizeSkipped, taxonomySkips ] = collectSources( rootDir, excludeSubstr, maxFileBytes, excludeLabel, respectGitignore );
+        auto [ crawledPaths, oversizeSkipped, taxonomySkips ] = collectSources( rootDir, excludeSubstr, maxFileBytes, excludeLabel, respectGitignore, &memWatch );
         result.files           = std::move( crawledPaths );
         // #228: record the root once, for rootRelPath (model.h). A directory crawl joins it onto every path; a
         // single-file root IS its one path, so the root-relative view anchors at that file's directory instead.
@@ -325,6 +328,18 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
         result.crawlRootPrefixes = selectorRootPrefixes( result.crawlRoot );   // #281: a selector typed from the cwd (graph.h selectorRootTail)
         result.skippedOversize = std::move( oversizeSkipped );
         result.crawlSkips      = std::move( taxonomySkips );   // §L1: excluded / unsupported-ext / unindexed exts
+        if( memWatch.tripped() )
+        {
+            result.memoryStop.limitBytes = memWatch.hardBytes();
+            if( memWatch.trippedByPressure() )
+            {
+                DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::CrawlUnderPressure, "ingest: the memory guard stopped the crawl — files= is what it saw, a floor of the tree" );
+            }
+            else
+            {
+                DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::CrawlOverLimit, "ingest: the memory guard stopped the crawl — files= is what it saw, a floor of the tree" );
+            }
+        }
     }
 
     // Win 1 (PERF.md P1) — lazy grammar compilation: load the cache FIRST, then compile only the
@@ -366,7 +381,10 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     // 2) the parallel parse pool — per-thread accumulators, cache-hit reuse, hostile-input guards,
     //    the pending-parsed-tree overlap with the async query compile, the install/gate-open moment,
     //    the deterministic merge, and the dirty-gated saveCache (ingest_parsepool.h).
-    RawFacts raw = runParsePool( result, rootDir, cacheFile, captureValueUses, cache, cacheStats, scan, prewarm );
+    // A crawl the guard stopped is still parsed, under the parse's own (higher) line: the crawl line — an eighth of the
+    // limit — is what leaves the parse that room (memguard.h).
+    memWatch.rearmForParse();
+    RawFacts raw = runParsePool( result, rootDir, cacheFile, captureValueUses, cache, cacheStats, scan, prewarm, &memWatch );
 
     // Cache facts are only needed by the parse pool. Release their map and bucket storage before the model tail
     // creates symbols/references, so a warm run does not carry the cache and the assembled model at once.
@@ -394,7 +412,10 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     // ── doc post-pass (P1-B): every collected document file (notebook/html/csv/…) becomes a docText
     //    override + one whole-file Section node — parallel extract, deterministic ascending-fileId merge
     //    (ingest_docpass.h, with the markitdown-bridge byte cache).
-    runDocPostPass( result, raw.defs, !cacheFile.empty(), captureValueUses );
+    if( !result.memoryStop.parseCut )   // #350: a stopped parse runs no second parse
+    {
+        runDocPostPass( result, raw.defs, !cacheFile.empty(), captureValueUses );
+    }
 
     PROFILE_SCOPE_DESCRIBE( "ingest: build model (dedup + symbols/refs)" );
 
@@ -474,6 +495,10 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
         suppressShadowedReferences( result );
     }
 
+    if( result.memoryStop.isSet() )
+    {
+        memguard::recordStop();   // #350: the caller must answer for this partial ingest (memguard.h, the backstop)
+    }
     return result;
 }
 }   // namespace rw

@@ -493,6 +493,12 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "roots",             "roots=N: N workspace roots", false, {}, MapHeaderRead::Only },
     { "changed",           "changed=K: K indexed git-changed files seed the PageRank teleport (0: uniform, incl. no git)", false, {}, MapHeaderRead::Only },
     { "skipped_oversize",  "skipped_oversize=K: K files over a size ceiling, not indexed", false, {}, MapHeaderRead::Only },
+    // #350 layer 3: the memory guard's stop (serialize.h buildMemoryStopAttr). Present only on a run the guard cut, so each
+    // is a present-only header term; the readings avoid the flag's spelling because a legend is an XML comment.
+    { "memory_stop",       "memory_stop=crawl|parse: the memory guard stopped that phase; files= and every count are floors of the tree", false, {}, MapHeaderRead::Only },
+    { "memory_parsed",     "memory_parsed=K: the parse claimed the first K slots of its work order (uncached files, then cached, then grammarless, each largest first; path order when no grammar-bearing file needed a fresh parse, every one an ingest-cache hit); a slot may reuse cached facts or fail to read; later files carry no symbols", false, {}, MapHeaderRead::Only },
+    { "memory_limit",      "memory_limit=NM: the guard's limit, spelled as the max-memory value that raises it", false, {}, MapHeaderRead::Only },
+    { "memory_pressure",   "memory_pressure=1: OS memory pressure stopped it, not the limit", false, {}, MapHeaderRead::Only },
     { "unindexed",         "unindexed=ext:N: N text files of that extension no grammar reads (6 extensions at most)", false, {}, MapHeaderRead::Only },
     { "unindexed_exts",    "unindexed_exts=E: E such extensions in all, the list cut", false, {}, MapHeaderRead::Only },
     { "escaped_root",      "escaped_root=K: K files refused: a symlink led out of the root", false, {}, MapHeaderRead::Only },

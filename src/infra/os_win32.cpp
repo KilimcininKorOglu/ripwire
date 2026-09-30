@@ -21,6 +21,7 @@
 #include <aclapi.h>
 #include <sddl.h>
 #include <shellapi.h>   // CommandLineToArgvW
+#include <psapi.h>      // GetProcessMemoryInfo — a kernel32 export (K32GetProcessMemoryInfo) at PSAPI_VERSION 2, no psapi.lib
 #undef near             // <windows.h> still defines these 16-bit keywords, and the program uses `near` as a name
 #undef far
 
@@ -2800,5 +2801,43 @@ int inet_pton( int family, const char* text, void* address )
 
 // Winsock never raises SIGPIPE: nothing to switch off.
 int setsockopt_nosigpipe( int, const void*, socklen_t ) { return 0; }
+
+// ── memory (#350's guard): each a single call, 0 when it fails ─────────────────────────────────────────────
+// PrivateUsage is the commit charge this process owns, the Windows analogue of phys_footprint: it counts what the
+// process allocated whether or not it is resident, which is the quantity that runs a machine out of memory.
+std::uint64_t mem_footprint()
+{
+    PROCESS_MEMORY_COUNTERS_EX counters {};
+    counters.cb = sizeof( counters );
+    if( !::GetProcessMemoryInfo( ::GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>( &counters ), sizeof( counters ) ) )
+    {
+        return 0;
+    }
+    return std::uint64_t( counters.PrivateUsage );
+}
+
+std::uint64_t mem_physical()
+{
+    MEMORYSTATUSEX status {};
+    status.dwLength = sizeof( status );
+    return ::GlobalMemoryStatusEx( &status ) ? std::uint64_t( status.ullTotalPhys ) : 0;
+}
+
+// The low-memory notification object is created once and kept for the process's life by a function-local static's
+// RAII owner; QueryMemoryResourceNotification only reads its state, so a poll is one call and no thread waits on it.
+int mem_pressure()
+{
+    static const UniqueHandle lowMemory( ::CreateMemoryResourceNotification( LowMemoryResourceNotification ) );
+    if( !lowMemory.valid() )
+    {
+        return 0;
+    }
+    BOOL isLow = FALSE;
+    if( !::QueryMemoryResourceNotification( lowMemory.get(), &isLow ) )
+    {
+        return 0;
+    }
+    return isLow ? 3 : 1;
+}
 
 }   // namespace rw::os

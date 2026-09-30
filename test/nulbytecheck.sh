@@ -79,6 +79,11 @@ BINARY_EXTENSIONS = {
                # rendered from the committed present/ripwire-showcase.pdf. Added 2026-08-10, the round
                # this gate's header anticipated: it failed once naming the file, and this is the row
                # plus the reason. Regenerate it from the deck PDF; never draw or edit it by hand.
+    ".jpg",    # docs/assets/field-report-multi-agent.jpg — the README's click-to-view field report, a
+               # screenshot of a model-written report (text only, checked by eye for names, paths and
+               # addresses before commit; a text scanner cannot read pixels). Added 2026-09-28: it failed
+               # here once naming the file, and this is the row plus the reason. JPEG, not PNG, because a
+               # screenshot of this size is 567 KB as JPEG against 1.4 MB as PNG.
     ".srcpack",  # bench/recalleval/snapshot.srcpack — the ranking lane's FROZEN source corpus, 1422
                # files packed and gzip-compressed (~32 MB of text, 6.7 MB stored). Added 2026-08-19 by
                # the ranking-lane freeze; it failed here once naming the file, and this is the row plus

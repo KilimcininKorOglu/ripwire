@@ -11,6 +11,7 @@
 // mcp.h/main.cpp concern-split). Includes mcpindex.h; included by mcp.h (runMcp dispatches here).
 
 #include "mcpindex.h"
+#include "memguard.h"        // #350: quality_baseline refuses an ingest the memory guard cut
 #include "nextverb.h"       // P3 (L7): next= on the MCP impact root (CLI parity)
 #include "gitmine.h"       // B3: gitRecentCommitFileSets + applyCoChangeBoost — the `for` verb's co-change prior (same boost as CLI --for)
 #include "ownersview.h"    // §P6.4: countUniformOwnership/ownershipRowsToPrint — shared with main.cpp's --owners CLI path
@@ -3964,6 +3965,16 @@ inline std::pair<std::string, std::string> qualityBaselineJson( const std::strin
     {
         std::lock_guard<std::mutex> ingestLk( rw::quality::headSnapshotIngestMutex() );
         ing = ingest( root.c_str(), {}, {} );
+    }
+    // #350: a baseline pinned from an ingest the memory guard cut would make every later --quality-delta report the
+    // missing symbols as regressions — refused like the CLI's --quality-baseline (exit 5), nothing written.
+    if( ing.memoryStop.isSet() )
+    {
+        memguard::answerStops();   // this refusal answers for the stop
+        DISCLOSE( Diagnostics::answerRefused, "mcp quality_baseline: an ingest the memory guard cut is refused with an MCP error; no sidecar is written" );
+        return { std::string(), "the memory guard stopped the " + std::string( memguard::phaseName( ing.memoryStop.phase ) )
+                                + " of this tree, so no baseline was written (a partial floor would read as regressions later) — "
+                                + std::string( memguard::kOverride ) };
     }
     const Graph  g   = buildGraph( ing, nullptr );
 

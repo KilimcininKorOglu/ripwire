@@ -320,6 +320,7 @@ probeFor()
         --limit=)        printf '%s' '--limit=3' ;;
         --offset=)       printf '%s' '--offset=1' ;;
         --max-file-size=) printf '%s' '--max-file-size=1M' ;;
+        --max-memory=)   printf '%s' '--max-memory=8G' ;;
         --pack-budget-bytes=) printf '%s' '--pack-budget-bytes=1000' ;;
         --cache=)        printf '%s' "--cache=$TMP/probe.cache" ;;
         --index-out=)    printf '%s' "--index-out=$TMP/probe.idx" ;;

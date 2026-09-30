@@ -342,6 +342,7 @@ struct ParsePoolShared
     std::size_t                      nfiles;
     bool                             needsCacheHash;
     bool                             captureValueUses;
+    memguard::Watch*                 memWatch;              // #350: null = unguarded; else checked before each claim
 };
 
 // one worker's whole life: grab files off the shared cursor, reuse cache hits, parse+capture misses,
@@ -418,6 +419,7 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
     };
 
     std::string bytes;
+    bool        claimedAny = false;   // #350: the file this worker claimed last has finished by the loop's top
     for( ;; )   // lock-free work-stealing: grab the next file via the atomic counter (balances the big-file tail)
     {
         if( sh.prewarm.ready.load( std::memory_order_acquire ) && !pendingParsed.empty() )
@@ -425,11 +427,34 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
             flushPendingParsed();
         }
 
+        // #350: the memory guard. The previous file is done (every path through the body below ends its iteration),
+        // so report it; then look at the stop flag BEFORE claiming, which is what keeps the finished set an unbroken
+        // prefix of the work order — a file once claimed is always completed.
+        if( sh.memWatch != nullptr )
+        {
+            if( claimedAny )
+            {
+                sh.memWatch->parseFileDone();
+            }
+            if( sh.memWatch->isStopped() )
+            {
+                break;
+            }
+        }
+
         const std::size_t orderIndex = sh.nextFile.fetch_add( 1, std::memory_order_relaxed );
         if( orderIndex >= sh.nfiles )
         {
             break;
         }
+        // #350, the parse seam (parse:N): the claim of work-order slot N and later is abandoned unparsed and trips the
+        // stop, so exactly the first N files of the parse order are parsed (applyMemoryParseCut counts them the same way)
+        if( sh.memWatch != nullptr && orderIndex >= sh.memWatch->seamParseCutoff() )
+        {
+            sh.memWatch->tripParseSeam();
+            break;
+        }
+        claimedAny = true;
         const std::size_t fileId = sh.parseOrder.empty() ? orderIndex : sh.parseOrder[ orderIndex ];
         // per-file try/catch: a throw (bad_alloc, filesystem_error, …) escaping a
         // std::thread entry would std::terminate the whole process. Degrade per file,
@@ -697,9 +722,37 @@ inline RawFacts mergeThreadFacts( std::vector<RawFacts>& tFacts )
 //    model-build tail, so collection order is irrelevant. Also owns the two flags that ride the
 //    pool (the Win-2 dirty flag and the A1 reparsed counter), the install/gate-open moment, and
 //    the dirty-gated saveCache — everything between the prewarm launch and the doc post-pass.
+// #350: after the pool join, a memory-guard stop while files remained. Workers look at the stop flag BEFORE claiming a
+// file, so every claimed file completed and the parsed set is the first K entries of the parse ORDER (cache misses,
+// then cache hits, then grammarless files, each largest first, then fileId — or plain fileId order when the query
+// prewarm was already ready, i.e. no grammar-bearing file needed a fresh parse (every one an ingest-cache hit, so the
+// prewarm had nothing to compile: ingest_prewarm.h builds toCompile from cache-miss files only); deterministic
+// for a given tree and cache), which is what memory_parsed=K counts (claimed slots: one may reuse cached facts or fail
+// to read); a partial answer therefore repeats for a given K. Under the parse seam an abandoned claim at slot N or later
+// is not a parse, hence the min with the seam's cutoff. A stop after the last claim cut nothing. Returns whether cut.
+inline bool applyMemoryParseCut( IngestResult& result, memguard::Watch* memWatch, std::size_t claimedSlots, std::size_t nfiles )
+{
+    const std::size_t parsed = std::min( { claimedSlots, nfiles, memWatch != nullptr ? memWatch->seamParseCutoff() : nfiles } );
+    if( memWatch == nullptr || !memWatch->tripped() || parsed >= nfiles )
+    {
+        return false;
+    }
+    result.memoryStop.limitBytes  = memWatch->hardBytes();
+    result.memoryStop.parsedFiles = static_cast<std::uint32_t>( parsed );
+    if( memWatch->trippedByPressure() )
+    {
+        DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseUnderPressure, "ingest: the memory guard stopped the parse pool — the files after the parsed prefix of the parse order carry no facts" );
+    }
+    else
+    {
+        DISCLOSE( result.memoryStop, MemoryStop::DisclosureWhy::ParseOverLimit, "ingest: the memory guard stopped the parse pool — the files after the parsed prefix of the parse order carry no facts" );
+    }
+    return true;
+}
+
 inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::string_view cacheFile, bool captureValueUses,
                               HashMap<std::string, FileFacts>& cache, const CacheLoadStats& cacheStats,
-                              IngestFileScan& scan, QueryPrewarm& prewarm )
+                              IngestFileScan& scan, QueryPrewarm& prewarm, memguard::Watch* memWatch = nullptr )
 {
     RawFacts raw;
     const bool needsCacheHash = !cacheFile.empty();
@@ -833,7 +886,8 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
         std::atomic<std::size_t>          nextFile{ 0 };   // lock-free work queue: threads fetch_add for the next parseOrder slot
 
         ParsePoolShared shared{ result.files, cache, scan, prewarm, queryReadyGate, cacheCandidateFacts, cacheHitFacts,
-                                tFacts, parseOrder, nextFile, dirty, reparsedCount, warmGrowths, nfiles, needsCacheHash, captureValueUses };
+                                tFacts, parseOrder, nextFile, dirty, reparsedCount, warmGrowths, nfiles, needsCacheHash, captureValueUses,
+                                memWatch };
 
         for( unsigned t = 0; t < nthreads; ++t )
         {
@@ -851,6 +905,8 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
         }
 
         raw = mergeThreadFacts( tFacts );
+
+        const bool parseCut = applyMemoryParseCut( result, memWatch, nextFile.load( std::memory_order_relaxed ), nfiles );   // #350
 
         // The aggregate owns the moved fact payloads now. Release the per-thread vector storage before the
         // cache write and before returning to the model-build tail; keeping these empty-but-capacious vectors
@@ -880,7 +936,11 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
 
         // Win 2: rewrite cache only when at least one file changed (dirty flag set by workers above).
         // Skips the ~11ms / 7 MB serialization+write on a no-change warm run.
-        if( !cacheFile.empty() && dirty.load() )
+        if( parseCut && !cacheFile.empty() && dirty.load() )
+        {
+            DISCLOSE( Diagnostics::answerUnchanged, "ingest: a memory-guard partial parse is not written to the cache — the next run re-parses instead of serving the gap as empty files" );
+        }
+        if( !parseCut && !cacheFile.empty() && dirty.load() )
         {
             forgetNestRefusalsForCache( scan );   // a refused file is written UNKNOWN, so a warm run re-refuses it (ingest_prewarm.h)
             saveCache( std::string( cacheFile ), rootDir, result.files, scan.hash, scan.statSize, scan.statMtime, scan.statCtime, scan.health, raw.defs, raw.refs, raw.incs, raw.binds, raw.ffis, raw.routeDefs, raw.routeUses, raw.constOpens, captureValueUses );

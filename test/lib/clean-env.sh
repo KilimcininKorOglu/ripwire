@@ -23,4 +23,6 @@
 # lives here and not there. test/gitenvhermeticcheck.sh pins the list and sweeps the tree for a gate that
 # builds a repo without sourcing this file.
 unset CODEX_HOME AGENTS_HOME HERMES_HOME CLAUDE_CONFIG_DIR RIPWIRE_DATA_HOME
+# (3) THE MEMORY GUARD (#350): an exported limit or test trip changes what every gate's ripwire answers.
+unset RIPWIRE_MAX_MEMORY RIPWIRE_TEST_MEMGUARD
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX

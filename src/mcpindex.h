@@ -801,6 +801,21 @@ inline void invalidateMcpIndex()
     mcpIndexSlot().valid = false;
 }
 
+// #350: over the memory guard's hard limit, drop the resident index's bulk (the ingest, the graph, the ranks and the
+// per-file arrays) and mark it stale, so the footprint can fall back under the line; the next getIndex() rebuilds.
+inline void releaseMcpIndexMemory()
+{
+    McpIndex& ix = mcpIndexSlot();
+    ix.valid = false;
+    ix.ing   = IngestResult{};
+    ix.g     = Graph{};
+    std::vector<float>().swap( ix.rank );
+    std::vector<long long>().swap( ix.fileMtime );
+    std::vector<long long>().swap( ix.fileSize );
+    std::vector<long long>().swap( ix.fileCtime );
+    std::vector<std::uint64_t>().swap( ix.fileByteHash );
+}
+
 // RIPWIRE_MCP_TIMINGS observable (MEASURE-FIRST, mirrors ingest.cpp's RIPWIRE_CACHE_STATS precedent): a
 // monotone count of FULL getIndex() rebuilds (the staleness/edit path — NOT warm reuses). The spec_trace
 // harness reads it before/after each request to attribute per-request wall time to "rebuilt" vs "warm".
