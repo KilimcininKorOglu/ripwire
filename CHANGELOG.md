@@ -30,11 +30,32 @@ a declaration binding several names
 (`const a = () => …, b = () => …`, a Lua table of function fields) gives each name its own span, so its calls
 attribute to it. On a 583-file TypeScript agent repo: `--biggest-first`, `--ensemble` and `--quality-panel` measure
 2,083 functions (was 63), `--clones` sees 32,714 lines of function body (was 819); summed
-`bodyless_defs` over every function/method name 2,043 → 23 (the 23 are interface signatures and data keys); edges
-3,894 → 3,856 and tier-3 `declined` 55 → 133, because a bodied closure no longer drops out of the candidate set as a
-"declaration" and hands a same-named method elsewhere a guessed edge — the call is now bound locally or declined. A
-real declaration (`declare function`, an overload signature, an interface member) stays bodyless. `kParserVer` 128.
-Gate: `test/fnliteralcheck.sh`.
+`bodyless_defs` over every function/method name 2,043 → 23 (the 23 are interface signatures and data keys). A real
+declaration (`declare function`, an overload signature, an interface member) stays bodyless. `kParserVer` 128.
+
+A bodied closure also competes for calls, so the resolver now knows where one can be named: a function bound inside
+another function's body (named or anonymous — a factory's `const start = () => …`, a `const run` in an `it()` callback,
+a nested `def`, in every language) records that function's span, and a call outside it cannot reach the closure by
+name. There the closure YIELDS to every candidate the call can name instead of competing: `tui.start()` on an imported
+class binds to the class's method even when another imported module holds a factory-local `start` (on main this
+declined for a nested `function start(){}`), and a helper's `run` parameter no longer binds to a `const run` inside
+another test's callback. It keeps its edge through a factory the caller imports when nothing reachable competes
+(`createTracker().stop()`). On the same repo: edges 3,894 → 3,851, `ambiguous` 24 → 0, tier-3 `declined` 55 → 129.
+Of the edge rows main had and this build does not, 41 were guesses — 40 `process.stdout`/`stderr.write()` calls bound
+to a same-named stub method and one `render()` of a dynamically imported library bound to an unrelated class method; both
+now decline — and 7 were splits that now bind one target: 5 over same-named closures, to the one in the caller's own
+function, and 2 over a declaration and its implementation, to the implementation. 8 calls into closures that had no
+body before are new edges. Still guessed, and stated: a call whose ONLY same-named definition is such a closure can
+bind to it (a parameter call included), and a closure returned by a factory and called through the result in the SAME
+file declines when an unrelated same-named definition exists elsewhere — a TS/JS call records no member bit, so the
+resolver cannot tell `provider.get()` from a bare `get()`. The index format changes with it: `kCacheVersion` 26, so a
+cache written by an earlier build re-parses once. Gate: `test/fnliteralcheck.sh` (section 6 for the edges).
+
+`--naming-consistency` no longer proposes camelCase for a JSX component: a PascalCase function in a `.tsx`/`.jsx`
+file neither votes nor is flagged (JSX reads a lowercase tag as an intrinsic element), and the header counts it as
+`component_exempt=N`. It reads the extension, not the body: a component in a plain `.js`/`.ts` file still votes. On the
+same repo the bodied arrows bring 7 React components into the vote; all 7 are exempt (`component_exempt="7"`, 0
+flagged). Gate: `test/namingconsistencycheck.sh` arm 12.
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
