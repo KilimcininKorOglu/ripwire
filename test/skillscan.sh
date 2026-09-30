@@ -163,6 +163,76 @@ command -v xmllint >/dev/null 2>&1 \
     && { xmllint --noout "$TMP/dir_out.txt" 2>/dev/null && ok "--scan-skills <skillscan> artifact is xmllint-clean" || no "--scan-skills <skillscan> artifact is malformed XML"; } \
     || ok "xml well-formed (xmllint absent — skipped)"
 
+# ── check 18 (#353): EXFILTRATE:net-exfil — graded by credential source, a destination required, var-free uploads caught ──
+# netexfil_severity.md holds five fenced blocks; line numbers are read off the fixture, so an edit to it cannot
+# silently shift what is asserted.
+#   1  the issue's three "Isolating the trigger" lines plus lines whose only $VAR is a host, port or id: a WARN row
+#      with why="no-cred-source" each, except the literal-port loopback line, which stays clean.
+#   2  a credential-shaped source on the line (credential-named var, Authorization header with a var, env dump,
+#      credential-named file operand): a CRITICAL net-exfil row, no why=.
+#   3  a SENSITIVE read piped, redirected or passed into an upload — curl, wget, nc HOST PORT, ncat, socat TCP:,
+#      a /dev/tcp redirect — mostly var-free (the issue's
+#      `cat /etc/passwd | curl … @-` scanned clean): CRITICAL — net-exfil with why="sensitive-read-upload", or the
+#      older ssh-aws-creds rule, which claims a ~/.ssh or ~/.aws path first.
+#   4  no row at all: a network verb with NO destination (the issue's `command -v … curl` tool-discovery loop,
+#      `command -v nc`, `nc -h`), and
+#      near misses — a non-sensitive file uploaded, a sensitive read not fed to the upload, a public key.
+#   5  a doc placeholder `http://<host>:<port>`: reported, never CRITICAL.
+# THE INVARIANT these rows pin (adversarial review, 2026-09-29): R1/R2 may only silence or downgrade a line carrying NO
+# credential token and NO sensitive read. Block 1 adds runner-prefixed and single-label-host WARN rows (command/eval/
+# stdbuf/run0 …, `curl host:port`, `env VAR=x curl`); block 2 the same shapes bearing a credential stay CRITICAL; block 3
+# the widened readers (tar/gzip/dd/openssl/xxd/od/head/tail/cp) and a sensitive read into a single-label host stay
+# CRITICAL; block 4's `command -v curl`/`command -V wget` stay clean. Every one of these was red on a8cdfd0d.
+NX="$ROOT/test/skillfix/netexfil_severity.md"
+"$BIN" "--scan-skill=$NX" --legend=full >"$TMP/nx_out.txt" 2>/dev/null
+nx_rc=$?
+nx_n1=0; nx_n2=0; nx_n3=0; nx_n4=0; nx_n5=0; nx_clean=0; nx_bad=0
+nx_prefix="<f p=\"$NX"
+while IFS=: read -r nx_block nx_line nx_text; do
+    nx_row="$( grep -oE "<f p=\"[^\"]*netexfil_severity\.md:$nx_line\" [^>]*>" "$TMP/nx_out.txt" )"
+    nx_tail="${nx_row#"$nx_prefix:$nx_line\" "}"
+    case "$nx_block" in
+        1)
+            if [ "$nx_text" = "curl http://127.0.0.1:8080/v1/models" ]; then
+                if [ -z "$nx_row" ]; then nx_clean=$(( nx_clean + 1 )); else nx_bad=1; no "line $nx_line should be clean: $nx_row"; fi
+            elif [ "$nx_tail" = 'rule="EXFILTRATE:net-exfil" sev="warn" why="no-cred-source"/>' ]; then nx_n1=$(( nx_n1 + 1 ))
+            else nx_bad=1; no "block 1 line $nx_line ($nx_text) should be a net-exfil WARN why=\"no-cred-source\": ${nx_row:-<no row>}"; fi ;;
+        2)
+            if [ "$nx_tail" = 'rule="EXFILTRATE:net-exfil" sev="critical"/>' ]; then nx_n2=$(( nx_n2 + 1 ))
+            else nx_bad=1; no "block 2 line $nx_line ($nx_text) should stay a net-exfil CRITICAL with no why=: ${nx_row:-<no row>}"; fi ;;
+        3)
+            if [ "$nx_tail" = 'rule="EXFILTRATE:net-exfil" sev="critical" why="sensitive-read-upload"/>' ] \
+               || [ "$nx_tail" = 'rule="EXFILTRATE:ssh-aws-creds" sev="critical"/>' ]; then nx_n3=$(( nx_n3 + 1 ))
+            else nx_bad=1; no "block 3 line $nx_line ($nx_text) should be CRITICAL (sensitive read into an upload): ${nx_row:-<no row>}"; fi ;;
+        4)
+            if [ -z "$nx_row" ]; then nx_n4=$(( nx_n4 + 1 ))
+            else nx_bad=1; no "block 4 line $nx_line ($nx_text) should carry no finding: $nx_row"; fi ;;
+        5)
+            if [ -n "$nx_row" ] && [ "${nx_row#*sev=\"critical\"}" = "$nx_row" ]; then nx_n5=$(( nx_n5 + 1 ))
+            else nx_bad=1; no "block 5 line $nx_line ($nx_text) should be reported and not CRITICAL: ${nx_row:-<no row>}"; fi ;;
+    esac
+done < <( awk '/^```bash/ { b++; inb = 1; next } /^```/ { inb = 0; next } inb { print b ":" NR ":" $0 }' "$NX" )
+nx_why3="$( grep -c . < <( grep -o 'why="sensitive-read-upload"' "$TMP/nx_out.txt" ) )"
+if [ "$nx_bad" = 0 ] && [ "$nx_n1" = 18 ] && [ "$nx_clean" = 1 ] && [ "$nx_n2" = 17 ] && [ "$nx_n3" = 40 ] && [ "$nx_n4" = 11 ] && [ "$nx_n5" = 1 ]; then
+    ok "(#353) net-exfil: 18 WARN no-cred-source + 1 clean, 17 credential CRITICAL, 40 sensitive-upload CRITICAL ($nx_why3 by why=\"sensitive-read-upload\"), 11 no-destination/near-miss clean, 1 placeholder non-critical"
+else
+    no "(#353) net-exfil split: b1 warn=$nx_n1/18 clean=$nx_clean/1, b2 critical=$nx_n2/17, b3 critical=$nx_n3/40, b4 clean=$nx_n4/11, b5 non-critical=$nx_n5/1"
+fi
+if [ "$nx_why3" -ge 36 ]; then ok "(#353) at least 36 of block 3's rows are caught by the new sensitive-read-upload grade ($nx_why3), not only by ssh-aws-creds"
+else no "(#353) only $nx_why3 block-3 rows carry why=\"sensitive-read-upload\" (want >= 36)"; fi
+if [ "$nx_rc" = 2 ]; then ok "(#353) a file with a credential-bearing line still exits 2"; else no "(#353) netexfil_severity.md exit $nx_rc, want 2"; fi
+# The WARN-only half alone: the issue's own reproduction must not block `wrap` (exit 1, not 2).
+printf '```bash\nfor p in 8080; do curl -sS http://127.0.0.1:$p/v1/models; done\n```\n' >"$TMP/nx_loop.md"
+rc="$( scan_exit "--scan-skill=$TMP/nx_loop.md" )"
+if [ "$rc" = 1 ]; then ok "(#353) the issue's loopback reproduction exits 1 (WARN), not 2"; else no "(#353) the issue's loopback reproduction exits $rc, want 1"; fi
+if ! command -v xmllint >/dev/null 2>&1; then
+    ok "xml well-formed (xmllint absent — skipped)"
+elif xmllint --noout "$TMP/nx_out.txt" 2>/dev/null; then
+    ok "(#353) netexfil_severity <skillscan> is xmllint-clean"
+else
+    no "(#353) netexfil_severity <skillscan> is malformed XML"
+fi
+
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then
     echo "ALL PASS"
