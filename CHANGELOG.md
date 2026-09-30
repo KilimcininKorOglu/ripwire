@@ -494,6 +494,11 @@ because a stub reopens it with the superclass repeated. A fifth floor, of `queri
 this round, is pinned beside them: a receiver-less call written with no parentheses and no arguments
 parses as `(identifier)`, not `(call)`, and is not a call site at all.
 
+The scoping is defensive in one place: an inherit reference with no superclass directive at its class
+open keeps the final-segment name rule. That fallback is now counted, and the graph gauge carries
+`ruby_bases_unscoped=N` when it was taken (absent at zero, defined in the full and compact legends).
+No well-formed input is known to reach it; `test/rubyinheritcheck.sh` drives it through a test seam.
+
 `--deps` is byte-identical on activerecord, and the default map is byte-identical on four Ruby-free
 corpora, with this repository's `--report` totals unchanged. `kParserVer` 129 in this release (carried as 97 → 99 on the PR, in two steps: 98 added the
 inheritance records; 99 dropped a computed superclass's stray receiver ref); the record layout is unchanged, and

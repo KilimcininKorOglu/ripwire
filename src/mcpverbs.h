@@ -2376,7 +2376,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
         // H5: the same legend the CLI --lego prints, and (issue #66) the same adjacent clause defining the
         // graph_unindexed= the root below carries — CLI and MCP are one wording by construction. H1: the unproven_defs=
         // clause rides as its own comment beside the closed literal, exactly as on the CLI.
-        rw::emitTo( mem, "<ctx>{}{}{}", kLegoLegend, graphUnindexedLegendComment( ix.g.unindexedFiles > 0 ).c_str(),
+        rw::emitTo( mem, "<ctx>{}{}{}", kLegoLegend, graphUnindexedLegendComment( rw::graphGaugeClauses( ix.g ) ).c_str(),
                     unprovenDefsVerbComment( UnprovenDefsVerb::Lego, unprovenDefs > 0, "<!-- ripwire lego: " ).c_str() );
         packLego( mem, ing, ix.g.implementors, flat, 1, redact, &impure, focus, /*withPaths=*/true,
                   ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),    // R-R: root-relative <iface p=>
@@ -2683,7 +2683,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   kTestedLensBlindSpotLegend,                       // F-02: rides with the partition, byte-identical to the CLI twin
                   unprovenDefsVerbLegend( UnprovenDefsVerb::Impact, unprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=, as on the CLI
                   declinedCallsLegendWithGate( declinedCalls > 0, g.gateDeclinedCalls > 0 ),         // exactly when the root carries declined_calls=, as on the CLI
-                  graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
+                  graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
     // "is it safe to change X?" reads as the WHOLE blast radius when it can be 3% of it. Same attributes,
     // same meaning as the CLI --impact — the two surfaces must not diverge on an honesty marker.
@@ -3005,7 +3005,7 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
                        "{}{}-->{}", kUsesLegendOpen,
                   capLegendClause( computePageDisclosure( upageRows, sites.size(), upw.end,
                                                           page.limit, page.offset, usDiscloseCap ).active ),
-                  graphCountDisclosure( ix.g.unindexedFiles > 0 ).c_str(),
+                  graphCountDisclosure( rw::graphGaugeClauses( ix.g ) ).c_str(),
                   rootRelPathsLegend( ing.realPaths.empty() )  );   // R-E fix: the CLI --uses legend carries the
                                                                    // identical clause — floormarkcheck (4) pins
                                                                    // the two disclosure tails byte-identical.
@@ -3119,7 +3119,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // H5: the same brief floor legend + marker the CLI --path prints (verbs_navigate.h) — one wording, two transports.
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}-->{}", unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ).c_str(),
-                  graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
+                  graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
     rw::emitTo( mem, "<path from=\"{}\" to=\"{}\" from_p=\"{}\" to_p=\"{}\" from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                   ex( from ).c_str(), ex( to ).c_str(), loc( srcUsed ).c_str(), loc( dstUsed ).c_str(),
                   srcDefs.size(), dstDefs.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: as the CLI root carries it
@@ -3383,7 +3383,7 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     // may never take. Held in a NAMED string rather than charged from one call and emitted from another: the
     // bytes counted here and the bytes written below are now the same object, so the two cannot drift again
     // (same reason connectExtraBytes itself is built once). Gate: estchargecheck #17.
-    const std::string  connectUnindexedLegend = graphUnindexedLegendComment( g.unindexedFiles > 0 );
+    const std::string  connectUnindexedLegend = graphUnindexedLegendComment( rw::graphGaugeClauses( g ) );
     // H1: the residue attribute and its clause are two more things this document carries ahead of its payload, charged
     // the way the unindexed clause above is — named once, counted from the same objects that are written. Both are empty
     // at zero, so an answer that dropped nothing prices and emits byte-identically.

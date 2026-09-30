@@ -111,6 +111,10 @@ struct Graph
     // files call THIS symbol, which nothing in the pipeline can support. Asset extensions never enter it
     // (ingest.h's withheld list), so a .png is not disclosed as a language ripwire failed to read.
     std::size_t                unindexedFiles = 0;
+    // #325: Ruby superclass references the scoped base lookup could not place (no superclass directive at their
+    // class open), so their base stayed on the final-segment byName rule — resolve.h RubyBaseScopeDisclosure.
+    // A whole-corpus gauge beside unindexedFiles, emitted as ruby_bases_unscoped= and ABSENT AT ZERO.
+    std::size_t                rubyBasesUnscoped = 0;
     std::size_t                externalCalls = 0;   // Phase 5 (docs/EVALS.md "Phase 5"): call sites the external-name
                                                      // VETO refused — a bare name or receiver provably bound OUTSIDE the
                                                      // indexed tree (a builtin/stdlib name with no in-repo evidence, an
@@ -3048,6 +3052,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // (c)). Read here — a base the tree never opens (`< ActiveRecord::Base`) adds no CHA edge, so its class's walk
     // cannot reach an unrelated in-tree `Base` — and by the implementor pass below. Empty on a Ruby-free corpus.
     const RubyBaseScope rubyBases = buildRubyBaseScope( ing );
+    g.rubyBasesUnscoped = rubyBases.disclosure.unscoped;   // ruby_bases_unscoped= (absent at zero)
     {
         const auto isClassLikeK = []( SymKind k ) noexcept
         { return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface; };
@@ -8143,11 +8148,16 @@ inline ZoomHierarchy multiLevelCommunities( const Graph& g, std::uint32_t maxTop
 // unresolvedOut totals (the map header's ambiguous=/unresolved=, same fold); counts_floor="1" stays LAST.
 inline std::string graphCountFloorAttrXml( const Graph& g )
 {
-    return graphGaugeAttrXml( g.ambOut, g.unresolvedOut, g.unindexedFiles ) + kGraphCountFloorAttrXml;
+    return graphGaugeAttrXml( g.ambOut, g.unresolvedOut, g.unindexedFiles, g.rubyBasesUnscoped ) + kGraphCountFloorAttrXml;
 }
 inline std::string graphCountFloorAttrJson( const Graph& g )
 {
-    return graphGaugeAttrJson( g.ambOut, g.unresolvedOut, g.unindexedFiles ) + kGraphCountFloorAttrJson;
+    return graphGaugeAttrJson( g.ambOut, g.unresolvedOut, g.unindexedFiles, g.rubyBasesUnscoped ) + kGraphCountFloorAttrJson;
+}
+// The legend clauses a root's absent-at-zero gauges call for, read off the same two fields the attribute is.
+inline GaugeClauses graphGaugeClauses( const Graph& g ) noexcept
+{
+    return GaugeClauses( g.unindexedFiles > 0, g.rubyBasesUnscoped > 0 );
 }
 
 // THE DECLINED-LIST INTERNER — tier 3's record of what a declined call could equally have meant, stored once per DISTINCT

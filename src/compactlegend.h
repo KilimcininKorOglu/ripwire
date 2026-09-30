@@ -205,6 +205,7 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
 
     "<!-- shallow=",                    // 0.6.6 shallow-history honesty: gitstamp.h kShallowLegendComment, the full clause
                                        // beside a history verb's shallow="1" root; the completeness table reads it back.
+    "<!-- ruby_bases_unscoped=",       // #325: the same own-comment clause when only the Ruby gauge is on (graphUnindexedLegendComment)
     "<!-- notes_degraded=",             // L3 follow-up (CodeRabbit 4053600616): the map/--expand root's standalone
                                        // clause (serialize.h kNotesDegradedComment) — the graph_unindexed= precedent
                                        // exactly. Every OTHER emitter splices the same reading as plain text inside
@@ -309,6 +310,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // which is also what kept it invisible: the compact dialect stripped the full clause and had nothing to
     // put back, on every verb, for the whole of v0.6.0.
     { "graph_unindexed",   "graph_unindexed=N: N files no grammar could read (the map header's unindexed=); their calls raise neither gauge" },
+    // #325: absent at zero like graph_unindexed=, so it needs its own present-only row for the same reason.
+    { "ruby_bases_unscoped", "ruby_bases_unscoped=N: N Ruby superclass refs with no directive at their class open; base matched by final name segment" },
     // THE COUNT QUALIFIERS the graph_unindexed row above did not bring along (2026-09-12). Each is absent at zero and
     // its full clause rides only a document that carries it (graphlegend.h declinedCallsLegend( bool ),
     // unprovenDefsLegend( bool ), the callees-only clause of callHierarchyLegendOpen( bool )), so the prose strip removed

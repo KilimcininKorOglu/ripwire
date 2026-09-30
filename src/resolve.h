@@ -1788,10 +1788,25 @@ inline std::pair<std::uint32_t, std::uint32_t> resolveRubyConstant( const RubyCo
 // to rails/generators' Base that way). Ruby has no forward declarations; every open is the class. A written
 // base the tree never opens resolves to nothing, and the reference then mints no implementor row and no CHA edge.
 // Any reference the join cannot place (no open around it, no superclass directive at that open) stays on the
-// byName rule — the pre-scoping answer, disclosed through DISCLOSE, never a guess in either
-// direction. Built only when the corpus holds a Ruby inherit reference; empty otherwise.
+// byName rule — the pre-scoping answer, never a guess in either direction — and is COUNTED by `disclosure` below
+// (RubyBaseScopeDisclosure), which buildGraph copies to Graph::rubyBasesUnscoped: the gauge attribute
+// ruby_bases_unscoped=N, absent at zero (graphlegend.h graphGaugeAttrXml/Json, test/rubyinheritcheck.sh).
+// Built only when the corpus holds a Ruby inherit reference; empty otherwise.
+//
+// The sink models Diagnostics::DisclosureSink: one reason, one count, read by the emitter as the gauge attribute.
+struct RubyBaseScopeDisclosure
+{
+    enum class DisclosureWhy : std::uint8_t
+    {
+        NoSuperclassDirective   // an inherit reference with no superclass directive at its class open
+    };
+    std::uint32_t unscoped = 0;   // ruby_bases_unscoped=
+    void disclose( DisclosureWhy ) noexcept { ++unscoped; }
+};
+
 struct RubyBaseScope
 {
+    RubyBaseScopeDisclosure                       disclosure;    // the references left on the byName rule
     RubyConstantIndex                             ix;
     HashMap<std::string, char>                    opened;        // the constant of EVERY open, wrapper or not
     HashMap<std::uint32_t, std::string>           baseFqn;       // reference index → resolved base constant (EMPTY
@@ -1898,6 +1913,21 @@ inline std::string rubyResolveBaseConstant( const HashMap<std::string, char>& op
     return isOpened( top ) ? top : std::string{};
 }
 
+// THE TEST SEAM (#325). RIPWIRE_TEST_RUBY_BASE_UNSCOPED=1 makes the join below find NO superclass directive for any
+// Ruby inherit reference, so every one takes the byName fallback and is counted. No well-formed input is known to
+// reach that fallback (a class open with a superclass records its directive at that open), so this is the one way
+// test/rubyinheritcheck.sh can pin the count and the ruby_bases_unscoped= attribute it feeds. Any other value, or
+// unset, is no seam; test/lib/clean-env.sh clears it. Read once.
+inline bool rubyBaseUnscopedTestSeam() noexcept
+{
+    static const bool on = []() noexcept
+    {
+        const char* const env = std::getenv( "RIPWIRE_TEST_RUBY_BASE_UNSCOPED" );
+        return env != nullptr && std::string_view( env ) == "1";
+    }();
+    return on;
+}
+
 // Joins each Ruby inherit reference to the superclass directive at its derived class's open and records the
 // resolved base constant in `sc.baseFqn`. A reference the join cannot place is left out — the byName rule stands.
 inline void rubyScopeBaseReferences( RubyBaseScope& sc, const IngestResult& ing )
@@ -1912,10 +1942,11 @@ inline void rubyScopeBaseReferences( RubyBaseScope& sc, const IngestResult& ing 
         }
         const std::vector<RubyOpenRec>& opens   = sc.ix.opensByFile[ r.fileId ];
         const std::uint32_t             derived = rubyInnermostOpen( opens, r.startByte );
-        const auto                      site    = ( derived == kNoFile ) ? sites.end() : sites.find( ( std::uint64_t( r.fileId ) << 32 ) | opens[ derived ].startByte );
+        const auto                      site    = ( derived == kNoFile || rubyBaseUnscopedTestSeam() ) ? sites.end() : sites.find( ( std::uint64_t( r.fileId ) << 32 ) | opens[ derived ].startByte );
         if( site == sites.end() )
         {
-            DISCLOSE( "Ruby inherit reference with no superclass directive at its class open: base left on the byName rule" );
+            DISCLOSE( sc.disclosure, RubyBaseScopeDisclosure::DisclosureWhy::NoSuperclassDirective,
+                      "Ruby inherit reference with no superclass directive at its class open: base left on the byName rule" );
             continue;
         }
         sc.baseFqn.emplace( std::uint32_t( i ), rubyResolveBaseConstant( sc.opened, opens, derived, *site->second ) );

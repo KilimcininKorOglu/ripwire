@@ -704,7 +704,7 @@ struct PrLegendClauses
     bool rootRelativeRuns = false;   // A3 / review of #219: the run clause's root-relative SENTENCE — one declared root, or the command stays absolute
 };
 
-inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindexed, const PrLegendClauses& clauses )
+inline std::string prLegendText( const std::string& baseEscaped, rw::GaugeClauses hasUnindexed, const PrLegendClauses& clauses )
 {
     return std::string(
                  "<!-- ripwire pr-context: no-LLM review-evidence bundle per changed file — defined symbols, their callers, blast radius (transitive dependents), affected tests, co-change partners not in the diff, and owners. "
@@ -1034,7 +1034,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // sentence is conditional too, so every form is built with the one predicate that also decides the run=
     // spelling — carried in the clause struct rather than as a second bare bool.
     const bool        prRootRelRuns  = rw::runsAreRootRelative( ing, root );
-    const std::string legendText     = prLegendText( escBase, g.unindexedFiles > 0, PrLegendClauses{ .rootRelativeRuns = prRootRelRuns } );
+    const std::string legendText     = prLegendText( escBase, rw::graphGaugeClauses( g ), PrLegendClauses{ .rootRelativeRuns = prRootRelRuns } );
     const std::string anchorNoteText = prAnchorNoteText( anchorAttr );
     // The clause-bearing form is built ONCE, and only if it is the form that gets written — the difference
     // between the two is exactly what testmap.h's runHintClauseIfRows returns for this run (prLegendText
@@ -1046,7 +1046,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     const auto        writeHead      = [ & ]( std::size_t testFiles, bool unmeasured )
     {
         const std::string legend = ( testFiles > 0 || unmeasured )
-                                       ? prLegendText( escBase, g.unindexedFiles > 0,
+                                       ? prLegendText( escBase, rw::graphGaugeClauses( g ),
                                                        PrLegendClauses{ .runHint = testFiles > 0, .estUnmeasured = unmeasured, .rootRelativeRuns = prRootRelRuns } )
                                        : legendText;
         std::fwrite( legend.data(), 1, legend.size(), out );
@@ -1364,7 +1364,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     const auto candidateDoc = [ & ]( const PrTrimRender& cand, const std::string& windowAttrs ) -> std::string
     {
         const std::string legend = ( cand.testFiles > 0 || !cand.rendered )
-                                       ? prLegendText( escBase, g.unindexedFiles > 0,
+                                       ? prLegendText( escBase, rw::graphGaugeClauses( g ),
                                                        PrLegendClauses{ .runHint = cand.testFiles > 0, .estUnmeasured = !cand.rendered, .rootRelativeRuns = prRootRelRuns } )
                                        : legendText;
         return legend + anchorNoteText

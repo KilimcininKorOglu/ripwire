@@ -449,5 +449,37 @@ MCU="$( "$BIN" "$MUT" --no-cache --callers=Unrelated::build 2>/dev/null )"
 echo "$MCU" | grep -q 'n="call_inherited"' && ok "mutation: …and Unrelated::build is back among its callers" \
     || no "mutation: Unrelated::build does not list call_inherited: $( echo "$MCU" | grep -o '<callers[^>]*' )"
 
+echo "=== #325 disclosure: a base left on the final-segment rule is counted as ruby_bases_unscoped= ==="
+# resolve.h's fallback — an inherit reference with no superclass directive at its class open keeps the byName rule —
+# is defensive: no well-formed input is known to reach it (every class open with a superclass records its directive at
+# that open). The test seam RIPWIRE_TEST_RUBY_BASE_UNSCOPED=1 (resolve.h rubyBaseUnscopedTestSeam) drops every
+# directive from the join, so every Ruby inherit reference in the fixture takes the fallback and is counted.
+if runq PLAIN "$FIX" --no-cache --lego=Parent
+then
+    echo "$PLAIN" | grep -q 'ruby_bases_unscoped' \
+        && no "absence: --lego=Parent carries ruby_bases_unscoped= on a tree where every Ruby base was scoped" \
+        || ok "absence: no ruby_bases_unscoped= on --lego=Parent when every Ruby base was scoped (absent at zero)"
+fi
+# The expected count: every `class X < Const` in the fixture (a computed superclass mints no inherit reference).
+WANT="$( cat "$FIX"/*.rb | grep -cE '^[[:space:]]*class [A-Z][A-Za-z0-9_:]* < (::)?[A-Z][A-Za-z0-9_]*(::[A-Z][A-Za-z0-9_]*)*[[:space:]]*(;|#|$)' )"
+if RIPWIRE_TEST_RUBY_BASE_UNSCOPED=1 runq SEAMED "$FIX" --no-cache --lego=Parent --legend=full
+then
+    echo "$SEAMED" | grep -q " ruby_bases_unscoped=\"$WANT\"" \
+        && ok "seam: --lego=Parent carries ruby_bases_unscoped=\"$WANT\" (one per Ruby inherit reference in the fixture)" \
+        || no "seam: --lego=Parent lacks ruby_bases_unscoped=\"$WANT\": $( echo "$SEAMED" | grep -o '<lego [^>]*' )"
+    echo "$SEAMED" | grep -q 'ruby_bases_unscoped=N (absent when zero' \
+        && ok "seam: the full lego legend (--legend=full) defines ruby_bases_unscoped=" \
+        || no "seam: the attribute rides --lego with no definition in its legend"
+    echo "$SEAMED" | sed 's/></>\n</g' | grep -q '<impl n="Child"' \
+        && ok "seam: the fallback keeps the byName answer (Child is still an implementor of Parent)" \
+        || no "seam: the byName fallback lost Child"
+fi
+if RIPWIRE_TEST_RUBY_BASE_UNSCOPED=1 runq SEAMC "$FIX" --no-cache --lego=Parent --legend=compact
+then
+    echo "$SEAMC" | grep -q 'ruby_bases_unscoped=N:' \
+        && ok "seam: the compact legend defines ruby_bases_unscoped=" \
+        || no "seam: --legend=compact carries ruby_bases_unscoped= with no row defining it"
+fi
+
 echo
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

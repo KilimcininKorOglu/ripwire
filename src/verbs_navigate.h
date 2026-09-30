@@ -55,7 +55,7 @@ inline void emitGraphQueryLegend( const rw::IngestResult& ing, const rw::Graph& 
                  "name/all; filters kind/cx/fanin/file/layer; bounded closure callers/callees; joins and/or/not), "
                  "ranked by importance + capped at the top-k limit (default 200); narrow the query or raise top-k for more. NOT Datalog. "
                  "{}{}{}-->", modScopeRowsLegend( ing, shownRows ),
-                 rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+                 rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
 }
 
 // L2: the `[{"t":..,"n":..,"p":"file:line"},...]` JSON row array shared by --callers/--callees/--impact's
@@ -208,7 +208,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          rw::declinedCallsLegendWithGate( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0 ),   // exactly when the root carries declined_calls=
                          rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ),     // H1: likewise, exactly when unproven_defs= is there
                          rw::modScopeLegend( chHasModScope ),                   // #60: likewise, exactly when a t="modscope" row is
-                         rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( chSingleRoot ),
+                         rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         }
 
@@ -712,7 +712,7 @@ std::optional<int> runUses( const MainDispatch& d )
                        + rw::declinedCallsLegendWithGate( usDeclinedCalls > 0, g.gateDeclinedCalls > 0 ) ).c_str(),                              // exactly when it carries declined_calls=
                      rw::capLegendClause( rw::computePageDisclosure( pageRows, sites.size(), upw.end,
                                                                     cfg.pageLimit, cfg.pageOffset, usDiscloseCap ).active ),
-                     rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( usSingleRoot ),
+                     rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( usSingleRoot ),
                      // M12: same multi-root roots-table disclosure --callers/--callees gained.
                      rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         char              upab[ kPageDisclosureCap ];
@@ -802,7 +802,7 @@ std::optional<int> runUses( const MainDispatch& d )
 struct SafeDeleteLegendFlags
 {
     bool        singleRoot    = false;   // root= is on the root: p= is root-relative
-    bool        hasUnindexed  = false;   // graph_unindexed= rides the floor tail
+    rw::GaugeClauses hasUnindexed{};      // graph_unindexed= / ruby_bases_unscoped= ride the floor tail
     bool        hasModScope   = false;   // a <c n="<file-scope>"> row is on this page
     std::size_t declinedCalls = 0;       // declined_calls= on the root (graph.h declinedCallsNaming)
     bool        gateDeclined  = false;   // the builtin-method gate declined a call in this graph
@@ -812,7 +812,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                                   const SafeDeleteLegendFlags& flags )
 {
     const bool        singleRoot    = flags.singleRoot;
-    const bool        hasUnindexed  = flags.hasUnindexed;
+    const rw::GaugeClauses hasUnindexed = flags.hasUnindexed;
     const bool        hasModScope   = flags.hasModScope;
     const std::size_t declinedCalls = flags.declinedCalls;
     // declined_calls=: its definition, and — beside risk=none-found — the sentence that keeps none-found from reading as
@@ -1033,7 +1033,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     const PageWindow sdLw = pageWindow( callerIds.size(), effectiveRowCap( cfg.pageLimit, 40 ), cfg.pageOffset );
     const std::size_t sdDeclinedCalls = declinedCallsNaming( g, defs );   // declined calls that could have meant a def (as --callers counts them)
     emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk,
-                          SafeDeleteLegendFlags{ sdSingleRoot, g.unindexedFiles > 0,
+                          SafeDeleteLegendFlags{ sdSingleRoot, rw::graphGaugeClauses( g ),
                                                  anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
                                                  sdDeclinedCalls, g.gateDeclinedCalls > 0 } );
 
@@ -1591,7 +1591,7 @@ std::optional<int> runVerify( const MainDispatch& d )
         const std::string vfUnprovenClause  = rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Verify, vfUnprovenDefs > 0 );
         const std::string vfUnprovenComment = vfUnprovenClause.empty() ? std::string() : "<!-- ripwire verify: " + vfUnprovenClause + "-->";
         rw::emitTo( stdout, "{}{}{}{}<verify claim=\"{}\" shape=\"{}\" verdict=\"{}\"{}{}", verify::kVerifyLegend,
-                     rw::graphUnindexedLegendComment( g.unindexedFiles > 0 ).c_str(),
+                     rw::graphUnindexedLegendComment( rw::graphGaugeClauses( g ) ).c_str(),
                      vfUnprovenComment.c_str(),
                      rw::rootRelPathsLegend( verSingleRoot ),
                      ex( cfg.verifyClaim ).c_str(), verify::kShapeTags[ std::size_t( claim.shape ) ], verdict, facts.c_str(),
@@ -2103,7 +2103,7 @@ std::optional<int> runPath( const MainDispatch& d )
         // same brief sentence, on both transports (mcpverbs.h path_between mirrors this line).
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                      "graph holds none. {}{}-->{}", rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ).c_str(),
-                     rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
+                     rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
         rw::emitTo( stdout, "<path from=\"{}\" to=\"{}\" from_p=\"{}\" to_p=\"{}\" from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                      ex( srcN ).c_str(), ex( dstN ).c_str(), loc( srcUsed ).c_str(), loc( dstUsed ).c_str(),
                      srcDefs.size(), dstDefs.size(), rw::unprovenDefsAttrXml( pthUnprovenDefs ).c_str(),   // H1: beside the defs counts it is not in
@@ -2450,7 +2450,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                          rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
                          rw::declinedCallsLegendWithGate( imDeclinedCalls > 0, g.gateDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
                          rw::modScopeLegend( imHasModScope ),                      // #60: likewise, exactly when a t="modscope" row is
-                         rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+                         rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         }
         // P2.1 + §P8 G1: the rank-ordered listing's 40 is a DEFAULT now, not a ceiling — see the §P10.3 note
         // above runImpact; pageDisclosure emits the ` shown= capped=` bytes this verb used to hand-roll

@@ -1014,9 +1014,9 @@ inline int writeNonLocalStateReport( const IngestResult& ing, const Graph& g, in
     // #66: the root below carries graph_unindexed= when the crawl could not read a file at all, and the legend
     // above is one closed literal — so its definition rides as its own adjacent comment, emitted on exactly
     // the emitter's own condition (graphlegend.h graphUnindexedLegendComment), never a re-derivation of it.
-    rw::emitTo( stdout, "{}", rw::graphUnindexedLegendComment( g.unindexedFiles > 0 ).c_str() );
+    rw::emitTo( stdout, "{}", rw::graphUnindexedLegendComment( rw::graphGaugeClauses( g ) ).c_str() );
     rw::emitTo( stdout, "<nonlocal_state cells=\"{}\" functions=\"{}\"{}{}", scan.cells.size(), total, rw::cstr( disclosure ),
-                 ( collectionCut ? rw::graphGaugeAttrXml( g.ambOut, g.unresolvedOut, g.unindexedFiles )
+                 ( collectionCut ? rw::graphGaugeAttrXml( g.ambOut, g.unresolvedOut, g.unindexedFiles, g.rubyBasesUnscoped )
                                  : rw::graphCountFloorAttrXml( g ) ).c_str()  );   // M15: gauge + marker
     if( !scan.unanalyzedLangs.empty() )
     {

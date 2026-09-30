@@ -91,7 +91,7 @@ inline std::string renderFieldUses( const IngestResult& ing, FieldId fieldId, co
     out += kUsesLegendOpen;
     out += kUsesFieldLegend;
     out += capLegendClause( computePageDisclosure( pageRows, rows.size(), window.end, args.pageLimit, args.pageOffset, discloseCap ).active );
-    out += graphCountDisclosure( args.graph.unindexedFiles > 0 );
+    out += graphCountDisclosure( rw::graphGaugeClauses( args.graph ) );
     out += "-->";
     out += rootRelPathsLegend( args.singleRoot );
 
