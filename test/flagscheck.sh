@@ -15,7 +15,9 @@
 #   a getenv(computedName) — non-literal argument                           -> ABSENT (cannot be named)
 # 0.6.6 D5 (arm 12, a temp JS/TS corpus): `process.env.NAME` / `process.env["NAME"]` reads are the Node getenv —
 #   a comparison, a `??` default and a bare truthiness test each make a kind="env" gate; a read inside a comment or a
-#   string literal, and `const env = process.env` (no name), do not.
+#   string literal, and `const env = process.env` (no name), do not. Template literals (arm 12t): the plain TEXT of a
+#   backtick template is a string (one line, several lines, nested inside `${}`, after a `${ {…} }` brace), while the
+#   code inside `${…}` is code — so `${process.env.X}` is a gate and `` `set process.env.X` `` is not.
 #
 # Exit 0 = ALL PASS, non-zero = SOME FAILED.
 
@@ -218,6 +220,31 @@ for n in AISLOP_POSTHOG_HOST AISLOP_TELEMETRY_DEBUG AISLOP_DRY_RUN FEATURE_X; do
 done
 for n in COMMENTED_OUT IN_STRING; do
     grep -q "<gate name=\"$n\"" "$TMP/js.xml" && no "12: $n (comment/string) must not be a gate" || ok "12: $n (comment/string) is not a gate"
+done
+
+# ── 12t) 0.6.6 D5 review B1: the TEXT of a JS/TS template literal is not code; `${…}` inside it is ─────────────────
+JT="$TMP/jstpl"; mkdir -p "$JT/src"
+cat >"$JT/src/templates.ts" <<'TS'
+declare const flag: boolean;
+declare function fn(o: object): string;
+const tpl = `set process.env.TEMPLATE_TEXT first`;
+const withExpr = `mode=${process.env.TEMPLATE_EXPR ?? "x"}`;
+const multi = `line one
+process.env.TEMPLATE_MULTILINE is text here
+and ${ process.env.TEMPLATE_MULTI_EXPR } counts`;
+const nested = `a ${ flag ? `inner process.env.NESTED_TEXT` : process.env.NESTED_EXPR } b`;
+const braced = `${ fn({ k: 1 }) } then process.env.AFTER_BRACE_TEXT`;
+export const after = process.env.AFTER_TEMPLATES === "1";
+void tpl; void withExpr; void multi; void nested; void braced;
+TS
+"$BIN" "$JT" --flags --no-cache --legend=full >"$TMP/jt.xml" 2>/dev/null
+JTROOT="$( grep -o '<flags [^>]*>' "$TMP/jt.xml" | head -1 )"
+case "$JTROOT" in *'env="4"'*) ok "12t: exactly the four code reads in the template corpus are env gates (env=\"4\")";; *) no "12t: expected env=\"4\" on the template corpus: $JTROOT";; esac
+for n in TEMPLATE_EXPR TEMPLATE_MULTI_EXPR NESTED_EXPR AFTER_TEMPLATES; do
+    if grep -q "<gate name=\"$n\" kind=\"env\"" "$TMP/jt.xml"; then ok "12t: $n (code: \${…} or after the template) is a kind=\"env\" gate"; else no "12t: no kind=\"env\" gate for $n"; fi
+done
+for n in TEMPLATE_TEXT TEMPLATE_MULTILINE NESTED_TEXT AFTER_BRACE_TEXT; do
+    if grep -q "<gate name=\"$n\"" "$TMP/jt.xml"; then no "12t: $n is template TEXT and must not be a gate"; else ok "12t: $n (template text) is not a gate"; fi
 done
 
 [ $fail -eq 0 ] && echo "flagscheck: ALL PASS" || echo "flagscheck: FAILURES"

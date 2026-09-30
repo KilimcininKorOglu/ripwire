@@ -8754,10 +8754,19 @@ inline bool pythonClassBasesNameTestCase( std::string_view source, std::string_v
     return false;
 }
 
-// 0.6.6 D4: a Python def that a TEST RUNNER or a DECORATOR reaches with no call the index can see — so zero in-edges on
-// it is not evidence of anything, and --dead-code / --safe-delete's dead_code_candidate= must not name it. The roots:
-//   * any decorated def (`@pytest.fixture`, `@app.route`, `@property`, `@click.command` … — a decorator registers or
-//     wraps the def, and the registry's call is invisible to the graph);
+// 0.6.6 D4: a DECORATED Python def. It is not a --dead-code / dead_code_candidate= row, and it is counted apart from the
+// test-runner roots below (decorated-excluded=), because the reason differs: a decorator MAY register the def (`@app.route`,
+// `@pytest.fixture`, `@click.command` — the registry's call is invisible to the graph), but a plain wrapper
+// (`@staticmethod`, `@property`, `@functools.lru_cache`) registers nothing. Such a row's only Python "linkage" evidence is a
+// non-comment `static` token (a parameter named static), which is never real linkage, so dropping it removes a claim the
+// detector could not back; the count says how many were dropped for this reason alone. Python only.
+inline bool pythonDecoratedDef( const Symbol& s, std::string_view source ) noexcept
+{
+    return s.lang == Lang::Python && s.sigStartByte <= source.size() && pythonDefIsDecorated( source, s.sigStartByte );
+}
+
+// 0.6.6 D4: a Python def that a TEST RUNNER reaches with no call the index can see — so zero in-edges on it is not
+// evidence of anything, and --dead-code / --safe-delete's dead_code_candidate= must not name it (runner-root-excluded=):
 //   * pytest discovery in a test_*.py / *_test.py file: a `test*` function or method, and the xunit-style hooks
 //     (setup_module, setup_method, teardown_class …);
 //   * unittest: a `test*` method or a setUp/tearDown/setUpClass/tearDownClass/asyncSetUp/asyncTearDown hook of a class
@@ -8769,10 +8778,6 @@ inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::strin
     if( s.lang != Lang::Python || s.sigStartByte > source.size() )
     {
         return false;
-    }
-    if( pythonDefIsDecorated( source, s.sigStartByte ) )
-    {
-        return true;
     }
     const std::size_t      slash      = path.rfind( '/' );
     const std::string_view baseName   = slash == std::string_view::npos ? path : path.substr( slash + 1 );

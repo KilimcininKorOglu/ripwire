@@ -68,9 +68,12 @@ llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the grap
 A TypeScript repository whose switches are all `process.env.X === "1"` checks answered `gates="0" env="0"`. The env
 lane now reads `process.env.NAME`, `process.env["NAME"]` and `process.env['NAME']` in code as `kind="env"` gates
 (default unset), the same way it reads `getenv("NAME")` and Python's `os.environ`; a read inside a comment or a
-string, and `process.env` without a name (`const env = process.env`), are not gates. As for Python env gates,
-`regions=` and `loc=` stay 0: the guarded code of an env gate is not measured. The full legend names the new
-spelling. On the aislop TypeScript repository the verb now reports 21 env gates. Gate: `flagscheck` arm 12.
+string, and `process.env` without a name (`const env = process.env`), are not gates. In JavaScript and TypeScript
+files a backtick template literal is a string: its text — on one line, across lines, or nested inside a `${…}` — is
+not code, while the code inside `${…}` is (so `${process.env.X}` is a gate). Other languages' quote handling is
+unchanged. As for Python env gates, `regions=` and `loc=` stay 0, and both legends now say so: they are measured
+only for `#if` regions. On the aislop TypeScript repository the verb now reports 20 env gates (a 21st read sits in
+the text of a generated-source template). Gate: `flagscheck` arms 12 and 12t.
 
 ### Fixed — `--doc-drift`: three false drifts on a Python repository
 
@@ -112,10 +115,12 @@ header change moves `est_tokens=` on `--connect` answers by a few tokens. Gate: 
 A Python def's signature span runs on through the comment lines that open its body, so a test method whose first
 comment contained the word `static` ("the static type is unchanged") met `--dead-code`'s internal-linkage rule and
 was reported. Two changes, shared by `--dead-code` and `--safe-delete`'s `dead_code_candidate=`: a `static` inside a
-comment (`#`, `//`, an unclosed `/*`) is no longer linkage evidence, and a Python def that a test runner or a
-decorator reaches is not a candidate — any decorated def, a pytest `test*` function or method or xunit hook in a
-`test_*.py` / `*_test.py` file, and a `test*` or setUp-family method of a class whose own bases name a `TestCase`.
-`--dead-code` counts the second group as `runner-root-excluded=N` (a floor, absent at 0, defined in both legends).
+comment (`#`, `//`, an unclosed `/*`) is no longer linkage evidence; a Python def that a test runner reaches is not a
+candidate — a pytest `test*` function or method or xunit hook in a `test_*.py` / `*_test.py` file, and a `test*` or
+setUp-family method of a class whose own bases name a `TestCase`; and a decorated Python def is not a candidate either
+(a decorator may register it; plain wrappers such as `@staticmethod`, `@property` and `@lru_cache` are included, and
+their only "linkage" evidence was a `static` token, which Python never means as linkage). `--dead-code` counts the two
+reasons apart, `runner-root-excluded=N` and `decorated-excluded=N` (floors, each absent at 0, defined in both legends).
 Not covered: a `TestCase` subclass reached only through an intermediate base, and pytest name overrides from a
 config file. Gate: `deadprecisioncheck` arms R1–R4.
 

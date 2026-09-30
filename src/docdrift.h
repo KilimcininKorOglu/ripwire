@@ -58,7 +58,7 @@
 // made at a time, in four escalating strengths (most specific evidence wins):
 //   rec="line"   the anchor's own line hedges it ("…`kMcpVerbCount = 22` at the time of this note; 30 as of
 //                2026-07-24"), or the line OPENS with an ISO date (a changelog / ledger row)
-//   rec="block"  the nearest markdown heading at or above it carries an ISO date ("### §2b — … (2026-07-11
+//   rec="block"  the nearest markdown heading at or above it (or a level-2+ heading enclosing it) carries an ISO date ("### §2b — … (2026-07-11
 //                addendum)")
 //   rec="title"  the doc's FILENAME or its H1 carries an ISO date — the author saying "this document IS the
 //                artifact of that day"
@@ -210,7 +210,7 @@ struct RecordSpec { const char* tag; const char* note; };
 inline constexpr RecordSpec kRecordTable[] = {
     { "live",  "no dating mark was found on the line, its heading, the title or the front matter, so the doc reads as claiming this NOW" },
     { "line",  "the anchor's own line dates the claim — an at-the-time / as-of-DATE hedge, or a line that opens with an ISO date (a changelog or ledger row)" },
-    { "block", "the nearest markdown heading at or above the anchor carries an ISO date, so the whole section is an observation made on that day" },
+    { "block", "the nearest markdown heading at or above the anchor, or a level-2+ heading enclosing it, carries an ISO date, so the whole section is an observation made on that day" },
     { "title", "the doc's filename or its H1 title carries an ISO date: the document IS the artifact of that day, and its anchors are what was true then" },
     { "stamp", "the doc's front matter carries a LABELLED self-date (Date: / Written / Generated / Recorded …), which dates the document rather than something it discusses" },
 };
