@@ -1550,11 +1550,34 @@ inline SkillFileKind skillFileKindOf( std::string_view path, std::string_view te
 // runs the scan on the caller at kCallerStackBytesFloor, disclosed by stackthreads.h. A throw out of the scan (an
 // allocation failure) cannot leave the thread, so it becomes one CRITICAL scan-aborted finding: a skill whose scan did
 // not finish never reads clean.
-// A ShellScript gets BOTH passes, merged: the markdown reading first, then the whole-file-code reading, stable-sorted on
-// (line, rule) and deduped keeping the first, so a (line, rule) both passes report keeps the markdown row and every
-// markdown finding survives byte for byte — script mode can only ADD rows. (Taking the code pass alone would not be
+// A ShellScript gets BOTH passes, merged by mergeScriptPasses (below): a (line, rule) both passes report keeps the WORSE
+// severity, the markdown row on a tie, so every markdown finding survives byte for byte unless the code pass graded the
+// same (line, rule) higher — script mode can only ADD rows or RAISE one, never quiet one. (Taking the code pass alone would not be
 // monotone: the joined-body injection pass reports only the FIRST hit per pattern, and code mode feeds it lines an
 // example fence withheld, which could move that first hit off the line the markdown pass reported.)
+// Merge a shell script's whole-file-code pass into its markdown pass: stable-sorted on (line, rule, severity WORST first),
+// then deduped keeping the first — so a (line, rule) both passes report keeps the higher severity, and the markdown row
+// (inserted first) on a tie. Keeping the first row per (line, rule) without the severity key would let a WARN from the
+// markdown pass hide a CRITICAL the code pass graded on the same line, and quiet the exit from 2 to 1 (a wrap that
+// stops refusing). Today every rule's severity is a function of the line alone, so the key only ever breaks ties; it
+// is the invariant, not a behaviour change, and the skillscan gate's merge arm holds it.
+inline void mergeScriptPasses( std::vector<SkillFinding>& findings, std::vector<SkillFinding> code )
+{
+    findings.insert( findings.end(), std::make_move_iterator( code.begin() ), std::make_move_iterator( code.end() ) );
+    std::stable_sort( findings.begin(), findings.end(), []( const SkillFinding& a, const SkillFinding& b ) noexcept
+                      {
+                          if( a.line != b.line )
+                          {
+                              return a.line < b.line;
+                          }
+                          const int byRule = std::string_view( a.rule ).compare( b.rule );
+                          return byRule != 0 ? byRule < 0 : a.sev > b.sev;
+                      } );
+    findings.erase( std::unique( findings.begin(), findings.end(), []( const SkillFinding& a, const SkillFinding& b ) noexcept
+                                 { return a.line == b.line && std::string_view( a.rule ) == std::string_view( b.rule ); } ),
+                    findings.end() );
+}
+
 inline std::vector<SkillFinding> scanSkillText( std::string_view text, SkillFileKind kind = SkillFileKind::Markdown )
 {
     std::vector<SkillFinding> findings;
@@ -1565,13 +1588,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text, SkillFile
             findings = scanSkillTextOn( text, settledBytes );
             if( kind == SkillFileKind::ShellScript )
             {
-                std::vector<SkillFinding> code = scanSkillTextOn( text, settledBytes, /*wholeFileIsCode=*/true );
-                findings.insert( findings.end(), std::make_move_iterator( code.begin() ), std::make_move_iterator( code.end() ) );
-                std::stable_sort( findings.begin(), findings.end(), []( const SkillFinding& a, const SkillFinding& b ) noexcept
-                                  { return a.line != b.line ? a.line < b.line : std::string_view( a.rule ) < std::string_view( b.rule ); } );
-                findings.erase( std::unique( findings.begin(), findings.end(), []( const SkillFinding& a, const SkillFinding& b ) noexcept
-                                             { return a.line == b.line && std::string_view( a.rule ) == std::string_view( b.rule ); } ),
-                                findings.end() );
+                mergeScriptPasses( findings, scanSkillTextOn( text, settledBytes, /*wholeFileIsCode=*/true ) );
             }
         }
         catch( ... )

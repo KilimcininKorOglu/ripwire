@@ -378,6 +378,35 @@ for lay in dirlink loop; do
     fi
 done
 
+# ── check 20 (0.6.6 review): the two-pass merge of a shell script never QUIETS a row ──
+# scanSkillText merges a script's whole-file-code pass into its markdown pass and dedupes on (line, rule). Keeping the
+# FIRST row per (line, rule) kept the markdown pass's, so a code-pass CRITICAL on a line the markdown pass graded WARN
+# for the same rule was dropped: exit 2 -> 1, and wrap stops refusing. Every rule's severity is a function of the line
+# today, so no CLI input reaches the collision; the arm drives mergeScriptPasses directly with the colliding pair.
+CXX="${CXX:-c++}"
+cat >"$TMP/merge.cpp" <<'CPP'
+#include "skillscan.h"
+#include <cstdio>
+int main()
+{
+    using rw::SkillFinding; using rw::SkillSeverity;
+    std::vector<SkillFinding> md{ { SkillSeverity::Warn, 3, "EXFILTRATE:net-exfil", "md3" }, { SkillSeverity::Critical, 5, "INJECTION:disregard", "md5" },
+                                  { SkillSeverity::Warn, 6, "SCOPE-CREEP:bash", "md6" } };
+    std::vector<SkillFinding> code{ { SkillSeverity::Critical, 3, "EXFILTRATE:net-exfil", "code3" }, { SkillSeverity::Warn, 5, "INJECTION:disregard", "code5" },
+                                    { SkillSeverity::Warn, 6, "SCOPE-CREEP:bash", "code6" }, { SkillSeverity::Info, 7, "X:y", "code7" } };
+    rw::mergeScriptPasses( md, code );
+    for( const SkillFinding& f : md ) { std::printf( "%d %s %d %s\n", f.line, f.rule, int( f.sev ), f.excerpt.c_str() ); }
+}
+CPP
+if "$CXX" -std=c++23 -I "$ROOT/src" "$TMP/merge.cpp" -o "$TMP/merge" >"$TMP/merge.err" 2>&1; then
+    MERGED="$( "$TMP/merge" )"
+    WANT="$( printf '3 EXFILTRATE:net-exfil 2 code3\n5 INJECTION:disregard 2 md5\n6 SCOPE-CREEP:bash 1 md6\n7 X:y 0 code7' )"
+    if [ "$MERGED" = "$WANT" ]; then ok "(merge) a (line, rule) both passes report keeps the WORSE severity (code CRITICAL over markdown WARN; markdown on a tie; code-only rows added)"
+    else no "(merge) want the worst severity per (line, rule), got: $( printf '%s' "$MERGED" | tr '\n' '|' )"; fi
+else
+    no "(merge) the mergeScriptPasses harness did not compile: $( head -3 "$TMP/merge.err" )"
+fi
+
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then
     echo "ALL PASS"
