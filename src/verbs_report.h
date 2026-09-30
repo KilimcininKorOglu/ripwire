@@ -1045,13 +1045,33 @@ inline const char* coMinRecurAttr( char* buf, std::size_t cap, int minRecur )
     return buf;
 }
 
+// multi-root §5: churn, co-change and ownership are mined from EVERY workspace root, so ONE depth-limited root qualifies
+// the merged answer (shallow="1") — probing the primary root alone left a full primary + shallow secondary unqualified.
+// `onlyRoot` narrows the probe to the one root a symbol-scoped run mines (--owners=SYM: the symbol's file's root).
+inline bool anyMinedRootShallow( const std::string& root, bool multiRoot, const std::vector<rw::WorkspaceRoot>& ws,
+                                 std::uint32_t onlyRoot = UINT32_MAX )
+{
+    if( !multiRoot )
+    {
+        return rw::gitstamp::isShallow( root );
+    }
+    for( std::uint32_t r = 0; r < ws.size(); ++r )
+    {
+        if( ( onlyRoot == UINT32_MAX || onlyRoot == r ) && rw::gitstamp::isShallow( ws[r].arg ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // §CLIO — one repo-wide co-change pair, and the document that renders them. `PR` used to be a struct local
 // to the --cochange branch; it moved out with the loop for the same reason the legends and the group form did.
 struct CoPairRow { std::uint32_t a, b, n; double deg, confAb, confBa; std::uint32_t recur; bool surprising; bool depCapable; };
 
 inline void emitCochangePairs( const rw::IngestResult& ing, const rw::Config& cfg, const std::vector<CoPairRow>& prs,
                                const std::string& windowLabel, std::uint32_t subWindows, const char* minRecAttr,
-                               int cap, const std::string& root )
+                               int cap, const std::string& root, bool coShallow )
 {
     std::vector<char> esc;
     const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( rw::escapeXml( s, esc ) ); };
@@ -1065,7 +1085,6 @@ inline void emitCochangePairs( const rw::IngestResult& ing, const rw::Config& cf
     // capped= reconcile pairs= against the rows that follow even with no --limit at all.
     const rw::PageWindow prpw = rw::pageWindow( prs.size(), rw::effectiveRowCap( cfg.pageLimit, cap ), cfg.pageOffset );
     char                 prab[ 192 ];
-    const bool coShallow = rw::gitstamp::isShallow( root );   // 0.6.6: co-change from a depth-limited history, qualified on the root
     rw::emitTo( stdout, "{}{}{}{}", kCochangeRepoLegend, rw::kAtStampLegend, rw::rootRelPathsLegend( coSingleRoot ), rw::gitstamp::shallowLegend( coShallow ) );   // sweep: ditto
     rw::emitTo( stdout, "<cochange pairs=\"{}\" window=\"{}\" sub_windows=\"{}\"{}{}{}{}{}>", prs.size(), windowLabel.c_str(), subWindows, minRecAttr,
                  rw::pageDisclosure( prab, sizeof( prab ), prpw.end - prpw.begin, prs.size(), prpw.end,
@@ -1104,7 +1123,7 @@ inline void emitCochangePairs( const rw::IngestResult& ing, const rw::Config& cf
 inline void emitCochangeGroups( const rw::IngestResult& ing, const rw::Config& cfg,
                                 const std::vector<rw::CoViolation>& viol, const std::vector<rw::CoGroup>& groups,
                                 const std::string& windowLabel, std::uint32_t subWindows, const char* minRecAttr,
-                                int cap, const std::string& root )
+                                int cap, const std::string& root, bool cgShallow )
 {
     std::vector<char> esc;
     const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( rw::escapeXml( s, esc ) ); };
@@ -1120,7 +1139,6 @@ inline void emitCochangeGroups( const rw::IngestResult& ing, const rw::Config& c
     {
         coveredTotal += g.members.size();
     }
-    const bool cgShallow = rw::gitstamp::isShallow( root );   // 0.6.6: co-change from a depth-limited history, qualified on the root
     rw::emitTo( stdout, "{}{}{}{}", kCochangeGroupLegend, rw::kAtStampLegend, rw::rootRelPathsLegend( cgSingleRoot ), rw::gitstamp::shallowLegend( cgShallow ) );
     rw::emitTo( stdout, "<cochange groups=\"{}\" pairs_covered=\"{}\" cover=\"greedy\" window=\"{}\" sub_windows=\"{}\"{}{}{}{}{}>",
                  groups.size(), coveredTotal, windowLabel.c_str(), subWindows, minRecAttr,
@@ -1343,7 +1361,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
         // 0.6.6 command sweep: on a depth-1 clone every churn= is 1 and score= is complexity alone, under a window label
         // that names twelve months. The rows are what the fetched history says, so the root QUALIFIES them (shallow="1",
         // defined here when present) rather than refusing. One probe for both.
-        const bool hsShallow = gitstamp::isShallow( root );
+        const bool hsShallow = anyMinedRootShallow( root, multiRoot, ws );   // every mined root, not the primary alone
         rw::emitRaw( stdout, gitstamp::shallowLegend( hsShallow ) );
         if( multiRoot )
         { // §5 comparability caveat: churn scales (commit-count conventions) differ per repo
@@ -1631,11 +1649,11 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                 }
             }
             const std::vector<CoGroup> groups = cochangeViolationGroups( viol, ing.files.size() );
-            emitCochangeGroups( ing, cfg, viol, groups, coWindowLabel, subWindows, coMinRec, cap, root );
+            emitCochangeGroups( ing, cfg, viol, groups, coWindowLabel, subWindows, coMinRec, cap, root, anyMinedRootShallow( root, multiRoot, ws ) );
             return 0;
         }
 
-        emitCochangePairs( ing, cfg, prs, coWindowLabel, subWindows, coMinRec, cap, root );
+        emitCochangePairs( ing, cfg, prs, coWindowLabel, subWindows, coMinRec, cap, root, anyMinedRootShallow( root, multiRoot, ws ) );
         return 0;
     }
 
@@ -1731,7 +1749,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
         // 0.6.6 command sweep: on a depth-1 clone every file came back bf="1" share="1.00" from ONE squashed commit,
         // with at='s +shallow suffix the only hint. The shares are still what the fetched history says, so the answer
         // is QUALIFIED rather than refused: shallow="1" on the root, and its clause in the legend. One probe.
-        const bool owShallow = gitstamp::isShallow( root );
+        const bool owShallow = anyMinedRootShallow( root, multiRoot, ws, onlyFileId != UINT32_MAX ? ing.fileRoot[ onlyFileId ] : UINT32_MAX );
         // XML comments forbid a literal "--" (G4): the flag is spelled "detail=1" below, not "--detail=1".
         rw::emitTo( stdout, "<!-- ripwire owners: recency-weighted author ownership (half-life=6mo). "
                      "bf=1 = one person holds >80% of weighted commits (bus-factor risk); "

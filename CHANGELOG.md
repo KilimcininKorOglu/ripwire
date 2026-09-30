@@ -270,6 +270,7 @@ cached quality snapshot is recomputed. The session legend dictionary is `dictv=0
 - `--doc-drift`: a thousands-grouped number longer than 10 digits (`1,099,511,627,776`) is no longer read as its 10-digit prefix and reported as a `const-value` drift. It makes no claim.
 - `--mentions` and the MCP `mentions` tool: indexed markdown files that cannot be read back when the answer is built are counted as `unbackticked_unread=N` (MCP `"unbackticked_unread"`), instead of being treated as files with no unbackticked mention.
 - `--pattern`: the `unmatched_qualified=` reading says the count is a floor when the hit budget stops the walk (`hits_capped=1`).
+- `--hotspots`, `--cochange` and `--owners` in a multi-root workspace carry `shallow="1"` when any mined root is a shallow clone, not only when the first root is. `--owners=SYM` checks the root that holds the symbol's file.
 
 ### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality verbs measure it
 

@@ -72,6 +72,18 @@ for v in --owners --hotspots --cochange=a.c; do
     if { has "$F" 'shallow="1"' || has "$F" '<!-- shallow='; }; then no "$v on the full clone carries shallow=\"1\" or its clause"; else ok "$v on the full clone: no shallow attribute or clause"; fi
 done
 
+# ── 2m. multi-root: a FULL primary + a SHALLOW secondary still qualifies (0.6.6 review) ──
+# hotspots, repo-wide cochange and owners mine EVERY workspace root, but the probe read only the primary root, so the
+# merged answer carried no shallow="1" although part of its history was depth-limited. The control is two full roots.
+FULL2="$T/full2"; git clone -q "file://$FULL" "$FULL2" >/dev/null 2>&1 || no "fixture: second full clone failed"
+for v in --hotspots --owners --cochange; do
+    M="$( "$BIN" "$FULL" "$SH" "$v" --legend=full --no-cache 2>/dev/null )"; RC=$?; MR="$( root_of "$M" )"
+    if [ "$RC" -le 1 ] && has "$MR" 'shallow="1"' && legend_defines_shallow "$M"; then ok "$v full+shallow workspace: the root carries shallow=\"1\", defined"
+    else no "$v full+shallow workspace (rc=$RC): no shallow=\"1\" on the root: $MR"; fi
+    MF="$( "$BIN" "$FULL" "$FULL2" "$v" --legend=full --no-cache 2>/dev/null )"
+    if { has "$MF" 'shallow="1"' || has "$MF" '<!-- shallow='; }; then no "$v full+full workspace carries shallow=\"1\" or its clause"; else ok "$v full+full workspace: no shallow attribute or clause"; fi
+done
+
 # ── 3. cochange (repo form) on the shallow stub: the refusal names the real cause ──
 C="$( run "$SH" --cochange )"
 if { has "$C" "shallow clone" && has "$C" "git fetch --deepen" && ! has "$C" "git unavailable"; }; then ok "cochange on a shallow stub with nothing mineable: 'shallow clone', not 'git unavailable'"; else no "cochange on shallow: $( printf '%s' "$C" | head -c 300 )"; fi
