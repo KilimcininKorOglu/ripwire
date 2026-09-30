@@ -283,6 +283,24 @@ fi
 if [ "$rc" = 0 ] && ! grep -q 'code_not_flow_scanned' "$TMP/sg_out.txt"; then ok "(scripts) a shell script is not counted as code_not_flow_scanned (it has the shell model)"
 else no "(scripts) the shell-only scan carries code_not_flow_scanned"; fi
 
+# ── check 20 (0.6.6 review round): the bypasses and false claims the adversarial review found in check 19's surface ──
+#   M1  a script whose first line is `---`: the code pass must not treat lines up to the next `---` as YAML (bash runs them)
+#   M4  code the scanner cannot flow-scan is DISCLOSED for every listed extension, not only .py/.js/.ts/.rb/.pl/.ps1
+#   S2  a UTF-8 BOM before `#!` still names the shell;  S3  shell dotfiles (.bashrc .envrc .profile …) are shell code
+#   S1  past the 200-row cap, CRITICAL rows print first, so a WARN flood cannot hide the evidence row
+#   S4  every --scan-skills legend defines the <f rule= sev=> row attributes
+#   M5  `ripwire <dir> --scan-skills` with <dir> not the cwd REFUSES (exit 3): the bare form never reads <dir>; the bare form
+#       names the directories it walked (dirs=) and defines it
+#   M3  `ripwire wrap` scans every file of a skill, as --scan-skills does, and refuses a CRITICAL script
+R2="$TMP/round2"; mkdir -p "$R2/home"
+r2_crit(){   # $1 file, $2 line, $3 label — --scan-skill must exit 2 with a CRITICAL EXFILTRATE row at that line
+    "$BIN" "--scan-skill=$1" --legend=full >"$TMP/r2.out" 2>/dev/null; local rc=$?
+    if [ "$rc" = 2 ] && grep -qE "<f p=\"[^\"]*:$2\" rule=\"EXFILTRATE:[a-z-]+\" sev=\"critical\"" "$TMP/r2.out"; then ok "(round2) $3: CRITICAL at line $2 (exit 2)"
+    else no "(round2) $3: want exit 2 + a CRITICAL row at line $2, got rc=$rc $( grep -oE '<f [^>]*>' "$TMP/r2.out" | head -2 )"; fi
+}
+printf -- '---\n%s\n---\n' "$SGLINE" >"$R2/fm.sh"
+r2_crit "$R2/fm.sh" 2 "M1 a .sh whose first line is --- (bash runs line 2)"
+
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then
     echo "ALL PASS"

@@ -189,8 +189,8 @@ other gate); direct `./test/…` invocation exits 126 no more.
 `curl … $GITHUB_TOKEN` upload that is CRITICAL inside a ```` ```bash ```` fence in `SKILL.md` read clean (exit 0) in the
 script, with or without a shebang, through `--scan-skills` and `--scan-skill` alike, and a ```` ``` ```` pair in a
 heredoc could close a fence the scan thought open. A `.sh`/`.bash`/`.zsh`/`.ksh` file, or one whose `#!` names `sh`,
-`bash`, `zsh`, `dash` or `ksh` (through `env` too), now also gets a whole-file-code pass — every line is command
-context and no ```` ``` ```` line toggles anything — merged with the markdown pass, so a script can only gain rows
+`bash`, `zsh`, `dash` or `ksh` (through `env` too), now also gets a whole-file-code pass — no YAML frontmatter (bash runs a
+leading `---` line and everything after it), every line is command context, and no ```` ``` ```` line toggles anything — merged with the markdown pass, so a script can only gain rows
 (measured over the 1,242 code files in this repo: no row lost, 23 added, 17 of them WARN `why="no-cred-source"`).
 Markdown input is byte-identical. Code in a language the scanner has no network-flow model for (`.py`, `.js`, `.mjs`,
 `.cjs`, `.ts`, `.rb`, `.pl`, `.ps1`, or another `#!`) is read as before and disclosed: `<skillscan

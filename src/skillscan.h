@@ -1024,8 +1024,8 @@ inline constexpr std::size_t kSkillScanStackBytes     = 256 * 1024 * 1024;   // 
 
 // Scan the raw text of a skill markdown file line by line, on a thread settled at `stackBytes`. Findings are sorted
 // (line, rule).
-// `wholeFileIsCode` (a shell script, see SkillFileKind): every body line is command context and no ``` / ~~~ line toggles
-// anything. It only ever sets lineInFence, which relaxes the two exfil context gates (fenceOnly, requiresCmdContext);
+// `wholeFileIsCode` (a shell script, see SkillFileKind): there is no frontmatter, every line is command context and no
+// ``` / ~~~ line toggles anything. It only ever sets lineInFence, which relaxes the two exfil context gates (fenceOnly, requiresCmdContext);
 // lineInExampleFence, the one flag that SUPPRESSES (injection in an example fence), stays false. scanSkillText merges
 // this pass with the markdown pass, so a script's findings are a superset of what the markdown reading alone reports.
 inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::size_t stackBytes, bool wholeFileIsCode = false )
@@ -1058,7 +1058,10 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
     }
 
     // ── frontmatter state: find the YAML block (first `---` to second `---`) ────────────────────
+    // The code pass (a shell script) has NO frontmatter: bash runs a leading `---` line as a command and then every line
+    // after it, so a YAML-shaped block there is code the pass must read (review M1: `---` / upload / `---` hid line 2).
     int frontmatterEnd = 0;   // index of the line AFTER the closing `---` (or 0 if none)
+    if( !wholeFileIsCode )
     {
         bool inFront = false;
         for( int i = 0; i < int( lines.size() ); ++i )
