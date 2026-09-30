@@ -492,6 +492,8 @@ probeFor()
 # RE-PINNED BACK 2026-09-30 (train22 fixups, review M2): ripwire.scan-skills/v1 520 -> 380 (measured 369). An earlier commit on
 # this branch pinned 520 from the developer's own HOME (a Codex install's .py helpers made the answer carry
 # code_not_flow_scanned=); the gate now runs under an empty HOME of its own, so the probe measures the same bytes everywhere.
+# RE-PINNED 2026-09-30 (review M5): 380 -> 530 (measured 518, hermetic HOME). The probe is a bare --scan-skills, whose answer
+# now names the directories it walked (dirs=) and whose legend defines it (+149 B); the value is in the root, not the legend.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -522,7 +524,7 @@ ripwire.skipped/v1               1510  1498
 ripwire.lint/v1                   340   324
 ripwire.lint-catalog/v1           220   204
 ripwire.external-surface/v1       250   234
-ripwire.scan-skills/v1            380   369
+ripwire.scan-skills/v1            530   518
 ripwire.owners/v1                 430   414
 ripwire.dead-code/v1              620   604
 ripwire.quality-delta/v1          940   928

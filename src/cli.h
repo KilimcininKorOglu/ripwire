@@ -2459,8 +2459,10 @@ inline constexpr char kHelpTail[] =
         "                               EVERY text file, .md and .sh alike — a skill dir's executables are the\n"
         "                               files most worth scanning. skipped= counts what it could not scan\n"
         "                               (binary content, or unreadable); denylisted subtrees (.git, node_modules,\n"
-        "                               build, ...) are not descended and the stderr tally says how many\n"
-        "                               for vulnerabilities\n"
+        "                               build, ...) are not descended and the stderr tally says how many.\n"
+        "                               The bare form never reads a positional root: one that is not the current\n"
+        "                               directory is refused (exit 3, use --scan-skills=DIR), and its answer names\n"
+        "                               the directories it walked in dirs=\n"
         "    --force                    (wrap) proceed even if CRITICAL findings are found\n\n"
         "  knobs / modes\n"
         "    --rank-by=pagerank|authority|hub|rrf|churn|churn-decay   choose the ranking signal: structure, authority, hub, fusion or churn\n"
@@ -3251,7 +3253,7 @@ inline constexpr ViewFlag kViewFlags[] =
     // the same ruling --dmm=/--quality-delta= below carry for their half-typed ranges. (The unparseable-
     // FILES refusal itself is per-item, in main's --test-gate arm; gate: testgaterefusecheck.sh.)
     { "--test-gate=",      &Config::testGateFiles   , EmptyValue::Refuse, "changed files, F1,F2", "--test-gate=src/cli.h", &Config::testGate },
-    { "--scan-skills=",    &Config::scanSkillsDir   , EmptyValue::Refuse, "a skills directory path (bare --scan-skills scans the tree it maps)", "--scan-skills=skills/", &Config::scanSkills },
+    { "--scan-skills=",    &Config::scanSkillsDir   , EmptyValue::Refuse, "a skills directory path (bare --scan-skills scans ./.agents/skills and the Claude and Codex skill homes, never the root)", "--scan-skills=skills/", &Config::scanSkills },
     { "--dead-code=",      &Config::deadCodeDir     , EmptyValue::Refuse, "a directory or path substring to scope the candidates (bare --dead-code scans the whole tree)", "--dead-code=src/", &Config::deadCode },
     { "--pr-context=",     &Config::prContextBase   , EmptyValue::Refuse, "a base ref (bare --pr-context reads the working tree)", "--pr-context=main", &Config::prContext },
     { "--stray-content=",  &Config::strayFilter     , EmptyValue::Refuse, "a ref-name substring filter (bare --stray-content sweeps every ref)", "--stray-content=lane/", &Config::strayContent },

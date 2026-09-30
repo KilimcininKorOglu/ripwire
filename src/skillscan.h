@@ -1741,23 +1741,36 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // #353: an EXFILTRATE:net-exfil row graded by more than its match carries why= — why="no-cred-source" on a WARN,
 // why="sensitive-read-upload" on a CRITICAL fed by a sensitive read. The full legend defines it only when a row carries
 // it, so every scan without one stays byte-identical.
+// The <skillscan> root's counts. codeNotFlowScanned (readable SkillFileKind::OtherCode files) and dirs (a bare --scan-skills
+// only: the directories it walked, ';'-separated) are present-only, so an answer without them is byte-identical to before.
+struct SkillScanTally
+{
+    int         filesScanned       = 0;
+    int         filesSkipped       = 0;
+    int         codeNotFlowScanned = 0;
+    std::string dirs;
+};
+
 // The --legend=full prose for <skillscan>: its present-only clauses (f rows, capped=, code_not_flow_scanned=, why=) ride only when
 // the answer carries the attribute, so a scan without them prints the legend it always printed.
-inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillScanRow>& rows, int codeNotFlowScanned ) noexcept
+inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillScanRow>& rows, const SkillScanTally& tally ) noexcept
 {
     const bool anyWhy = std::any_of( rows.begin(), rows.end(), []( const SkillScanRow& r ) noexcept { return r.finding.why != nullptr; } );
     rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
                       "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
                       "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
                       "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
-                      "worst finding's severity, the same read as the exit code (0/1/2).{}{}{}{} -->", kSkillScanFindingCap,
+                      "worst finding's severity, the same read as the exit code (0/1/2).{}{}{}{}{} -->", kSkillScanFindingCap,
+                      tally.dirs.empty() ? "" : " dirs= (a bare scan only) lists the directories it walked, separated by ';': .agents/skills under "
+                                                "the current directory, then the Claude and Codex skill homes (a missing one holds nothing); "
+                                                "the positional root is never read.",
                       rows.empty() ? "" : " An f row is one finding: p= is path:line (line 0 = the file or walk as a whole), rule= is "
                                           "CATEGORY:name (INJECTION, EXFILTRATE, SCOPE-CREEP, FRONTMATTER, SCAN-INCOMPLETE), sev= is "
                                           "critical|warn|info.",
                       rows.size() > kSkillScanFindingCap ? " capped=1 (present only then): the rows shown are the worst severity first (every "
                                                            "CRITICAL row, then WARN), each severity in scan order, so the cap never hides a "
                                                            "CRITICAL row behind WARN rows." : "",
-                      codeNotFlowScanned > 0 ? " code_not_flow_scanned=N (present only then): N scanned files are code in a language this "
+                      tally.codeNotFlowScanned > 0 ? " code_not_flow_scanned=N (present only then): N scanned files are code in a language this "
                                                "scanner has no network-flow model for (.py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or a non-shell #!); "
                                                "they were read line by line like markdown, so an upload of a secret written in that language "
                                                "is not detected: clean does not cover them. Shell scripts are scanned as code." : "",
@@ -1784,14 +1797,12 @@ inline std::vector<std::size_t> skillScanRowOrder( const std::vector<SkillScanRo
     return order;
 }
 
-// codeNotFlowScanned: readable files of SkillFileKind::OtherCode (present-only: absent when 0, so every answer without one
-// is byte-identical to before the attribute existed).
-inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, int filesScanned, int filesSkipped = 0, bool fullLegend = false,
-                                    int codeNotFlowScanned = 0 ) noexcept
+inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, const SkillScanTally& tally, bool fullLegend ) noexcept
 {
+    const int filesScanned = tally.filesScanned, filesSkipped = tally.filesSkipped, codeNotFlowScanned = tally.codeNotFlowScanned;
     if( fullLegend )
     {
-        printSkillScanFullLegend( out, rows, codeNotFlowScanned );
+        printSkillScanFullLegend( out, rows, tally );
     }
     int maxSev = 0;
     for( const SkillScanRow& r : rows )
@@ -1819,6 +1830,10 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
     if( codeNotFlowScanned > 0 )
     {
         rw::emitTo( out, " code_not_flow_scanned=\"{}\"", codeNotFlowScanned );
+    }
+    if( !tally.dirs.empty() )
+    {
+        rw::emitTo( out, " dirs=\"{}\"", escapeXmlAttr( tally.dirs ) );
     }
     rw::emitTo( out, " verdict=\"{}\">", verdict );
     const std::vector<std::size_t> order = skillScanRowOrder( rows, capped );

@@ -204,6 +204,16 @@ missed even inside a ```` ```python ```` fence) are 0.6.7 work. `ripwire wrap`'s
 200-row cap the shown rows are the worst severity first (every CRITICAL, then WARN), so a WARN flood cannot hide the
 CRITICAL evidence row; an uncapped answer keeps scan order.
 
+### Fixed — `ripwire <dir> --scan-skills` no longer answers "clean" for a `<dir>` it never read
+
+The bare form walks `./.agents/skills` under the current directory and the Claude and Codex skill homes; it never read a
+positional root, yet `ripwire <dir> --scan-skills` answered `files="0" verdict="clean"` at exit 0 for a `<dir>` holding a
+CRITICAL script, and the empty-value hint said it "scans the tree it maps". A positional root other than the current
+directory is now refused by name (exit 3, this verb's "never scanned it" code, since 0/1/2 are verdicts: pass
+`--scan-skills=<dir>` or `cd` there), the hint and `--help` say what the bare form walks, and its answer names the
+directories it walked in `dirs=` (present only on the bare form; defined in the compact and full legends). Scans of a
+`DIR` or a single file are byte-identical. Gate: `test/skillscan.sh` check 20 (M5).
+
 ### Fixed — `--stray-content` defines the `diffable="0"` it emits for a binary on an unmerged branch
 
 A file an unmerged local branch holds that cannot be line-diffed (a binary or oversized blob on some side, e.g. an

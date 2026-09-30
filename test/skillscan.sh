@@ -334,6 +334,19 @@ for L in "" "--legend=full"; do
     for a in rule sev; do printf '%s' "$leg" | grep -qE "(^|[^[:alnum:]_:.-])$a *=" || r2_undef="$r2_undef ${L:-default}:$a"; done
 done
 if [ -z "$r2_undef" ]; then ok "(round2) S4 both --scan-skills legends define rule= and sev="; else no "(round2) S4 undefined:$r2_undef"; fi
+mkdir -p "$R2/elsewhere/skills/x/scripts"; cp "$SG/sh/scripts/helper.sh" "$R2/elsewhere/skills/x/scripts/"
+( cd "$R2/home" && HOME="$R2/home" "$BIN" "$R2/elsewhere/skills" --scan-skills >"$TMP/r2m5.out" 2>"$TMP/r2m5.err" ); rc=$?
+if [ "$rc" = 3 ] && [ ! -s "$TMP/r2m5.out" ] && grep -q -- '--scan-skills=' "$TMP/r2m5.err"; then
+    ok "(round2) M5 a positional root that is not the cwd is refused (exit 3, names --scan-skills=DIR), not answered clean"
+else
+    no "(round2) M5 rc=$rc stdout: $( head -c 160 "$TMP/r2m5.out" ) stderr: $( head -c 160 "$TMP/r2m5.err" )"
+fi
+( cd "$R2/home" && HOME="$R2/home" "$BIN" . --scan-skills >"$TMP/r2m5b.out" 2>/dev/null ); rc=$?
+if [ "$rc" = 0 ] && grep -q '<skillscan [^>]*dirs="' "$TMP/r2m5b.out" && grep -qE '^<!--.*[^[:alnum:]_]dirs=' "$TMP/r2m5b.out"; then
+    ok "(round2) M5 the bare form names the directories it walked (dirs=), defined in its legend"
+else
+    no "(round2) M5 bare form: rc=$rc $( grep -o '<skillscan[^>]*>' "$TMP/r2m5b.out" )"
+fi
 
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then

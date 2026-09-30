@@ -677,6 +677,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "rule", "f rule=: the finding's rule, CATEGORY:name (INJECTION, EXFILTRATE, SCOPE-CREEP, FRONTMATTER, SCAN-INCOMPLETE); p= is path:line", true, "f", MapHeaderRead::No, {}, "scan-skills" },
     { "sev", "f sev=critical|warn|info: that finding's severity (verdict= is the worst)", true, "f", MapHeaderRead::No, {}, "scan-skills" },
     { "capped", "capped=1: more rows than 200; the shown rows are the worst severity first (every CRITICAL, then WARN)", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
+    { "dirs", "dirs=: the directories a bare scan-skills run walked, ;-separated (cwd .agents/skills, the Claude and Codex skill homes); never the positional root", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     { "code_not_flow_scanned", "code_not_flow_scanned=N: scanned code files with no network-flow model (.py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, a non-shell #!); clean does not cover them", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     // seams: src/verbs_report.h runStructureText (the seams arm)
     { "modules", "modules=N: directories holding indexed symbols (a module = parent dir)", false, "seams", MapHeaderRead::No, {}, "seams" },
