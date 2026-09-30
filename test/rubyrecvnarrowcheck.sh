@@ -282,8 +282,13 @@ I="$( rowOf 'n="inherited_call" ' )"
 CB="$( "$BIN" "$FIX" --no-cache --callers=Parent::build 2>/dev/null )"
 echo "$CB" | grep -q 'n="inherited_call"' && ok "--callers=Parent::build lists inherited_call" \
     || no "--callers=Parent::build does not list inherited_call"
-CBU="$( "$BIN" "$FIX" --no-cache --callers=Unrelated::build 2>/dev/null )"
-echo "$CBU" | grep -q 'n="inherited_call"' && no "--callers=Unrelated::build lists inherited_call — the walk took an unrelated same-named def" || ok "--callers=Unrelated::build does not list inherited_call"
+# An absence arm must fail on a broken run: a crash or refusal leaves CBU empty, which the grep alone reads as a PASS.
+if CBU="$( "$BIN" "$FIX" --no-cache --callers=Unrelated::build 2>"$DIR/cbu.err" )"; then
+    if echo "$CBU" | grep -q 'n="inherited_call"'; then no "--callers=Unrelated::build lists inherited_call — the walk took an unrelated same-named def"
+    else ok "--callers=Unrelated::build does not list inherited_call"; fi
+else
+    no "--callers=Unrelated::build exited non-zero: $( head -3 "$DIR/cbu.err" )"
+fi
 
 echo "=== floor (b): two same-final-segment classes both defining the callee keep BOTH (honest split) ==="
 SS="$( rowOf 'n="same_segment_call" ' )"
