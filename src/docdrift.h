@@ -1525,6 +1525,27 @@ inline Record recordOf( std::string_view line, bool isHeadingDated, const DocDat
 // resolution) rather than growing a fifth concern every time a lane is added. Three interleaved states live
 // here and nowhere else: the fence toggle, the heading's dated-ness, and the doc's own dating. `resolving`
 // grows alongside — it is the corroboration signal collectNamedSpans appends to, in ascending line order.
+// 0.6.6 D3: a section inherits the ISO date of the heading it sits UNDER. Keep a Changelog writes
+// `## [1.8.2] - 2026-03-17` then `### Fixed`, and the rename recorded under `### Fixed` was read as a live claim
+// because only the NEAREST heading was consulted. datedAtLevel[L] = the last level-L heading carried a date; a heading
+// clears every deeper level. Level 1 does not propagate: an H1 date is the doc's title date (rec="title").
+struct HeadingDates
+{
+    std::array<bool, 7> datedAtLevel{};
+
+    // Record the heading line `t` (leading '#'s, trimmed); returns whether its section is dated.
+    bool enter( std::string_view t ) noexcept
+    {
+        const std::size_t hashes   = t.find_first_not_of( '#' );
+        const std::size_t level    = std::min<std::size_t>( hashes == std::string_view::npos ? t.size() : hashes, datedAtLevel.size() - 1 );
+        const bool        ownDated = hasDatingIsoDate( t );
+        const bool        enclosed = level > 2 && std::any_of( datedAtLevel.begin() + 2, datedAtLevel.begin() + std::ptrdiff_t( level ), []( bool d ) { return d; } );
+        datedAtLevel[ level ] = ownDated;
+        std::fill( datedAtLevel.begin() + std::ptrdiff_t( level ) + 1, datedAtLevel.end(), false );
+        return ownDated || enclosed;
+    }
+};
+
 inline std::vector<Anchor> collectDocAnchors( std::string_view rel, std::string_view bytes,
                                               const HashMap<std::string, std::uint32_t>& defined,
                                               std::vector<std::uint32_t>& resolving )
@@ -1534,30 +1555,14 @@ inline std::vector<Anchor> collectDocAnchors( std::string_view rel, std::string_
     std::vector<Anchor> anchors;
     bool                inFence        = false;
     bool                isHeadingDated = false;
-    // 0.6.6 D3: a section inherits the ISO date of the heading it sits UNDER. Keep a Changelog writes
-    // `## [1.8.2] - 2026-03-17` then `### Fixed`, and the rename recorded under `### Fixed` was read as a live claim
-    // because only the NEAREST heading was consulted. datedAtLevel[L] = the last level-L heading carried a date; a
-    // heading clears every deeper level. Level 1 does not propagate: an H1 date is the doc's title date (rec="title").
-    std::array<bool, 7> datedAtLevel{};
+    HeadingDates        headingDates;
     darkflags::forEachLine( bytes, [ & ]( std::string_view line, std::uint32_t lineNo )
     {
         const std::string_view t = darkflags::trimView( line );
         if( t.size() >= 3 && ( t.compare( 0, 3, "```" ) == 0 || t.compare( 0, 3, "~~~" ) == 0 ) ) { inFence = !inFence; return; }
         if( !inFence && !t.empty() && t.front() == '#' )
         {
-            const std::size_t level    = std::min<std::size_t>( t.find_first_not_of( '#' ) == std::string_view::npos ? t.size() : t.find_first_not_of( '#' ), 6 );
-            const bool        ownDated = hasDatingIsoDate( t );
-            bool              enclosingDated = false;
-            for( std::size_t up = 2; up < level; ++up )
-            {
-                enclosingDated = enclosingDated || datedAtLevel[ up ];
-            }
-            datedAtLevel[ level ] = ownDated;
-            for( std::size_t deeper = level + 1; deeper < datedAtLevel.size(); ++deeper )
-            {
-                datedAtLevel[ deeper ] = false;
-            }
-            isHeadingDated = ownDated || enclosingDated;
+            isHeadingDated = headingDates.enter( t );
         }
 
         // The record classifier runs ONLY over the anchors THIS line produced, so a doc line that anchors

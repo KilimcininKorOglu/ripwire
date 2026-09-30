@@ -527,6 +527,28 @@ inline constexpr std::string_view kEnvProbeTable[] = { "getenv", "environ.get", 
 // leaves the ONE call (the old reader crossed a `"` that closed one literal and entered the next, which is
 // how the commas separating kEnvProbeTable's own spellings became gates named `,` and `, `), and the name it
 // finds must be identifier-shaped.
+// The identifier-shaped name inside ONE quoted literal that opens at `i` (after optional whitespace), with an opening
+// quote from `quotes`, closed by the same quote; "" otherwise (a computed name, an unclosed literal, a non-name).
+// Shared by the getenv-family call shape and Node's `process.env[...]` subscript.
+inline std::string_view quotedEnvNameAt( std::string_view line, std::size_t i, std::string_view quotes )
+{
+    while( i < line.size() && std::isspace( (unsigned char)line[i] ) )
+    {
+        ++i;
+    }
+    if( i >= line.size() || quotes.find( line[i] ) == std::string_view::npos )
+    {
+        return {}; // computed name — cannot be named
+    }
+    const std::size_t close = line.find( line[i], i + 1 );
+    if( close == std::string_view::npos )
+    {
+        return {};
+    }
+    const std::string_view name = line.substr( i + 1, close - i - 1 );
+    return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
+}
+
 inline std::string_view envNameAt( std::string_view line, std::size_t at, std::string_view probe )
 {
     if( line.compare( at, probe.size(), probe ) != 0 )
@@ -547,23 +569,7 @@ inline std::string_view envNameAt( std::string_view line, std::size_t at, std::s
         }
         ++i;
     }
-    while( i < line.size() && std::isspace( (unsigned char)line[i] ) )
-    {
-        ++i;
-    }
-    if( i >= line.size() || line[i] != '"' )
-    {
-        return {}; // computed name — cannot be named
-    }
-
-    const std::size_t close = line.find( '"', i + 1 );
-    if( close == std::string_view::npos )
-    {
-        return {};
-    }
-
-    const std::string_view name = line.substr( i + 1, close - i - 1 );
-    return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
+    return quotedEnvNameAt( line, i, "\"" );
 }
 
 // 0.6.6 D5: Node's environment read — `process.env.NAME`, `process.env["NAME"]`, `process.env['NAME']` — is the getenv of
@@ -588,26 +594,7 @@ inline std::string_view processEnvNameAt( std::string_view line, std::size_t at 
         const std::string_view name = line.substr( i + 1, end - i - 1 );
         return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
     }
-    if( i >= line.size() || line[i] != '[' )
-    {
-        return {};
-    }
-    ++i;
-    while( i < line.size() && std::isspace( (unsigned char)line[i] ) )
-    {
-        ++i;
-    }
-    if( i >= line.size() || ( line[i] != '"' && line[i] != '\'' && line[i] != '`' ) )
-    {
-        return {}; // computed key — cannot be named
-    }
-    const std::size_t close = line.find( line[i], i + 1 );
-    if( close == std::string_view::npos )
-    {
-        return {};
-    }
-    const std::string_view name = line.substr( i + 1, close - i - 1 );
-    return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
+    return ( i < line.size() && line[i] == '[' ) ? quotedEnvNameAt( line, i + 1, "\"'`" ) : std::string_view{};
 }
 
 inline void harvestEnvReads( std::string_view line, std::uint32_t lineNo, FileHarvest& fh,
