@@ -472,6 +472,24 @@ every input the tool ever sees, costs nothing in release, and tells the optimize
   ordered container); and `unordered_dense` invalidates references on insert (values live in one
   vector), so never hold a `T&` into it across an insert.
 
+### Adding a language: common stays common
+
+A new language is **data plus, at most, small per-language pieces for semantics that genuinely differ** —
+never a copy of another language's mechanism. The step-by-step path is `prompts/add-a-language.md`; the
+rules it enforces:
+
+- **Data, not branches.** A `kLangTable` row, a `queries/<lang>/tags.scm` in the shared capture
+  vocabulary, and a row in each exhaustive `switch( Lang )` table. No language-named capture kinds.
+- **Reuse the shared mechanism.** Scope walks, shadowing (`VarDecl` bindings with spans) and imports
+  (`Binding`/`Include`) each exist once. Extend them; a second copy under a new language's name is a
+  review finding, and `--clones` shows it. No language-neutral qualified-call resolver exists yet
+  (`src/elixir_resolve.h` is Elixir-specific); raise generalising it in your PR.
+- **Refuse, don't guess.** A call whose qualifier (`Mod.f`, `ns/f`) cannot be resolved is counted as
+  unresolved, never laddered to every definition of that short name.
+- **Known gap.** Tags-pass predicates (`#eq?`/`#any-of?`) do not run yet, so keyword-headed definitions
+  (Elixir today; a Lisp-style `defn` if one is added) keep a small keyword table in C++. That table belongs in `tags.scm` once the
+  mechanism lands; it is not a pattern to extend.
+
 ### Interfaces
 
 - **Structured-binding returns** over out-params: `auto [ nodes, edges ] = build( … );`.
