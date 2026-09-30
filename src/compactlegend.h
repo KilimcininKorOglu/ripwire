@@ -590,6 +590,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // MCP verbs. Head term like disk_walk_failed=/refs_dropped= above; --notes itself is unaffected (its own
     // lines_skipped=/refused= rows already have readings, further up this table).
     { "notes_degraded",    "notes_degraded=1: the .ripwire_notes sidecar had unreadable lines or was refused this run (the notes verb's own listing names which)" },
+    // --naming-consistency's absent-at-zero count (countAttrXmlOrEmpty, so (S) requires its row HERE): the JSX components
+    // kept out of the vote (namingconsistency.h isJsxComponentName). Key-qualified: no other verb spells it.
+    { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (JSX components), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
 
 };
 
@@ -654,7 +657,6 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "candidates", "candidates=N: multi-token styled names scanned", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     { "decided", "decided=N: groups whose leading style cleared both the sample and agreement floors", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     { "flagged", "flagged=N: off-convention names in decided groups (the f rows)", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
-    { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (JSX components), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     // path: src/verbs_navigate.h (the <path> root emit)
     { "from_p", "from_p=/to_p=: the definitions from= and to= were bound to", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_p=
     { "from_defs", "from_defs=/to_defs=: definitions of each name, all searched; above 1, qualify file:name", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_defs=

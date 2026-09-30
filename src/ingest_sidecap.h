@@ -2122,7 +2122,9 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             // enclosingFunctionScope): graph.h reachableByName ranks it below every def a call outside it can name.
             if( kind == SymKind::Function )
             {
-                const FnScope fnScope = enclosingFunctionScope( defNode );
+                const FnScope fnScope = enclosingFunctionScope( roleNode );   // roleNode: defNode or its parent binding list —
+                                                                              // no scope node between them, and its parent is
+                                                                              // not a 20k-child declaration to rescan per name
                 d.fnScopeStart = fnScope.start;
                 d.fnScopeEnd   = fnScope.end;
             }
