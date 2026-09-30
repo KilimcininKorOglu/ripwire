@@ -67,6 +67,13 @@ file neither votes nor is flagged (JSX reads a lowercase tag as an intrinsic ele
 same repo the bodied arrows bring 7 React components into the vote; all 7 are exempt (`component_exempt="7"`, 0
 flagged). Gate: `test/namingconsistencycheck.sh` arm 12.
 
+### Changed — `ripwire-quality-bar` gains a bounded debt fix loop
+
+A new section drives paying down EXISTING debt: pick the top `--quality-panel=strict` row, write the test first when
+nothing reaches the code, apply the table/playbook recipe for its shape, and prove it with the closed fix loop plus an
+anti-gaming rule (measure before committing, one fix per commit; `regressions="0"` and `acked=` not rising — a fix
+may not worsen any other kind); at most 3 fixes per session (a default, not a measured optimum).
+
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
 ripwire measured none of its own memory, so a large tree (#350: a non-git home directory, 67 GB) could grow it until
