@@ -632,9 +632,8 @@ struct NetFlowScan
     // A read operand: note whether it is sensitive, and whether it is named like a credential.
     void noteRead( std::string_view operand ) noexcept
     {
-        const std::size_t slash = operand.find_last_of( '/' );   // never `npos + 1`: G1's -fsanitize=integer traps the wrap
         segSensitive        = segSensitive || isSensitivePath( operand );
-        flow.credentialRead = flow.credentialRead || isCredentialName( slash == std::string_view::npos ? operand : operand.substr( slash + 1 ) );
+        flow.credentialRead = flow.credentialRead || isCredentialName( namesplit::afterLast( operand, "/" ) );
     }
 
     void word( std::string_view token, std::string_view low ) noexcept

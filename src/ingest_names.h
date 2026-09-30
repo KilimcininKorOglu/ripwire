@@ -70,8 +70,8 @@ inline std::string_view skipTemplateDisambiguator( std::string_view text ) noexc
 
 inline std::string immediateScope( std::string_view full )
 {
-    const std::size_t cc = full.rfind( "::" );
-    return std::string( skipTemplateDisambiguator( cc == std::string_view::npos ? full : full.substr( cc + 2 ) ) );
+    const std::string_view lastSegment = rw::namesplit::afterLast( full, "::" );
+    return std::string( skipTemplateDisambiguator( lastSegment ) );
 }
 
 // ── H4 qualified-call re-split helpers ───────────────────────────────────────────────────────────────────

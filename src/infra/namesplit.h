@@ -149,5 +149,21 @@ inline std::string_view stripQuotePair( std::string_view text ) noexcept
     return text;
 }
 
+/// The text after the LAST `sep`, or all of `text` when `sep` does not occur — the ONE "base name" cut, for a path
+/// (`sep` "/": `a/b/c.h` -> `c.h`) and for a qualified name (`sep` "::": `ns::Foo::bar` -> `bar`). mention.h's
+/// baseNameOf, ingest_names.h's immediateScope, skillscan.h's NetFlowScan::noteRead and layout.h's lastSegment each
+/// spelled it themselves, and --quality-delta flags that as a duplication clone (0.6.6). `at + sep.size()` is taken
+/// only when `sep` was found, so the npos wrap -fsanitize=integer traps cannot occur.
+inline std::string_view afterLast( std::string_view text, std::string_view sep ) noexcept
+{
+    EXPECTS( !sep.empty(), "an empty separator has no last occurrence to cut after" );
+    const std::size_t at = text.rfind( sep );
+    if( at != std::string_view::npos )
+    {
+        text.remove_prefix( at + sep.size() );
+    }
+    return text;
+}
+
 } // namespace namesplit
 } // namespace rw
