@@ -674,6 +674,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "findings", "findings=N: pattern hits; rows print up to 200 (shown= capped=1 past that)", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     { "verdict", "verdict=clean|warn|critical: the worst finding's severity, the same as exit 0/1/2", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     { "why", "f why=no-cred-source: net-exfil hit, no credential-shaped source on the line (WARN); why=sensitive-read-upload: a sensitive file read feeds the upload (CRITICAL)", true, "f", MapHeaderRead::No, {}, "scan-skills" },
+    { "capped", "capped=1: more rows than 200; the shown rows are the worst severity first (every CRITICAL, then WARN)", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     { "code_not_flow_scanned", "code_not_flow_scanned=N: scanned code files with no network-flow model (.py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, a non-shell #!); clean does not cover them", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     // seams: src/verbs_report.h runStructureText (the seams arm)
     { "modules", "modules=N: directories holding indexed symbols (a module = parent dir)", false, "seams", MapHeaderRead::No, {}, "seams" },

@@ -1750,7 +1750,10 @@ inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillSca
                       "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
                       "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
                       "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
-                      "worst finding's severity, the same read as the exit code (0/1/2).{}{} -->", kSkillScanFindingCap,
+                      "worst finding's severity, the same read as the exit code (0/1/2).{}{}{} -->", kSkillScanFindingCap,
+                      rows.size() > kSkillScanFindingCap ? " capped=1 (present only then): the rows shown are the worst severity first (every "
+                                                           "CRITICAL row, then WARN), each severity in scan order, so the cap never hides a "
+                                                           "CRITICAL row behind WARN rows." : "",
                       codeNotFlowScanned > 0 ? " code_not_flow_scanned=N (present only then): N scanned files are code in a language this "
                                                "scanner has no network-flow model for (.py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or a non-shell #!); "
                                                "they were read line by line like markdown, so an upload of a secret written in that language "
@@ -1759,6 +1762,23 @@ inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillSca
                                "verb plus a $VAR or base64 but no credential-shaped source on the line, so WARN, not CRITICAL; "
                                "why=sensitive-read-upload, a sensitive file read (a key, /etc/passwd, .netrc, .env, a credential "
                                "or cookie store) piped, redirected or passed into an upload, CRITICAL." : "" );
+}
+
+// The order <f> rows print in: scan order, except past the row cap, where the worst severity comes first (a stable sort, so
+// each severity keeps scan order) — a WARN flood cannot push the CRITICAL evidence row past the cap (review S1). Uncapped
+// answers keep scan order, byte-identical to before.
+inline std::vector<std::size_t> skillScanRowOrder( const std::vector<SkillScanRow>& rows, bool capped )
+{
+    std::vector<std::size_t> order( rows.size() );
+    for( std::size_t i = 0; i < order.size(); ++i )
+    {
+        order[i] = i;
+    }
+    if( capped )
+    {
+        std::stable_sort( order.begin(), order.end(), [ & ]( std::size_t a, std::size_t b ) noexcept { return int( rows[a].finding.sev ) > int( rows[b].finding.sev ); } );
+    }
+    return order;
 }
 
 // codeNotFlowScanned: readable files of SkillFileKind::OtherCode (present-only: absent when 0, so every answer without one
@@ -1798,9 +1818,10 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
         rw::emitTo( out, " code_not_flow_scanned=\"{}\"", codeNotFlowScanned );
     }
     rw::emitTo( out, " verdict=\"{}\">", verdict );
+    const std::vector<std::size_t> order = skillScanRowOrder( rows, capped );
     for( std::size_t i = 0; i < shown; ++i )
     {
-        const SkillScanRow& r = rows[i];
+        const SkillScanRow& r = rows[ order[i] ];
         rw::emitTo( out, "<f p=\"{}:{}\" rule=\"{}\" sev=\"{}\"",
                      escapeXmlAttr( r.path ).c_str(), r.finding.line, r.finding.rule, skillSeverityAttr( r.finding.sev ).c_str() );
         if( r.finding.why != nullptr )

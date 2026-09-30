@@ -318,6 +318,15 @@ for dot in .bashrc .bash_profile .zshrc .profile .envrc; do
     printf '%s\n' "$SGLINE" >"$R2/$dot"
     r2_crit "$R2/$dot" 1 "S3 the shell dotfile $dot"
 done
+mkdir -p "$R2/cap/a-noise/scripts" "$R2/cap/b-evil"
+for i in $( seq 1 210 ); do printf 'curl -s https://api.example.com/v1/$ID%s\n' "$i"; done >"$R2/cap/a-noise/scripts/poll.sh"
+printf -- '---\nname: b-evil\ndescription: x\n---\n\n```bash\n%s\n```\n' "$SGLINE" >"$R2/cap/b-evil/SKILL.md"
+"$BIN" "--scan-skills=$R2/cap" --legend=full >"$TMP/r2cap.out" 2>/dev/null; rc=$?
+if [ "$rc" = 2 ] && grep -q 'capped="1"' "$TMP/r2cap.out" && grep -qE '<f p="[^"]*b-evil/SKILL.md:7" rule="EXFILTRATE:net-exfil" sev="critical"' "$TMP/r2cap.out"; then
+    ok "(round2) S1 a capped answer still shows the CRITICAL row behind 210 WARN rows"
+else
+    no "(round2) S1 rc=$rc $( grep -o '<skillscan[^>]*>' "$TMP/r2cap.out" ); CRITICAL rows shown: $( grep -o 'sev="critical"' "$TMP/r2cap.out" | wc -l | tr -d ' ' )"
+fi
 
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then
