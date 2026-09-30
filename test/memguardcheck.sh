@@ -606,6 +606,18 @@ fi
 #       the parse line and the cut rule are the real ones. The big files sort LAST (z/), and the parse order is largest
 #       first, so a rule that kept a prefix of the SORTED list would keep nothing here (rc 5, "nothing built"); the
 #       claimed-prefix rule keeps the z/ files it parsed. The line crossed is named: the parse line, half the limit.
+#   HEADROOM (0.6.6): the limit is the 64M floor, not 128M. Measured on a 10-core macOS host, with the pool size forced to
+#       3/4/10/16 workers and each run foreground and under `taskpolicy -b`: this fixture's footprint roughly DOUBLES
+#       between the parse stop and the graph build (the parsed facts are merged, then graphed), so the post-stop peak is
+#       about the limit minus what does not double (the process base and the trees in flight at the stop): a headroom
+#       that does NOT scale with the limit. Raising limit and fixture together (256M + twice the z/ files) keeps
+#       that ratio and measured WORSE (1/6 under taskpolicy -b at 10 workers, against 1/4 at 128M); the floor gives the
+#       fixed headroom the largest share (10 workers 7/7 fg+bg; 3 and 16 workers 7/7 each). One shape stays marginal (4
+#       workers under taskpolicy -b: 5 of 11 attempts), so an attempt that ends on the REAL hard line after its parse stop (rc 5,
+#       "memory limit reached during the <phase>"), or that never reaches the parse line (rc 0, no memory_stop=), is an
+#       ENVIRONMENT outcome, not the property: it is re-run, up to 6 attempts, and the arm passes only on an attempt that
+#       shows the whole property. Anything else fails at once — the D1 shape (rc 5, "before anything was built"), a stop
+#       that keeps no z/ file, a wrong line. Six environment outcomes in a row fail too: the arm never passes blind.
 EG="$TMP/eg"; mkdir -p "$EG"
 python3 - "$EG" <<'PY2'
 import os, sys
@@ -619,17 +631,30 @@ for f in range( 80 ):
     open( os.path.join( root, "z", "big%02d.c" % f ), "w" ).write(
         "".join( "int z%d_%d(int x){ return x>0 ? z%d_%d(x-1)+%d : %d; }\n" % ( f, k, f, ( k + 1 ) % 1500, k, k ) for k in range( 1500 ) ) )
 PY2
-# ASan quarantine inflates the footprint past the 128M hard line before the soft parse stop is visible (review G1:
+# ASan quarantine inflates the footprint past the hard line before the soft parse stop is visible (review G1:
 #   peak 498 MB under ASan vs 82 MB plain); a plain binary ignores the option.
-ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}quarantine_size_mb=0" RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG" --no-cache --max-memory=128M --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
-hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b12.out" | head -1 )"
-parsed="$( printf '%s' "$hdr" | grep -oE 'memory_parsed=[0-9]+' | grep -oE '[0-9]+' )"
-if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=parse"*) true;; *) false;; esac && [ "${parsed:-0}" -ge 2 ] && grep -q 'p="z/' "$TMP/b12.out"; then
-    ok "(B12) a real parse stop (128M, eager readings) answers from the $parsed files it parsed — the big z/ files, first in the parse order"
+b12="" b12env=""
+for attempt in 1 2 3 4 5 6; do
+    ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}quarantine_size_mb=0" RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG" --no-cache --max-memory=64M --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
+    hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b12.out" | head -1 )"
+    parsed="$( printf '%s' "$hdr" | grep -oE 'memory_parsed=[0-9]+' | grep -oE '[0-9]+' )"
+    if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=parse"*) true;; *) false;; esac && [ "${parsed:-0}" -ge 2 ] && grep -q 'p="z/' "$TMP/b12.out"; then
+        b12=pass; break
+    fi
+    if { [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ' "$TMP/b12.err" && ! grep -q 'before anything was built' "$TMP/b12.err"; } \
+       || { [ "$rc" = 0 ] && ! grep -q 'memory_stop=' "$TMP/b12.out"; }; then
+        b12env="$b12env [attempt $attempt: rc=$rc $( grep '^ripwire:' "$TMP/b12.err" | tail -1 | head -c 70 )]"
+        continue
+    fi
+    break
+done
+[ -n "$b12env" ] && printf '  ..    (B12) environment outcome(s) re-run:%s\n' "$b12env"
+if [ "$b12" = pass ]; then
+    ok "(B12) a real parse stop (64M, eager readings) answers from the $parsed files it parsed — the big z/ files, first in the parse order (attempt $attempt)"
 else
     no "(B12) rc=$rc header: $hdr stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 200 )"
 fi
-if grep -q '^ripwire: the memory guard stopped the parse at the parse line (half of the 128M limit)' "$TMP/b12.err"; then
+if [ "$b12" = pass ] && grep -q '^ripwire: the memory guard stopped the parse at the parse line (half of the 64M limit)' "$TMP/b12.err"; then
     ok "(B12b) the stop line names the parse line (half of the limit), not the limit it did not reach"
 else
     no "(B12b) stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 250 )"
