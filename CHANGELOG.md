@@ -138,6 +138,16 @@ opening with `TODO`/`FIXME` that names no issue. Every row is `origin="new-symbo
 change with no stub prints nothing new. `--help`, the MCP `quality_delta` description and the full legend
 now say eleven kinds.
 
+### Changed
+- `--metrics` prints one row per definition. Same-name definitions in one file and scope (Java, C++ or C#
+  overloads; a macro defined in several preprocessor branches) used to share ONE row that carried one
+  body's `cx`/`ccx`/`loc`, so the other bodies' metrics were hidden and a join by function missed them.
+  Each body now has its own row with `l=` (its start line; `"l"` in `--json`). Bodyless declarations add
+  no row: they fold into `overloads=` of the group's first body, so `rows + sum(overloads-1) = shown`
+  still holds. A prototype plus its definition stays one row, now carrying the definition's metrics
+  instead of the prototype's. Rows of code without same-name definitions are byte-identical, and the
+  default map (no `--metrics`) keeps its collapse unchanged. Gate: `test/metricscheck.sh` (per-def arms).
+
 ## [0.6.5] — 2026-09-27
 
 

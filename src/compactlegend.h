@@ -1232,6 +1232,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "ev_floor", "ev_floor=1: ev= is a FLOOR; noreturn calls, macro-hidden exits and unresolved gotos are unseen", true, "s", MapHeaderRead::No, {}, "metrics" },
     { "ppalt", "ppalt=N: #else/#elif branches in the body; metrics sum ALL branches, no one build compiles them all", true, "s", MapHeaderRead::No, {}, "metrics" },
     { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "f", MapHeaderRead::No, {}, "metrics" },
+    // l= (P11, 2026-09-27): same-name overloads print one row per BODY, told apart by their start line; present-only.
+    { "l", "l=N: start line; only on a same-name overload's row, one row per body (bodyless decls fold into overloads=)", true, "s", MapHeaderRead::No, {}, "metrics" },
     // query: src/serialize.h (f layer= via builtinLayer)
     { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "f", MapHeaderRead::No, {}, "query" },
     // around: src/serialize.h (f layer= via builtinLayer)

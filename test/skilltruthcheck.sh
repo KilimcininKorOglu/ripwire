@@ -134,7 +134,9 @@ grep -q -- '--lint .*cache-\* data-layout' <<<"$helpOut" \
     && ok "--help's --lint line names the cache-* data-layout pack" \
     || no "--help's --lint line does not name the cache-* pack"
 
-pushBackRow="$( "$BIN" "$ROOT" --metrics --no-cache --top-k=5000 2>/dev/null | grep -o '<s[^>]*n="push_back" sc="svector"[^>]*>' | head -1 )"
+# --metrics prints one row per definition (P11, 2026-09-27): svector's two push_back overloads are two rows told apart by
+# l=, and only the guard-return body (the const T& one) carries ev=; the other has none. Pick that row, not the first.
+pushBackRow="$( "$BIN" "$ROOT" --metrics --no-cache --top-k=5000 2>/dev/null | grep -o '<s[^>]*n="push_back" sc="svector"[^>]*>' | grep 'ev_why=' | head -1 )"
 { [ -n "$pushBackRow" ] && grep -q 'ev="2"' <<<"$pushBackRow" && grep -q 'ev_why="guard-return:1"' <<<"$pushBackRow"; } \
     && ok "--metrics actually emits ev=/ev_why= on a known guard-return function (svector::push_back)" \
     || no "--metrics did not emit the expected ev=/ev_why= on svector::push_back"

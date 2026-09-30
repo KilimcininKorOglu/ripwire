@@ -1578,6 +1578,7 @@ struct OverloadRows
 {
     std::vector<NodeId>        id;          // one representative NodeId per printed row, original order
     std::vector<std::uint32_t> overloads;    // parallel: 1 = no collision, N>1 = N rows collapsed into this one
+    std::vector<std::uint8_t>  split;       // parallel, --metrics only: 1 = one DEFINITION of a same-name group, row carries l=
 };
 
 inline OverloadRows collapseOverloadRows( const IngestResult& ing, const std::vector<NodeId>& bucket )
@@ -1605,7 +1606,111 @@ inline OverloadRows collapseOverloadRows( const IngestResult& ing, const std::ve
             }
         }
     }
+    out.split.assign( out.id.size(), 0 );
     return out;
+}
+
+// A declaration with no body (a C/C++ prototype, an abstract or interface method): its signature end IS its end —
+// the same test callhierarchy.h (bodylessDefs), readability.h and quality.h apply.
+inline bool isBodylessDecl( const Symbol& s ) noexcept
+{
+    return s.endByte <= s.sigEndByte;
+}
+
+// --metrics: ONE ROW PER DEFINITION (M1 pilot finding P11). collapseOverloadRows() folds every same (kind,id) group
+// into one row and prints ONE member's cx/ccx/loc — so a Java/C++/C# overload set hid all but one body's metrics and a
+// consumer joining by function lost the rest. Under --metrics a group with 2+ BODIED members instead prints one row per
+// body, each with l= (its start line, the only field that tells the rows apart); the group's bodyless declarations add
+// no row and fold into overloads= of its lowest-NodeId body, so rows+sum(overloads-1)=shown still holds. A group with at
+// most one body keeps the collapse, except that its representative is that body (a prototype+definition pair used to
+// print the prototype's loc/cx). Groups with one member — every row of overload-free code — are untouched byte for byte.
+struct DefGroupStat
+{
+    std::uint32_t members = 0;
+    std::uint32_t bodied  = 0;
+    NodeId        anchor  = kNoNode;   // lowest-NodeId bodied member (the row bodyless decls fold into)
+};
+
+// Pass 1 of perDefinitionRows: each bucket member's (kind,id) group, and per group its member/body counts and anchor.
+inline void tallyDefGroups( const IngestResult& ing, const std::vector<NodeId>& bucket,
+                            std::vector<DefGroupStat>& groups, std::vector<std::size_t>& memberGroup )
+{
+    rw::HashMap<std::string, std::size_t> groupOf;
+    memberGroup.reserve( bucket.size() );
+    for( NodeId nodeId : bucket )
+    {
+        const Symbol&     s   = ing.symbols[nodeId];
+        const std::string key = std::string( symTag( s.kind ) ) + '\x1f' + canonicalId( ing.files[ s.fileId ], s.scope, s.name );
+        const auto [it, fresh] = groupOf.try_emplace( key, groups.size() );
+        if( fresh ) { groups.emplace_back(); }
+        DefGroupStat& g = groups[ it->second ];
+        ++g.members;
+        if( !isBodylessDecl( s ) )
+        {
+            ++g.bodied;
+            g.anchor = std::min( g.anchor, nodeId );
+        }
+        memberGroup.push_back( it->second );
+    }
+}
+
+inline OverloadRows perDefinitionRows( const IngestResult& ing, const std::vector<NodeId>& bucket )
+{
+    std::vector<DefGroupStat> groups;
+    std::vector<std::size_t>  memberGroup;
+    tallyDefGroups( ing, bucket, groups, memberGroup );
+    OverloadRows                    out;
+    std::vector<std::size_t>        rowOfGroup( groups.size(), SIZE_MAX );
+    for( std::size_t i = 0; i < bucket.size(); ++i )
+    {
+        const NodeId        nodeId = bucket[i];
+        const DefGroupStat& g      = groups[ memberGroup[i] ];
+        const bool          body   = !isBodylessDecl( ing.symbols[nodeId] );
+        if( g.bodied >= 2 )
+        {
+            if( body )
+            {
+                out.id.push_back( nodeId );
+                out.overloads.push_back( nodeId == g.anchor ? 1 + ( g.members - g.bodied ) : 1 );
+                out.split.push_back( 1 );
+            }
+            continue;
+        }
+        std::size_t& row = rowOfGroup[ memberGroup[i] ];
+        if( row == SIZE_MAX )
+        {
+            row = out.id.size();
+            out.id.push_back( g.bodied == 1 ? g.anchor : nodeId );
+            out.overloads.push_back( 0 );
+            out.split.push_back( 0 );
+        }
+        ++out.overloads[row];
+        if( g.bodied == 0 && nodeId < out.id[row] )   // same order-invariant min-id pin collapseOverloadRows uses
+        {
+            out.id[row] = nodeId;
+        }
+    }
+    std::uint64_t counted = 0;
+    for( std::uint32_t n : out.overloads ) { counted += n; }
+    ENSURES( counted == bucket.size(), "perDefinitionRows: rows+sum(overloads-1) must equal the bucket's definition count" );
+    return out;
+}
+
+inline OverloadRows overloadRowsFor( const IngestResult& ing, const std::vector<NodeId>& bucket, bool metrics )
+{
+    return metrics ? perDefinitionRows( ing, bucket ) : collapseOverloadRows( ing, bucket );
+}
+
+// " l=\"N\"" on a --metrics row split out of a same-name group (OverloadRows::split); empty otherwise, so rows of
+// overload-free code stay byte-identical.
+inline std::string splitLineAttr( const OverloadRows& rows, std::size_t i, const Symbol& s )
+{
+    return rows.split[i] ? " l=\"" + std::to_string( s.line ) + "\"" : std::string();
+}
+
+inline std::string splitLineJson( const OverloadRows& rows, std::size_t i, const Symbol& s )
+{
+    return rows.split[i] ? ",\"l\":" + std::to_string( s.line ) : std::string();
 }
 
 // the shared "n > floor ? PREFIX+n+SUFFIX : empty" idiom behind every economy-of-attributes disclosure in
@@ -2979,7 +3084,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
             // §P6.3: see collapseOverloadRows() above — const/non-const overload pairs are already folded to
             // one representative row per (kind,id) before this loop runs, so the loop body below is unchanged
             // shape (no added branch): it just iterates a shorter vector.
-            const OverloadRows rows = collapseOverloadRows( ing, buckets[f] );
+            const OverloadRows rows = overloadRowsFor( ing, buckets[f], metrics );   // --metrics: one row per definition
 
             for( std::size_t i = 0; i < rows.id.size(); ++i )
             {
@@ -3000,6 +3105,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                 writeScopeAttr( w, s, esc );
 
                 w.write( overloadsAttr( rows.overloads[i] ) );   // see overloadsAttr() above — empty in the common case
+                w.write( splitLineAttr( rows, i, s ) );            // --metrics per-definition rows only
 
                 // A4-R5: bind="pkg.Cls.method" — the decoded JNI binding label (graph.h g.bindLabel), when this
                 // symbol has one. Unconditional (not --metrics-gated): it is an identity fact like id=, not a
@@ -8493,7 +8599,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
             // §P6.3 / §A4d: const/non-const overloads canonicalize to the SAME id, so a bucket straight from
             // `order` printed two byte-identical JSON objects and a consumer keying on "id" silently dropped
             // one. Same collapse the XML path runs (collapseOverloadRows above), same "overloads" count.
-            const OverloadRows rows = collapseOverloadRows( ing, buckets[f] );
+            const OverloadRows rows = overloadRowsFor( ing, buckets[f], metrics );   // the XML path's per-definition rule
 
             bool firstSym = true;
             for( std::size_t rowIndex = 0; rowIndex < rows.id.size(); ++rowIndex )
@@ -8514,6 +8620,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
 
                 if( rows.overloads[ rowIndex ] > 1 )
                 { rw::formatTo( num, sizeof( num ), ",\"overloads\":{}", rows.overloads[ rowIndex ] );  w.write( num ); }
+                w.write( splitLineJson( rows, rowIndex, s ) );   // the XML l= twin: a --metrics row split out of a same-name group
 
                 if( bind && id < bind->size() && !(*bind)[id].empty() )
                 { w.write( ",\"bind\":" );  writeJsonStr( w, (*bind)[id], esc ); }
