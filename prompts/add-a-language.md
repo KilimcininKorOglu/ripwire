@@ -69,6 +69,10 @@ common: twenty languages each carrying a private copy of the same idea is twenty
   (`@definition.LANG`, `@LANG.head`); every consumer downstream has to learn a new name for it.
 - The exhaustive `switch( Lang )` tables (`langTag`, `isCodeLang`, `dependencyCapable`, …) — the compiler
   lists every one you missed (`-Werror=switch`). A row each, no logic.
+- Then the arms the compiler cannot see: `grep` for a recently added language (`Lang::Elixir`) and read
+  every hit. Lists and masks are not switches — e.g. `kAllCatalogLangs` in `src/lintcatalog.h`, the
+  `langBit` masks in `src/clones.h`, `wordLang` in `src/ingest_metrics.h`. Semantic hooks (arity,
+  params, attributes) live today in the per-language branches of `src/ingest_sidecap.h`.
 - Per-language C++ is for semantics the grammar cannot express. **Before writing a helper, look for the
   shared one:**
 
@@ -77,7 +81,7 @@ common: twenty languages each carrying a private copy of the same idea is twenty
   | the scope a definition sits in | `enclosingScopeOf` (`src/ingest_names.h`) |
   | a local that shadows a global name (`let`, params) | a `VarDecl` binding with its block span — the generic shadow pass (`suppressShadowedReferences`) does the rest |
   | imports / aliases / `require … :as` | `Binding` / `Include` facts (`src/model.h`), as JS imports and Elixir aliases already do |
-  | module-qualified calls (`Mod.f`, `ns/f`) | extend the qualified-name resolver in `src/elixir_resolve.h`; do not write a `LANG_resolve.h` beside it |
+  | module-qualified calls (`Mod.f`, `ns/f`) | no language-neutral resolver exists yet; `src/elixir_resolve.h` is Elixir-specific and the only one. Raise generalising it in your PR rather than writing a `LANG_resolve.h` beside it |
 
   Then run `ripwire --clones` on your tree: your new code should add no clone group.
 - **A qualified call you cannot resolve is counted as unresolved — never sent to the global name ladder.**
@@ -86,8 +90,8 @@ common: twenty languages each carrying a private copy of the same idea is twenty
 
 **A known gap, so you are not surprised by it:** the tags pass does not evaluate `#eq?`/`#any-of?`
 predicates yet (see the notes in `queries/javascript/tags.scm`). A language whose definitions are *a call
-with a keyword head* — Elixir `def`, Clojure `defn` — therefore has to keep that keyword list in C++ for
-now. That is the reason `src/ingest_elixir.h` exists; it is **not a template to copy**. If you hit this, keep
+with a keyword head* — Elixir `def`, or a Lisp-style grammar (e.g. Clojure's `defn`, if added) — therefore has to keep that keyword list in C++ for
+now. That is one reason `src/ingest_elixir.h` exists (it also holds arity, params, attribute and alias logic); it is **not a template to copy**. If you hit this, keep
 the list a small `constexpr` table in one place, and say in the PR that it belongs in `tags.scm` once
 predicates run. Maintainers will move it; you are not asked to build the mechanism.
 
@@ -110,7 +114,7 @@ totally unrelated bug. Bump on **any** grammar, `.scm`, or extraction change —
 it, and a stale cache serving old symbols for new code is the worst failure this tool has.
 
 **Do not take the next integer blindly.** Parallel pull requests each need their own number, and the
-maintainers keep a reservation list. Ask in your PR which number is yours.
+maintainers assign you a parser version number in the PR.
 
 Then regenerate `test/qschemetrip.hash` and update `test/printf_parity.manifest`.
 
