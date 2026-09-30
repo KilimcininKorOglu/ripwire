@@ -316,6 +316,7 @@
 "mcpstalecheck.sh": 1.3,
 "mcpstdiolinecapcheck.sh": 7.0,
 "mcptoolprunecheck.sh": 4.5,
+"mcptoolsubsetcheck.sh": 3.0,
 "mcptranchecheck.sh": 68.3,
 "mcpverbscheck.sh": 10.8,
 "mcpw2fixcheck.sh": 58.7,

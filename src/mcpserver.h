@@ -49,6 +49,8 @@ struct McpHttpConfig
     bool                     stable           = false;
     bool                     noRedact         = false;
     bool                     allowRemoteEdits = false;
+    McpToolMask              toolMask         = kMcpAllToolsMask;   // --mcp-tools (validated by main.cpp)
+    std::string              toolSpec;                              // --mcp-tools as typed; rendered only under a subset
 };
 
 namespace mcphttp
@@ -493,6 +495,8 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
     McpDispatchPolicy policy;
     policy.pinnedRoot   = pinnedRoot;
     policy.editsAllowed = cfg.allowRemoteEdits;   // remote edits refused by default
+    policy.toolMask     = cfg.toolMask;           // --mcp-tools: the same subset over HTTP as over stdio
+    policy.toolSpec     = cfg.toolSpec;
 
     // V3/F4: can the git-backed verbs answer about THIS workspace at all? Resolved ONCE, here — the answer
     // is fixed for the listener's life (the workspace is pinned at startup) and the probe forks `git`, so
