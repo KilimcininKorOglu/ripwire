@@ -634,7 +634,7 @@ inline void ur_walkTree( TSNode root, std::uint32_t fileId, std::string_view src
 // its own reasons to grow) lives next to itself.
 inline void pat_walkTree( const pattern::PatternProgramSet* set, TSNode root, std::uint32_t fileId, std::string_view bytes,
                           const std::vector<std::uint32_t>& nlOffsets, const TSLanguage* grammar, std::vector<AstMatch>& hits,
-                          std::atomic<std::uint64_t>* ellipsisCappedOut )
+                          std::atomic<std::uint64_t>* ellipsisCappedOut, std::atomic<std::uint64_t>* qualifiedUnmatchedOut )
 {
     if( set == nullptr )
     {
@@ -653,6 +653,10 @@ inline void pat_walkTree( const pattern::PatternProgramSet* set, TSNode root, st
         // Relaxed is right: nothing else is published alongside it and the only reader runs after the pool
         // has joined. Addition is associative, so the total does not depend on which worker got here first.
         ellipsisCappedOut->fetch_add( stats.ellipsisCappedCount, std::memory_order_relaxed );
+    }
+    if( qualifiedUnmatchedOut != nullptr && stats.qualifiedUnmatchedCount != 0 )
+    {
+        qualifiedUnmatchedOut->fetch_add( stats.qualifiedUnmatchedCount, std::memory_order_relaxed );   // same reduction, same reason
     }
     for( const auto& [a, b] : spans )
     {
@@ -702,7 +706,7 @@ inline void runWalkGroups( const std::vector<AstQueryGroup>& groups, TSNode root
         else if( groups[groupIndex].walk == AstWalk::Pattern )
         {
             pat_walkTree( groups[groupIndex].patternPrograms, root, fileId, bytes, nlOffsets, grammar, perGroupHits[groupIndex],
-                          groups[groupIndex].ellipsisCappedOut );
+                          groups[groupIndex].ellipsisCappedOut, groups[groupIndex].qualifiedUnmatchedOut );
         }
     }
 }

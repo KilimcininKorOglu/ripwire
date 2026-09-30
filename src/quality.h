@@ -3759,7 +3759,38 @@ struct MaterializedTree
     }
 };
 
-inline std::string materializeCommitTree( const std::string& root, const std::string& committish, const char* tag )
+// The crawl denylist (ingest.h kCrawlSkipDirs / isSkippedCrawlDir) spelled as `git archive` exclude pathspecs, each
+// single-quoted and space-led. A caller that only INGESTS the tree (merge-scout's per-arm index) gains nothing from
+// extracting a subtree the crawl prunes by name anyway, and on this repository that subtree is most of the bytes:
+// third_party/ is 249 MB of a 325 MB archive, so every scouted arm wrote and deleted a quarter-gigabyte it never read
+// (--stray-content --plan: 12 arms, 116 s, timed out a 60 s caller with nothing printed). `glob` magic keeps `*` inside
+// one path component, the leading `**/` matches the root level too, and an exclude-only pathspec list still means
+// "everything else" (git >= 2.13). The one crawl prune a pathspec cannot express — a directory holding CMakeCache.txt —
+// is still extracted and still pruned by the crawl. What the prune CAN change is a tracked SYMLINK: one whose target sits
+// under a pruned directory (`src/v.c -> ../vendor/lib/v.c`) dangles in the pruned tree, and the crawl drops a dangling
+// link silently where the full tree indexed it. So a tree holding any symlink (mode 120000) is never pruned
+// (treeHasNoSymlink); with that guard the ingest result is the one an unpruned archive gives.
+// True only when `rev`'s tree provably holds no symlink: `git ls-tree -r` lists every entry's mode, and none is 120000.
+// An empty listing (an empty tree, or a git too old for --format) is not proof, so it answers false: the plain archive.
+inline bool treeHasNoSymlink( const std::string& root, const std::string& rev )
+{
+    const std::string modes = gitOneLine( root, "ls-tree -r " + shSingleQuote( "--format=%(objectmode)" ) + " " + shSingleQuote( rev ) + " 2>/dev/null" );
+    return !modes.empty() && modes.find( "120000" ) == std::string::npos;
+}
+
+inline std::string crawlSkipDirPathspecs()
+{
+    std::string specs;
+    for( const std::string_view dir : kCrawlSkipDirs )
+    {
+        specs += " " + shSingleQuote( ":(exclude,glob)**/" + std::string( dir ) + "/**" );
+    }
+    specs += " " + shSingleQuote( ":(exclude,glob)**/cmake-build-?*/**" );   // isSkippedCrawlDir: the prefix plus at least one byte
+    specs += " " + shSingleQuote( ":(exclude,glob)**/?*.dSYM/**" );          // isSkippedCrawlDir: a name longer than the suffix
+    return specs;
+}
+
+inline std::string materializeCommitTree( const std::string& root, const std::string& committish, const char* tag, bool pruneCrawlSkipDirs = false )
 {
     namespace fs = std::filesystem;
     MaterializedTree tree;
@@ -3795,8 +3826,14 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // TmpTreeGuard owns.
     const std::string archiveFile = tmpRoot + ".tar";
     const std::string archiveCmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " -- 2>/dev/null";
-    if( os::system( archiveCmd.c_str() ) != 0 )
+                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " -- ";
+    // The pruned archive is an optimisation, never a new way to fail: git refuses an exclude-only pathspec over an
+    // EMPTY tree ("pathspec … did not match any files", measured on git 2.50), which is a legal base. Any refusal of
+    // the pruned form falls back to the plain archive, whose exit status then decides as it always did.
+    // A tree with a symlink is archived whole (see crawlSkipDirPathspecs: a link into a pruned subtree would dangle).
+    const bool archivedPruned = pruneCrawlSkipDirs && treeHasNoSymlink( root, rev )
+                             && os::system( ( archiveCmd + crawlSkipDirPathspecs() + " 2>/dev/null" ).c_str() ) == 0;
+    if( !archivedPruned && os::system( ( archiveCmd + " 2>/dev/null" ).c_str() ) != 0 )
     {
         DISCLOSE( tree, MaterializedTree::DisclosureWhy::ArchiveFailed, "quality: git archive failed — committed tree unavailable" );
         std::error_code e;

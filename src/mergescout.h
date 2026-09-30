@@ -286,7 +286,7 @@ inline SymTreeIndex indexCommittish( const std::string& root, const std::string&
     {
         return {};
     }
-    const std::string tmpRoot = quality::materializeCommitTree( root, committish, "qms" );
+    const std::string tmpRoot = quality::materializeCommitTree( root, committish, "qms", /*pruneCrawlSkipDirs=*/true );   // index only: skip what the crawl prunes
     if( tmpRoot.empty() )
     {
         return {};   // materialize genuinely failed (git archive / tar extract / temp dir / revision) — isIndexed stays false, the arm refuses (below)

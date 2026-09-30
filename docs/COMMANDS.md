@@ -1010,7 +1010,7 @@ $ ./build/ripwire . --verify="frobnicate(x)"
 
 **Answers:** find the markdown docs that name SYM in backticks — the doc-to-code link markdown docs (plans/designs) that name SYM in a `backtick` (doc↔code).
 
-An @FILE:LINE seed rebinds to the innermost enclosing definition and answers, disclosing sym= the pre-PR family — plumbing (--affected) to mid-task report (--situ) to gate (--test-gate):
+An @FILE:LINE seed rebinds to the innermost enclosing definition and answers, disclosing sym= (its name). unbackticked_docs=N (absent at 0): files naming SYM only outside such a span, a ceiling. the pre-PR family — plumbing (--affected) to mid-task report (--situ) to gate (--test-gate):
 
 **Try it**
 
@@ -1424,7 +1424,7 @@ $ ./build/ripwire . --match='(if_statement)'
 
 **Answers:** structural search written in CODE, not in node kinds: --pattern='foo($X, ...)' structural search written in CODE, not in node kinds: --pattern='foo($X, ...)'.
 
-$NAME binds one node (repeat it and both sites must match structurally); $_ binds nothing; ... (or $$$) is an ellipsis over siblings, matched by ONE first-match-wins probe under a hard cap -- both facts on the element. Comments are transparent, everything else is kind- and text-exact ($A + $B does not match a - b). Served: c cpp objc java csharp javascript typescript python go rust swift; ruby, bash and the data tiers are named in unsupported= instead of answered. A pattern no served grammar resolves, or that collapses to a bare token, is REFUSED -- never reported as hits=0.
+$NAME binds one node (repeat it and both sites must match structurally); $_ binds nothing; ... (or $$$) is an ellipsis over siblings, matched by ONE first-match-wins probe under a hard cap -- both facts on the element. Comments are transparent, everything else is kind- and text-exact ($A + $B does not match a - b). Served: c cpp objc java csharp javascript typescript python go rust swift; ruby, bash and the data tiers are named in unsupported= instead of answered. A pattern no served grammar resolves, or that collapses to a bare token, is REFUSED -- never reported as hits=0. A qualified call (ns::foo) is no hit for a bare foo; unmatched_qualified=N counts them.
 
 **Try it**
 
@@ -1645,7 +1645,7 @@ $ ./build/ripwire . --expand=compressBody --top-k=0 --compress
 
 ### `--pack-top-n=N`
 
-**Answers:** pack the N top symbols' bodies  [--pack-budget-bytes=B]
+**Answers:** pack the N top symbols' bodies  [--pack-budget-bytes=B] A budget cut is stated: truncated=1 lines=1-K/T on the cut file, src_cut shown= total= capped=1.
 
 **Try it**
 
@@ -1671,6 +1671,10 @@ $ ./build/ripwire . --pack-top-n=3 --top-k=0
 ```
 
 **Shaped by:** `--top-k`, `--token-budget`, `--for`
+
+**Caveats (stated by the binary):**
+
+- pack the N top symbols' bodies  [--pack-budget-bytes=B] A budget cut is stated: truncated=1 lines=1-K/T on the cut file, src_cut shown= total= capped=1.
 
 ### `--no-redact`
 
@@ -3346,11 +3350,11 @@ $ ./build/ripwire . --slice-depth=3
 _Hold a LOCATION, not a name: the enclosing-definition chain at FILE:LINE (a compiler error, a diff hunk, a stack frame), outermost -> innermost._
 
 ```
-$ ./build/ripwire . --at=src/graph.h:4432
+$ ./build/ripwire . --at=src/graph.h:4528
 <!-- ripwire at: the ENCLOSING-DEFINITION CHAIN at one FILE:LINE seed. p= the resolved file, l= the 1-based seed line, sym= the innermost enclosing definition's name (what the same seed resolves to in a selector position), chain= the row count. Rows are INDEXED definitions only, outermost first, innermost last: n= the definition's name, t= its kind tag, l= its own start line, el= its end line (1-based, inclusive). A namespace or any construct the index does not carry is NOT a row, so an outer scope can be absent rather than misnamed; a seed line inside no indexed definition is refused, never served as an empty chain. The same seed composes into any SYM selector as @FILE:LINE (callers, callees, impact, around, expand, uses, edit-check, slice, safe-delete, path, connect) and resolves to the innermost row. -->
 <!-- root= on this element is the crawl root every p= below is RELATIVE to (single-root runs only; absent => p= is the path ingest itself used, unchanged). -->
-<at p="src/graph.h" l="4432" sym="rankGraphTeleport" chain="1" root=".">
-<s n="rankGraphTeleport" t="fn" l="4432" el="4460"/>
+<at p="src/graph.h" l="4528" sym="rankGraphTeleport" chain="1" root=".">
+<s n="rankGraphTeleport" t="fn" l="4528" el="4556"/>
 </at>
 ```
 

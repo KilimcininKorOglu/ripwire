@@ -262,5 +262,69 @@ if command -v xmllint >/dev/null 2>&1; then
     if echo "$B" | xmllint --noout - 2>/dev/null; then ok "REPO2 landing-plan XML well-formed"; else no "REPO2 landing-plan XML malformed"; fi
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+# REPO3 — the per-arm tree materialization skips what the crawl prunes (src/quality.h crawlSkipDirPathspecs).
+# merge-scout extracted EVERY committed byte of each arm's tree and then let the crawl ignore third_party/,
+# build/ etc. On this repository that was 249 MB of a 325 MB archive per arm and --stray-content --plan ran
+# 116 s. The observable here is deterministic, not a timing: a vendored path no filesystem can create (a
+# 300-byte name component, stored with git plumbing) made `tar -x` fail, so the arm refused over a file the
+# crawl would never have read. Red before the prune, green after; a real source change on the same branch
+# must still be seen.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+R3="$TMP/repo3"; mkdir -p "$R3"
+g3(){ git -C "$R3" "$@" >/dev/null 2>&1; }
+g3 init -q -b main
+printf 'int keep( int a )\n{\n    return a + 1;\n}\n' >"$R3/a.c"
+g3 add a.c; g3 commit -q -m base
+g3 checkout -q -b vend
+printf 'int keep( int a )\n{\n    return a + 2;\n}\n\nint added( int b )\n{\n    return b * 3;\n}\n' >"$R3/a.c"
+g3 add a.c
+longName="$( printf 'v%.0s' $( seq 1 300 ) ).c"
+blob="$( printf 'int vendored( void ) { return 7; }\n' | git -C "$R3" hash-object -w --stdin )"
+g3 update-index --add --cacheinfo "100644,$blob,third_party/$longName"
+g3 commit -q -m "vendored tree with an unextractable path"
+g3 checkout -q -f main
+V3="$( "$BIN" "$R3" --stray-content --plan 2>/dev/null )"; v3rc=$?
+if [ "$v3rc" -eq 0 ]; then ok "REPO3: --stray-content --plan ran clean (rc=0)"; else no "REPO3 run failed (rc=$v3rc)"; fi
+echo "$V3" | grep -q '<arm ref="vend" [^>]*ok="1"' \
+    && ok "REPO3: the arm over an unextractable third_party/ path is scouted (ok=1): the prune skips it at archive time" \
+    || { no "REPO3: the vend arm refused — the materialization extracted a subtree the crawl prunes"; echo "$V3" | grep -o '<arm [^>]*>'; }
+echo "$V3" | grep -q '<arm ref="vend" [^>]*changed="[1-9]' \
+    && ok "REPO3: the arm still sees the real a.c change (changed>0)" \
+    || { no "REPO3: the vend arm lost the a.c change"; echo "$V3" | grep -o '<arm [^>]*>'; }
+MS3="$( "$BIN" "$R3" --merge-scout=vend 2>/dev/null )"
+echo "$MS3" | grep -q '<arm ref="vend" [^>]*ok="1"' \
+    && ok "REPO3: --merge-scout=vend scouts the arm too (the shared materializer)" \
+    || { no "REPO3: --merge-scout=vend refused the arm"; echo "$MS3" | grep -o '<arm [^>]*>'; }
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+# REPO4 — review round of the prune: a tracked SYMLINK into a pruned directory. `src/v.c -> ../vendor/lib/v.c` dangles
+# in a tree archived without vendor/, and the crawl drops a dangling link silently, so the pruned arm lost vend_one
+# (changed="1" where the full tree reads changed="2"). A tree holding any symlink is now archived whole.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+if ( ln -s probe "$TMP/.lnprobe" ) 2>/dev/null; then
+R4="$TMP/repo4"; mkdir -p "$R4/vendor/lib" "$R4/src"
+g4(){ git -C "$R4" "$@" >/dev/null 2>&1; }
+g4 init -q -b main
+printf 'int vend_one( int a )\n{\n    return a + 1;\n}\n' >"$R4/vendor/lib/v.c"
+printf 'int own( int a )\n{\n    return a;\n}\n' >"$R4/src/own.c"
+ln -s ../vendor/lib/v.c "$R4/src/v.c"
+g4 add -A; g4 commit -q -m base
+g4 checkout -q -b feat
+printf 'int vend_one( int a )\n{\n    return a + 2;\n}\n' >"$R4/vendor/lib/v.c"
+printf 'int own( int a )\n{\n    return a * 2;\n}\n' >"$R4/src/own.c"
+g4 add -A; g4 commit -q -m "edit through the link"
+g4 checkout -q -f main
+MS4="$( "$BIN" "$R4" --merge-scout=feat 2>/dev/null )"
+A4="$( printf '%s' "$MS4" | grep -oE '<arm ref="feat" [^>]*>' | head -1 )"
+if printf '%s' "$A4" | grep -q 'changed="2"' && printf '%s' "$MS4" | grep -q '<sym p="src/v.c"[^>]*id="vend_one"'; then
+    ok "REPO4: a symlink into vendor/ keeps its symbol: changed=\"2\" with src/v.c vend_one"
+else
+    no "REPO4: the symlinked vend_one was lost by the pruned archive: $A4"
+fi
+else
+    printf '  SKIP  REPO4: this filesystem cannot create a symlink\n'
+fi
+
 [ $fail -eq 0 ] && echo "landingcheck: ALL PASS" || echo "landingcheck: FAILURES"
 exit $fail

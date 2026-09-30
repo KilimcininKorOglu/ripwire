@@ -130,6 +130,55 @@ Gate: `test/shallowhistorycheck.sh` (21 checks fail on the previous binary; all 
 
 Gate: `test/mcptwinclaimscheck.sh` (fails on the previous binary with 6 failed checks, passes on this one).
 
+### Fixed — three answers that cut silently now say what they left out
+
+- `--mentions=SYM`: `docs=` counts markdown files whose one-line backtick span is exactly the name, and nothing said
+  that prose, a code block, `callers:SYM` or a span broken across lines never counts. `--mentions=escapeXml` read
+  `docs="2"` on this repository while three more files named it. The root now carries `unbackticked_docs=N` (present
+  only when non-zero, a whole-word text match and so a ceiling) with its reading in the same answer; the MCP
+  `mentions` twin carries the same count with `"unbackticked_docs_ceiling":true`. On the tree before this change: `docs="2" unbackticked_docs="3"`. Gate: `test/mentionsverbcheck.sh` 7.
+- `--pattern`: the matcher is kind- and text-exact, so `escapeXml($X, ...)` never matched `rw::escapeXml( s, esc )`
+  and answered `hits="213"` with 46 qualified calls unmentioned (`--uses` counts 265). Those calls are still not hits
+  — the pattern did not say `rw::` — but each candidate the exact match refused is asked once more with a pattern
+  name allowed to match the last segment of a scope-qualified name (`qualified_identifier`, `scoped_identifier`,
+  `qualified_name`), and the root counts those as `unmatched_qualified=N` with a reading. Absent at zero. Gate:
+  `test/patterncheck.sh` 7.
+- `--pack-top-n` (deprecated): the budget ended the answer with a bare `<!-- truncated -->` inside the last file's
+  CDATA, the files it never reached vanished, and on this repository the loop went on serving 20–32 B fragments of
+  three more files. The first file that does not fit now closes the answer, cut at a line end with
+  `<src truncated="1" lines="1-K/T">` (a file of which no whole line fits is omitted, not served empty); when a
+  requested file was not served, `<src_cut shown= total= capped="1" budget_bytes=>` (plus `unreadable=N` for a file
+  that could not be read, which used to be skipped silently) comes first, and one comment defines both. An uncut
+  answer is byte-identical. Gate: `test/overbudgetcommentcheck.sh` B8.
+
+### Fixed — Python: a class defined in the caller's file no longer vouches for a dict's `.get`
+
+The builtin-method gate kept an edge whenever the caller's file named the target's class, and a file that merely
+DEFINES the class counted. So in the file that defines `ConnectionPool`, `data.get( "repos" )` on a json dict and
+`entry.get( "alias" )` on a dict row still bound to `ConnectionPool.get`: 4 of its 9 callers on the public Python
+repository the gate was measured on. For a Python call on a receiver other than `self`/`cls`, the class's own
+definition (its `class` statement and the declared name it leaves) is no longer evidence; a reference, binding or
+import naming the class still is. On that repository `ConnectionPool.get` now lists its 5 real callers, with the
+4 counted in `declined_calls=`. `self.get()` and `cls.get()` inside the class keep their edges, and JavaScript,
+TypeScript and Ruby keep the file-grain rule (the first records no receiver shape; a bare Ruby call is a self call).
+Because Python records no annotation as a binding, the class still counts when its name occurs in its own file beyond
+its definition (a parameter or local annotation, a string, `Optional[…]`/`List[…]`, `isinstance`, a return type — or a
+comment), read token-exact from the file; `registry.py` names `ConnectionPool` only on its `class` line. The default map
+of this repository and of all 38 Python fixture trees under `test/` is byte-identical. Gate: `test/builtinbindcheck.sh`
+arm T (a same-file decoy, plus eight same-file annotation shapes that must keep their edge).
+
+### Fixed — `--stray-content --plan` and `--merge-scout` stop extracting the subtrees the crawl prunes
+
+Each scouted arm materialised its commit with `git archive` + `tar -x` of EVERY committed byte, then ingested it
+with a crawl that prunes `third_party/`, `vendor/`, `build/` and the rest of the built-in denylist by name. On this
+repository that is 249 MB of a 325 MB archive per arm; `--stray-content --plan` (12 scouted arms) took 116 s on a
+loaded machine and a 60 s caller got no output at all. The archive now carries the denylist as exclude pathspecs
+(`:(exclude,glob)**/<dir>/**`), so an arm writes and deletes only what the crawl reads: one arm 14.4 s → 7.2 s,
+byte-identical output. It also stops an unextractable vendored path (a name component no filesystem accepts) from
+refusing the whole arm. A tree holding a tracked symlink is archived whole, since a link into a pruned directory would
+dangle and drop its symbols (landingcheck REPO4). An empty tree (git refuses an exclude-only pathspec over it) falls back to the plain archive. The one prune a pathspec cannot express — a directory holding `CMakeCache.txt` — is still
+extracted and still pruned by the crawl. Gate: `test/landingcheck.sh` REPO3 (red before, green after).
+
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any

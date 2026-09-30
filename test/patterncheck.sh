@@ -22,6 +22,11 @@
 #      with a message — it must not print a confident hits="0" it did not measure.
 #   5. Metavariable CONSISTENCY: `$X` twice in one pattern means the same text twice.
 #   6. Determinism + well-formedness, like every other emitting verb.
+#   7. No SILENT qualified miss (lane honesty-cuts-066). The matcher is kind- and text-exact, so `foo($X)` never
+#      matches `ns::foo( 1 )` (a qualified_identifier callee): on this repository `escapeXml($X, ...)` answered
+#      hits="213" while 46 `rw::escapeXml(` calls went unmentioned. They are still not hits (the pattern did not
+#      say `ns::`), but the root now counts them as unmatched_qualified=N with a reading in the same document;
+#      spelling the qualifier matches them, and a pattern with no such near miss carries no attribute.
 #
 #   RIPWIRE_BIN=build/ripwire      bash test/patterncheck.sh
 #   RIPWIRE_BIN=../ripwire-wt-wave3/build/ripwire bash test/patterncheck.sh   # must FAIL (pre-feature binary)
@@ -359,6 +364,29 @@ if grep -q 'pattern' "$TMP/all"; then ok "the emitted element/legend names the v
 "$BIN" "$FIX" --pattern='foo($A, $B)' 2>/dev/null | grep -q 'unsupported=' \
     && ok "unsupported= names the families --pattern deliberately does not serve" \
     || no "unsupported= missing — the coverage limit is undisclosed"
+
+# -- 7) a qualified spelling of the callee is counted, never silently dropped --------------------------------------
+QF="$TMP/qualfix"; mkdir -p "$QF"
+cat >"$QF/q.cpp" <<'CPP'
+namespace ns { int ping( int v ) { return v; } }
+int ping( int v ) { return v + 1; }
+int use_plain( int a ) { return ping( a ); }
+int use_qualified( int a ) { return ns::ping( a ); }
+int use_nested( int a ) { return ::ns::ping( a ) + ns::ping( a + 1 ); }
+CPP
+QB="$( "$BIN" "$QF" --pattern='ping($X)' --no-cache 2>/dev/null )"
+QR="$( printf '%s' "$QB" | grep -oE '<pattern [^>]*>' | head -1 )"
+printf '%s' "$QR" | grep -q ' hits="1"' && printf '%s' "$QR" | grep -q ' unmatched_qualified="3"' \
+    && ok "ping(\$X): hits=\"1\" (the bare call) and unmatched_qualified=\"3\" (ns::ping, ::ns::ping, ns::ping)" \
+    || no "ping(\$X) should read hits=\"1\" unmatched_qualified=\"3\": $QR"
+printf '%s' "$QB" | grep -qE '<!-- unmatched_qualified=N: ' \
+    && ok "the same document defines unmatched_qualified=" || no "unmatched_qualified= rides with no reading"
+QS="$( "$BIN" "$QF" --pattern='ns::ping($X)' --no-cache 2>/dev/null | grep -oE '<pattern [^>]*>' | head -1 )"
+printf '%s' "$QS" | grep -q ' hits="2"' \
+    && ok "spelling the qualifier matches them: ns::ping(\$X) hits=\"2\"" || no "ns::ping(\$X) should hit the two ns::ping calls: $QS"
+QN="$( "$BIN" "$QF" --pattern='use_plain($X)' --no-cache 2>/dev/null )"
+printf '%s' "$QN" | grep -q 'unmatched_qualified' \
+    && no "a pattern with no qualified near miss carries unmatched_qualified" || ok "no near miss, no attribute and no reading (0 B)"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
