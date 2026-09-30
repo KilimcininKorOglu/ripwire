@@ -39,6 +39,7 @@
 #include <cstring>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <string_view>
 #include <vector>
 
@@ -416,17 +417,36 @@ inline std::size_t countPhrases( std::string_view hay, const std::string_view ( 
 // Is `word` (any case) one of the whole words that say log: log, logger, logging?
 inline bool isLogWord( std::string_view word )
 {
-    constexpr std::string_view kLogWords[] = { "log", "logger", "logging" };
-    const std::string lowered = lowerCopy( word );
-    return std::find( std::begin( kLogWords ), std::end( kLogWords ), lowered ) != std::end( kLogWords );
+    const std::string w = lowerCopy( word );
+    return w == "log" || w == "logger" || w == "logging";
 }
 
-// A logging receiver: anything whose LAST segment's first or last WORD says log — words split on `_`, `-` and a
-// lower-to-upper camelCase step, so logger, log, LOG, logging, _log, audit_log, appLogger, log_sink, self.logger and
-// Rails.logger all qualify — a known logger package (slog, glog, klog, logrus, zerolog, syslog), or one of the
-// console/stream spellings every grammar here uses for print-to-a-reader. A WHOLE word, never a substring: catalog,
-// dialog, backlog, analog and technology contain "log" and log nothing, and a Python log-only row gates — precision
-// first, so a logger spelled some other way is a miss, never a false gate.
+// The first and last WORD of an identifier segment, words split on `_`, `-` and a lower-to-upper camelCase step:
+// audit_log -> (audit, log), appLogger -> (app, Logger), LOG -> (LOG, LOG). Empty views when it has no word.
+inline std::pair<std::string_view, std::string_view> edgeWordsOf( std::string_view seg )
+{
+    std::string_view first;
+    std::string_view last;
+    std::size_t      wordBegin = 0;
+    for( std::size_t i = 0; i <= seg.size(); ++i )
+    {
+        const bool atSep   = i == seg.size() || seg[i] == '_' || seg[i] == '-';
+        const bool atCamel = !atSep && i > 0 && std::isupper( (unsigned char)seg[i] ) && std::islower( (unsigned char)seg[i - 1] );
+        if( ( atSep || atCamel ) && i > wordBegin )
+        {
+            last  = seg.substr( wordBegin, i - wordBegin );
+            first = first.empty() ? last : first;
+        }
+        wordBegin = atSep ? i + 1 : ( atCamel ? i : wordBegin );
+    }
+    return { first, last };
+}
+
+// A logging receiver: anything whose LAST segment's first or last WORD (edgeWordsOf) says log — logger, log, LOG,
+// logging, _log, audit_log, appLogger, log_sink, self.logger, Rails.logger — a known logger package (slog, glog, klog,
+// logrus, zerolog, syslog), or one of the console/stream spellings every grammar here uses for print-to-a-reader. A
+// WHOLE word, never a substring: catalog, dialog, backlog, analog and technology contain "log" and log nothing, and a
+// Python log-only row gates — precision first, so a logger spelled some other way is a miss, never a false gate.
 inline bool isLogReceiver( std::string_view recv )
 {
     const std::size_t      dot  = recv.find_last_of( '.' );
@@ -434,29 +454,9 @@ inline bool isLogReceiver( std::string_view recv )
     constexpr std::string_view kStreamReceivers[] = { "console", "out", "err", "stderr", "stdout", "warnings", "fmt", "debug", "trace",
                                                       "slog", "glog", "klog", "logrus", "zerolog", "syslog" };
     const std::string lowered = lowerCopy( last );
-    if( std::find( std::begin( kStreamReceivers ), std::end( kStreamReceivers ), lowered ) != std::end( kStreamReceivers ) )
-    {
-        return true;
-    }
-    std::string_view first;
-    std::string_view final;
-    std::size_t      wordBegin = 0;
-    for( std::size_t i = 0; i <= last.size(); ++i )
-    {
-        const bool atSep   = i == last.size() || last[i] == '_' || last[i] == '-';
-        const bool atCamel = !atSep && i > 0 && std::isupper( (unsigned char)last[i] ) && std::islower( (unsigned char)last[i - 1] );
-        if( !atSep && !atCamel )
-        {
-            continue;
-        }
-        if( i > wordBegin )
-        {
-            final = last.substr( wordBegin, i - wordBegin );
-            first = first.empty() ? final : first;
-        }
-        wordBegin = atSep ? i + 1 : i;
-    }
-    return ( !first.empty() && isLogWord( first ) ) || ( !final.empty() && isLogWord( final ) );
+    const auto [ firstWord, lastWord ] = edgeWordsOf( last );
+    return std::find( std::begin( kStreamReceivers ), std::end( kStreamReceivers ), lowered ) != std::end( kStreamReceivers )
+        || isLogWord( firstWord ) || isLogWord( lastWord );
 }
 
 // The verbs a logging call ends in. `exception` is deliberately ABSENT (Python's logger.exception writes
