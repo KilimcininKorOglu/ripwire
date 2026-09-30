@@ -409,6 +409,11 @@ inline IngestResult mergeWorkspaceIngests( const std::vector<WorkspaceRoot>& roo
             s.fileId += fileOff;
             m.symbols.push_back( std::move( s ) );
         }
+        for( FnLocalScope f : p.fnLocalScopes )   // the function-local scope side table rides the same id offset
+        {
+            f.id += symOff;
+            m.fnLocalScopes.push_back( f );
+        }
         const std::uint32_t fieldOff = std::uint32_t( m.fields.size() );   // member-variable round: the field side table merges alike
         for( Symbol& f : p.fields )
         {

@@ -202,6 +202,10 @@ inline IngestResult previewMerge( const IngestResult& ing, std::uint32_t fileId,
         c.id     = NodeId( out.symbols.size() );
         out.symbols.push_back( std::move( c ) );
     }
+    // the function-local scope side table (model.h fnLocalScopes): ascending id, spliced at the same seam
+    for( const FnLocalScope& f : ing.fnLocalScopes ) { if( f.id < lo ) { out.fnLocalScopes.push_back( f ); } }
+    for( FnLocalScope f : one.fnLocalScopes )         { f.id = NodeId( lo + f.id ); out.fnLocalScopes.push_back( f ); }
+    for( FnLocalScope f : ing.fnLocalScopes )         { if( f.id >= hi ) { f.id = shift( f.id ); out.fnLocalScopes.push_back( f ); } }
 
     // The field SIDE TABLE keeps its own index space (a FieldId, never a NodeId), so it is spliced by the
     // same (fileId, …) ordering and its ids are simply re-indexed.

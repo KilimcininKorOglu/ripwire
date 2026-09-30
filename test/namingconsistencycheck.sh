@@ -115,5 +115,26 @@ echo "$MOUT" | grep -q '<g lang="cpp" kind="fn" style="UNAVAILABLE" why="no-clea
     && ok "mutation: flipping 10/27 camel names to snake_case flips cpp/fn to UNAVAILABLE (17/29 = 59% < 90%)" \
     || no "mutation did not flip the verdict — the metric may be hardcoded: $( echo "$MOUT" | grep -oE '<g lang="cpp" kind="fn"[^/]*/>' )"
 
+# ── 12) a JSX component keeps its PascalCase: .tsx/.jsx components neither vote nor get flagged ─────────
+# `<activityPane/>` is an intrinsic element in JSX, so proposing camelCase for a component breaks every use site. 30
+# camelCase .ts helpers decide ts/fn = camel (with or without the components' votes); the two .tsx components (a function
+# declaration and an arrow const) and one .jsx component are exempt and counted; a PascalCase function in a plain .ts
+# file is still flagged (the stated floor: the rule reads the extension, not the body).
+JSX="$TMP/jsx"
+mkdir -p "$JSX"
+for i in $( seq 0 29 ); do printf 'export function helperNumber%s( x: number ): number { return x + %s; }\n' "$i" "$i"; done >"$JSX/helpers.ts"
+printf 'export function ActivityPane( p: { n: number } ) { return <div>{p.n}</div>; }\nexport const FooterBar = ( p: { n: number } ) => { return <b>{p.n}</b>; };\n' >"$JSX/comps.tsx"
+printf 'export function StatusLine( p ) { return <i>{p.n}</i>; }\n' >"$JSX/line.jsx"
+printf 'export function MakeWidget( x: number ): number { return x * 2; }\n' >"$JSX/widget.ts"
+JOUT="$( "$BIN" "$JSX" --naming-consistency --no-cache 2>/dev/null )"
+jh="$( echo "$JOUT" | grep -oE '<naming-consistency [^>]*>' )"
+echo "$jh" | grep -q 'flagged="1" component_exempt="3"' \
+    && ok "jsx: flagged=1 component_exempt=3 (the .tsx pair and the .jsx one; ts/fn decided camel)" \
+    || no "jsx: expected flagged=1 component_exempt=3 — got: $jh"
+if echo "$JOUT" | grep -qE 'n="(ActivityPane|FooterBar|StatusLine)"'; then no "jsx: a .tsx/.jsx component was flagged: $( echo "$JOUT" | grep -oE '<f [^>]*>' | tr '\n' ' ' )"; else ok "jsx: no .tsx/.jsx component flagged"; fi
+echo "$JOUT" | grep -q 'n="MakeWidget"[^>]*propose="makeWidget"' \
+    && ok "jsx: a PascalCase function in a plain .ts file is still flagged" \
+    || no "jsx: MakeWidget (.ts) should still be flagged: $( echo "$JOUT" | grep -oE '<f [^>]*>' | tr '\n' ' ' )"
+
 [ "$fail" -eq 0 ] && echo "namingconsistencycheck: ALL PASS" || echo "namingconsistencycheck: FAILURES"
 exit $fail

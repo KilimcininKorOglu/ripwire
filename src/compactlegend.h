@@ -606,6 +606,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // 0.6.6 shallow-history honesty (gitstamp.h shallowAttr): the root of owners / hotspots / cochange on a depth-limited
     // clone. A head term — --doctor's <c shallow=> row (onTag "c", further down) is the same fact on another element.
     { "shallow",           "shallow=1: a depth-limited clone; churn, bf=/share= and co-change count only the commits fetched (deepen or unshallow it)" },
+    // --naming-consistency's absent-at-zero count (countAttrXmlOrEmpty, so (S) requires its row HERE): the JSX components
+    // kept out of the vote (namingconsistency.h isJsxComponentName). Key-qualified: no other verb spells it.
+    { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (read as JSX components by extension alone), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
 
 };
 

@@ -938,6 +938,66 @@ inline void collapseDeclarationsOfName( const IngestResult& ing, bool multiRoot,
     }
 }
 
+// FUNCTION-LOCAL DEFS YIELD OUTSIDE THEIR FUNCTION (every language; gate test/fnliteralcheck.sh §6).
+//
+// A function bound inside another function's body (model.h Symbol::fnLocal: `const start = () => {…}` inside a factory,
+// a nested `def`, a `const run` inside an `it()` callback) is named only inside that function: an import cannot reach
+// it, and neither can another function of the same file. From anywhere else it is reachable only as a VALUE the
+// function hands out — `return { start }`, then `tracker.start()` — which is a real call the resolver can see only by
+// name. So such a def is not DROPPED outside its function; it YIELDS: Rule 3 and the name-based ladder first run over
+// the candidates the call can reach by name, and fall back to the whole list only when that set does not decide.
+//   * Rule 3 on the reachable set first — even a lone reachable candidate, when it sits in a file the caller imports;
+//     on the whole list only when no reachable candidate does — the returned-value idiom: the caller imports the
+//     factory's module and calls a member of its result.
+//   * The ladder's same-file and same-directory tiers over the reachable set; over the whole list only when nothing
+//     reachable is left. Its unique-global tier still counts the set-aside defs: the NAME is shared, so a lone
+//     reachable survivor with no import or locality evidence declines, exactly as it did while the local competed.
+// It can never empty a candidate set nor add one the ladder would not reach, and it is inert unless a local def is out
+// of reach. Measured on a 583-file TypeScript agent repo: `tui.start()` on an imported `AgentTui` binds again (7 call
+// sites a bodied factory-local `start` had turned into declines), and a test helper's own `run` PARAMETER stops binding
+// to another test's `const run` (4 false edges). WHY NOT "a typed receiver outranks import evidence": a TS/JS member
+// call carries no receiver today (ingest_binds.h receiverOf returns None past a literal), so Rule 2 never sees
+// `tui: AgentTui`; giving it one re-reads every `recv == None` guard in this loop, a far wider change than this one.
+// WHY NOT drop the local def outside its function outright: TS/JS cannot tell `tracker.stop()` from a bare `stop()`
+// here (both None), and the drop would lose the returned-value edge while handing the call to an unrelated same-named
+// method elsewhere — the edge this rule keeps.
+inline bool localDefOutOfReach( const IngestResult& ing, NodeId c, const Reference& r ) noexcept
+{
+    const Symbol& s = ing.symbols[ c ];
+    if( s.fnLocal == 0 )
+    {
+        return false;
+    }
+    const auto row = std::lower_bound( ing.fnLocalScopes.begin(), ing.fnLocalScopes.end(), c,
+                                       []( const FnLocalScope& f, NodeId id ) noexcept { return f.id < id; } );
+    if( row == ing.fnLocalScopes.end() || row->id != c )
+    {
+        return false;   // no span recorded: claim nothing past the evidence — the def stays reachable
+    }
+    return s.fileId != r.fileId || r.startByte < row->start || r.startByte >= row->end;
+}
+
+// the candidates of `ids` a call at `r` can reach BY NAME, into `out`; true iff a function-local def was set aside AND
+// something reachable is left (only then does the caller have a narrower set to try first).
+inline bool reachableByName( const IngestResult& ing, const rw::SmallVec<NodeId, 2>& ids, const Reference& r, rw::SmallVec<NodeId, 2>& out )
+{
+    out.clear();
+    bool setAside = false;
+    for( NodeId c : ids )
+    {
+        if( localDefOutOfReach( ing, c, r ) )
+        {
+            setAside = true;
+        }
+        else
+        {
+            out.push_back( c );
+        }
+    }
+    ENSURES( out.size() <= ids.size(), "reachableByName only removes candidates" );
+    return setAside && !out.empty();
+}
+
 // JVM OWN-LANGUAGE-FIRST — the candidate filter that keeps the Kotlin<->Java bridge from deleting edges.
 //
 // langCompatible admits a Kotlin/Java pair by bare NAME. Past it, the tier ladder resolves a bare call to the same file,
@@ -3023,6 +3083,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     ChaConeMemo              chaCones( chaUp, chaDown );   // one cone per receiver type, computed on first use (see the type)
     const ClassIdentity      classIds = buildClassIdentity( ing, chaUp );   // Rule 2's class identity: nesting, owners, real inheritance (resolve.h)
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
+    rw::SmallVec<NodeId, 2>  reachScratch; // reused per-call buffer: the candidates a call can reach by name (reachableByName)
 
     // ---- census arming + the ORACLE side (eval-only; src/pincensus.h) ------------------------------
     // The oracle rows are a straight transcription of the overlay's own (from, calleeName) → target table
@@ -3497,9 +3558,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // above resolved is FLAGGED here, before Rule 3 (whose transitive-import evidence says nothing about a receiver),
         // and filtered after the whole ladder has decided — see the post-filter just before the edge is committed.
         const bool builtinGated = !scipPinned && !canonical && !narrowed && it != byName.end() && builtinGate.appliesTo( r );
+        // A function-local def out of this call's reach YIELDS (reachableByName, above): `nameIds` is the set the call
+        // can name, and the whole list is consulted only when that set does not decide. Not on a call the builtin-method
+        // gate flagged or the external-name veto below refuses (`d.get()`, `re.sub()`): their answer is "outside the tree"
+        // whichever same-named def competes, and yielding would move them from external= into declined=, so such a call
+        // resolves exactly as it did before local defs had bodies.
+        const bool localsYield = !scipPinned && !canonical && !narrowed && !builtinGated && it != byName.end() && !ing.fnLocalScopes.empty()
+                                 && reachableByName( ing, it->second, r, reachScratch )
+                                 && !( r.role == RefRole::Call && r.qualifier.empty() && bindingTier.empty() && externalVeto.isExternalBound( r ) );
+        const rw::SmallVec<NodeId, 2>* nameIds = localsYield ? &reachScratch : ( it != byName.end() ? &it->second : nullptr );
         if( !scipPinned && !canonical && !narrowed && it != byName.end() )
         {
-            if( narrower.rule3IncludeFile( it->second, r.fileId, rule3Out ) )
+            if( narrower.rule3IncludeFile( *nameIds, r.fileId, rule3Out, localsYield ? 1u : 2u )
+                || ( localsYield && narrower.rule3IncludeFile( it->second, r.fileId, rule3Out ) ) )
             {
                 for( NodeId c : rule3Out )
                 {
@@ -3539,11 +3610,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             else
             {
-                for( NodeId c : it->second )
+                for( NodeId c : *nameIds )
                 {
                     if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
                     {
                         cand.push_back( c ); // same lang, or ObjC↔C++ bridge; same ROOT (A10)
+                    }
+                }
+                for( std::size_t i = 0; localsYield && cand.empty() && i < it->second.size(); ++i )   // nothing reachable survived: the whole list
+                {
+                    const NodeId c = it->second[ i ];
+                    if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    {
+                        cand.push_back( c );
                     }
                 }
                 // §3.1 cross-root EVIDENCE channel for a name with NO same-root def: admit another root's
@@ -3692,7 +3771,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 //
                 // H4 V3 M-3: `canonical` belongs in the same rescue, for the same reason — see the note above
                 // buildGraph ("the tier-3 canonical rescue").
-                if( cand.size() == 1 || narrowed || canonical ) { tier = cand; tierConf = 0.2f; }
+                // A lone survivor is a unique global only when the NAME is: a function-local def set aside by
+                // reachableByName still shares it, so that call declines like any other shared name (a bare `render()`
+                // of a destructured import must not fall to the one class method left once the closures step aside).
+                if( ( cand.size() == 1 && !localsYield ) || narrowed || canonical ) { tier = cand; tierConf = 0.2f; }
                 else
                 {
                     // DECLINED. Still no edge and still no guess — that precision rule is the ladder's point. What is gone is the silence: the decline counts on the
