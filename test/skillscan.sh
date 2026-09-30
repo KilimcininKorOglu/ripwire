@@ -327,6 +327,13 @@ if [ "$rc" = 2 ] && grep -q 'capped="1"' "$TMP/r2cap.out" && grep -qE '<f p="[^"
 else
     no "(round2) S1 rc=$rc $( grep -o '<skillscan[^>]*>' "$TMP/r2cap.out" ); CRITICAL rows shown: $( grep -o 'sev="critical"' "$TMP/r2cap.out" | wc -l | tr -d ' ' )"
 fi
+r2_undef=""
+for L in "" "--legend=full"; do
+    "$BIN" "--scan-skills=$ROOT/test/skillfix" $L >"$TMP/r2leg.out" 2>/dev/null
+    leg="$( grep -oE '^(<!--.*-->)' "$TMP/r2leg.out" | head -1 )"
+    for a in rule sev; do printf '%s' "$leg" | grep -qE "(^|[^[:alnum:]_:.-])$a *=" || r2_undef="$r2_undef ${L:-default}:$a"; done
+done
+if [ -z "$r2_undef" ]; then ok "(round2) S4 both --scan-skills legends define rule= and sev="; else no "(round2) S4 undefined:$r2_undef"; fi
 
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then

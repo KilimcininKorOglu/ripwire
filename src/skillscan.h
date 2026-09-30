@@ -1741,7 +1741,7 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // #353: an EXFILTRATE:net-exfil row graded by more than its match carries why= — why="no-cred-source" on a WARN,
 // why="sensitive-read-upload" on a CRITICAL fed by a sensitive read. The full legend defines it only when a row carries
 // it, so every scan without one stays byte-identical.
-// The --legend=full prose for <skillscan>: its present-only clauses (code_not_flow_scanned=, an f row's why=) ride only when
+// The --legend=full prose for <skillscan>: its present-only clauses (f rows, capped=, code_not_flow_scanned=, why=) ride only when
 // the answer carries the attribute, so a scan without them prints the legend it always printed.
 inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillScanRow>& rows, int codeNotFlowScanned ) noexcept
 {
@@ -1750,7 +1750,10 @@ inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillSca
                       "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
                       "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
                       "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
-                      "worst finding's severity, the same read as the exit code (0/1/2).{}{}{} -->", kSkillScanFindingCap,
+                      "worst finding's severity, the same read as the exit code (0/1/2).{}{}{}{} -->", kSkillScanFindingCap,
+                      rows.empty() ? "" : " An f row is one finding: p= is path:line (line 0 = the file or walk as a whole), rule= is "
+                                          "CATEGORY:name (INJECTION, EXFILTRATE, SCOPE-CREEP, FRONTMATTER, SCAN-INCOMPLETE), sev= is "
+                                          "critical|warn|info.",
                       rows.size() > kSkillScanFindingCap ? " capped=1 (present only then): the rows shown are the worst severity first (every "
                                                            "CRITICAL row, then WARN), each severity in scan order, so the cap never hides a "
                                                            "CRITICAL row behind WARN rows." : "",

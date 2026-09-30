@@ -219,7 +219,9 @@ ROSTER = [
     ("doc-drift",          [SMALL, "--doc-drift"]),
     ("layout",             [SMALL, "--layout=MapAnnotations"]),
     ("notes",              [ROOT,  "--notes"]),
-    ("scan-skills",        [ROOT,  "--scan-skills"]),
+    # 0.6.6 (review M2/M5/S4): an explicit DIR with finding rows, so the row attributes (rule= sev= why=) are read and the run
+    # does not depend on the cwd or HOME (bare --scan-skills walks cwd/.agents/skills and the HOME skill homes).
+    ("scan-skills",        [ROOT,  "--scan-skills=" + os.path.join( ROOT, "test", "skillfix" )]),
     # 2026-09-13: the router's own document was outside this roster, and it was the one shape with NO
     # legend in the default dialect at all — every attribute on its only screen undefined. The probe is a
     # RECOMMEND, not an abstain: an abstain carries no <choice>, so half the vocabulary would be unseen.
