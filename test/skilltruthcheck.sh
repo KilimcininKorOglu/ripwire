@@ -115,6 +115,12 @@ kindCount="$( "$BIN" --help=all 2>/dev/null | sed -n 's/.*--quality-delta .*acro
 [ "$kindCount" -gt 0 ] && grep -q "$kindCount kinds" "$QUAL" \
     && ok "quality skill documents the binary's $kindCount quality kinds" \
     || no "quality skill does not match the binary's quality-kind count ($kindCount)"
+# EVERY "N kinds" / "N quality kinds" in the skill, not just the first match: one stale count left in a routing bullet
+# gave an agent two answers on the same page.
+staleKinds="$( grep -noE '\b[0-9]+ (quality )?kinds\b' "$QUAL" | grep -vE ":$kindCount (quality )?kinds$" )"
+[ "$kindCount" -gt 0 ] && [ -z "$staleKinds" ] \
+    && ok "every 'N kinds' count in the quality skill says $kindCount" \
+    || no "quality skill has a stale kind count (binary: $kindCount): $( printf '%s' "$staleKinds" | tr '\n' ' ' )"
 grep -q 'all 21 MCP verbs' "$ROOT/src/wrap.h" \
     && no "wrap source retains the stale 21-verb comment" \
     || ok "wrap source does not hardcode a stale MCP verb count"
