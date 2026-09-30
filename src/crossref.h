@@ -1369,8 +1369,8 @@ struct WhereHit
     std::string   text;               // the trimmed source line (evidence, so the caller can judge)
 };
 
-// §A7: where the parsed INDEX says SYM is defined — supplied by the caller (the CLI holds the IngestResult;
-// the MCP verb deliberately holds no index and passes none). `path` is spelled ROOT-RELATIVE, the way git
+// §A7: where the parsed INDEX says SYM is defined — supplied by the caller (both surfaces hold an IngestResult
+// and pass whereisIndexDefSites below). `path` is spelled ROOT-RELATIVE, the way git
 // spells a tree entry; `line` is the index's 1-based def line.
 struct IndexDefSite
 {
@@ -1386,6 +1386,24 @@ struct WhereisEvidence
     const gitoracle::HistoryIndex* history   = nullptr;   // --with-history: the name-history oracle (nullptr ⇒ not asked for)
     std::span<const IndexDefSite>  indexDefs = {};        // §A7: where the parsed index defines SYM (empty ⇒ label HEAD lexically)
 };
+
+// §A7: every place the parsed index defines `name`, keyed the way git spells a tree entry (model.h::relForHash
+// — the SAME root-relative join --abi uses to match ing.files against git paths). This is what lets whereis
+// stop GUESSING on HEAD rows: the tree scan reads committed blobs, the index knows where the definitions are,
+// and the join is a single pass over the symbol table with no extra I/O. ONE helper for both surfaces: the MCP
+// twin used to pass none, and labelled a wrapped call site kind="def" where the CLI said "ref" (0.6.6 sweep).
+inline std::vector<IndexDefSite> whereisIndexDefSites( const IngestResult& ing, std::string_view name, const std::string& root )
+{
+    std::vector<IndexDefSite> sites;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.name == name )
+        {
+            sites.push_back( IndexDefSite{ std::string( relForHash( ing.files[ s.fileId ], root ) ), s.line } );
+        }
+    }
+    return sites;
+}
 
 struct WhereResult
 {
@@ -1672,7 +1690,7 @@ inline bool sameTreePath( std::string_view gitPath, std::string_view indexRelPat
 //
 // Two degrade paths, both alerted rather than silent, because both would otherwise reproduce the very failure
 // this fixes ("0 def rows for a symbol that is plainly defined on HEAD"):
-//   • the caller supplied no def sites (no index — the MCP verb), or the index knows no def of this name (the
+//   • the caller supplied no def sites (no index was passed), or the index knows no def of this name (the
 //     symbol lives only on a branch, or outside the ingest root) ⇒ keep the lexical labels.
 //   • def sites exist but NO HEAD row landed in any window ⇒ the working tree the index was built from has
 //     drifted from HEAD's committed blob (uncommitted edits above the definition) ⇒ keep the lexical labels.

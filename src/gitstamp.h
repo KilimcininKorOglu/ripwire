@@ -48,7 +48,60 @@ namespace rw { namespace gitstamp
 // so the disclosure rides it: at="<sha>[+dirty][+shallow]". One extra `git rev-parse` per stamped verb.
 inline bool isShallow( const std::string& root )
 {
-    return quality::gitOneLine( root, "rev-parse --is-shallow-repository 2>/dev/null" ) == "true";
+    return quality::gitIsShallow( root );   // the ONE probe (quality.h, shallow-history honesty)
+}
+
+// The history verbs' root attribute (0.6.6): ` shallow="1"` when the clone is depth-limited, else "" — the
+// SAME name and reading --doctor's git row already carries. Rides the root of every verb whose numbers are
+// history-derived (owners, hotspots, cochange), so the qualification sits on the answer itself rather than
+// only in at='s +shallow suffix. Absent on a full clone: those answers stay byte-identical.
+// Both take the probe's answer rather than the root, so a verb that prints the attribute AND its legend pays
+// for ONE `git rev-parse` (call isShallow once, pass it to both).
+inline const char* shallowAttr( bool shallow )
+{
+    return shallow ? " shallow=\"1\"" : "";
+}
+
+// The full-legend clause that defines it, as its OWN comment (the graph_unindexed= / notes_degraded= precedent:
+// compactlegend.h lists the `<!-- shallow=` opener as prose and its completeness table carries the compact
+// reading). Emitted exactly when the attribute is — defined where it is met. No literal double dash: it rides
+// inside an XML comment (G4), so the git flags are spelled by name.
+inline constexpr const char* kShallowLegendComment =
+    "<!-- shallow=\"1\" on the root: a depth-limited (shallow) clone. Every history-derived number here (churn, ownership bf= "
+    "and share=, co-change) counts only the commits fetched, not the repository's history; git fetch with deepen=N or "
+    "unshallow restores it -->";
+
+inline const char* shallowLegend( bool shallow )
+{
+    return shallow ? kShallowLegendComment : "";
+}
+
+// The history verbs' empty-history refusal (--hotspots, --cochange, --owners and their MCP twins). It said "git
+// unavailable / no history (need a git repo)" whenever mining came back empty, which on a shallow clone is false
+// twice: git is there and so is a repo — only the fetched history is too short, or its one squashed commit is
+// skipped as bulk. A shallow clone with history now hears exactly that; every other case keeps its bytes.
+// "" means "not that case": the caller then prints its own pre-existing sentence, byte for byte.
+inline std::string shallowHistoryCause( const std::string& root )
+{
+    if( quality::gitRepoHasHistory( root ) && isShallow( root ) )
+    {
+        return "shallow clone: the fetched history holds no commit this verb can mine (a depth-limited clone keeps only its "
+               "newest commits, and one touching many files is skipped as bulk); "
+             + std::string( quality::kShallowDeepenHint );
+    }
+    return {};
+}
+
+// The unknown-ref refusal's shallow hint (--pr-context base ref, --merge-scout refs). "unknown ref 'HEAD~1'" is
+// true on a depth-1 clone, and says nothing of the likeliest cause; this suffix names it. "" on a full clone
+// (byte-identical refusal), so a real typo there reads exactly as before.
+inline std::string shallowRefHint( const std::string& root )
+{
+    if( !isShallow( root ) )
+    {
+        return {};
+    }
+    return " — this is a shallow clone, so the ref may lie beyond the fetched history; " + std::string( quality::kShallowDeepenHint );
 }
 
 inline std::string stampAt( const std::string& root )

@@ -86,6 +86,50 @@ relative `HOME` is ignored. Canonical paths are compared, and `%WINDIR%`, `/Syst
 (`ripwire ~`) is always answered, under the memory guard, and subdirectories are ordinary directories. Gate:
 `test/memguardcheck.sh` (A).
 
+### Fixed — the history verbs say so when a clone is shallow
+
+On a `git clone --depth 1` (the `actions/checkout` default) the history verbs answered from one commit and said
+things that are false about the repository; the `+shallow` suffix on `at=` was the only hint. One probe
+(`git rev-parse --is-shallow-repository`, now shared by `at=`, `--doctor` and the verbs below) drives:
+
+- `--quality-delta=REV` and `--dmm=REV` on a shallow clone's boundary commit say "shallow clone: that commit's
+  parent was not fetched" and name `git fetch --deepen=N` / `git fetch --unshallow`, instead of "a root commit".
+  The raw commit object still records its parent, which is how a boundary is told from a true root commit, and a
+  true root commit is still called one.
+- `--owners`, `--hotspots` and `--cochange` (all three forms), plus the MCP `owners` and `cochange` twins, carry
+  `shallow="1"` on the root (`"shallow":true` in the cochange JSON), with a legend clause and a compact reading.
+  This is the attribute `--doctor`'s git row already uses. The numbers are unchanged; they are marked as coming
+  from only the fetched commits.
+- `--hotspots`, `--cochange` and `--owners` refusals on an empty mined history say "shallow clone: the fetched
+  history holds no commit this verb can mine", not "git unavailable / no history (need a git repo)".
+- `--rank-by=churn-decay` names its unscoped span `fetched-history` on a shallow clone, not `all-history`, and
+  both churn rankers append `(shallow clone)` to `window=`.
+- `--pr-context` and `--merge-scout` unknown-ref refusals add a shallow-clone hint.
+
+On a full-history clone every one of these answers is byte-identical to before (measured on a three-commit fixture
+for all ten verb forms under both legends, and on this repository for `--hotspots` and `--rank-by=churn-decay`).
+The legend dictionary gains one row (`dictv` changes).
+Gate: `test/shallowhistorycheck.sh` (21 checks fail on the previous binary; all 38 pass here).
+
+### Fixed — three MCP answers no longer claim more than they checked (whereis, uses, find_symbol)
+
+- **MCP `whereis`** labelled HEAD rows with the lexical shape test (`head_labels="lexical"`), and that test
+  reads a call whose line wraps after its closing `)` as a definition: `const auto ep = rw::escapeXml( …`
+  came back `kind="def"` where the CLI said `kind="ref"`. The twin now hands the tree scan the index's
+  definition sites, through the same helper the CLI calls, so HEAD rows and `head_labels=` match the CLI.
+  The lexical fallback is unchanged and still disclosed (`head_labels="lexical"`): no indexed definition of the name,
+  or a working tree that drifted from HEAD.
+- **MCP `uses`** (and the `batch` sub-query) refused a name with "no indexed definition and no use-site under that
+  spelling". The scan behind it reads indexed reference edges only, so a member access on an unindexed field
+  (a TypeScript interface property read as `row.valueToken`) is a use-site it never sees. The refusal now says
+  "no indexed reference" and points at `grep` for text uses. Indexing TypeScript interface properties is not
+  part of this fix.
+- **MCP `find_symbol`** carries two arrays, and `count`/`hop_tested`/`hop_untested` total `calls` only; a leaf read
+  `"count":0` beside `"calledBy_total":67`. A new `"count_of":"calls"` key names the array those keys total.
+  `find_referencing_symbols` has one array and is unchanged.
+
+Gate: `test/mcptwinclaimscheck.sh` (fails on the previous binary with 6 failed checks, passes on this one).
+
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any

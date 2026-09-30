@@ -443,7 +443,8 @@ std::optional<int> runChangeViews( const MainDispatch& d )
                 // case (it still degrades to its own empty section); see prcontext.h §badRef.
                 if( masks[r].badRef )
                 {
-                    rw::emitTo( stderr, "ripwire: --pr-context: unknown base ref '{}' in root {}\n", std::string_view( cfg.prContextBase.data(), cfg.prContextBase.size() ), ws[r].arg.c_str() );
+                    rw::emitTo( stderr, "ripwire: --pr-context: unknown base ref '{}' in root {}{}\n", std::string_view( cfg.prContextBase.data(), cfg.prContextBase.size() ), ws[r].arg.c_str(),
+                                 rw::gitstamp::shallowRefHint( ws[r].arg ) );   // 0.6.6: the likeliest cause on a depth-limited clone
                     return 1;
                 }
                 for( char c : masks[r].mask )
@@ -500,7 +501,8 @@ std::optional<int> runChangeViews( const MainDispatch& d )
         // Kept ahead of the `!pcm.ok` degrade below, whose message would misname this failure.
         if( pcm.badRef )
         {
-            rw::emitTo( stderr, "ripwire: --pr-context: unknown base ref '{}'\n", std::string_view( cfg.prContextBase.data(), cfg.prContextBase.size() ) );
+            rw::emitTo( stderr, "ripwire: --pr-context: unknown base ref '{}'{}\n", std::string_view( cfg.prContextBase.data(), cfg.prContextBase.size() ),
+                         rw::gitstamp::shallowRefHint( root ) );   // 0.6.6: the likeliest cause on a depth-limited clone
             return 1;
         }
         if( !pcm.ok )
@@ -1162,7 +1164,7 @@ std::optional<int> runMergeScout( const MainDispatch& d )
             }
             else
             {
-                rw::emitTo( stderr, "ripwire: --merge-scout: unknown ref '{}'\n", result.badRef.c_str() );
+                rw::emitTo( stderr, "ripwire: --merge-scout: unknown ref '{}'{}\n", result.badRef.c_str(), rw::gitstamp::shallowRefHint( root ) );   // 0.6.6: shallow hint
             }
             return 1;
         }
@@ -1438,23 +1440,6 @@ int runAbiCheck( const MainDispatch& d )
 // just below: it composes the sweep with --merge-scout, which DOES need `d.ing` (the working tree's own
 // already-ingested IngestResult, for merge-scout's implicit dirty-working-tree arm) — same reasoning
 // runMergeScout itself uses.
-// §A7: every place the parsed index defines `name`, keyed the way git spells a tree entry (arch.h::relForHash
-// — the SAME root-relative join --abi uses to match ing.files against git paths). This is what lets --whereis
-// stop GUESSING on HEAD rows: the tree scan reads committed blobs, the index knows where the definitions are,
-// and the join is a single pass over the symbol table with no extra I/O.
-inline std::vector<rw::crossref::IndexDefSite> whereisIndexDefSites( const rw::IngestResult& ing, std::string_view name, const std::string& root )
-{
-    std::vector<rw::crossref::IndexDefSite> sites;
-    for( const rw::Symbol& s : ing.symbols )
-    {
-        if( s.name == name )
-        {
-            sites.push_back( rw::crossref::IndexDefSite{ std::string( rw::relForHash( ing.files[ s.fileId ], root ) ), s.line } );
-        }
-    }
-    return sites;
-}
-
 std::optional<int> runCrossRef( const MainDispatch& d )
 {
     using namespace rw;
@@ -1618,7 +1603,7 @@ std::optional<int> runCrossRef( const MainDispatch& d )
         const gitoracle::HistoryIndex history = buildHistoryIndex( cfg, root, "the fate lane reports probed=\"0\"" );
 
         // §A7: HEAD's rows are documented as the PARSED answer, so hand the tree scan what the index knows.
-        const std::vector<crossref::IndexDefSite> indexDefs = whereisIndexDefSites( d.ing, whereisSel, root );
+        const std::vector<crossref::IndexDefSite> indexDefs = crossref::whereisIndexDefSites( d.ing, whereisSel, root );
 
         crossref::WhereResult result = crossref::computeWhereis( root, whereisSel, cfg.strayFilter,
                                                                  crossref::WhereisEvidence{ cfg.withHistory ? &history : nullptr, indexDefs } );
