@@ -27,12 +27,15 @@
 #       and fails, ending in a real `:digits` so the trailing-digit check alone cannot short-circuit) at
 #       roughly 40 KB / 160 KB / 640 KB / 2.5 MB: each ~4x size step must cost roughly a ~4x time step,
 #       not the ~16x a real O(k^2) would show. Generous slack (8x) keeps this off CI noise while still
-#       catching a genuine quadratic regression, which blows the ratio by 100x+ at the top end.
+#       catching a genuine quadratic regression, which blows the ratio by 100x+ at the top end. Each size
+#       is timed 5 times, round-robin, and the ratios compare MEDIANS (#352: one stalled sample failed B1).
 #   (C) REGRESSION — an ordinary single-space ASan frame (test/tracecheck.sh's own fixture) still parses.
 #
 # MUTATION CONTROL: arm B is exactly what a revert to the per-candidate rescan trips — arm A and C still
 # pass (the algorithm is a rewrite, not a capability change), only the TIMING ratio in B goes red. Run
 # against a pre-fix binary — RIPWIRE_BIN=<base>/ripwire bash test/traceasanlinearcheck.sh — arm B must FAIL.
+# Re-proven for the median form (#352): a per-word `after.substr( start ).find_first_of( "./" )` rescan planted in
+# scanAsanWordBoundaries measured medians 132 / 1033 / 14094 ms / timeout and failed B1, B2 and B3.
 #
 # Usage:  bash test/traceasanlinearcheck.sh   |   RIPWIRE_BIN=asan/ripwire bash test/traceasanlinearcheck.sh
 #
@@ -152,16 +155,37 @@ msOf(){ # $1 = label, $2 = runner line -> prints ms, or TIMED_OUT_MS for a timeo
         *)           printf '%s' "$TIMED_OUT_MS" ;;
     esac
 }
-R40="$( timed_trace patho_40k.txt )"; R160="$( timed_trace patho_160k.txt )"; R640="$( timed_trace patho_640k.txt )"; R2500="$( timed_trace patho_2500k.txt )"
-samplesOk=1
-for pair in "40 KB|$R40" "160 KB|$R160" "640 KB|$R640" "2.5 MB|$R2500"; do
-    case "${pair#*|}" in
-        "rc=0 ms="*|"TIMEOUT "*) ;;
-        *) samplesOk=0; no "B0: the ${pair%%|*} run is not a timing sample — ${pair#*|} (a failed or unstarted run must never read as fast)" ;;
-    esac
+# #352: ONE sample per size let a single scheduler stall fail the arm. The full-matrix run on 3fcd515f read
+# 31 / 65 / 637 / 1382 ms: B1 saw 65 -> 637 (9.8x) and called it quadratic, while the SAME run's next step,
+# 640 KB -> 2.5 MB, cost 2.2x, below even linear (a real O(k^2) turns 637 ms into ~10 s there). The 640 KB run
+# stalled once. So every size is timed REPS times, round-robin across the sizes (a burst of load lands on one
+# rep of every size, not on every rep of one size), and B1-B3 compare MEDIANS: one stalled rep per size, or two,
+# moves nothing. A real quadratic is slow on EVERY rep, so the median keeps it — see the mutation control above.
+REPS=5
+R40=(); R160=(); R640=(); R2500=()
+for (( rep = 0; rep < REPS; ++rep )); do
+    R40+=( "$( timed_trace patho_40k.txt )" ); R160+=( "$( timed_trace patho_160k.txt )" )
+    R640+=( "$( timed_trace patho_640k.txt )" ); R2500+=( "$( timed_trace patho_2500k.txt )" )
 done
-ms40=$(msOf 40k "$R40"); ms160=$(msOf 160k "$R160"); ms640=$(msOf 640k "$R640"); ms2500=$(msOf 2500k "$R2500")
-
+samplesOk=1
+checkSamples(){ # $1 = label, $2.. = the runner lines of that size
+    local label="$1" r; shift
+    for r in "$@"; do
+        case "$r" in
+            "rc=0 ms="*|"TIMEOUT "*) ;;
+            *) samplesOk=0; no "B0: a $label run is not a timing sample — $r (a failed or unstarted run must never read as fast)" ;;
+        esac
+    done
+}
+checkSamples "40 KB" "${R40[@]}"; checkSamples "160 KB" "${R160[@]}"; checkSamples "640 KB" "${R640[@]}"; checkSamples "2.5 MB" "${R2500[@]}"
+medianMs(){ # $1 = label, $2.. = runner lines -> the median ms (a timeout counts as TIMED_OUT_MS, so it can only raise it)
+    local label="$1" r; shift
+    for r in "$@"; do msOf "$label" "$r"; echo; done | sort -n | awk '{ v[NR] = $1 } END { print v[ int( ( NR + 1 ) / 2 ) ] }'
+}
+ms40=$(medianMs 40k "${R40[@]}"); ms160=$(medianMs 160k "${R160[@]}"); ms640=$(medianMs 640k "${R640[@]}"); ms2500=$(medianMs 2500k "${R2500[@]}")
+allMs(){ local r; for r in "$@"; do printf '%s ' "$( msOf x "$r" )"; done; }
+echo "     samples (ms): 40 KB [ $(allMs "${R40[@]}")]  160 KB [ $(allMs "${R160[@]}")]  640 KB [ $(allMs "${R640[@]}")]  2.5 MB [ $(allMs "${R2500[@]}")]"
+echo "     medians of $REPS:"
 echo "     40 KB: ${ms40} ms   160 KB: ${ms160} ms   640 KB: ${ms640} ms   2.5 MB: ${ms2500} ms"
 
 # B1-B3 compare real samples only: with a B0 failure above they would compare the sentinel with itself.
