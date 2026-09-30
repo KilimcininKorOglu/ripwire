@@ -4473,7 +4473,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                 const fs::path  canon = fs::weakly_canonical( fs::path( std::string( root ) ), rootEc );
                 if( !VALIDATE( !cwdEc && !rootEc && canon == cwd, "a bare --scan-skills root must be the current directory" ) )
                 {
-                    DISCLOSE( Diagnostics::answerRefused, "main: bare --scan-skills with a positional root other than the cwd — exit 3, one stderr line" );
+                    DISCLOSE( Diagnostics::answerRefused, "main: bare --scan-skills with a positional root other than the cwd — exit 3 and one ripwire: refusal line on stderr (a dev build also prints its diagnostic trace)" );
                     rw::emitTo( stderr, "ripwire: --scan-skills: the bare form scans ./.agents/skills and the Claude and Codex skill homes, "
                                         "never the root '{}' — pass --scan-skills={} (or cd there) to scan that directory; no scan performed\n",
                                 root, root );

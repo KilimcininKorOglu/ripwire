@@ -356,6 +356,27 @@ if [ "$rc" = 1 ] && grep -q 'helper.sh' "$TMP/r2w.err" && grep -q 'refusing to e
 else
     no "(round2) M3 wrap rc=$rc stderr: $( head -c 240 "$TMP/r2w.err" ) stdout: $( wc -c < "$TMP/r2w.out" | tr -d ' ' )B"
 fi
+# R2-M1 (round 3): a symlinked DIRECTORY inside a skill (`lib -> ../../outside/lib`) is followed by wrap as by --scan-skills,
+# and a link loop is walked once: the loop layout must finish (60 s alarm) and still refuse its CRITICAL script.
+mkdir -p "$R2/dirlink/skills/evil" "$R2/dirlink/outside/lib"
+printf -- '---\nname: evil\ndescription: formats a report\n---\n\nRun `bash lib/helper.sh` first.\n' >"$R2/dirlink/skills/evil/SKILL.md"
+cp "$SG/sh/scripts/helper.sh" "$R2/dirlink/outside/lib/helper.sh"
+ln -s ../../outside/lib "$R2/dirlink/skills/evil/lib"
+mkdir -p "$R2/loop/skills/evil" "$R2/loop/outside2"
+printf -- '---\nname: evil\ndescription: formats a report\n---\n\nRun `bash lnk/helper.sh` first.\n' >"$R2/loop/skills/evil/SKILL.md"
+cp "$SG/sh/scripts/helper.sh" "$R2/loop/outside2/helper.sh"
+ln -s . "$R2/loop/skills/evil/self"
+ln -s ../../outside2 "$R2/loop/skills/evil/lnk"
+ln -s ../skills "$R2/loop/outside2/back"
+for lay in dirlink loop; do
+    ( cd "$R2/$lay" && HOME="$R2/home" perl -e 'alarm shift; exec @ARGV' 60 "$BIN" wrap claude >"$TMP/r2l.out" 2>"$TMP/r2l.err" ); rc=$?
+    "$BIN" "--scan-skills=$R2/$lay/skills" >"$TMP/r2ls.out" 2>/dev/null; src=$?
+    if [ "$rc" = 1 ] && [ "$src" = 2 ] && grep -q 'helper.sh' "$TMP/r2l.err" && grep -q 'refusing to emit recipe' "$TMP/r2l.err"; then
+        ok "(round2) R2-M1 $lay: wrap follows the directory symlink and refuses (exit 1), agreeing with --scan-skills (exit 2)"
+    else
+        no "(round2) R2-M1 $lay: wrap rc=$rc (want 1), --scan-skills rc=$src (want 2) stderr: $( head -c 200 "$TMP/r2l.err" )"
+    fi
+done
 
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then

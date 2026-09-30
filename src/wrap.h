@@ -15,6 +15,8 @@
 #include "mcp.h"       // kMcpVerbTable / kMcpVerbCount — the single source of truth for the MCP verb list (A4-S2)
 #include "infra/os.h"  // rw::os::access — wrapCommandToken (2026-09-06); wrapScanSkillDir names a skills folder it cannot enter
 #include <algorithm>
+#include <cstdint>
+#include <utility>
 #include <cerrno>
 #include <cstring>    // std::strerror — the unreadable-folder WARN
 #include "skillscan.h"
@@ -513,9 +515,30 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
     // Collect + sort every regular file's path for determinism. The walk advances with increment(ec): the throwing range-for
     // operator++ made an undescendable tree std::terminate (exit 134) before this fix. A stopped walk is
     // disclosed below (CRITICAL: F-B3); a directory the scan cannot ENTER (mode-000, WARN) is different.
-    std::vector<std::string> skillPaths;
+    // Directory SYMLINKS are followed (review R2-M1: `skills/evil/lib -> ../../outside/lib` hid a CRITICAL helper.sh from wrap
+    // while --scan-skills, which follows them, called the tree CRITICAL; the agent resolves the link when it runs the script).
+    // Following links means cycles, so every directory entered is recorded by (st_dev, st_ino) and a directory already seen
+    // is not re-entered: a `loop -> .` link is walked once and the walk always ends.
+    std::vector<std::string>                               skillPaths;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>>   visitedDirs;   // (device, inode) of every directory entered
+    const auto isFirstVisit = [ &visitedDirs ]( const fs::path& d )
+    {
+        os::stat_t st{};
+        if( os::stat( os::path_arg( d ).c_str(), &st ) != 0 )
+        {
+            return true;   // cannot identify it: descend, and let the walk's own error path report what it cannot read
+        }
+        const std::pair<std::uint64_t, std::uint64_t> key{ std::uint64_t( st.st_dev ), std::uint64_t( st.st_ino ) };
+        if( std::find( visitedDirs.begin(), visitedDirs.end(), key ) != visitedDirs.end() )
+        {
+            return false;
+        }
+        visitedDirs.push_back( key );
+        return true;
+    };
+    (void)isFirstVisit( fs::path( dir ) );   // the root itself, so a link back to it is a cycle
     int                      maxSev = 0;
-    fs::recursive_directory_iterator it( dir, fs::directory_options::none, ec ), end;
+    fs::recursive_directory_iterator it( dir, fs::directory_options::follow_directory_symlink, ec ), end;
     for( ; !ec && it != end; it.increment( ec ) )
     {
         std::error_code entryEc;
@@ -525,6 +548,11 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
                         it->path().string(), std::strerror( errno ) );
             maxSev = std::max( maxSev, 1 );
             it.disable_recursion_pending();
+            continue;
+        }
+        if( it->is_directory( entryEc ) && !entryEc && !isFirstVisit( it->path() ) )
+        {
+            it.disable_recursion_pending();   // a directory reached a second time through a link: already scanned
             continue;
         }
         if( it->is_regular_file( entryEc ) && !entryEc )
