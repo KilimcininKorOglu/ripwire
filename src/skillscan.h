@@ -1780,21 +1780,32 @@ inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillSca
                                "or cookie store) piped, redirected or passed into an upload, CRITICAL." : "" );
 }
 
-// The order <f> rows print in: scan order, except past the row cap, where the worst severity comes first (a stable sort, so
-// each severity keeps scan order) — a WARN flood cannot push the CRITICAL evidence row past the cap (review S1). Uncapped
-// answers keep scan order, byte-identical to before.
-inline std::vector<std::size_t> skillScanRowOrder( const std::vector<SkillScanRow>& rows, bool capped )
+// The <f> rows an answer shows, in order: every row in scan order, except past the row cap, where the worst severity comes
+// first — one pass per severity, CRITICAL down to INFO, each in scan order — so a WARN flood cannot push the CRITICAL
+// evidence row past the cap (review S1). Uncapped answers keep scan order, byte-identical to before.
+template<class Fn>
+inline void forEachShownSkillRow( const std::vector<SkillScanRow>& rows, std::size_t shown, bool capped, Fn&& fn )
 {
-    std::vector<std::size_t> order( rows.size() );
-    for( std::size_t i = 0; i < order.size(); ++i )
+    if( !capped )
     {
-        order[i] = i;
+        for( const SkillScanRow& r : rows )
+        {
+            fn( r );
+        }
+        return;
     }
-    if( capped )
+    std::size_t printed = 0;
+    for( const SkillSeverity sev : { SkillSeverity::Critical, SkillSeverity::Warn, SkillSeverity::Info } )
     {
-        std::stable_sort( order.begin(), order.end(), [ & ]( std::size_t a, std::size_t b ) noexcept { return int( rows[a].finding.sev ) > int( rows[b].finding.sev ); } );
+        for( std::size_t i = 0; i < rows.size() && printed < shown; ++i )
+        {
+            if( rows[i].finding.sev == sev )
+            {
+                fn( rows[i] );
+                ++printed;
+            }
+        }
     }
-    return order;
 }
 
 inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, const SkillScanTally& tally, bool fullLegend ) noexcept
@@ -1836,10 +1847,8 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
         rw::emitTo( out, " dirs=\"{}\"", escapeXmlAttr( tally.dirs ) );
     }
     rw::emitTo( out, " verdict=\"{}\">", verdict );
-    const std::vector<std::size_t> order = skillScanRowOrder( rows, capped );
-    for( std::size_t i = 0; i < shown; ++i )
+    forEachShownSkillRow( rows, shown, capped, [ & ]( const SkillScanRow& r )
     {
-        const SkillScanRow& r = rows[ order[i] ];
         rw::emitTo( out, "<f p=\"{}:{}\" rule=\"{}\" sev=\"{}\"",
                      escapeXmlAttr( r.path ).c_str(), r.finding.line, r.finding.rule, skillSeverityAttr( r.finding.sev ).c_str() );
         if( r.finding.why != nullptr )
@@ -1847,7 +1856,7 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
             rw::emitTo( out, " why=\"{}\"", r.finding.why );
         }
         rw::emitRaw( out, "/>" );
-    }
+    } );
     rw::emitRaw( out, "</skillscan>\n" );
 }
 
