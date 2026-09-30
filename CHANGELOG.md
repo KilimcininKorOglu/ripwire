@@ -63,6 +63,18 @@ from a partial index without disclosure. Deferred: layer 2 (the non-git crawl bu
 pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
 llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
 
+### Fixed — `--connect` searches a many-definition terminal from the definition that joins
+
+`--connect` resolved each terminal to one definition, the lowest id, before searching. On this repository
+`--connect=main,escapeXml,Graph` took `main` from a Python bench script (one of 107 definitions) and printed every
+terminal `<unconnected>`, while `--path` joined `main` to `escapeXml` in two hops. Each definition of a terminal's
+name is now scored by how many other terminals it reaches within `radius=` on the same undirected view, then by
+the fewest hops, and the best one is searched from (CLI and MCP `connect` alike, `graph.h` `joinTerminalPicks`).
+A name none of whose definitions joins keeps the old pick, so `<unconnected>` there holds for every definition.
+When several definitions join equally well, the root names that terminal in `ambiguous_terminal=` (present only
+then). The full legend's `defs=` sentence, which said the lowest-id definition was used, now states the rule; the
+header change moves `est_tokens=` on `--connect` answers by a few tokens. Gate: `connectcheck` arm 10.
+
 ### Fixed — `--dead-code` no longer reports a pytest test method as an internal-linkage orphan
 
 A Python def's signature span runs on through the comment lines that open its body, so a test method whose first

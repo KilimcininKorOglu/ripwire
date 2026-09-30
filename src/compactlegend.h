@@ -901,6 +901,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "hint", "hint=: what to try when no directed path exists (connect for a shared caller, uses/impact for non-call references)", false, "path", MapHeaderRead::No, {}, "path" },
     // connect: src/mcpverbs.h packConnect (terminal rows)
     { "defs", "t defs=N: that terminal name has N defs in the index; all were searched (above 1, qualify file:name)", true, "t", MapHeaderRead::No, {}, "connect" },
+    // 0.6.6 D1: present-only — absent unless a many-definition terminal's pick tied with another equally-joining definition
+    { "ambiguous_terminal", "ambiguous_terminal=: terminal names whose pick tied with another equally-joining definition (qualify file:name)", true, "connect", MapHeaderRead::No, {}, "connect" },
     // grep: src/verbs_grep.h (the enc row's def count)
     { "defs", "enc defs=N: the enclosing name has N defs, the row unions them (only above 1)", true, "enc", MapHeaderRead::No, {}, "grep" },
     // owners: src/verbs_report.h (the of= form)

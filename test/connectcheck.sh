@@ -16,6 +16,11 @@
 #      <unconnected> block removed MUST trip the unconnected assertion (the gate can catch both bugs)
 #   9  MCP verb smoke: tools/list carries `connect`; tools/call connect {path,symbols} returns the same
 #      <connect> payload, deterministic across two calls
+#  10  0.6.6 D1 — a terminal NAME with several definitions: the definition that JOINS is searched from, not the
+#      lowest id. (a) a Python `main` sorting first beside the C++ `main` that reaches leaf: ONE <g>, the <t> row
+#      names src/main.cpp, no <unconnected>; (b) two C++ mains that join equally well: connected, and the root says
+#      ambiguous_terminal="main"; (c) a name no definition of which joins: <unconnected>, no ambiguous_terminal=;
+#      (d) the MCP connect verb makes the same pick as the CLI
 #
 # Usage:  test/connectcheck.sh              # uses build/ripwire
 #         RIPWIRE_BIN=asan/ripwire test/connectcheck.sh
@@ -177,6 +182,41 @@ print("__ERROR__" if "error" in r else r["result"]["content"][0]["text"])
     if printf '%s' "$INNER2" | grep -q 'radius="3"'; then ok "comma-string symbols + radius arg honored"; else no "comma-string/radius form failed: $INNER2"; fi
 else
     ok "python3 absent — MCP smoke skipped"
+fi
+
+# ── 10) 0.6.6 D1: a many-definition terminal is searched from the definition that joins ────────────────
+MD="$TMP/multidef"; mkdir -p "$MD/a_bench" "$MD/src"
+printf 'def main():\n    pass\n' >"$MD/a_bench/analyze.py"
+cat >"$MD/src/main.cpp" <<'CPP'
+void leaf() {}
+void mid() { leaf(); }
+void island2() {}
+int main() { mid(); return 0; }
+CPP
+OUT10="$( "$BIN" "$MD" --no-cache --connect=main,leaf 2>/dev/null )"
+if printf '%s' "$OUT10" | grep -q '<unconnected radius='; then no "10a a joining definition of main exists, yet a terminal is <unconnected>: $OUT10"; else ok "10a main,leaf connects (no <unconnected>)"; fi
+printf '%s' "$OUT10" | grep -q '<t n="main" t="fn" p="src/main.cpp:4" defs="2"' \
+    && ok "10a the main <t> row names the joining definition src/main.cpp:4 (defs=2)" || no "10a main <t> row does not name src/main.cpp:4: $OUT10"
+printf '%s' "$OUT10" | grep -q 'ambiguous_terminal=' && no "10a one joining definition must not claim ambiguous_terminal=: $OUT10" || ok "10a a unique join carries no ambiguous_terminal="
+MT="$TMP/multitie"; mkdir -p "$MT/src"
+printf 'void leaf() {}\nint main() { leaf(); return 0; }\n' >"$MT/src/one.cpp"
+printf 'void leaf();\nint main() { leaf(); return 1; }\n' >"$MT/src/two.cpp"
+OUT10B="$( "$BIN" "$MT" --no-cache --connect=main,leaf 2>/dev/null )"
+printf '%s' "$OUT10B" | grep -q 'ambiguous_terminal="main"' \
+    && ok "10b two equally-joining mains: ambiguous_terminal=\"main\" on the root" || no "10b tie not disclosed: $OUT10B"
+printf '%s' "$OUT10B" | grep -q '<unconnected radius=' && no "10b tie case must still connect: $OUT10B" || ok "10b tie case connects"
+OUT10C="$( "$BIN" "$MD" --no-cache --connect=main,island2 2>/dev/null )"
+printf '%s' "$OUT10C" | grep -q '<unconnected radius=' && ok "10c no definition of main joins island2: <unconnected> kept" || no "10c expected <unconnected>: $OUT10C"
+printf '%s' "$OUT10C" | grep -q 'ambiguous_terminal=' && no "10c an all-unconnected name must not claim ambiguous_terminal=" || ok "10c no ambiguous_terminal= when nothing joins"
+if command -v python3 >/dev/null 2>&1; then
+    CMSG10='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"connect","arguments":{"path":"'"$MD"'","symbols":["main","leaf"]}}}'
+    INNER10="$( mcp_call '{"jsonrpc":"2.0","id":1,"method":"initialize"}' "$CMSG10" | tail -1 | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+print("__ERROR__" if "error" in r else r["result"]["content"][0]["text"])
+' )"
+    printf '%s' "$INNER10" | grep -q '<t n="main" t="fn" p="src/main.cpp:4"' && ! printf '%s' "$INNER10" | grep -q '<unconnected radius=' \
+        && ok "10d MCP connect makes the CLI's pick (src/main.cpp:4, connected)" || no "10d MCP connect pick differs: $INNER10"
 fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
