@@ -124,9 +124,33 @@ inline void statementsOf( TSNode body, std::vector<TSNode>& out )
     } );
 }
 
+// How deep mentionsName reads below the node it is handed — the handler walk's own pathological-depth bound
+// (walkHandlerShapes' frame.depth > 512), so a deeply nested log argument cannot recurse past it on a worker stack.
+inline constexpr int kMentionsNameMaxDepth = 512;
+
+// mentionsName's recursion: true when a named leaf below n spells `name`, OR when the read reached depthLeft == 0
+// with named children still below — a subtree too deep to read answers "mentions it", which excludes the handler
+// from log-only: a miss, never a finding.
+inline bool mentionsNameBelow( TSNode n, std::string_view src, std::string_view name, int depthLeft )
+{
+    if( depthLeft <= 0 )
+    {
+        return true;
+    }
+    ChildCursor cursor( n );   // this frame's own: the body recurses
+    bool        found = false;
+    forEachNamedChild( n, cursor.cur, [ & ]( TSNode c )
+    {
+        found = ts_node_named_child_count( c ) == 0 ? nodeTextOf( c, src ) == name : mentionsNameBelow( c, src, name, depthLeft - 1 );
+        return !found;
+    } );
+    return found;
+}
+
 // Does any NAMED LEAF below n spell `name`? Identifiers in every grammar are leaves, so this reads an
 // f-string's `{e}`, a template's `${e}`, a Kotlin `"$e"` and a plain argument alike. A leaf inside a string
-// literal that happens to equal the name also answers yes — a miss, never a finding.
+// literal that happens to equal the name also answers yes — a miss, never a finding. Bounded at
+// kMentionsNameMaxDepth levels; deeper than that also answers yes (mentionsNameBelow).
 inline bool mentionsName( TSNode n, std::string_view src, std::string_view name )
 {
     if( name.empty() )
@@ -137,8 +161,7 @@ inline bool mentionsName( TSNode n, std::string_view src, std::string_view name 
     {
         return !ts_node_is_null( n ) && ts_node_is_named( n ) && nodeTextOf( n, src ) == name;
     }
-    return anyChildBelow( n, -1, true, [ & ]( TSNode c )
-                          { return ts_node_named_child_count( c ) == 0 && nodeTextOf( c, src ) == name; } );
+    return mentionsNameBelow( n, src, name, kMentionsNameMaxDepth );
 }
 
 // The spellings that carry the CURRENT error without naming the caught identifier: Python's

@@ -911,5 +911,17 @@ if printf '%s' "$CAPOUT" | tr '>' '\n' | grep -q '<r kind="error-masking" sym="[
 else ok "5m cap: 6000 -> 100 catches in A.java leaves untouched Z.victim with no error-masking row"; fi
 [ "$CAPRC" = 0 ] && ok "5m cap: the delta exits 0 (removing catches is not a regression)" || no "5m cap: the delta exits $CAPRC, want 0"
 
+# 5n) 0.6.6 review: mentionsName (does a log call's argument name the caught error?) recursed with no depth bound, and
+#     no nesting refusal covers Python: a 20000-deep argument overflowed the worker stack (SIGBUS, exit 138). It now
+#     reads at most kMentionsNameMaxDepth levels and answers "mentions it" past that — a miss, never a finding.
+DEEPD="$WORK/deepnest"; mkdir -p "$DEEPD"
+( cd "$DEEPD" && git init -q && git config user.email t@t && git config user.name t && printf 'def ok():\n    return 1\n' >m.py && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+python3 -c 'N = 20000; print( "def deep(x):\n    try:\n        risky()\n    except Exception as e:\n        log.error(" + "f(" * N + "x" + ")" * N + ")" )' >"$DEEPD/m.py"
+DEEPOUT="$( cd "$DEEPD" && "$BIN" . --quality-delta --no-cache 2>/dev/null )"; DEEPRC=$?
+[ "$DEEPRC" -lt 128 ] && ok "5n deep: a 20000-deep log argument does not overflow the stack (rc=$DEEPRC)" || no "5n deep: --quality-delta died on a 20000-deep log argument (rc=$DEEPRC)"
+printf '%s' "$DEEPOUT" | tr '>' '\n' | grep -q '<r kind="error-masking" sym="deep"' \
+    && no "5n deep: a handler too deep to read is reported log-only (the bound must answer 'mentions it')" \
+    || ok "5n deep: past the depth bound the handler is not called log-only"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
