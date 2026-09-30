@@ -484,6 +484,10 @@ probeFor()
 # shared sub-cap clause (+27 B), the present-only shown_symbols= row (+34 B) and "top 3" in the purpose line (+2 B). The
 # fixture has files with more than 3 symbols, so the probe is a cut page. No other schema moved (the --zoom bridge and
 # --impact importers_next= readings are present-only and ride neither probe).
+# RE-PINNED 2026-09-30 (train22 fixups, bundled-script scan): ripwire.scan-skills/v1 380 -> 520 (measured 506). The probe
+# runs --scan-skills with no DIR, so it scans the skill homes of the $HOME it runs under; a Codex install ships .py helpers
+# (~/.codex/skills/.system/imagegen/scripts), and the answer then carries the present-only code_not_flow_scanned= and its
+# reading (+137 B). The pin is taken from that case; a HOME with no code in its skill homes measures 369, as before.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -514,7 +518,7 @@ ripwire.skipped/v1               1510  1498
 ripwire.lint/v1                   340   324
 ripwire.lint-catalog/v1           220   204
 ripwire.external-surface/v1       250   234
-ripwire.scan-skills/v1            380   369
+ripwire.scan-skills/v1            520   506
 ripwire.owners/v1                 430   414
 ripwire.dead-code/v1              620   604
 ripwire.quality-delta/v1          940   928

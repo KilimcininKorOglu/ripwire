@@ -4430,8 +4430,10 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         {
             rows.push_back( { path, f } );
         }
-        printSkillScanArtifact( stdout, rows, /*filesScanned=*/1, /*filesSkipped=*/0, cfg.legend == "full" );
-        rw::emitTo( stderr, "ripwire scan: {} finding(s) in {}\n", int( result.findings.size() ), path.c_str() );
+        const bool notFlowScanned = result.kind == SkillFileKind::OtherCode;
+        printSkillScanArtifact( stdout, rows, /*filesScanned=*/1, /*filesSkipped=*/0, cfg.legend == "full", notFlowScanned ? 1 : 0 );
+        rw::emitTo( stderr, "ripwire scan: {} finding(s) in {}{}\n", int( result.findings.size() ), path.c_str(),
+                    notFlowScanned ? " (a code file this scanner has no network-flow model for: not flow-scanned)" : "" );
         return skillScanExitCode( result.findings );
     }
 
@@ -4522,6 +4524,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         int      filesScanned  = 0;
         int      filesSkipped  = 0;          // seen but not scannable: binary, or unreadable
         int      prunedDirs    = 0;          // denylisted subtrees not descended
+        int      codeNotFlowScanned = 0;     // readable SkillFileKind::OtherCode files (a language with no network-flow model)
         int      maxSev        = 0;          // 0=clean, 1=warn, 2=critical
 
         for( const std::string& dir : dirs )
@@ -4614,6 +4617,10 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                 }
 
                 ++filesScanned;
+                if( res.kind == SkillFileKind::OtherCode )
+                {
+                    ++codeNotFlowScanned;
+                }
                 for( const SkillFinding& f : res.findings )
                 {
                     allRows.push_back( { p, f } );
@@ -4627,15 +4634,16 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             }
         }
 
-        printSkillScanArtifact( stdout, allRows, filesScanned, filesSkipped, cfg.legend == "full" );
+        printSkillScanArtifact( stdout, allRows, filesScanned, filesSkipped, cfg.legend == "full", codeNotFlowScanned );
 
         // Honest zero: "0 finding(s)" alone doesn't say whether that's because nothing was WARN/CRITICAL
         // or because there was nothing readable to scan. Naming the file count keeps a genuine "scanned
         // 0 skill files" (an empty/unpopulated dir — a real measurement) legible on its own, distinct from
         // this same verb's exit-3 refusal above (which never gets here). §B13.3 adds the other half of the
         // population to the same line: what the walk saw and could not scan, and what it did not descend.
-        rw::emitTo( stderr, "ripwire scan: {} finding(s) total ({} skill file(s) scanned, {} unscannable file(s) skipped, {} denylisted subtree(s) not descended)\n",
-                      totalFindings, filesScanned, filesSkipped, prunedDirs );
+        rw::emitTo( stderr, "ripwire scan: {} finding(s) total ({} skill file(s) scanned, {} unscannable file(s) skipped, {} denylisted subtree(s) not descended{})\n",
+                      totalFindings, filesScanned, filesSkipped, prunedDirs,
+                      codeNotFlowScanned > 0 ? ", " + std::to_string( codeNotFlowScanned ) + " code file(s) not flow-scanned" : std::string() );
         return maxSev;
     }
 
