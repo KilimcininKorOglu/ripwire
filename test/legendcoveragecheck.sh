@@ -664,5 +664,70 @@ else
     ok "(F) the shared-name sole-closure census is exactly its pinned floor — nothing new hides behind a name this document carries twice"
 fi
 
+# (H) A BINARY FILE ON AN UNMERGED BRANCH (0.6.6). --stray-content reports a path it cannot line-diff (a binary or oversized
+#     blob on some side) as a <file … diffable="0"/> row with its counts zeroed. The row is conditional on the TREE, so the
+#     roster rows above see it only when the checkout they run in happens to hold a local branch with a binary on it — which
+#     is how it was found: arm (G) went red in a developer clone and green on CI, and no legend defined diffable=. This arm
+#     builds that state in a throwaway repo so the property is checked on every run: a text file AND a binary on an unmerged
+#     branch, then every attribute the CLI default answer and its MCP twin (stray_content, default legend) emit must be
+#     defined (`name=`, arm (B)'s predicate) in the answer's own legend, and the full legend must define diffable= too.
+#     (H0) is the precondition: an answer with no diffable="0" row proves nothing.
+BR="$TMP/binref"
+mkdir -p "$BR/src"
+gitb(){ env -u GIT_DIR -u GIT_WORK_TREE git -c user.email=g@example.invalid -c user.name=g -c commit.gpgsign=false -C "$BR" "$@"; }
+gitb init -q
+printf 'int alpha( int n ) { return n + 1; }\n' >"$BR/src/a.c"
+gitb add -A; gitb commit -qm one
+gitb checkout -q -b side
+printf '\211PNG\r\n\032\n\000\000\000\rIHDR\000\001\002' >"$BR/logo.png"
+printf 'int beta( int n ) { return n * 2; }\n' >"$BR/src/b.c"
+gitb add -A; gitb commit -qm two
+gitb checkout -q -
+"$BIN" "$BR" --stray-content >"$TMP/h_def" 2>/dev/null
+"$BIN" "$BR" --stray-content --legend=full >"$TMP/h_full" 2>/dev/null
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"stray_content","arguments":{"path":"'"$BR"'"}}}' \
+    | "$BIN" --mcp 2>/dev/null | tail -1 >"$TMP/h_mcp.json"
+python3 - "$TMP" <<'PYH' >"$TMP/h_out" 2>&1
+import json, os, re, sys
+T = sys.argv[1]
+def rd( p ): return open( os.path.join( T, p ), "rb" ).read().decode( "utf-8", "replace" )
+def legendOf( doc ):
+    m = re.match( r'\A(?:\s*<!--.*?-->)+', doc, re.S )
+    return m.group( 0 ) if m else ""
+def defined( a, legend ): return re.search( r'(?<![\w:.-])' + re.escape( a ) + r'\s*=', legend ) is not None
+def gaps( doc ):
+    legend = legendOf( doc )
+    body   = re.sub( r'<!--.*?-->', '', re.sub( r'<!\[CDATA\[.*?\]\]>', '', doc, flags = re.S ), flags = re.S )
+    keys   = set()
+    for m in re.finditer( r'<([a-zA-Z][\w-]*)((?:\s+[\w:.-]+="[^"]*")*)\s*/?>', body ):
+        for a in re.findall( r'\s([\w:.-]+)="', m.group( 2 ) ):
+            if a not in { "p", "n", "t", "id", "l", "k", "c" }: keys.add( m.group( 1 ) + "@" + a )
+    return sorted( k for k in keys if not defined( k.split( "@", 1 )[ 1 ], legend ) )
+dflt, full = rd( "h_def" ), rd( "h_full" )
+try:
+    r   = json.loads( rd( "h_mcp.json" ) )
+    mcp = r[ "result" ][ "content" ][ 0 ][ "text" ]
+except Exception as e:
+    mcp = ""
+row = re.compile( r'<file [^>]*diffable="0"' )
+print( "H0 %d %d %d" % ( bool( row.search( dflt ) ), bool( row.search( full ) ), bool( row.search( mcp ) ) ) )
+print( "H1 " + " ".join( gaps( dflt ) ) )
+print( "H2 " + ( "" if defined( "diffable", legendOf( full ) ) else "file@diffable" ) )
+print( "H3 " + " ".join( gaps( mcp ) ) )
+PYH
+hline(){ sed -n "s/^$1 //p" "$TMP/h_out"; }
+if [ "$( hline H0 )" = "1 1 1" ]; then
+    ok "(H0) a binary on an unmerged branch is reported as a diffable=\"0\" row by the CLI default, --legend=full and the MCP twin"
+else
+    no "(H0) no diffable=\"0\" row (default/full/mcp = $( hline H0 )) — the fixture no longer reaches the undiffable path, so (H1)-(H3) prove nothing: $( head -c 300 "$TMP/h_out" )"
+fi
+[ -z "$( hline H1 )" ] && ok "(H1) the CLI default --stray-content answer defines every attribute it emits, diffable= included" \
+                       || no "(H1) the CLI default --stray-content legend does not define: $( hline H1 )"
+[ -z "$( hline H2 )" ] && ok "(H2) the --legend=full --stray-content legend defines diffable=" \
+                       || no "(H2) the --legend=full --stray-content legend does not define: $( hline H2 )"
+[ -z "$( hline H3 )" ] && ok "(H3) the MCP stray_content twin defines every attribute it emits, diffable= included" \
+                       || no "(H3) the MCP stray_content legend does not define: $( hline H3 )"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "legendcoveragecheck: FAILURES ABOVE"
 exit "$fail"

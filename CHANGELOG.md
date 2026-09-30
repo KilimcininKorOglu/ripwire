@@ -117,6 +117,18 @@ print are unchanged.
 `test/recallpassagecheck.sh` and `test/impactpartitioncheck.sh` are executable now (mode 100755 like every
 other gate); direct `./test/…` invocation exits 126 no more.
 
+### Fixed — `--stray-content` defines the `diffable="0"` it emits for a binary on an unmerged branch
+
+A file an unmerged local branch holds that cannot be line-diffed (a binary or oversized blob on some side, e.g. an
+image) is listed as `<file … diffable="0"/>` with its counts at 0, but no legend defined `diffable=`: not the default
+(compact) legend, not `--legend=full`, not the MCP `stray_content` twin or the session dictionary. So
+`legendcoveragecheck` arm (G) went red in any clone whose local branches held such a file and green everywhere else.
+The compact legend (and with it the session dictionary: `entries=` 730 → 731) and the full legend now define it;
+the compact reading is present-only, so a default answer with no such row is byte-identical to before (the full
+legend gains one sentence). `legendcoveragecheck`
+gains arm (H), which builds that state in a throwaway repo — a text file and a binary on an unmerged branch — and
+requires the CLI default, `--legend=full` and the MCP twin to define every attribute they emit.
+
 ## [0.6.5] — 2026-09-27
 
 
