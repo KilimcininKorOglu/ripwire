@@ -129,14 +129,20 @@ fi
 # L1 (2026-09-19): the CLI default legend is compact. (G-b)'s identity — reason='s bundle price IS the served byte count —
 # is priced by chooseExpandServe in the FULL dialect (expandmodecheck (4) states why); under the compact default the
 # reason= numbers stay the full-dialect candidate prices, a found item in the L1 lane report. Both runs ask for full.
-"$BIN" "$ROOT" --expand=endsWithView --no-cache --legend=full >"$TMP/real_default.xml" 2>"$TMP/real_default.err"
-"$BIN" "$ROOT" --expand=endsWithView --no-cache --top-k=0 --legend=full >"$TMP/real_tk0.xml" 2>/dev/null
+# PROBE MOVED 2026-09-30 (train 22): src/darkflags.h grew past the 64 KiB pack budget (66,556 B, the --flags
+# JavaScript/TypeScript env reader), so --expand=endsWithView now serves bundle for a different reason ("whole-file
+# 66556B over pack-budget 65536B") and never prices the bundle against the file — the comparison this arm exists for.
+# The probe is now lspPercentDecode (src/lsp.h, ~50 KB, one definition): a small body in a real file under the budget,
+# the same shape darkflags.h had when V1 was found. Pick another such symbol if lsp.h crosses the budget too.
+PROBE=lspPercentDecode
+"$BIN" "$ROOT" --expand=$PROBE --no-cache --legend=full >"$TMP/real_default.xml" 2>"$TMP/real_default.err"
+"$BIN" "$ROOT" --expand=$PROBE --no-cache --top-k=0 --legend=full >"$TMP/real_tk0.xml" 2>/dev/null
 realTk0Bytes=$( wc -c < "$TMP/real_tk0.xml" | tr -d ' ' )
 
 if grep -q 'mode="whole-file"' "$TMP/real_default.xml"; then
-    no "(G) default --expand=endsWithView on the real repo wrongly served whole-file: $( grep -oE '<ctx[^>]*>' "$TMP/real_default.xml" )"
+    no "(G) default --expand=$PROBE on the real repo wrongly served whole-file: $( grep -oE '<ctx[^>]*>' "$TMP/real_default.xml" )"
 else
-    ok "(G) default --expand=endsWithView on the real repo correctly stays in bundle mode"
+    ok "(G) default --expand=$PROBE on the real repo correctly stays in bundle mode"
 fi
 
 # (G-a) the SERVED BODY (everything but the <ctx ...> opening tag's own mode=/reason= decoration, which
