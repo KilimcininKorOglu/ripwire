@@ -308,6 +308,12 @@ for ext in py js mjs cjs jsx ts mts cts tsx rb pl pm lua php ps1 psm1 psd1 bat c
 done
 if [ -z "$r2_missing" ]; then ok "(round2) M4 every listed code extension is disclosed code_not_flow_scanned=\"1\""
 else no "(round2) M4 not disclosed:$r2_missing"; fi
+printf '\357\273\277#!/bin/sh\n%s\n' "$SGLINE" >"$R2/bomscript"
+r2_crit "$R2/bomscript" 2 "S2 an extensionless script with a UTF-8 BOM before #!/bin/sh"
+printf '#!/usr/bin/env -u HOME bash\n%s\n' "$SGLINE" >"$R2/envu"
+r2_crit "$R2/envu" 2 "env -u NAME: the option's argument is not the interpreter"
+printf '#!/bin/busybox sh\n%s\n' "$SGLINE" >"$R2/bbox"
+r2_crit "$R2/bbox" 2 "busybox: the applet after it is the interpreter"
 
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then

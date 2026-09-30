@@ -1444,8 +1444,8 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
 // What a file under a skill IS, for the fence gate (0.6.6). --scan-skills reads every regular file under a skill, and
 // the markdown fence tracker used to run over a bundled script's bytes too: net-exfil, the one fence-only rule, never
 // fired in scripts/helper.sh (no ``` line, so never "in a fence"), and a ``` pair in a heredoc could close a fence.
-//   ShellScript — .sh .bash .zsh .ksh, or a first line `#!` whose interpreter (through `env`) is sh, bash, zsh, dash or
-//                 ksh: also scanned as whole-file code (scanSkillTextOn's wholeFileIsCode), merged with the markdown pass.
+//   ShellScript — .sh .bash .zsh .ksh, or a first line `#!` (after a UTF-8 BOM) whose interpreter (through `env` or
+//                 `busybox`) is sh, bash, zsh, dash, ksh, ash or mksh: also scanned as whole-file code (scanSkillTextOn's wholeFileIsCode), merged with the markdown pass.
 //   OtherCode   — .py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or any other `#!`: read exactly as before, but the scanner has no
 //                 network-flow vocabulary for these languages (Python `requests.post` of `os.environ` is missed even in
 //                 a ```python fence), so the answer DISCLOSES them: <skillscan code_not_flow_scanned="N">.
@@ -1457,10 +1457,19 @@ enum class SkillFileKind : std::uint8_t
     OtherCode,
 };
 
+// A leading UTF-8 byte-order mark is not part of the file's first line for this probe: bash still runs such a file
+// (review S2: `\xEF\xBB\xBF#!/bin/sh` executed, and read as markdown).
+inline std::string_view skillTextAfterBom( std::string_view text ) noexcept
+{
+    return text.starts_with( "\xEF\xBB\xBF" ) ? text.substr( 3 ) : text;
+}
+
 // The interpreter a `#!` first line names, as a base name: `#!/bin/sh` -> sh, `#!/usr/bin/env -S bash -e` -> bash (through
-// `env`, options and VAR=value operands are skipped). Empty when the text has no `#!` line or it names nothing.
+// `env`, options and VAR=value operands are skipped, and `-u NAME` / `-C DIR` skip their argument too), `#!/bin/busybox sh`
+// -> sh (the applet). Empty when the text has no `#!` line or it names nothing.
 inline std::string_view skillShebangInterpreter( std::string_view text ) noexcept
 {
+    text = skillTextAfterBom( text );
     if( !text.starts_with( "#!" ) )
     {
         return {};
@@ -1468,7 +1477,8 @@ inline std::string_view skillShebangInterpreter( std::string_view text ) noexcep
     const std::size_t eol = text.find( '\n' );
     ASSUME( eol == std::string_view::npos || eol >= 2, "the text starts with \"#!\", so a newline is at index 2 or later" );
     std::string_view line     = text.substr( 2, eol == std::string_view::npos ? std::string_view::npos : eol - 2 );
-    bool             afterEnv = false;
+    bool             afterEnv     = false;   // `env` (or `busybox`) seen: the interpreter is a later token
+    bool             skipArgument = false;   // the previous token was an env option that takes an argument
     for( std::size_t start = line.find_first_not_of( " \t\r" ); start != std::string_view::npos; start = line.find_first_not_of( " \t\r" ) )
     {
         line.remove_prefix( start );
@@ -1476,9 +1486,17 @@ inline std::string_view skillShebangInterpreter( std::string_view text ) noexcep
         const std::string_view token = line.substr( 0, end );
         line.remove_prefix( token.size() );
         const std::string_view name = namesplit::afterLast( token, "/" );
-        if( !afterEnv && name == "env" )
+        if( skipArgument )
+        {
+            skipArgument = false;
+        }
+        else if( !afterEnv && ( name == "env" || name == "busybox" ) )
         {
             afterEnv = true;
+        }
+        else if( afterEnv && ( token == "-u" || token == "-C" || token == "--unset" || token == "--chdir" ) )
+        {
+            skipArgument = true;
         }
         else if( !afterEnv || !( token.starts_with( "-" ) || token.find( '=' ) != std::string_view::npos ) )
         {
@@ -1507,12 +1525,12 @@ inline SkillFileKind skillFileKindOf( std::string_view path, std::string_view te
         return SkillFileKind::Markdown;   // a markdown file is read as markdown whatever its first line says: .md is byte-identical
     }
     const std::string_view interpreter = skillShebangInterpreter( text );
-    if( extIs( { "sh", "bash", "zsh", "ksh" } ) || interpreter == "sh" || interpreter == "bash" || interpreter == "zsh" || interpreter == "dash"
-        || interpreter == "ksh" )
+    constexpr std::string_view kShells[] = { "sh", "bash", "zsh", "dash", "ksh", "ash", "mksh" };
+    if( extIs( { "sh", "bash", "zsh", "ksh" } ) || std::find( std::begin( kShells ), std::end( kShells ), interpreter ) != std::end( kShells ) )
     {
         return SkillFileKind::ShellScript;
     }
-    if( text.starts_with( "#!" ) || extIs( { "py", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "rb", "pl", "pm", "lua", "php", "ps1", "psm1", "psd1", "bat", "cmd" } ) )
+    if( skillTextAfterBom( text ).starts_with( "#!" ) || extIs( { "py", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "rb", "pl", "pm", "lua", "php", "ps1", "psm1", "psd1", "bat", "cmd" } ) )
     {
         return SkillFileKind::OtherCode;
     }
