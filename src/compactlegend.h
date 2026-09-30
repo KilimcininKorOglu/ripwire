@@ -700,6 +700,11 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "findings", "findings=N: pattern hits; rows print up to 200 (shown= capped=1 past that)", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     { "verdict", "verdict=clean|warn|critical: the worst finding's severity, the same as exit 0/1/2", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     { "why", "f why=no-cred-source: net-exfil hit, no credential-shaped source on the line (WARN); why=sensitive-read-upload: a sensitive file read feeds the upload (CRITICAL)", true, "f", MapHeaderRead::No, {}, "scan-skills" },
+    { "rule", "f rule=: the finding's rule, CATEGORY:name (INJECTION, EXFILTRATE, SCOPE-CREEP, FRONTMATTER, SCAN-INCOMPLETE); p= is path:line", true, "f", MapHeaderRead::No, {}, "scan-skills" },
+    { "sev", "f sev=critical|warn|info: that finding's severity (verdict= is the worst)", true, "f", MapHeaderRead::No, {}, "scan-skills" },
+    { "capped", "capped=1: more rows than 200; the shown rows are the worst severity first (every CRITICAL, then WARN)", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
+    { "dirs", "dirs=: the directories a bare scan-skills run walked, ;-separated (cwd .agents/skills, the Claude and Codex skill homes); never the positional root", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
+    { "code_not_flow_scanned", "code_not_flow_scanned=N: scanned code files with no network-flow model (.py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, a non-shell #!); clean does not cover them", false, "skillscan", MapHeaderRead::No, {}, "scan-skills" },
     // seams: src/verbs_report.h runStructureText (the seams arm)
     { "modules", "modules=N: directories holding indexed symbols (a module = parent dir)", false, "seams", MapHeaderRead::No, {}, "seams" },
     { "bridges", "bridges=N: cross-directory call edges, tested or not; untested= is those no test reaches", false, "seams", MapHeaderRead::No, {}, "seams" },
@@ -873,6 +878,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "redone", "redone=N: of del=, the base lines HEAD removed too (the supersession evidence)", true, "file", MapHeaderRead::No, {}, "stray-content" },
     { "sim", "sim=: minhash containment, 0 to 1, of the ref's blob in HEAD's (pure-addition evidence)", true, "file", MapHeaderRead::No, {}, "stray-content" },
     { "head-touched", "head-touched=1: the live line changed this path since the merge base", true, "file", MapHeaderRead::No, {}, "stray-content" },
+    { "diffable", "diffable=0: a binary or oversized blob on some side; the path is listed but not line-diffed, so its counts are 0, not measured", true, "file", MapHeaderRead::No, {}, "stray-content" },
     { "files", "more files=N: N more file rows of this ref withheld; shown + N = the ref's files=; detail=1 lists all", true, "more", MapHeaderRead::No, {}, "stray-content" },
     // whereis: src/crossref.h writeWhereisPage (root emit, trailing <more hits=>)
     { "hits", "hits=N: occurrences in HEAD plus every scanned local ref's full tree (the total rows)", false, "whereis", MapHeaderRead::No, {}, "whereis" },

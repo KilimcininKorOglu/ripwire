@@ -107,7 +107,8 @@ restarted (a floor: on macOS the allocator may keep freed pages, so the re-read 
 trimming the allocator is deferred). The trip seam `RIPWIRE_TEST_MEMGUARD=crawl:N|pressure:N|parse:N|request:N` is additive — it only adds a
 trip and never replaces a real reading, so it can make a run stricter, never unguarded — and it and
 `RIPWIRE_MAX_MEMORY` are cleared by `test/lib/clean-env.sh`. Gate: `test/memguardcheck.sh` (B)–(D), including a
-real-footprint arm (this repo's `src/` under `--max-memory=64M`), a warm-cache arm and a two-run snapshot arm.
+real-footprint arm (a generated tree whose parsed facts sit far over `--max-memory=64M`), a warm-cache arm and a
+two-run snapshot arm.
 Known floors: the cgroup limit read is the v2 leaf `memory.max` only — a limit on an ancestor (a systemd slice's
 `MemoryMax`) and cgroup v1 fall back to physical RAM; `HOME` unset (no `USERPROFILE` either) means no home directory is
 recognised; `--legend=full` (the frozen 0.6.1 prose) does not define the `memory_*` attributes; the LSP server answers
@@ -337,8 +338,9 @@ WARN (including the three `http://<host>:<port>` doc placeholders), and the `com
 the first-histogram set, 109 CRITICAL become 6 CRITICAL, 102 WARN and one silent line. The decision is still
 line-local. It does not resolve a `$VAR` to its assignment, does not tell a token's own service from another host,
 and does not follow a read on one line to an upload on the next. That is the source-to-sink flow decision, which
-is still to come. `src/skillscan.h` now names its lineage (NVIDIA SkillSpector), and `docs/LINEAGE.md` names it
-too; its counted row, which moves the repository count README.md and the deck restate, is owed with the flow fix.
+is still to come. `src/skillscan.h` and `docs/LINEAGE.md` now note that this hardening was informed by ideas from NVIDIA SkillSpector
+(Apache-2.0), surveyed as related work; no SkillSpector code or pattern text is included. A counted lineage row, with
+per-rule attribution, will be added once the planned port of its code-based checks lands.
 Gated by `test/skillscan.sh` check 18 over the five blocks of `test/skillfix/netexfil_severity.md`, and by
 `test/regexguardcheck.sh` arm (f1), whose oracle now specifies the destination rule too and agrees with the scanner
 on 3,000 generated lines; each of its destination branches (the netcat pair, the socket address, the `/dev/tcp`
@@ -564,6 +566,53 @@ No well-formed input is known to reach it; `test/rubyinheritcheck.sh` drives it 
 corpora, with this repository's `--report` totals unchanged. `kParserVer` 129 in this release (carried as 97 → 99 on the PR, in two steps: 98 added the
 inheritance records; 99 dropped a computed superclass's stray receiver ref); the record layout is unchanged, and
 the `quality.h` mirror and `test/qschemetrip.hash` move with it.
+
+### Fixed — `--scan-skills` scans a skill's bundled shell scripts as code, and discloses the code it cannot flow-scan (`.py` `.js` `.mjs` `.cjs` `.jsx` `.ts` `.mts` `.cts` `.tsx` `.rb` `.pl` `.pm` `.lua` `.php` `.ps1` `.psm1` `.psd1` `.bat` `.cmd`, a non-shell `#!`)
+
+`--scan-skills` reads every regular file under a skill, but ran each through the markdown fence tracker. So
+`EXFILTRATE:net-exfil`, which fires only inside a fenced code block, never fired in `scripts/helper.sh`: a
+`curl … $GITHUB_TOKEN` upload that is CRITICAL inside a ```` ```bash ```` fence in `SKILL.md` read clean (exit 0) in the
+script, with or without a shebang, through `--scan-skills` and `--scan-skill` alike, and a ```` ``` ```` pair in a
+heredoc could close a fence the scan thought open. A `.sh`/`.bash`/`.zsh`/`.ksh` file, or one whose `#!` (after a UTF-8 BOM, if
+any) names `sh`, `bash`, `zsh`, `dash`, `ksh`, `ash` or `mksh` (through `env` or `busybox` too), or a shell startup file (`.bashrc`,
+`.bash_profile`, `.bash_login`, `.bash_logout`, `.bash_aliases`, `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.profile`,
+`.kshrc`, `.envrc`), now also gets a whole-file-code pass — no YAML frontmatter (bash runs a
+leading `---` line and everything after it), every line is command context, and no ```` ``` ```` line toggles anything — merged with the markdown pass, so a script can only gain rows
+(measured over the 1,242 code files in this repo: no row lost, 23 added, 17 of them WARN `why="no-cred-source"`).
+Markdown input is byte-identical. Code in a language the scanner has no network-flow model for — exactly `.py`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.rb`, `.pl`, `.pm`, `.lua`, `.php`, `.ps1`, `.psm1`, `.psd1`, `.bat`, `.cmd`,
+or another `#!` — is read as before and disclosed: `<skillscan
+code_not_flow_scanned="N">`, defined in the compact and full legends and counted on the stderr tally; `clean` does
+not cover those files. Python and JavaScript flow shapes (`requests.post` or `urllib` with `os.environ`, which is
+missed even inside a ```` ```python ```` fence) are 0.6.7 work. `ripwire wrap`'s pre-install scan read only `.md`
+files, so it emitted the recipe (rc 0, empty stderr) for a skill whose `scripts/helper.sh` uploads a credential; it now
+scans every regular file of `./skills` and `.agents/skills` through the same kind-aware scan, following directory
+symlinks as `--scan-skills` does (each directory entered once, by device and inode, so a link loop ends), refuses such a skill
+(rc 1 unless `--force`), and counts code files it cannot flow-scan on stderr. Gate: `test/skillscan.sh` check 19. The `<f rule= sev=>` row attributes are now defined in both
+`--scan-skills` legends (present only when the answer has rows; they never were, on any earlier build), and past the
+200-row cap the shown rows are the worst severity first (every CRITICAL, then WARN), so a WARN flood cannot hide the
+CRITICAL evidence row; an uncapped answer keeps scan order.
+
+### Fixed — `ripwire <dir> --scan-skills` no longer answers "clean" for a `<dir>` it never read
+
+The bare form walks `./.agents/skills` under the current directory and the Claude and Codex skill homes; it never read a
+positional root, yet `ripwire <dir> --scan-skills` answered `files="0" verdict="clean"` at exit 0 for a `<dir>` holding a
+CRITICAL script, and the empty-value hint said it "scans the tree it maps". A positional root other than the current
+directory is now refused by name (exit 3, this verb's "never scanned it" code, since 0/1/2 are verdicts: pass
+`--scan-skills=<dir>` or `cd` there), the hint and `--help` say what the bare form walks, and its answer names the
+directories it walked in `dirs=` (present only on the bare form; defined in the compact and full legends). Scans of a
+`DIR` or a single file are byte-identical. Gate: `test/skillscan.sh` check 20 (M5).
+
+### Fixed — `--stray-content` defines the `diffable="0"` it emits for a binary on an unmerged branch
+
+A file an unmerged local branch holds that cannot be line-diffed (a binary or oversized blob on some side, e.g. an
+image) is listed as `<file … diffable="0"/>` with its counts at 0, but no legend defined `diffable=`: not the default
+(compact) legend, not `--legend=full`, not the MCP `stray_content` twin or the session dictionary. So
+`legendcoveragecheck` arm (G) went red in any clone whose local branches held such a file and green everywhere else.
+The compact legend (and with it the session dictionary: `entries=` 730 → 731) and the full legend now define it;
+the compact reading is present-only, so a default answer with no such row is byte-identical to before (the full
+legend gains one sentence). `legendcoveragecheck`
+gains arm (H), which builds that state in a throwaway repo — a text file and a binary on an unmerged branch — and
+requires the CLI default, `--legend=full` and the MCP twin to define every attribute they emit.
 
 ## [0.6.5] — 2026-09-27
 

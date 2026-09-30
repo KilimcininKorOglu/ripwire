@@ -2096,6 +2096,8 @@ inline void writeStrayContentPage( std::FILE* out, const StrayResult& res, std::
                        "SHALLOW clone (the checkout default in CI) is every ref: it is not a claim that the ref is merged, "
                        "and the fix is to deepen the clone. The four buckets are exhaustive, so unmerged plus superseded "
                        "plus merged plus unknown always equals refs. "
+                       "diffable=\"0\" on a file row (present only then) means a binary or oversized blob on some side: "
+                       "the path is listed rather than dropped, but it cannot be line diffed, so its counts are 0, not measured. "
                        // §B12.2 — the same scope clause as whereis, in the same words, because the two verbs are read
                        // together and used to over claim in the same way ("across ALL branches").
                        "SCOPE: refs/heads only, which is every local branch (worktree branches included). Remote "

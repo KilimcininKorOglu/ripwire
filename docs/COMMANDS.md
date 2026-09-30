@@ -4216,11 +4216,13 @@ $ ./build/ripwire --scan-skill=skills/ripwire-orient/SKILL.md
 <skillscan files="1" findings="0" verdict="clean"></skillscan>
 ```
 
+**Shaped by:** `--scan-skills`
+
 ### `--scan-skills[=DIR]`
 
 **Answers:** scan a skills directory before installing — every text file, .md and .sh alike scan DIR (or .agents/skills/ + ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/ + ${CODEX_HOME:-~/.codex}/skills/).
 
-EVERY text file, .md and .sh alike — a skill dir's executables are the files most worth scanning. skipped= counts what it could not scan (binary content, or unreadable); denylisted subtrees (.git, node_modules, build, ...) are not descended and the stderr tally says how many for vulnerabilities
+EVERY text file, .md and .sh alike — a skill dir's executables are the files most worth scanning. skipped= counts what it could not scan (binary content, or unreadable); denylisted subtrees (.git, node_modules, build, ...) are not descended and the stderr tally says how many. The bare form never reads a positional root: one that is not the current directory is refused (exit 3, use --scan-skills=DIR), and its answer names the directories it walked in dirs=
 
 **Try it**
 
@@ -4234,6 +4236,7 @@ $ ./build/ripwire --scan-skills=skills
 **Caveats (stated by the binary):**
 
 - skipped= counts what it could not scan (binary content, or unreadable);
+- The bare form never reads a positional root: one that is not the current directory is refused (exit 3, use --scan-skills=DIR), and its answer names the directories it walked in dirs=
 
 ### `--force`
 

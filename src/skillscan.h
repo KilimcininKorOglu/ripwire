@@ -1,4 +1,4 @@
-// Lineage: this scanner descends from NVIDIA SkillSpector's work on vetting agent skills before install (see docs/LINEAGE.md).
+// Lineage: informed by ideas from NVIDIA SkillSpector (Apache-2.0), related work; no code or pattern text taken; see docs/LINEAGE.md.
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
@@ -15,9 +15,12 @@
 //   SCOPE-CREEP — body requests tools absent from the allowed-tools: frontmatter (WARN)
 //   FRONTMATTER — YAML keys attempting to set model/system/temperature (WARN)
 //
-// No tree-sitter — ripwire has no markdown grammar. Pure line-iteration, PLUS a second pass inside
-// `scanSkillText` over a whitespace-normalized join of the body (INJECTION only) to catch a phrase
-// split across a newline.
+// No tree-sitter parse here: tree_sitter_markdown is vendored (the index reads .md with it), but this scanner does not
+// call it. It reads a file line by line with its own fence tracker (``` / ~~~ open and close, and whether the opening
+// tag marks an EXAMPLE fence), PLUS a second pass inside `scanSkillText` over a whitespace-normalized join of the body
+// (INJECTION only) to catch a phrase split across a newline. A bundled SHELL script (SkillFileKind) is also read as
+// whole-file code, every line command context, and merged with that reading; code in other languages is read as
+// before and disclosed as code_not_flow_scanned.
 // Pattern matching: guarded regexes (src/regexguard.h — ECMAScript, icase where relevant); INJECTION patterns
 // are word-boundary-anchored phrases, not bare substrings (a bare substring like "disregard"
 // false-positives on "disregarding", and "new persona" on "new personal"). A skill file is UNTRUSTED input, so a
@@ -35,6 +38,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <sstream>
 #include <string>
@@ -632,9 +636,8 @@ struct NetFlowScan
     // A read operand: note whether it is sensitive, and whether it is named like a credential.
     void noteRead( std::string_view operand ) noexcept
     {
-        const std::size_t slash = operand.find_last_of( '/' );   // never `npos + 1`: G1's -fsanitize=integer traps the wrap
         segSensitive        = segSensitive || isSensitivePath( operand );
-        flow.credentialRead = flow.credentialRead || isCredentialName( slash == std::string_view::npos ? operand : operand.substr( slash + 1 ) );
+        flow.credentialRead = flow.credentialRead || isCredentialName( namesplit::afterLast( operand, "/" ) );
     }
 
     void word( std::string_view token, std::string_view low ) noexcept
@@ -1021,7 +1024,11 @@ inline constexpr std::size_t kSkillScanStackBytes     = 256 * 1024 * 1024;   // 
 
 // Scan the raw text of a skill markdown file line by line, on a thread settled at `stackBytes`. Findings are sorted
 // (line, rule).
-inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::size_t stackBytes )
+// `wholeFileIsCode` (a shell script, see SkillFileKind): there is no frontmatter, every line is command context and no
+// ``` / ~~~ line toggles anything. It only ever sets lineInFence, which relaxes the two exfil context gates (fenceOnly, requiresCmdContext);
+// lineInExampleFence, the one flag that SUPPRESSES (injection in an example fence), stays false. scanSkillText merges
+// this pass with the markdown pass, so a script's findings are a superset of what the markdown reading alone reports.
+inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::size_t stackBytes, bool wholeFileIsCode = false )
 {
     using namespace detail;
 
@@ -1051,7 +1058,10 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
     }
 
     // ── frontmatter state: find the YAML block (first `---` to second `---`) ────────────────────
+    // The code pass (a shell script) has NO frontmatter: bash runs a leading `---` line as a command and then every line
+    // after it, so a YAML-shaped block there is code the pass must read (review M1: `---` / upload / `---` hid line 2).
     int frontmatterEnd = 0;   // index of the line AFTER the closing `---` (or 0 if none)
+    if( !wholeFileIsCode )
     {
         bool inFront = false;
         for( int i = 0; i < int( lines.size() ); ++i )
@@ -1154,7 +1164,11 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
         // BETWEEN the ``` markers read lineInFence==true while the markers themselves read false.
         bool lineInFence        = false;
         bool lineInExampleFence = false;
-        if( inBody )
+        if( inBody && wholeFileIsCode )
+        {
+            lineInFence = true;   // a shell script is code on every line: a ``` in a heredoc toggles nothing
+        }
+        else if( inBody )
         {
             lineInFence        = inFence;
             lineInExampleFence = inExampleFence;
@@ -1427,12 +1441,121 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
     return findings;
 }
 
+// What a file under a skill IS, for the fence gate (0.6.6). --scan-skills reads every regular file under a skill, and
+// the markdown fence tracker used to run over a bundled script's bytes too: net-exfil, the one fence-only rule, never
+// fired in scripts/helper.sh (no ``` line, so never "in a fence"), and a ``` pair in a heredoc could close a fence.
+//   ShellScript — .sh .bash .zsh .ksh, or a first line `#!` (after a UTF-8 BOM) whose interpreter (through `env` or
+//                 `busybox`) is sh, bash, zsh, dash, ksh, ash or mksh, or a shell startup file (.bashrc .bash_profile
+//                 .bash_login .bash_logout .bash_aliases .zshrc .zshenv .zprofile .zlogin .profile .kshrc .envrc): also scanned as whole-file code (scanSkillTextOn's wholeFileIsCode), merged with the markdown pass.
+//   OtherCode   — .py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or any other `#!`: read exactly as before, but the scanner has no
+//                 network-flow vocabulary for these languages (Python `requests.post` of `os.environ` is missed even in
+//                 a ```python fence), so the answer DISCLOSES them: <skillscan code_not_flow_scanned="N">.
+//   Markdown    — .md / .markdown whatever their first line says, and everything else: unchanged.
+enum class SkillFileKind : std::uint8_t
+{
+    Markdown,
+    ShellScript,
+    OtherCode,
+};
+
+// A leading UTF-8 byte-order mark is not part of the file's first line for this probe: bash still runs such a file
+// (review S2: `\xEF\xBB\xBF#!/bin/sh` executed, and read as markdown).
+inline std::string_view skillTextAfterBom( std::string_view text ) noexcept
+{
+    return text.starts_with( "\xEF\xBB\xBF" ) ? text.substr( 3 ) : text;
+}
+
+// The interpreter a `#!` first line names, as a base name: `#!/bin/sh` -> sh, `#!/usr/bin/env -S bash -e` -> bash (through
+// `env`, options and VAR=value operands are skipped, and `-u NAME` / `-C DIR` skip their argument too), `#!/bin/busybox sh`
+// -> sh (the applet). Empty when the text has no `#!` line or it names nothing.
+inline std::string_view skillShebangInterpreter( std::string_view text ) noexcept
+{
+    text = skillTextAfterBom( text );
+    if( !text.starts_with( "#!" ) )
+    {
+        return {};
+    }
+    const std::size_t eol = text.find( '\n' );
+    ASSUME( eol == std::string_view::npos || eol >= 2, "the text starts with \"#!\", so a newline is at index 2 or later" );
+    std::string_view line     = text.substr( 2, eol == std::string_view::npos ? std::string_view::npos : eol - 2 );
+    bool             afterEnv     = false;   // `env` (or `busybox`) seen: the interpreter is a later token
+    bool             skipArgument = false;   // the previous token was an env option that takes an argument
+    for( std::size_t start = line.find_first_not_of( " \t\r" ); start != std::string_view::npos; start = line.find_first_not_of( " \t\r" ) )
+    {
+        line.remove_prefix( start );
+        const std::size_t      end   = line.find_first_of( " \t\r" );
+        const std::string_view token = line.substr( 0, end );
+        line.remove_prefix( token.size() );
+        const std::string_view name = namesplit::afterLast( token, "/" );
+        if( skipArgument )
+        {
+            skipArgument = false;
+        }
+        else if( !afterEnv && ( name == "env" || name == "busybox" ) )
+        {
+            afterEnv = true;
+        }
+        else if( afterEnv && ( token == "-u" || token == "-C" || token == "--unset" || token == "--chdir" ) )
+        {
+            skipArgument = true;
+        }
+        else if( !afterEnv || !( token.starts_with( "-" ) || token.find( '=' ) != std::string_view::npos ) )
+        {
+            return name;
+        }
+    }
+    return {};
+}
+
+inline SkillFileKind skillFileKindOf( std::string_view path, std::string_view text ) noexcept
+{
+    // the extension: the base name's text after its last '.', lowercased (a dotfile `.bashrc` has none)
+    const std::string_view base = namesplit::afterLast( path, "/" );
+    const std::size_t      dot  = base.rfind( '.' );
+    std::string            ext( ( dot == std::string_view::npos || dot == 0 ) ? std::string_view() : base.substr( dot + 1 ) );
+    for( char& c : ext )
+    {
+        c = char( std::tolower( static_cast<unsigned char>( c ) ) );
+    }
+    const auto extIs = [ & ]( std::initializer_list<std::string_view> names ) noexcept
+    {
+        return std::find( names.begin(), names.end(), std::string_view( ext ) ) != names.end();
+    };
+    if( extIs( { "md", "markdown" } ) )
+    {
+        return SkillFileKind::Markdown;   // a markdown file is read as markdown whatever its first line says: .md is byte-identical
+    }
+    const std::string_view interpreter = skillShebangInterpreter( text );
+    // shell startup files are shell code with no extension and usually no #! (review S3); direnv executes .envrc once allowed
+    constexpr std::string_view kShellDotfiles[] = { ".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases", ".zshrc",
+                                                    ".zshenv", ".zprofile", ".zlogin", ".profile", ".kshrc", ".envrc" };
+    if( std::find( std::begin( kShellDotfiles ), std::end( kShellDotfiles ), base ) != std::end( kShellDotfiles ) )
+    {
+        return SkillFileKind::ShellScript;
+    }
+    constexpr std::string_view kShells[] = { "sh", "bash", "zsh", "dash", "ksh", "ash", "mksh" };
+    if( extIs( { "sh", "bash", "zsh", "ksh" } ) || std::find( std::begin( kShells ), std::end( kShells ), interpreter ) != std::end( kShells ) )
+    {
+        return SkillFileKind::ShellScript;
+    }
+    if( skillTextAfterBom( text ).starts_with( "#!" ) || extIs( { "py", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "rb", "pl", "pm", "lua", "php", "ps1", "psm1", "psd1", "bat", "cmd" } ) )
+    {
+        return SkillFileKind::OtherCode;
+    }
+    return SkillFileKind::Markdown;
+}
+
 // scanSkillTextOn on one thread with a kSkillScanStackBytes stack (a reservation: pages commit only as deep as a match
 // recurses), so a long skill line gets the bound that stack affords instead of the caller's. A thread the system refuses
 // runs the scan on the caller at kCallerStackBytesFloor, disclosed by stackthreads.h. A throw out of the scan (an
 // allocation failure) cannot leave the thread, so it becomes one CRITICAL scan-aborted finding: a skill whose scan did
 // not finish never reads clean.
-inline std::vector<SkillFinding> scanSkillText( std::string_view text )
+// A ShellScript gets BOTH passes, merged: the markdown reading first, then the whole-file-code reading, stable-sorted on
+// (line, rule) and deduped keeping the first, so a (line, rule) both passes report keeps the markdown row and every
+// markdown finding survives byte for byte — script mode can only ADD rows. (Taking the code pass alone would not be
+// monotone: the joined-body injection pass reports only the FIRST hit per pattern, and code mode feeds it lines an
+// example fence withheld, which could move that first hit off the line the markdown pass reported.)
+inline std::vector<SkillFinding> scanSkillText( std::string_view text, SkillFileKind kind = SkillFileKind::Markdown )
 {
     std::vector<SkillFinding> findings;
     const auto scan = [ & ]( std::size_t settledBytes )
@@ -1440,6 +1563,16 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
         try
         {
             findings = scanSkillTextOn( text, settledBytes );
+            if( kind == SkillFileKind::ShellScript )
+            {
+                std::vector<SkillFinding> code = scanSkillTextOn( text, settledBytes, /*wholeFileIsCode=*/true );
+                findings.insert( findings.end(), std::make_move_iterator( code.begin() ), std::make_move_iterator( code.end() ) );
+                std::stable_sort( findings.begin(), findings.end(), []( const SkillFinding& a, const SkillFinding& b ) noexcept
+                                  { return a.line != b.line ? a.line < b.line : std::string_view( a.rule ) < std::string_view( b.rule ); } );
+                findings.erase( std::unique( findings.begin(), findings.end(), []( const SkillFinding& a, const SkillFinding& b ) noexcept
+                                             { return a.line == b.line && std::string_view( a.rule ) == std::string_view( b.rule ); } ),
+                                findings.end() );
+            }
         }
         catch( ... )
         {
@@ -1465,6 +1598,7 @@ struct SkillFileReadResult
 {
     bool                        readable = false;   // false = path could not be scanned at all
     std::vector<SkillFinding>   findings;            // valid only when readable == true
+    SkillFileKind               kind     = SkillFileKind::Markdown;   // OtherCode: counted as code_not_flow_scanned
 };
 
 // NO DISCLOSE on the unreadable paths here, deliberately, and it is not an omission (M7/F20,
@@ -1489,7 +1623,9 @@ inline SkillFileReadResult scanSkillFileChecked( const std::string& path )
     {
         return {};
     }
-    return { true, scanSkillText( buf.str() ) };   // empty file → empty findings → a legitimate clean scan
+    const std::string   text = buf.str();
+    const SkillFileKind kind = skillFileKindOf( path, text );
+    return { true, scanSkillText( text, kind ), kind };   // empty file → empty findings → a legitimate clean scan
 }
 
 // NOTE: directory scanning (recursive .md discovery + per-file scan + exit-code aggregation) is
@@ -1605,20 +1741,79 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // #353: an EXFILTRATE:net-exfil row graded by more than its match carries why= — why="no-cred-source" on a WARN,
 // why="sensitive-read-upload" on a CRITICAL fed by a sensitive read. The full legend defines it only when a row carries
 // it, so every scan without one stays byte-identical.
-inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, int filesScanned, int filesSkipped = 0, bool fullLegend = false ) noexcept
+// The <skillscan> root's counts. codeNotFlowScanned (readable SkillFileKind::OtherCode files) and dirs (a bare --scan-skills
+// only: the directories it walked, ';'-separated) are present-only, so an answer without them is byte-identical to before.
+struct SkillScanTally
 {
+    int         filesScanned       = 0;
+    int         filesSkipped       = 0;
+    int         codeNotFlowScanned = 0;
+    std::string dirs;
+};
+
+// The --legend=full prose for <skillscan>: its present-only clauses (f rows, capped=, code_not_flow_scanned=, why=) ride only when
+// the answer carries the attribute, so a scan without them prints the legend it always printed.
+inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillScanRow>& rows, const SkillScanTally& tally ) noexcept
+{
+    const bool anyWhy = std::any_of( rows.begin(), rows.end(), []( const SkillScanRow& r ) noexcept { return r.finding.why != nullptr; } );
+    rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
+                      "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
+                      "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
+                      "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
+                      "worst finding's severity, the same read as the exit code (0/1/2).{}{}{}{}{} -->", kSkillScanFindingCap,
+                      tally.dirs.empty() ? "" : " dirs= (a bare scan only) lists the directories it walked, separated by ';': .agents/skills under "
+                                                "the current directory, then the Claude and Codex skill homes (a missing one holds nothing); "
+                                                "the positional root is never read.",
+                      rows.empty() ? "" : " An f row is one finding: p= is path:line (line 0 = the file or walk as a whole), rule= is "
+                                          "CATEGORY:name (INJECTION, EXFILTRATE, SCOPE-CREEP, FRONTMATTER, SCAN-INCOMPLETE), sev= is "
+                                          "critical|warn|info.",
+                      rows.size() > kSkillScanFindingCap ? " capped=1 (present only then): the rows shown are the worst severity first (every "
+                                                           "CRITICAL row, then WARN), each severity in scan order, so the cap never hides a "
+                                                           "CRITICAL row behind WARN rows." : "",
+                      tally.codeNotFlowScanned > 0 ? " code_not_flow_scanned=N (present only then): N scanned files are code in a language this "
+                                               "scanner has no network-flow model for (.py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or a non-shell #!); "
+                                               "they were read line by line like markdown, so an upload of a secret written in that language "
+                                               "is not detected: clean does not cover them. Shell scripts are scanned as code." : "",
+                      anyWhy ? " An f row's why= says why EXFILTRATE:net-exfil graded as it did: why=no-cred-source, a network "
+                               "verb plus a $VAR or base64 but no credential-shaped source on the line, so WARN, not CRITICAL; "
+                               "why=sensitive-read-upload, a sensitive file read (a key, /etc/passwd, .netrc, .env, a credential "
+                               "or cookie store) piped, redirected or passed into an upload, CRITICAL." : "" );
+}
+
+// The <f> rows an answer shows, in order: every row in scan order, except past the row cap, where the worst severity comes
+// first — one pass per severity, CRITICAL down to INFO, each in scan order — so a WARN flood cannot push the CRITICAL
+// evidence row past the cap (review S1). Uncapped answers keep scan order, byte-identical to before.
+template<class Fn>
+inline void forEachShownSkillRow( const std::vector<SkillScanRow>& rows, std::size_t shown, bool capped, Fn&& fn )
+{
+    if( !capped )
+    {
+        for( const SkillScanRow& r : rows )
+        {
+            fn( r );
+        }
+        return;
+    }
+    std::size_t printed = 0;
+    for( const SkillSeverity sev : { SkillSeverity::Critical, SkillSeverity::Warn, SkillSeverity::Info } )
+    {
+        for( std::size_t i = 0; i < rows.size() && printed < shown; ++i )
+        {
+            if( rows[i].finding.sev == sev )
+            {
+                fn( rows[i] );
+                ++printed;
+            }
+        }
+    }
+}
+
+inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, const SkillScanTally& tally, bool fullLegend ) noexcept
+{
+    const int filesScanned = tally.filesScanned, filesSkipped = tally.filesSkipped, codeNotFlowScanned = tally.codeNotFlowScanned;
     if( fullLegend )
     {
-        const bool anyWhy = std::any_of( rows.begin(), rows.end(), []( const SkillScanRow& r ) noexcept { return r.finding.why != nullptr; } );
-        rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
-                          "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
-                          "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
-                          "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
-                          "worst finding's severity, the same read as the exit code (0/1/2).{} -->", kSkillScanFindingCap,
-                          anyWhy ? " An f row's why= says why EXFILTRATE:net-exfil graded as it did: why=no-cred-source, a network "
-                                   "verb plus a $VAR or base64 but no credential-shaped source on the line, so WARN, not CRITICAL; "
-                                   "why=sensitive-read-upload, a sensitive file read (a key, /etc/passwd, .netrc, .env, a credential "
-                                   "or cookie store) piped, redirected or passed into an upload, CRITICAL." : "" );
+        printSkillScanFullLegend( out, rows, tally );
     }
     int maxSev = 0;
     for( const SkillScanRow& r : rows )
@@ -1643,10 +1838,17 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
     {
         rw::emitTo( out, " shown=\"{}\" capped=\"1\"", shown );
     }
-    rw::emitTo( out, " verdict=\"{}\">", verdict );
-    for( std::size_t i = 0; i < shown; ++i )
+    if( codeNotFlowScanned > 0 )
     {
-        const SkillScanRow& r = rows[i];
+        rw::emitTo( out, " code_not_flow_scanned=\"{}\"", codeNotFlowScanned );
+    }
+    if( !tally.dirs.empty() )
+    {
+        rw::emitTo( out, " dirs=\"{}\"", escapeXmlAttr( tally.dirs ) );
+    }
+    rw::emitTo( out, " verdict=\"{}\">", verdict );
+    forEachShownSkillRow( rows, shown, capped, [ & ]( const SkillScanRow& r )
+    {
         rw::emitTo( out, "<f p=\"{}:{}\" rule=\"{}\" sev=\"{}\"",
                      escapeXmlAttr( r.path ).c_str(), r.finding.line, r.finding.rule, skillSeverityAttr( r.finding.sev ).c_str() );
         if( r.finding.why != nullptr )
@@ -1654,7 +1856,7 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
             rw::emitTo( out, " why=\"{}\"", r.finding.why );
         }
         rw::emitRaw( out, "/>" );
-    }
+    } );
     rw::emitRaw( out, "</skillscan>\n" );
 }
 

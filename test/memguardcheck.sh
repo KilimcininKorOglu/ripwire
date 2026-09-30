@@ -400,19 +400,43 @@ else
     no "(B7c) no answer to id=4"
 fi
 
-# (B8) the REAL reading (no seam): this repo's src/ peaks well over 64M, so the hard line after the ingest fires
-"$BIN" "$ROOT/src" --no-cache --max-memory=64M >"$TMP/b8.out" 2>"$TMP/b8.err"; rc=$?
+# (B8) the REAL reading (no seam): a fixture whose parsed facts alone sit far over 64M (80 files x 1500 small functions;
+#      unguarded peak 150-185M), so the hard line after the ingest fires on its own reading.
+# (B8b) the seam is ADDITIVE: a trip that never fires (crawl:999999999) does not switch the real guard off — the same
+#      run under that seam still ends on the real hard line.
+#   0.6.6 (#364): both arms used to run on this repo's src/, whose footprint AT THE HARD LINE (not its peak: 72-93M on a
+#   10-core host with the pool forced to 3/4 workers) straddles 64M, and whose ingest can outlast the five-second gate on
+#   a slow host. Measured under `taskpolicy -b` at 4 workers, that gave three outcomes, none of them a disabled guard: the
+#   hard line (rc 5), a time-gated soft parse stop (rc 0, memory_stop= disclosed), and a complete run whose phase readings
+#   all fell under the limit (rc 0) — the last is what CI's macOS legs hit, and B8b read it as "the seam turned the guard
+#   off". The run is not guarded per allocation: a sub-five-second transient over the limit between phase readings is the
+#   documented contract, so this was the gate's assumption, not a product gap. On $EG both runs measured rc 5 with the
+#   ingest line 40/40 (with and without the seam; 3/4/10/16 workers; foreground and taskpolicy -b; 0.7-4.7 s).
+EG="$TMP/eg"; mkdir -p "$EG"
+python3 - "$EG" <<'PY2'
+import os, sys
+root = sys.argv[1]
+for d in "abcdefgh":
+    os.makedirs( os.path.join( root, d ), exist_ok=True )
+    for f in range( 40 ):
+        open( os.path.join( root, d, "f%02d.c" % f ), "w" ).write( "int %s_%d(int x){ return x; }\n" % ( d, f ) )
+os.makedirs( os.path.join( root, "z" ), exist_ok=True )
+for f in range( 80 ):
+    open( os.path.join( root, "z", "big%02d.c" % f ), "w" ).write(
+        "".join( "int z%d_%d(int x){ return x>0 ? z%d_%d(x-1)+%d : %d; }\n" % ( f, k, f, ( k + 1 ) % 1500, k, k ) for k in range( 1500 ) ) )
+PY2
+b8why(){ printf 'rc=%s memory_stop=%s stdout=%sB stderr: %s' "$1" "$( grep -oE 'memory_stop=[a-z]+' "$2" | head -1 | cut -d= -f2 )" "$( wc -c < "$2" | tr -d ' ' )" "$( grep '^ripwire:' "$3" | head -c 200 )"; }
+"$BIN" "$EG" --no-cache --max-memory=64M >"$TMP/b8.out" 2>"$TMP/b8.err"; rc=$?
 if [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ingest' "$TMP/b8.err" && [ ! -s "$TMP/b8.out" ]; then
-    ok "(B8) a real footprint over --max-memory=64M (src/, no seam): exit 5 with the ingest line"
+    ok "(B8) a real footprint over --max-memory=64M (no seam): exit 5 with the ingest line"
 else
-    no "(B8) rc=$rc stderr: $( grep '^ripwire:' "$TMP/b8.err" | head -c 250 )"
+    no "(B8) $( b8why "$rc" "$TMP/b8.out" "$TMP/b8.err" )"
 fi
-# (B8b) the seam is ADDITIVE: a trip that never fires does not switch the real guard off
-RIPWIRE_TEST_MEMGUARD=crawl:999999999 "$BIN" "$ROOT/src" --no-cache --max-memory=64M >/dev/null 2>"$TMP/b8b.err"; rc=$?
-if [ "$rc" = 5 ]; then
-    ok "(B8b) RIPWIRE_TEST_MEMGUARD cannot disable the guard (crawl:999999999 still exits 5 on src/)"
+RIPWIRE_TEST_MEMGUARD=crawl:999999999 "$BIN" "$EG" --no-cache --max-memory=64M >"$TMP/b8b.out" 2>"$TMP/b8b.err"; rc=$?
+if [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ingest' "$TMP/b8b.err" && [ ! -s "$TMP/b8b.out" ]; then
+    ok "(B8b) RIPWIRE_TEST_MEMGUARD cannot disable the guard (crawl:999999999 still exits 5 with the ingest line)"
 else
-    no "(B8b) rc=$rc — the test variable turned the real guard off"
+    no "(B8b) the never-firing seam changed the real outcome: $( b8why "$rc" "$TMP/b8b.out" "$TMP/b8b.err" )"
 fi
 
 # (B9) the pressure path: a pressure stop is disclosed as such, and a pressure stop with nothing built says pressure
@@ -606,30 +630,47 @@ fi
 #       the parse line and the cut rule are the real ones. The big files sort LAST (z/), and the parse order is largest
 #       first, so a rule that kept a prefix of the SORTED list would keep nothing here (rc 5, "nothing built"); the
 #       claimed-prefix rule keeps the z/ files it parsed. The line crossed is named: the parse line, half the limit.
-EG="$TMP/eg"; mkdir -p "$EG"
-python3 - "$EG" <<'PY2'
-import os, sys
-root = sys.argv[1]
-for d in "abcdefgh":
-    os.makedirs( os.path.join( root, d ), exist_ok=True )
-    for f in range( 40 ):
-        open( os.path.join( root, d, "f%02d.c" % f ), "w" ).write( "int %s_%d(int x){ return x; }\n" % ( d, f ) )
-os.makedirs( os.path.join( root, "z" ), exist_ok=True )
-for f in range( 80 ):
-    open( os.path.join( root, "z", "big%02d.c" % f ), "w" ).write(
-        "".join( "int z%d_%d(int x){ return x>0 ? z%d_%d(x-1)+%d : %d; }\n" % ( f, k, f, ( k + 1 ) % 1500, k, k ) for k in range( 1500 ) ) )
-PY2
-# ASan quarantine inflates the footprint past the 128M hard line before the soft parse stop is visible (review G1:
-#   peak 498 MB under ASan vs 82 MB plain); a plain binary ignores the option.
-ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}quarantine_size_mb=0" RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG" --no-cache --max-memory=128M --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
-hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b12.out" | head -1 )"
-parsed="$( printf '%s' "$hdr" | grep -oE 'memory_parsed=[0-9]+' | grep -oE '[0-9]+' )"
-if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=parse"*) true;; *) false;; esac && [ "${parsed:-0}" -ge 2 ] && grep -q 'p="z/' "$TMP/b12.out"; then
-    ok "(B12) a real parse stop (128M, eager readings) answers from the $parsed files it parsed — the big z/ files, first in the parse order"
+#   HEADROOM (0.6.6): a plain build runs at the 64M floor, not 128M. Measured on a 10-core macOS host, with the pool size forced to
+#       3/4/10/16 workers and each run foreground and under `taskpolicy -b`: this fixture's footprint roughly DOUBLES
+#       between the parse stop and the graph build (the parsed facts are merged, then graphed), so the post-stop peak is
+#       about the limit minus what does not double (the process base and the trees in flight at the stop): a headroom
+#       that does NOT scale with the limit. Raising limit and fixture together (256M + twice the z/ files) keeps
+#       that ratio and measured WORSE (1/6 under taskpolicy -b at 10 workers, against 1/4 at 128M); the floor gives the
+#       fixed headroom the largest share (10 workers 7/7 fg+bg; 3 and 16 workers 7/7 each). One shape stays marginal (4
+#       workers under taskpolicy -b: 5 of 11 attempts), so an attempt that ends on the REAL hard line after its parse stop (rc 5,
+#       "memory limit reached during the <phase>"), or that never reaches the parse line (rc 0, no memory_stop=), is an
+#       ENVIRONMENT outcome, not the property: it is re-run, up to 6 attempts, and the arm passes only on an attempt that
+#       shows the whole property. Anything else fails at once — the D1 shape (rc 5, "before anything was built"), a stop
+#       that keeps no z/ file, a wrong line. Six environment outcomes in a row fail too: the arm never passes blind.
+# (the fixture, $EG, is built above B8, which shares it)
+# ASan quarantine inflates the footprint past the hard line before the soft parse stop is visible (review G1:
+#   peak 498 MB under ASan vs 82 MB plain); a plain binary ignores the option. A sanitizer build keeps 128M: its runtime
+#   carries a fixed footprint of its own that does not double after the stop (measured with llvm@22 ASan: 64M ends on
+#   the hard line during the ingest 3/3, 128M passes), which is the headroom the floor buys a plain build.
+B12LIM=64M
+LC_ALL=C grep -q -a '__asan_init' "$BIN" 2>/dev/null && B12LIM=128M
+b12="" b12env=""
+for attempt in 1 2 3 4 5 6; do
+    ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}quarantine_size_mb=0" RIPWIRE_TEST_MEMGUARD=eager:1 "$BIN" "$EG" --no-cache --max-memory=$B12LIM --top-k=3 >"$TMP/b12.out" 2>"$TMP/b12.err"; rc=$?
+    hdr="$( grep -oE '<!-- files=[^>]*-->' "$TMP/b12.out" | head -1 )"
+    parsed="$( printf '%s' "$hdr" | grep -oE 'memory_parsed=[0-9]+' | grep -oE '[0-9]+' )"
+    if [ "$rc" = 0 ] && case "$hdr" in *"memory_stop=parse"*) true;; *) false;; esac && [ "${parsed:-0}" -ge 2 ] && grep -q 'p="z/' "$TMP/b12.out"; then
+        b12=pass; break
+    fi
+    if { [ "$rc" = 5 ] && grep -q '^ripwire: memory limit reached during the ' "$TMP/b12.err" && ! grep -q 'before anything was built' "$TMP/b12.err"; } \
+       || { [ "$rc" = 0 ] && ! grep -q 'memory_stop=' "$TMP/b12.out"; }; then
+        b12env="$b12env [attempt $attempt: rc=$rc $( grep '^ripwire:' "$TMP/b12.err" | tail -1 | head -c 70 )]"
+        continue
+    fi
+    break
+done
+[ -n "$b12env" ] && printf '  ..    (B12) environment outcome(s) re-run:%s\n' "$b12env"
+if [ "$b12" = pass ]; then
+    ok "(B12) a real parse stop ($B12LIM, eager readings) answers from the $parsed files it parsed — the big z/ files, first in the parse order (attempt $attempt)"
 else
     no "(B12) rc=$rc header: $hdr stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 200 )"
 fi
-if grep -q '^ripwire: the memory guard stopped the parse at the parse line (half of the 128M limit)' "$TMP/b12.err"; then
+if [ "$b12" = pass ] && grep -q "^ripwire: the memory guard stopped the parse at the parse line (half of the $B12LIM limit)" "$TMP/b12.err"; then
     ok "(B12b) the stop line names the parse line (half of the limit), not the limit it did not reach"
 else
     no "(B12b) stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 250 )"

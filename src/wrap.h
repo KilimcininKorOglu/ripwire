@@ -15,6 +15,8 @@
 #include "mcp.h"       // kMcpVerbTable / kMcpVerbCount — the single source of truth for the MCP verb list (A4-S2)
 #include "infra/os.h"  // rw::os::access — wrapCommandToken (2026-09-06); wrapScanSkillDir names a skills folder it cannot enter
 #include <algorithm>
+#include <cstdint>
+#include <utility>
 #include <cerrno>
 #include <cstring>    // std::strerror — the unreadable-folder WARN
 #include "skillscan.h"
@@ -565,51 +567,77 @@ inline std::vector<AgentConfig> getAgentConfigs() noexcept
     return configs;
 }
 
-// Scan a local skills directory (best-effort). Returns worst severity found (0/1/2).
-// Prints WARN/CRITICAL findings to stderr. Silent on no findings / dir absent.
-inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
+// The directories a skill walk has entered, by (st_dev, st_ino). The walk follows directory SYMLINKS (review R2-M1:
+// `skills/evil/lib -> ../../outside/lib` hid a CRITICAL helper.sh from wrap while --scan-skills, which follows them, called the
+// tree CRITICAL; the agent resolves the link when it runs the script). Following links means cycles, so a directory already
+// entered is not re-entered: a `loop -> .` link is walked once and the walk always ends.
+struct WrapDirVisits
+{
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> seen;
+
+    // true the first time this directory is met; a directory that cannot be stat'ed is descended, and the walk's own error
+    // path reports what it cannot read
+    [[nodiscard]] bool firstVisit( const std::filesystem::path& d )
+    {
+        os::stat_t st{};
+        if( os::stat( os::path_arg( d ).c_str(), &st ) != 0 )
+        {
+            return true;
+        }
+        const std::pair<std::uint64_t, std::uint64_t> key{ std::uint64_t( st.st_dev ), std::uint64_t( st.st_ino ) };
+        if( std::find( seen.begin(), seen.end(), key ) != seen.end() )
+        {
+            return false;
+        }
+        seen.push_back( key );
+        return true;
+    }
+};
+
+// Every regular file under `dir`, sorted for determinism. The walk advances with increment(ec): the throwing range-for
+// operator++ made an undescendable tree std::terminate (exit 134) before that fix; a stopped walk is left in `ec` for the
+// caller to disclose (CRITICAL: F-B3). A directory the scan cannot ENTER (mode-000) is a WARN here, raising `maxSev` to 1.
+inline std::vector<std::string> wrapCollectSkillFiles( const std::string& dir, int& maxSev, std::error_code& ec )
 {
     namespace fs = std::filesystem;
-    std::error_code ec;
-    if( !fs::exists( dir, ec ) || ec )
-    {
-        return 0;
-    }
-
-    // Collect + sort .md paths for determinism. The walk advances with increment(ec): the throwing range-for
-    // operator++ made an undescendable tree std::terminate (exit 134) before this fix. A stopped walk is
-    // disclosed below (CRITICAL: F-B3); a directory the scan cannot ENTER (mode-000, WARN) is different.
-    std::vector<std::string> mdPaths;
-    int                      maxSev = 0;
-    fs::recursive_directory_iterator it( dir, fs::directory_options::none, ec ), end;
+    std::vector<std::string> skillPaths;
+    WrapDirVisits            visits;
+    (void)visits.firstVisit( fs::path( dir ) );   // the root itself, so a link back to it is a cycle
+    fs::recursive_directory_iterator it( dir, fs::directory_options::follow_directory_symlink, ec ), end;
     for( ; !ec && it != end; it.increment( ec ) )
     {
         std::error_code entryEc;
-        if( it->is_directory( entryEc ) && !entryEc && os::access( os::path_arg( it->path() ).c_str(), R_OK | X_OK ) != 0 )
+        const bool      isDir = it->is_directory( entryEc ) && !entryEc;
+        if( isDir && os::access( os::path_arg( it->path() ).c_str(), R_OK | X_OK ) != 0 )
         {
             rw::emitTo( stderr, "ripwire wrap: WARN — cannot read skills folder {} ({}); the skills inside it were not scanned\n",
                         it->path().string(), std::strerror( errno ) );
             maxSev = std::max( maxSev, 1 );
             it.disable_recursion_pending();
-            continue;
         }
-        if( it->is_regular_file( entryEc ) && !entryEc && it->path().extension() == ".md" )
+        else if( isDir && !visits.firstVisit( it->path() ) )
         {
-            mdPaths.push_back( it->path().string() );
+            it.disable_recursion_pending();   // a directory reached a second time through a link: already scanned
+        }
+        else if( !isDir && it->is_regular_file( entryEc ) && !entryEc )
+        {
+            skillPaths.push_back( it->path().string() );
         }
     }
-    std::sort( mdPaths.begin(), mdPaths.end() );
+    std::sort( skillPaths.begin(), skillPaths.end() );
+    return skillPaths;
+}
 
-    // F-B3: unlike the WARN above, files past a stopped walk are still COPYABLE — this fails CLOSED (ruling 3).
-    if( !ec && rw::faultSwitchOn( "RIPWIRE_FAULT_SKILL_WALK_STOP" ) ) { ec = std::make_error_code( std::errc::too_many_files_open ); }
-    if( ec )
-    {
-        rw::emitTo( stderr, "ripwire wrap: CRITICAL — the skill scan of {} stopped early ({}); skills past that point were not scanned and may still be installed\n", dir, ec.message() );
-        maxSev = std::max( maxSev, 2 );
-    }
-    for( const std::string& p : mdPaths )
+// Scan each collected file (kind-aware: a shell script gets the code pass), print WARN/CRITICAL findings to stderr, and
+// return the worst severity; one NOTE counts code files the scanner has no network-flow model for.
+inline int wrapScanSkillFiles( const std::vector<std::string>& skillPaths, const std::string& dir )
+{
+    int maxSev             = 0;
+    int codeNotFlowScanned = 0;
+    for( const std::string& p : skillPaths )
     {
         const SkillFileReadResult res = scanSkillFileChecked( p );
+        codeNotFlowScanned += ( res.readable && res.kind == SkillFileKind::OtherCode ) ? 1 : 0;
         if( !res.readable )   // the folder was enterable, so the file is copyable: CRITICAL by name, as --scan-skills scores it
         {
             rw::emitTo( stderr, "ripwire wrap: CRITICAL — cannot read skill file {}; it was not scanned and may still be installed\n", p );
@@ -624,7 +652,38 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
             }
         }
     }
+    if( codeNotFlowScanned > 0 )
+    {
+        rw::emitTo( stderr, "ripwire wrap: NOTE — {} code file(s) under {} are in a language this scanner has no network-flow model for "
+                            "(see --scan-skills code_not_flow_scanned=): an upload written there is not detected\n", codeNotFlowScanned, dir );
+    }
     return maxSev;
+}
+
+// Scan a local skills directory (best-effort). Returns worst severity found (0/1/2).
+// Prints WARN/CRITICAL findings to stderr. Silent on no findings / dir absent, except for one line counting code files the
+// scanner has no network-flow model for. Review M3 (0.6.6): this walked only `.md` files, so a skill whose bundled
+// scripts/helper.sh uploads a credential installed with rc 0 while --scan-skills called the same tree CRITICAL. It now
+// scans EVERY regular file through scanSkillFileChecked, as --scan-skills does, so a shell script gets the code pass.
+inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if( !fs::exists( dir, ec ) || ec )
+    {
+        return 0;
+    }
+    int                            maxSev     = 0;
+    const std::vector<std::string> skillPaths = wrapCollectSkillFiles( dir, maxSev, ec );
+
+    // F-B3: unlike the WARN above, files past a stopped walk are still COPYABLE — this fails CLOSED (ruling 3).
+    if( !ec && rw::faultSwitchOn( "RIPWIRE_FAULT_SKILL_WALK_STOP" ) ) { ec = std::make_error_code( std::errc::too_many_files_open ); }
+    if( ec )
+    {
+        rw::emitTo( stderr, "ripwire wrap: CRITICAL — the skill scan of {} stopped early ({}); skills past that point were not scanned and may still be installed\n", dir, ec.message() );
+        maxSev = std::max( maxSev, 2 );
+    }
+    return std::max( maxSev, wrapScanSkillFiles( skillPaths, dir ) );
 }
 
 // ONE recipe path for every agent that can shell out, and the point is that the RECOMMENDATION does

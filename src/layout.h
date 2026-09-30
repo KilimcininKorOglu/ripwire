@@ -58,6 +58,7 @@
 #include "graphlegend.h"   // R-E fix (2026-08-19): rw::rootRelPathsLegend — the ONE root= definition
 #include "arch.h"               // fnv1a64
 #include "infra/hashutil.h"     // fnv1aMultiply — the sanitizer-safe wrapping multiply (G1 runs -fsanitize=integer)
+#include "infra/namesplit.h"    // afterLast — the ONE base-name cut (lastSegment's `::` segment)
 #include "serialize.h"          // escapeXml
 #include "darkflags.h"          // readWhole — the same 4 MB-capped whole-file read the sibling field-notes verb owns
 #include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
@@ -895,8 +896,7 @@ inline std::vector<std::string_view> typeWords( std::string_view spec, bool& saw
 // simd/Metal headers spell it both ways in the same tree. The LAST segment is what the table keys on.
 inline std::string_view lastSegment( std::string_view s )
 {
-    const std::size_t at = s.rfind( "::" );
-    return ( at == std::string_view::npos ) ? s : s.substr( at + 2 );
+    return rw::namesplit::afterLast( s, "::" );
 }
 
 inline bool primLookup( std::string_view spelling, TypeSize& out )

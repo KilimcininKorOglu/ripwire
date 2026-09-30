@@ -273,8 +273,7 @@ inline bool isTokenChar( char c ) noexcept { return isIdentChar( c ) || c == '.'
 // basename of an indexed path, and the same with its extension stripped ("src/a/b.py" → "b.py", "b")
 inline std::string_view baseNameOf( std::string_view path ) noexcept
 {
-    const std::size_t slash = path.rfind( '/' );
-    return slash == std::string_view::npos ? path : path.substr( slash + 1 );
+    return rw::namesplit::afterLast( path, "/" );
 }
 inline std::string_view stripExt( std::string_view name ) noexcept
 {

@@ -53,6 +53,11 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 FIX="$ROOT/test/fixture"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
+# HERMETIC HOME (0.6.6 review M2): the (U)/(UG) probe runs bare --scan-skills, which walks the skill homes under $HOME
+# (.claude/skills, .codex/skills). With the caller's HOME the answer — and its legend's byte count against the pin — was
+# whatever skills that machine had installed (a Codex install ships .py helpers), and the gate read the real home. Every
+# probe here now runs under an empty HOME of its own (clean-env.sh already drops CLAUDE_CONFIG_DIR / CODEX_HOME).
+export HOME="$TMP/home"; mkdir -p "$HOME"
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
@@ -488,6 +493,11 @@ probeFor()
 # --impact=distance probe; 797 on the base binary b343b988). The answer now carries by_depth= on the root and d= on its
 # first <s> row (the listing runs nearest first, graph.h orderByDepthThenRank), and the compact legend reads both: the
 # present-only <s d=N> row (+64 B with its separator) and by_depth= (+63 B). Both are absent at reaches="0". No other schema moved.
+# RE-PINNED BACK 2026-09-30 (train22 fixups, review M2): ripwire.scan-skills/v1 520 -> 380 (measured 369). An earlier commit on
+# this branch pinned 520 from the developer's own HOME (a Codex install's .py helpers made the answer carry
+# code_not_flow_scanned=); the gate now runs under an empty HOME of its own, so the probe measures the same bytes everywhere.
+# RE-PINNED 2026-09-30 (review M5): 380 -> 530 (measured 518, hermetic HOME). The probe is a bare --scan-skills, whose answer
+# now names the directories it walked (dirs=) and whose legend defines it (+149 B); the value is in the root, not the legend.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -518,7 +528,7 @@ ripwire.skipped/v1               1510  1498
 ripwire.lint/v1                   340   324
 ripwire.lint-catalog/v1           220   204
 ripwire.external-surface/v1       250   234
-ripwire.scan-skills/v1            380   369
+ripwire.scan-skills/v1            530   518
 ripwire.owners/v1                 430   414
 ripwire.dead-code/v1              620   604
 ripwire.quality-delta/v1          940   928
