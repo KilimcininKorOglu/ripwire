@@ -51,12 +51,15 @@ function, and 2 over a declaration and its implementation, to the implementation
 body before are new edges. Still guessed, and stated: a call whose ONLY same-named definition is such a closure can
 bind to it (a parameter call included), and a closure returned by a factory and called through the result in the SAME
 file declines when an unrelated same-named definition exists elsewhere — a TS/JS call records no member bit, so the
-resolver cannot tell `provider.get()` from a bare `get()`. Known limit, and a new false edge in this shape: when a
+resolver cannot tell `provider.get()` from a bare `get()`. A Python function that declares `global g` and then defines
+a nested `def g` binds `g` globally, but it is read as local (the `global` statement is not read), so a bare `g()`
+elsewhere can bind to a same-named method in another file where main bound the nested def. Known limit, and a new false edge in this shape: when a
 returned closure is called by name (Python `py_incr = make_counter(); py_incr(1)`, or a JS `module.exports = { jsInit }`
 from an IIFE) and the caller ALSO imports another module that defines the same name, main split the call across both
 definitions; this build pins the other module's definition, because a lone import candidate the call can reach wins
-over a closure it cannot name. The fix is the same missing member bit. The index format changes with it: `kCacheVersion` 26, so a
-cache written by an earlier build re-parses once. Gate: `test/fnliteralcheck.sh` (section 6 for the edges).
+over a closure it cannot name. The fix is the same missing member bit. The index format changes with it: `kCacheVersion` 27, so a
+cache written by an earlier build re-parses once (27, not 26: a 26 cache from an intermediate build of this change holds
+wrong scope spans and is refused too). Gate: `test/fnliteralcheck.sh` (section 6 for the edges).
 
 `--naming-consistency` no longer proposes camelCase for a JSX component: a PascalCase function in a `.tsx`/`.jsx`
 file neither votes nor is flagged (JSX reads a lowercase tag as an intrinsic element), and the header counts it as

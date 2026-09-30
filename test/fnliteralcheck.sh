@@ -138,6 +138,18 @@ edge lua init.lua:run    lua_helper init.lua:4 "a non-local Lua nested function 
 # (f) a top-level C/C++ function is never "nested in itself": its captured name sits inside its own
 #     function_definition, so the scope search must start from the definition, not the declarator
 edge c a/x.cpp:use_helper helper a/x.cpp:3 "a same-file top-level C++ function, as on main"
+# (g) the scope span rides the ingest cache: a WARM run (cache on, second pass) answers these arms exactly as --no-cache.
+#     A blob from an older format (kCacheVersion 26 held wrong spans for the shapes above) is never read: the format is in
+#     the blob's name and header, and cachefuzzcheck's version_decrement arm proves an N-1 blob is refused.
+CACHEHOME="$TMP/cachehome"; mkdir -p "$CACHEHOME/xdg" "$CACHEHOME/tmp"
+for q in "c a/x.cpp:use_helper" "php a.php:use_helper" "lua init.lua:run" "import cmd/use.ts:declCaller" "shadow tests/a.test.ts:captureStdout"; do
+    set -- $q
+    cold="$( ( cd "$EDGE/$1" && "$BIN" . --callees="$2" --no-cache --legend=compact 2>/dev/null ) | grep -oE '<s t="[^>]*>|declined_calls="[0-9]+"' )"
+    for pass in 1 2; do
+        warm="$( ( cd "$EDGE/$1" && XDG_CACHE_HOME="$CACHEHOME/xdg" TMPDIR="$CACHEHOME/tmp" "$BIN" . --callees="$2" --legend=compact 2>/dev/null ) | grep -oE '<s t="[^>]*>|declined_calls="[0-9]+"' )"
+    done
+    if [ -n "$cold" ] && [ "$cold" = "$warm" ]; then ok "$2: warm cache answers as --no-cache"; else no "$2: warm cache differs from --no-cache — cold: $cold / warm: $warm"; fi
+done
 # ...while the call INSIDE that it() callback does reach it (a file-scope caller: the callback is anonymous)
 if ( cd "$EDGE/shadow" && "$BIN" . --callers=tests/a.test.ts:run --no-cache --legend=compact 2>/dev/null ) | grep -q 'n="&lt;file-scope&gt;" p="tests/a.test.ts:1"'; then
     ok "tests/a.test.ts:run is called from inside its it() callback"

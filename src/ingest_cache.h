@@ -132,7 +132,14 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 26;           // 26: a FUNCTION-LOCAL def records the span of the function
+constexpr std::uint32_t kCacheVersion = 27;           // 27: same record layout as 26, new VALUES — the lane's second
+                                                      //    round changed which defs record fnScopeStart/End (the
+                                                      //    scope search descends to the OUTER def node, and
+                                                      //    kEscapingNestedBindings keeps globally-binding nested
+                                                      //    functions out). A 26 blob would serve the old spans
+                                                      //    (every top-level C/C++ function "nested in itself",
+                                                      //    PHP/Lua globals yielding) until its files changed.
+                                                      // 26: a FUNCTION-LOCAL def records the span of the function
                                                       //    whose body binds its name — RawDef gains `fnScopeStart`
                                                       //    and `fnScopeEnd` (two u32 after `scopeRootsStd`, def
                                                       //    record 80 -> 88 bytes lean), read by graph.h's
