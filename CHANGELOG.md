@@ -189,7 +189,9 @@ other gate); direct `./test/…` invocation exits 126 no more.
 `curl … $GITHUB_TOKEN` upload that is CRITICAL inside a ```` ```bash ```` fence in `SKILL.md` read clean (exit 0) in the
 script, with or without a shebang, through `--scan-skills` and `--scan-skill` alike, and a ```` ``` ```` pair in a
 heredoc could close a fence the scan thought open. A `.sh`/`.bash`/`.zsh`/`.ksh` file, or one whose `#!` (after a UTF-8 BOM, if
-any) names `sh`, `bash`, `zsh`, `dash`, `ksh`, `ash` or `mksh` (through `env` or `busybox` too), now also gets a whole-file-code pass — no YAML frontmatter (bash runs a
+any) names `sh`, `bash`, `zsh`, `dash`, `ksh`, `ash` or `mksh` (through `env` or `busybox` too), or a shell startup file (`.bashrc`,
+`.bash_profile`, `.bash_login`, `.bash_logout`, `.bash_aliases`, `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.profile`,
+`.kshrc`, `.envrc`), now also gets a whole-file-code pass — no YAML frontmatter (bash runs a
 leading `---` line and everything after it), every line is command context, and no ```` ``` ```` line toggles anything — merged with the markdown pass, so a script can only gain rows
 (measured over the 1,242 code files in this repo: no row lost, 23 added, 17 of them WARN `why="no-cred-source"`).
 Markdown input is byte-identical. Code in a language the scanner has no network-flow model for — exactly `.py`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.rb`, `.pl`, `.pm`, `.lua`, `.php`, `.ps1`, `.psm1`, `.psd1`, `.bat`, `.cmd`,

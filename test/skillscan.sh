@@ -314,6 +314,10 @@ printf '#!/usr/bin/env -u HOME bash\n%s\n' "$SGLINE" >"$R2/envu"
 r2_crit "$R2/envu" 2 "env -u NAME: the option's argument is not the interpreter"
 printf '#!/bin/busybox sh\n%s\n' "$SGLINE" >"$R2/bbox"
 r2_crit "$R2/bbox" 2 "busybox: the applet after it is the interpreter"
+for dot in .bashrc .bash_profile .zshrc .profile .envrc; do
+    printf '%s\n' "$SGLINE" >"$R2/$dot"
+    r2_crit "$R2/$dot" 1 "S3 the shell dotfile $dot"
+done
 
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 if [ "$fail" = "0" ]; then

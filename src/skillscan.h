@@ -1445,7 +1445,8 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
 // the markdown fence tracker used to run over a bundled script's bytes too: net-exfil, the one fence-only rule, never
 // fired in scripts/helper.sh (no ``` line, so never "in a fence"), and a ``` pair in a heredoc could close a fence.
 //   ShellScript — .sh .bash .zsh .ksh, or a first line `#!` (after a UTF-8 BOM) whose interpreter (through `env` or
-//                 `busybox`) is sh, bash, zsh, dash, ksh, ash or mksh: also scanned as whole-file code (scanSkillTextOn's wholeFileIsCode), merged with the markdown pass.
+//                 `busybox`) is sh, bash, zsh, dash, ksh, ash or mksh, or a shell startup file (.bashrc .bash_profile
+//                 .bash_login .bash_logout .bash_aliases .zshrc .zshenv .zprofile .zlogin .profile .kshrc .envrc): also scanned as whole-file code (scanSkillTextOn's wholeFileIsCode), merged with the markdown pass.
 //   OtherCode   — .py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or any other `#!`: read exactly as before, but the scanner has no
 //                 network-flow vocabulary for these languages (Python `requests.post` of `os.environ` is missed even in
 //                 a ```python fence), so the answer DISCLOSES them: <skillscan code_not_flow_scanned="N">.
@@ -1525,6 +1526,13 @@ inline SkillFileKind skillFileKindOf( std::string_view path, std::string_view te
         return SkillFileKind::Markdown;   // a markdown file is read as markdown whatever its first line says: .md is byte-identical
     }
     const std::string_view interpreter = skillShebangInterpreter( text );
+    // shell startup files are shell code with no extension and usually no #! (review S3); direnv executes .envrc once allowed
+    constexpr std::string_view kShellDotfiles[] = { ".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases", ".zshrc",
+                                                    ".zshenv", ".zprofile", ".zlogin", ".profile", ".kshrc", ".envrc" };
+    if( std::find( std::begin( kShellDotfiles ), std::end( kShellDotfiles ), base ) != std::end( kShellDotfiles ) )
+    {
+        return SkillFileKind::ShellScript;
+    }
     constexpr std::string_view kShells[] = { "sh", "bash", "zsh", "dash", "ksh", "ash", "mksh" };
     if( extIs( { "sh", "bash", "zsh", "ksh" } ) || std::find( std::begin( kShells ), std::end( kShells ), interpreter ) != std::end( kShells ) )
     {
