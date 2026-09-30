@@ -365,6 +365,7 @@ inline constexpr const char* kNamingConsistencyLegend =
     "finding: a snake separator AND a camel transition inside ONE identifier) never wins a vote and is always "
     "flagged when its group has a decided convention. A PascalCase function in a .tsx/.jsx file is a JSX component (JSX "
     "reads a lowercase tag as an intrinsic element), so it neither votes nor is flagged; component_exempt=N counts them, "
+    "keyed on the extension alone, so a PascalCase function there that is not a component is exempt too, "
     "absent when 0 (a component in a plain .js/.ts file still votes). Exit 0 always: a lens, not a gate. "
     "groups=(language,kind) pairs with at least one styled name candidates=styled names scanned "
     "decided=groups that cleared both floors flagged=off-convention names in decided groups "

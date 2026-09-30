@@ -1525,9 +1525,53 @@ inline bool inFileTestScope( TSNode defNode, std::string_view src, Lang lang ) n
 // arena's own probe-verified list: a named function, a method, an arrow/lambda/closure/func literal, in every grammar),
 // and the walk stops — NOT local — at the first ancestor that is a MEMBER container (a class/impl/record body): a
 // method of a class declared inside a function is reached through its instance by dispatch, from anywhere. A
-// language joins by its grammar's spelling appearing in either list, never by a branch here. Stated floors: PHP binds
-// a nested named `function` globally once the outer one runs, and Lua a non-`local` nested `function g()`; both read
-// as local here (rare shapes; the graph rule only re-ranks, it never removes the last candidate).
+// language joins by its grammar's spelling appearing in either list, never by a branch here. A nested name the grammar
+// binds OUTSIDE the function (kEscapingNestedBindings, above) is never local.
+// NOT every nested name is a binding of the enclosing function's scope. Where the grammar makes a nested named function
+// bind OUTSIDE it, the def never enters fnLocal (a bare call from anywhere can name it, and letting it yield hands that
+// call to an unrelated same-named def in the same directory — measured on PHP and Lua fixtures). One row per shape:
+//   PHP   a nested `function f()` is declared GLOBALLY once the outer function runs;
+//   Bash  a nested `f() { … }` likewise defines a global shell function when the outer one runs;
+//   Lua   `function f()` / `function M.f()` / `f = function` / `M.f = function` without `local` bind a global or a field
+//         of an outer table — only `local function f` (a `local` token child) and `local f = function` (the assignment
+//         under a variable_declaration) are scope bindings;
+//   JS    an assignment-bound def (`exports.f = function`, `obj.f = () => …`) writes a property of an outer object.
+// Surveyed and NOT listed: Ruby's nested `def` also escapes (it defines a method on the class) but is a Method, which
+// fnLocal never takes; Python's nested `def` is local unless a `global` statement says otherwise (not read — a floor);
+// Rust/Kotlin/Swift/C#/Dart local functions and GCC nested C functions are lexically scoped; Go and Java have no nested
+// named function; a JS/TS object-literal member (`{ run: () => … }`) and a Lua table field stay local — reached only
+// through the returned value, the member-call case the yield rule already weighs.
+struct EscapingNestedBinding
+{
+    Lang             lang;
+    std::string_view roleKind;          // the captured def node's kind
+    std::string_view localChildToken;   // a first child of this kind makes it a scope binding after all ("" = never)
+    std::string_view localParentKind;   // a parent of this kind makes it a scope binding after all ("" = never)
+};
+inline constexpr std::array<EscapingNestedBinding, 5> kEscapingNestedBindings = { {
+    { Lang::Php,        "function_definition",   {},      {} },
+    { Lang::Bash,       "function_definition",   {},      {} },
+    { Lang::Lua,        "function_declaration",  "local", {} },
+    { Lang::Lua,        "assignment_statement",  {},      "variable_declaration" },
+    { Lang::JavaScript, "assignment_expression", {},      {} },
+} };
+inline bool bindsOutsideItsFunction( TSNode roleNode, Lang lang ) noexcept
+{
+    const std::string_view kind( ts_node_type( roleNode ) );
+    for( const EscapingNestedBinding& e : kEscapingNestedBindings )
+    {
+        if( e.lang != lang || kind != e.roleKind )
+        {
+            continue;
+        }
+        const bool localToken  = !e.localChildToken.empty() && ts_node_child_count( roleNode ) > 0
+                                 && std::string_view( ts_node_type( ts_node_child( roleNode, 0 ) ) ) == e.localChildToken;
+        const bool localParent = !e.localParentKind.empty() && std::string_view( ts_node_type( ts_node_parent( roleNode ) ) ) == e.localParentKind;
+        return !localToken && !localParent;
+    }
+    return false;
+}
+
 inline constexpr std::array<std::string_view, 5> kMemberContainerKinds = {
     "class_body", "class_definition", "declaration_list", "field_declaration_list", "enum_body"
 };

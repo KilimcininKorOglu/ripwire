@@ -36,7 +36,10 @@ declaration (`declare function`, an overload signature, an interface member) sta
 A bodied closure also competes for calls, so the resolver now knows where one can be named: a function bound inside
 another function's body (named or anonymous — a factory's `const start = () => …`, a `const run` in an `it()` callback,
 a nested `def`, in every language) records that function's span, and a call outside it cannot reach the closure by
-name. There the closure YIELDS to every candidate the call can name instead of competing: `tui.start()` on an imported
+name. A nested function the language binds GLOBALLY is not such a closure and competes as before: PHP's nested
+`function`, a nested Bash function, Lua's non-`local` nested `function`/assignment, and a JS assignment-bound def
+(`exports.f = function`). A call the builtin-method gate or the external-name veto already answers (`d.get()`,
+`re.sub()`) resolves exactly as before. There the closure YIELDS to every candidate the call can name instead of competing: `tui.start()` on an imported
 class binds to the class's method even when another imported module holds a factory-local `start` (on main this
 declined for a nested `function start(){}`), and a helper's `run` parameter no longer binds to a `const run` inside
 another test's callback. It keeps its edge through a factory the caller imports when nothing reachable competes
@@ -48,7 +51,11 @@ function, and 2 over a declaration and its implementation, to the implementation
 body before are new edges. Still guessed, and stated: a call whose ONLY same-named definition is such a closure can
 bind to it (a parameter call included), and a closure returned by a factory and called through the result in the SAME
 file declines when an unrelated same-named definition exists elsewhere — a TS/JS call records no member bit, so the
-resolver cannot tell `provider.get()` from a bare `get()`. The index format changes with it: `kCacheVersion` 26, so a
+resolver cannot tell `provider.get()` from a bare `get()`. Known limit, and a new false edge in this shape: when a
+returned closure is called by name (Python `py_incr = make_counter(); py_incr(1)`, or a JS `module.exports = { jsInit }`
+from an IIFE) and the caller ALSO imports another module that defines the same name, main split the call across both
+definitions; this build pins the other module's definition, because a lone import candidate the call can reach wins
+over a closure it cannot name. The fix is the same missing member bit. The index format changes with it: `kCacheVersion` 26, so a
 cache written by an earlier build re-parses once. Gate: `test/fnliteralcheck.sh` (section 6 for the edges).
 
 `--naming-consistency` no longer proposes camelCase for a JSX component: a PascalCase function in a `.tsx`/`.jsx`

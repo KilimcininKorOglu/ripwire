@@ -2120,10 +2120,14 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             d.internalLinkage = internalLinkageBit( le.lang, defNode, src );
             // A FUNCTION bound inside another function's body records that function's span (ingest_names.h
             // enclosingFunctionScope): graph.h reachableByName ranks it below every def a call outside it can name.
-            if( kind == SymKind::Function )
+            if( kind == SymKind::Function && !bindsOutsideItsFunction( roleNode, le.lang ) )
             {
-                const FnScope fnScope = enclosingFunctionScope( root, roleNode );   // roleNode: defNode or the declaration
-                                                                                    // holding it — no scope node between them
+                // Descend to the OUTER of the two def nodes: a C-family def's defNode climbed from its declarator (the role
+                // node) to the function_definition, which must not read as the function enclosing itself; a multi-name
+                // binding's defNode narrowed to one declarator, whose declaration (the role node) holds no scope node
+                // and is not a 20k-child list to rescan per name.
+                const bool    defIsOuter = ts_node_start_byte( defNode ) <= ts_node_start_byte( roleNode ) && ts_node_end_byte( defNode ) >= ts_node_end_byte( roleNode );
+                const FnScope fnScope    = enclosingFunctionScope( root, defIsOuter ? defNode : roleNode );
                 d.fnScopeStart = fnScope.start;
                 d.fnScopeEnd   = fnScope.end;
             }

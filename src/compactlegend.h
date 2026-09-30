@@ -592,7 +592,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "notes_degraded",    "notes_degraded=1: the .ripwire_notes sidecar had unreadable lines or was refused this run (the notes verb's own listing names which)" },
     // --naming-consistency's absent-at-zero count (countAttrXmlOrEmpty, so (S) requires its row HERE): the JSX components
     // kept out of the vote (namingconsistency.h isJsxComponentName). Key-qualified: no other verb spells it.
-    { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (JSX components), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
+    { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (read as JSX components by extension alone), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
 
 };
 

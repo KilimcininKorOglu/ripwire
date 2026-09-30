@@ -3463,9 +3463,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // and filtered after the whole ladder has decided — see the post-filter just before the edge is committed.
         const bool builtinGated = !scipPinned && !canonical && !narrowed && it != byName.end() && builtinGate.appliesTo( r );
         // A function-local def out of this call's reach YIELDS (reachableByName, above): `nameIds` is the set the call
-        // can name, and the whole list is consulted only when that set does not decide.
-        const bool localsYield = !scipPinned && !canonical && !narrowed && it != byName.end() && !ing.fnLocalScopes.empty()
-                                 && reachableByName( ing, it->second, r, reachScratch );
+        // can name, and the whole list is consulted only when that set does not decide. Not on a call the builtin-method
+        // gate flagged or the external-name veto below refuses (`d.get()`, `re.sub()`): their answer is "outside the tree"
+        // whichever same-named def competes, and yielding would move them from external= into declined=, so such a call
+        // resolves exactly as it did before local defs had bodies.
+        const bool localsYield = !scipPinned && !canonical && !narrowed && !builtinGated && it != byName.end() && !ing.fnLocalScopes.empty()
+                                 && reachableByName( ing, it->second, r, reachScratch )
+                                 && !( r.role == RefRole::Call && r.qualifier.empty() && bindingTier.empty() && externalVeto.isExternalBound( r ) );
         const rw::SmallVec<NodeId, 2>* nameIds = localsYield ? &reachScratch : ( it != byName.end() ? &it->second : nullptr );
         if( !scipPinned && !canonical && !narrowed && it != byName.end() )
         {

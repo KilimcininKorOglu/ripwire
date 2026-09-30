@@ -103,7 +103,8 @@ if diff -q "$TMP/a" "$TMP/b" >/dev/null; then ok "default map byte-identical run
 # `const run` inside an it() callback) is reachable BY NAME only inside that function; outside it, only as a member of
 # the value the function returns (src/graph.h reachableByName). Once such a def has a body it competes for calls, so
 # the resolver must rank it below every candidate the call can name — without losing the returned-value edge.
-# Fixtures: test/fnliteraledgefix/import (typed receiver + imported factories) and .../shadow (a helper's PARAMETER).
+# Fixtures: test/fnliteraledgefix/import (typed receiver + imported factories), .../shadow (a helper's PARAMETER), and
+# .../php, .../lua (nested named functions the language binds globally), .../c (a top-level C++ function).
 echo "=== 6. edges: function-local defs yield outside their function ==="
 EDGE="$ROOT/test/fnliteraledgefix"
 callees(){ ( cd "$EDGE/$1" && "$BIN" . --callees="$2" --no-cache --legend=compact 2>/dev/null ) | sed 's/></>\n</g'; }
@@ -129,6 +130,14 @@ edge import agents/tracker.ts:stop start agents/tracker.ts:4 "a sibling closure 
 #     nor a sibling test file's may answer it
 noedge shadow tests/a.test.ts:captureStdout run "its own parameter; the it() callback's const is out of reach"
 noedge shadow tests/b.test.ts:captureStdout run "its own parameter; another file's callback const is out of reach"
+# (e) a nested named function the language binds GLOBALLY never yields (ingest_names.h kEscapingNestedBindings): PHP's
+#     nested `function`, Lua's non-`local` nested `function` — a bare call from outside means it, never a same-named
+#     method or table field of another file in the same directory (main binds these; a yielding local did not)
+edge php a.php:use_helper php_helper a.php:4 "a PHP nested function is global once its outer function has run"
+edge lua init.lua:run    lua_helper init.lua:4 "a non-local Lua nested function is a global"
+# (f) a top-level C/C++ function is never "nested in itself": its captured name sits inside its own
+#     function_definition, so the scope search must start from the definition, not the declarator
+edge c a/x.cpp:use_helper helper a/x.cpp:3 "a same-file top-level C++ function, as on main"
 # ...while the call INSIDE that it() callback does reach it (a file-scope caller: the callback is anonymous)
 if ( cd "$EDGE/shadow" && "$BIN" . --callers=tests/a.test.ts:run --no-cache --legend=compact 2>/dev/null ) | grep -q 'n="&lt;file-scope&gt;" p="tests/a.test.ts:1"'; then
     ok "tests/a.test.ts:run is called from inside its it() callback"
