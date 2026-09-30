@@ -1536,21 +1536,27 @@ struct FnScope
     std::uint32_t start = 0;
     std::uint32_t end   = 0;   // 0: the def is not function-local (a real function span always ends past byte 0)
 };
-inline FnScope enclosingFunctionScope( TSNode defNode ) noexcept
+//
+// ONE descent from the root, not an upward walk: tree-sitter nodes hold no parent pointer, so every ts_node_parent is
+// itself a descent from the root, and walking k ancestors up costs k of them. The innermost function-or-container
+// above the def is the LAST one met on the way down (measured: 600 nested `if` blocks each binding a closure, --metrics
+// 19.7 s with the upward walk against 9.4 s before this table existed).
+inline FnScope enclosingFunctionScope( TSNode root, TSNode defNode ) noexcept
 {
-    for( TSNode n = ts_node_is_null( defNode ) ? defNode : ts_node_parent( defNode ); !ts_node_is_null( n ); n = ts_node_parent( n ) )
+    FnScope scope;
+    for( TSNode n = root; !ts_node_is_null( n ) && !ts_node_is_null( defNode ) && !ts_node_eq( n, defNode ); n = ts_node_child_with_descendant( n, defNode ) )
     {
         const char* t = ts_node_type( n );
         if( namesNode( kMemberContainerKinds, t ) )
         {
-            return {};
+            scope = {};   // a member of a class/impl body below here, unless a function nests deeper still
         }
-        if( isFunctionBoundaryKind( t ) )
+        else if( isFunctionBoundaryKind( t ) )
         {
-            return { ts_node_start_byte( n ), ts_node_end_byte( n ) };
+            scope = { ts_node_start_byte( n ), ts_node_end_byte( n ) };
         }
     }
-    return {};
+    return scope;
 }
 
 // ---- LB-E (r10 gitnexus harvest 2026-08-20): macro-defined test bodies ----------------------------------
