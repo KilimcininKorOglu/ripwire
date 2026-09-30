@@ -381,6 +381,11 @@ printf '%s' "$QR" | grep -q ' hits="1"' && printf '%s' "$QR" | grep -q ' unmatch
     || no "ping(\$X) should read hits=\"1\" unmatched_qualified=\"3\": $QR"
 printf '%s' "$QB" | grep -qE '<!-- unmatched_qualified=N: ' \
     && ok "the same document defines unmatched_qualified=" || no "unmatched_qualified= rides with no reading"
+# 0.6.6 review: the walk stops at the hit budget, so qualified near misses past the stop are never counted — the reading
+# must say unmatched_qualified= is then a floor, like hits= itself.
+printf '%s' "$QB" | grep -oE '<!-- unmatched_qualified=N: [^>]*-->' | grep -q 'A floor when the hit budget stops the walk (hits_capped=1)' \
+    && ok "the unmatched_qualified= reading says it is a floor when the hit budget stops the walk" \
+    || no "the unmatched_qualified= reading does not say it is a floor under hits_capped=1"
 QS="$( "$BIN" "$QF" --pattern='ns::ping($X)' --no-cache 2>/dev/null | grep -oE '<pattern [^>]*>' | head -1 )"
 printf '%s' "$QS" | grep -q ' hits="2"' \
     && ok "spelling the qualifier matches them: ns::ping(\$X) hits=\"2\"" || no "ns::ping(\$X) should hit the two ns::ping calls: $QS"

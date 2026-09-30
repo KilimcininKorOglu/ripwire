@@ -269,6 +269,7 @@ cached quality snapshot is recomputed. The session legend dictionary is `dictv=0
 - `--quality-delta`: a log call whose argument nests thousands of levels deep no longer overflows the stack (exit 138). The search for the caught error's name stops at 512 levels and then treats the handler as not log-only.
 - `--doc-drift`: a thousands-grouped number longer than 10 digits (`1,099,511,627,776`) is no longer read as its 10-digit prefix and reported as a `const-value` drift. It makes no claim.
 - `--mentions` and the MCP `mentions` tool: indexed markdown files that cannot be read back when the answer is built are counted as `unbackticked_unread=N` (MCP `"unbackticked_unread"`), instead of being treated as files with no unbackticked mention.
+- `--pattern`: the `unmatched_qualified=` reading says the count is a floor when the hit budget stops the walk (`hits_capped=1`).
 
 ### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality verbs measure it
 

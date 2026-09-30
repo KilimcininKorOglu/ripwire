@@ -1225,7 +1225,8 @@ struct PatternSearchOutcome
 // unmatched_qualified= (present only when non-zero): its reading rides the answer that carries it, beside the root.
 inline constexpr std::string_view kPatternQualifiedLegend =
     "<!-- unmatched_qualified=N: N more nodes match only when a name in q= is read as the last segment of a "
-    "scope-qualified name (ns::name, a::b::name) - NOT in hits=; spell the qualifier in the pattern to match them -->";
+    "scope-qualified name (ns::name, a::b::name) - NOT in hits=; spell the qualifier in the pattern to match them. "
+    "A floor when the hit budget stops the walk (hits_capped=1): nodes past the stop are not counted -->";
 
 // Compile the pattern for every served grammar, decide refusal-or-proceed, run the walk, and assemble the
 // disclosures. The refusal path is the load-bearing half: §P0.1's rule one level out — a pattern nothing
