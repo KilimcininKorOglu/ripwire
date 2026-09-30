@@ -429,13 +429,6 @@ inline std::size_t countPhrases( std::string_view hay, const std::string_view ( 
     return found;
 }
 
-// Is `word` (any case) one of the whole words that say log: log, logger, logging?
-inline bool isLogWord( std::string_view word )
-{
-    const std::string w = lowerCopy( word );
-    return w == "log" || w == "logger" || w == "logging";
-}
-
 // The first and last WORD of an identifier segment, words split on `_`, `-` and a lower-to-upper camelCase step:
 // audit_log -> (audit, log), appLogger -> (app, Logger), LOG -> (LOG, LOG). Empty views when it has no word.
 inline std::pair<std::string_view, std::string_view> edgeWordsOf( std::string_view seg )
@@ -468,10 +461,14 @@ inline bool isLogReceiver( std::string_view recv )
     const std::string_view last = ( dot == std::string_view::npos ) ? recv : recv.substr( dot + 1 );
     constexpr std::string_view kStreamReceivers[] = { "console", "out", "err", "stderr", "stdout", "warnings", "fmt", "debug", "trace",
                                                       "slog", "glog", "klog", "logrus", "zerolog", "syslog" };
-    const std::string lowered = lowerCopy( last );
+    constexpr std::string_view kLogWords[] = { "log", "logger", "logging" };
+    const auto inTable = []( std::string_view word, const auto& table )   // `word` in any case
+    {
+        const std::string lowered = lowerCopy( word );
+        return std::find( std::begin( table ), std::end( table ), lowered ) != std::end( table );
+    };
     const auto [ firstWord, lastWord ] = edgeWordsOf( last );
-    return std::find( std::begin( kStreamReceivers ), std::end( kStreamReceivers ), lowered ) != std::end( kStreamReceivers )
-        || isLogWord( firstWord ) || isLogWord( lastWord );
+    return inTable( last, kStreamReceivers ) || inTable( firstWord, kLogWords ) || inTable( lastWord, kLogWords );
 }
 
 // The verbs a logging call ends in. `exception` is deliberately ABSENT (Python's logger.exception writes
