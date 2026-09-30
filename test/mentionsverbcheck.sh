@@ -162,4 +162,24 @@ except Exception as e:
 [ "$MCP7V" = OK ] && ok "MCP mentions: docs=2, unbackticked_docs=2 with unbackticked_docs_ceiling=true" \
     || no "MCP mentions twin: $MCP7V"
 
+# 8) 0.6.6 review: an indexed markdown file that cannot be read back at answer time was silently counted as "no
+#    unbackticked mention". It is now counted and disclosed: unbackticked_unread=N (present only when non-zero, defined
+#    in the same document). The index comes from a cache (an isolated HOME), then one file loses its read permission.
+UR="$WORK/unread"; mkdir -p "$UR" "$WORK/urhome"
+printf 'int widget_pipeline_process( int x ) { return x; }\n' >"$UR/a.c"
+printf '# Prose\n\nThe widget_pipeline_process step runs first.\n' >"$UR/prose.md"
+printf '# Other\n\nnothing here\n' >"$UR/other.md"
+UR0="$( HOME="$WORK/urhome" "$BIN" "$UR" --mentions=widget_pipeline_process 2>/dev/null )"
+printf '%s' "$UR0" | grep -q 'unbackticked_unread' && no "every doc readable, yet unbackticked_unread= is present" || ok "every doc readable: no unbackticked_unread= (0 B)"
+chmod 000 "$UR/prose.md"
+if [ -r "$UR/prose.md" ]; then ok "unbackticked_unread: skipped (this user reads a mode-000 file, e.g. root)"
+else
+    UR1="$( HOME="$WORK/urhome" "$BIN" "$UR" --mentions=widget_pipeline_process 2>/dev/null )"
+    UR1ROOT="$( printf '%s' "$UR1" | grep -oE '<mentions [^>]*>' | head -1 )"
+    printf '%s' "$UR1ROOT" | grep -q ' unbackticked_unread="1"' && printf '%s' "$UR1" | grep -q '<!-- unbackticked_unread=N: ' \
+        && ok "an indexed doc unreadable at answer time is disclosed: unbackticked_unread=\"1\", defined" \
+        || no "an unreadable indexed doc is not disclosed: $UR1ROOT"
+fi
+chmod 644 "$UR/prose.md"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

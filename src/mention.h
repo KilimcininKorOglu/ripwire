@@ -1452,7 +1452,15 @@ inline bool holdsIdentifierToken( std::string_view text, const std::vector<std::
     return false;
 }
 
-inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted )
+// The residue count, and how many candidate files could not be read back at answer time (deleted, unreadable) — those
+// are not in `residue`, so a non-zero `unread` makes it a floor over the files that were read.
+struct UnbacktickedCount
+{
+    std::size_t residue = 0;
+    std::size_t unread  = 0;
+};
+
+inline UnbacktickedCount countUnbacktickedDocFiles( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted )
 {
     std::vector<std::string_view> names;
     for( const NodeId d : defs )
@@ -1473,7 +1481,7 @@ inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std
     {
         candidate[ row.fileId ] = 0;
     }
-    std::size_t residue = 0;
+    UnbacktickedCount out;
     for( std::uint32_t fileId = 0; fileId < candidate.size(); ++fileId )
     {
         if( candidate[ fileId ] == 0 )
@@ -1481,32 +1489,45 @@ inline std::size_t countUnbacktickedDocFiles( const IngestResult& ing, const std
             continue;
         }
         const std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
-        residue += ( bytes && holdsIdentifierToken( *bytes, names ) ) ? 1u : 0u;
+        out.unread  += bytes ? 0u : 1u;
+        out.residue += ( bytes && holdsIdentifierToken( *bytes, names ) ) ? 1u : 0u;
     }
-    return residue;
+    return out;
 }
 
 // unbackticked_docs= (present only when non-zero): its reading, beside the root that carries it.
 inline constexpr const char* kUnbacktickedDocsLegend =
     "<!-- unbackticked_docs=N: N more markdown files, over readable indexed markdown, name of= as a whole word but not as "
     "a clean one-line backtick span (prose, a code block, a span broken across lines) - not in docs=; a text match, so a ceiling -->";
+// unbackticked_unread= (present only when non-zero): the indexed markdown files that scan could not read back.
+inline constexpr const char* kUnbacktickedUnreadLegend =
+    "<!-- unbackticked_unread=N: N indexed markdown files could not be read back for the unbackticked_docs scan (deleted "
+    "or unreadable since indexing) - not scanned, so unbackticked_docs= (or its absence) says nothing about them -->";
 
-// The CLI root's share of it: the count, the attribute and the reading, all empty at zero and on a multi-root run.
+// The CLI root's share of it: the counts, the attributes and the readings, all empty at zero and on a multi-root run.
 struct UnbacktickedDocs
 {
-    std::size_t count = 0;
+    std::size_t count  = 0;
+    std::size_t unread = 0;
     std::string attr;
-    const char* legend = "";
+    std::string legend;
 };
 inline UnbacktickedDocs unbacktickedDocsFor( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted,
                                              bool singleRoot )
 {
-    UnbacktickedDocs out;
-    out.count = singleRoot ? countUnbacktickedDocFiles( ing, defs, counted ) : 0;
+    UnbacktickedDocs        out;
+    const UnbacktickedCount n = singleRoot ? countUnbacktickedDocFiles( ing, defs, counted ) : UnbacktickedCount{};
+    out.count                 = n.residue;
+    out.unread                = n.unread;
     if( out.count > 0 )
     {
         out.attr   = " unbackticked_docs=\"" + std::to_string( out.count ) + "\"";
         out.legend = kUnbacktickedDocsLegend;
+    }
+    if( out.unread > 0 )
+    {
+        out.attr   += " unbackticked_unread=\"" + std::to_string( out.unread ) + "\"";
+        out.legend += kUnbacktickedUnreadLegend;
     }
     return out;
 }

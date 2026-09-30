@@ -2532,7 +2532,7 @@ std::optional<int> runMentions( const MainDispatch& d )
                      "No line locator: the doc edge is stored at file granularity — a fabricated always-1 l= was removed; absent beats fake -->{}",
                      rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Mentions, mnUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
                      rw::rootRelPathsLegend( mnSingleRoot ) );
-        rw::emitRaw( stdout, unbackticked.legend );
+        rw::emitRaw( stdout, unbackticked.legend.c_str() );
         // §P15/§P16: fileRows is deterministic (file path order) and printed unconditionally, no historic
         // display cap — pageWindow directly on cfg.pageLimit/cfg.pageOffset, discloseCap=false so the
         // un-paginated tag stays byte-identical.

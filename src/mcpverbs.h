@@ -1624,10 +1624,11 @@ inline std::string mentionsJson( const std::string& root, const std::string& sym
     // offset= pages the CLI's own stream.
     const PageWindow mnPw = pageWindow( fileRows.size(), effectiveRowCap( page.limit, kUseSiteRowCap ), page.offset );
     char             mnPab[ kPageDisclosureCap ];
-    const std::size_t unbackticked = unbacktickedDocsFor( ing, defs, fileRows, mnSingleRoot ).count;   // the CLI twin's unbackticked_docs=
+    const UnbacktickedDocs ub = unbacktickedDocsFor( ing, defs, fileRows, mnSingleRoot );   // the CLI twin's unbackticked_docs= / _unread=
     out += "\"docs\":" + std::to_string( fileRows.size() )
          + ",\"sections\":" + std::to_string( docs.size() )
-         + ( unbackticked > 0 ? ",\"unbackticked_docs\":" + std::to_string( unbackticked ) + ",\"unbackticked_docs_ceiling\":true" : std::string() )
+         + ( ub.count > 0 ? ",\"unbackticked_docs\":" + std::to_string( ub.count ) + ",\"unbackticked_docs_ceiling\":true" : std::string() )
+         + ( ub.unread > 0 ? ",\"unbackticked_unread\":" + std::to_string( ub.unread ) : std::string() )
          + pageDisclosure( mnPab, sizeof( mnPab ), mnPw.end - mnPw.begin, fileRows.size(), mnPw.end,
                            page.limit, page.offset, /*discloseCap=*/mnPw.end - mnPw.begin < fileRows.size(), kJsonPageSyntax )
          + ",\"files\":[";
