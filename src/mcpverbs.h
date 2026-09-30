@@ -2623,11 +2623,14 @@ inline std::optional<std::string> impactText( const std::string& root, const std
         return std::string{}; // symbol not found → caller reports not-found
     }
 
-    const std::vector<NodeId> reach = transitiveCallers( g, seeds );
+    // 0.6.5: the CLI --impact's walk, keeping each node's hop depth, and its order (graph.h orderByDepthThenRank).
+    std::vector<std::uint32_t>       depth;
+    const std::vector<NodeId>        reach = transitiveCallersDepth( g, seeds, &depth );
     const auto [ rank, prIters, prConverged ] = rankGraph( g );
-    const RankDisclosure      prD{ prIters, prConverged, true };   // W2-F: CLI --impact discloses this; so does its twin
-    std::vector<NodeId>       show  = reach;
-    std::sort( show.begin(), show.end(), [ & ]( NodeId a, NodeId b ) { return rank[a] != rank[b] ? rank[a] > rank[b] : a < b; } );
+    const RankDisclosure             prD{ prIters, prConverged, true };   // W2-F: CLI --impact discloses this; so does its twin
+    std::vector<NodeId>              show  = reach;
+    orderByDepthThenRank( show, depth, rank );   // ranked before the page window cuts, exactly as on the CLI
+    const std::vector<std::uint32_t> byDepth = depthCounts( reach, depth );
 
     // A6: the identical isTestSymbol-seeded lens the CLI --impact now runs (graph.h::testSymbolForwardReach)
     // — mcpclidiffcheck compares root-attribute SETS between the two surfaces, so radius_tested=/
@@ -2660,7 +2663,9 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // Measured before the legend (#220 part 1): its imports_unresolved= decides whether that clause rides.
     ImportTier imports = impactImportTier( ing, seeds );
     sizeImportTier( imports, page.limit, symbol );   // cut-fix C: limit sizes the tier, as on the CLI
-    rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause, kImpactImportTierLegend,
+    rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause,
+                  reach.empty() ? "" : kImpactDepthLegend,           // 0.6.5: exactly when d=/by_depth= ride, as on the CLI
+                  kImpactImportTierLegend,
                   impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread ).c_str(),   // #220: exactly when the root carries them, as on the CLI
                   kTestedRowLegend, kImpactTestedPartitionLegend,   // A6
                   kTestedLensBlindSpotLegend,                       // F-02: rides with the partition, byte-identical to the CLI twin
@@ -2681,8 +2686,9 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const bool         imSingleRoot = ing.realPaths.empty();
     const std::string  imRootPrefix = imSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
     const std::string  imRootAttr   = imSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
-    rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
+    rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
                   ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: where the CLI root carries it
+                  byDepthAttrXml( byDepth ),                                                                        // 0.6.5: the CLI root's by_depth=
                   imports.xmlAttrs.c_str(), radiusTested, radiusUntested, declinedCallsAttrXml( declinedCalls ).c_str(), imRootAttr.c_str(),
                   pageDisclosure( ipab, sizeof( ipab ), shownRows, show.size(), ipw.end, page.limit, page.offset, true ),
                   graphCountFloorAttrXml( g ).c_str(), renderDisclosure( prD, DiscloseAs::XmlAttrs ).c_str(),   // M15: gauge + marker
@@ -2690,9 +2696,9 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     for( std::size_t i = ipw.begin; i < ipw.end; ++i )
     { const Symbol& s = ing.symbols[ show[i] ];
       const std::string_view rp = imSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], imRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-      // A6: tested="1" only (never a literal 0) — see kTestedRowLegend.
-      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                    isTestedByReach( ing, impTestReach, show[i] ) ? " tested=\"1\"" : ""  ); }
+      // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= as on the CLI row.
+      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+                    depthRunAttrXml( show, depth, i, ipw.begin ), isTestedByReach( ing, impTestReach, show[i] ) ? " tested=\"1\"" : ""  ); }
     // the import tier's rows, after the symbol rows and under their own tag — a different unit, so a
     // different element (see the CLI arm and kImpactImportTierLegend for why they are never one number).
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,

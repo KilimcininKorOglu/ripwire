@@ -269,8 +269,12 @@ page_verb(){
     n3="$( printf '%s' "$p3" | grep -oE "$rowpat" | wc -l | tr -d ' ' )"
     p6="$( run "$@" --limit=6 --offset=0 )"
     # rowpat is a prefix, so compare the FULL row text instead — extract whole elements for a real diff.
-    { printf '%s' "$p0" | grep -oE "${rowpat}[^>]*>"; printf '%s' "$p3" | grep -oE "${rowpat}[^>]*>"; } > "$TMP/seam"
-    printf '%s' "$p6" | grep -oE "${rowpat}[^>]*>" > "$TMP/full6"
+    # 0.6.5 (depth-labelled --impact): an <s> row's d= is RUN-LENGTH per emitted page — printed on a page's first row
+    # and where the depth changes — so row 3 carries d= as the first row of page[3:6] and not inside page[0:6]. The
+    # seam compares row IDENTITY, so d= is stripped from <s> rows on both sides; test/impactdepthcheck.sh (3)/(4) gate
+    # the depths and the first-row rule themselves.
+    { printf '%s' "$p0" | grep -oE "${rowpat}[^>]*>"; printf '%s' "$p3" | grep -oE "${rowpat}[^>]*>"; } | sed -E '/^<s /s/ d="[0-9]+"//' > "$TMP/seam"
+    printf '%s' "$p6" | grep -oE "${rowpat}[^>]*>" | sed -E '/^<s /s/ d="[0-9]+"//' > "$TMP/full6"
     if [ "$n3" = 3 ] && diff -q "$TMP/seam" "$TMP/full6" >/dev/null; then
         ok "$label: --offset advances — page[0:3]+[3:6] == page[0:6], no dup/drop"
     else

@@ -234,6 +234,7 @@
 "htmlhostcheck.sh": 22.5,
 "htmlrendercheck.sh": 22.0,
 "identitycheck.sh": 35.5,
+"impactdepthcheck.sh": 4.0,
 "impactimportcheck.sh": 1.8,
 "impactpartitioncheck.sh": 74.7,
 "importnarrowcheck.sh": 2.8,

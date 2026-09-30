@@ -164,6 +164,21 @@ the valid names), a repeated name or an empty name exits 1 before the server sta
 --mcp-tools=LIST` writes the flag into the printed server command for claude, cursor, windsurf, gemini and
 opencode, and prints a note to add it by hand for codex, openclaw and hermes. Gate: `test/mcptoolsubsetcheck.sh`.
 
+### Changed — `--impact` lists the blast radius nearest first, with its hop depth
+
+`--impact=SYM` (and the MCP `impact` twin) used to list the reach set in PageRank order with no depth, so a
+direct caller and a four-hop dependent looked alike, and the page window (40 rows by default) cut across every
+depth at once: a well-ranked distant dependent could push a direct caller off the page. Rows now run by hop
+depth first (1 = calls SYM directly), in the previous PageRank order within a depth, and the order is applied
+before the window cuts, so a cut drops the deepest rows first. Each XML row states its depth as `d=`, printed on
+the first row shown and wherever the depth changes (a row without it has the depth of the row above); the root
+carries `by_depth="1:n,2:n,…"`, which counts `reaches=` per depth, so a capped answer says which depth it stopped
+in. `--json` carries `"by_depth":[…]` and `"d"` on every row; `--format=columnar` a `<depth>` column. The set of
+symbols and every existing count are unchanged; with more than one depth in the reach set, which rows fill a cut
+page changes. Measured on this repository's own answers (four symbols, blast radius 4 to 204 symbols):
+`by_depth=` adds 27–45 B and `d=` 6–24 B, and the compact legend 127 B; `d=` on every row would have cost 240 B
+per page instead. Gate: `test/impactdepthcheck.sh`.
+
 ## [0.6.5] — 2026-09-27
 
 

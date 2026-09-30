@@ -484,6 +484,10 @@ probeFor()
 # shared sub-cap clause (+27 B), the present-only shown_symbols= row (+34 B) and "top 3" in the purpose line (+2 B). The
 # fixture has files with more than 3 symbols, so the probe is a cut page. No other schema moved (the --zoom bridge and
 # --impact importers_next= readings are present-only and ride neither probe).
+# RE-PINNED 2026-09-26 (lane impact-depth-065, depth-labelled --impact): ripwire.impact/v1 810 -> 940 (measured 924, the
+# --impact=distance probe; 797 on the base binary b343b988). The answer now carries by_depth= on the root and d= on its
+# first <s> row (the listing runs nearest first, graph.h orderByDepthThenRank), and the compact legend reads both: the
+# present-only <s d=N> row (+64 B with its separator) and by_depth= (+63 B). Both are absent at reaches="0". No other schema moved.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -526,7 +530,7 @@ ripwire.doc-drift/v1              960   949
 ripwire.notes/v1                  310   292
 ripwire.path/v1                   550   535
 ripwire.connect/v1                760   741
-ripwire.impact/v1                810   797
+ripwire.impact/v1                940   924
 ripwire.mentions/v1               260   243
 ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
@@ -910,7 +914,10 @@ echo
 # ripwire.test-gate/v1 schema pin above: untested_modscope=N's compactlegend.h completeness clause is always
 # present, so the loop's --test-gate=geometry.cpp probe carries it too. Attributed on this fixture: --test-gate
 # alone moved +95 B (measured against the pre-change binary), the other nine verbs unmoved.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,500 B (33,763 B in full on the fixture) ==="
+# RE-ANCHORED 2026-09-26 (lane impact-depth-065, depth-labelled --impact): 7,500 → 7,700 B, measured 7,622 (7,495 on the
+# base binary b343b988). The loop's --impact=distance probe now carries by_depth= and d=, and its compact legend reads both
+# (+127 B, the (U) table's ripwire.impact/v1 row); the other nine verbs unmoved. Same rule: the next multiple of 100 B.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,700 B (34,431 B in full on the fixture) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -919,8 +926,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 7500 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,500 B; full: $fullBytes B)"
+[ "$loopBytes" -le 7700 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,700 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="
@@ -965,7 +972,9 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 # Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
 # RE-PINNED 2026-09-23 (cut-fix C): impact 780 -> 810 (measured 797; 777 on the base binary) — the same +20 B
 # shown_importers= reading the (U) table's ripwire.impact/v1 row states: --limit now sizes the import tier.
-for pair in "impact:810:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
+# RE-PINNED 2026-09-26 (lane impact-depth-065): impact 810 -> 940 (measured 924; 797 on the base binary) — the same +127 B
+# <s d=N>/by_depth= readings the (U) table's ripwire.impact/v1 row states; the MCP twin carries the CLI's attributes.
+for pair in "impact:940:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "uses:510:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "path_between:540:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
             "lego:260:{\"path\":\".\",\"type\":\"Point\",\"legend\":\"compact\"}" \

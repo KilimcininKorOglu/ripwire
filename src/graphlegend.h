@@ -39,6 +39,7 @@
 #include <utility>
 #include <cstdio>
 #include <string>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -601,6 +602,51 @@ inline std::string declinedCallsAttrXml( std::size_t declinedCalls )
 inline std::string declinedCallsKeyJson( std::size_t declinedCalls )
 {
     return declinedCalls > 0 ? ",\"declined_calls\":" + std::to_string( declinedCalls ) : std::string();
+}
+
+// ── Depth-labelled --impact (0.6.5): by_depth= on the root, d= on the rows ──────────────────────────────────────────
+// `counts` is graph.h depthCounts over the FULL reach set: element k counts the rows first reached at hop k+1. One
+// spelling per dialect, shared by the CLI --impact and its MCP twin so the two cannot drift. Absent when the reach set
+// is empty (reaches="0" has no depth to partition). The XML form spells each depth (`1:9,2:20`) rather than relying on
+// position: a reader never has to count commas to learn which depth a number belongs to.
+inline std::string byDepthField( std::span<const std::uint32_t> counts, bool json )
+{
+    if( counts.empty() )
+    {
+        return {};
+    }
+    std::string out = json ? ",\"by_depth\":[" : " by_depth=\"";
+    for( std::size_t k = 0; k < counts.size(); ++k )
+    {
+        out += json ? std::string( k ? "," : "" ) : ( k ? "," : "" ) + std::to_string( k + 1 ) + ":";
+        out += std::to_string( counts[k] );
+    }
+    out += json ? ']' : '"';
+    return out;
+}
+inline std::string byDepthAttrXml( std::span<const std::uint32_t> counts )
+{
+    return byDepthField( counts, false );
+}
+// The JSON twin is an array: element i is depth i+1 (a JSON consumer indexes it; the XML reader reads it).
+inline std::string byDepthKeyJson( std::span<const std::uint32_t> counts )
+{
+    return byDepthField( counts, true );
+}
+
+// The legend clause, one per dialect (the columnar form carries the depth as a dense column, not a row attribute).
+// Emitted INSIDE an XML comment: no double hyphen.
+inline constexpr const char* kImpactDepthLegend =
+    "d=N on <s>: hop depth (1 = calls SYM directly; the shortest call chain), printed on the first row and where it changes "
+    "(a row without d= has the depth above it). Rows run d=1 first, PageRank order within a depth, so a cut drops the deepest "
+    "rows first; by_depth=k:n,… counts reaches= per depth and sums to it, so a capped answer states the depth it stopped in. ";
+inline constexpr const char* kImpactDepthColumnarLegend =
+    "the depth column: each row's hop depth (1 = calls SYM directly; the shortest call chain). Rows run depth 1 first, "
+    "PageRank order within a depth, so a cut drops the deepest rows first; by_depth=k:n,… counts reaches= per depth and sums "
+    "to it, so a capped answer states the depth it stopped in. ";
+inline const char* impactDepthLegend( bool columnar ) noexcept
+{
+    return columnar ? kImpactDepthColumnarLegend : kImpactDepthLegend;
 }
 
 // ── #220 part 1 — imports_unresolved=, the FILE graph's own gauge (test/depsprecisecheck.sh, the #220 arms) ─────────

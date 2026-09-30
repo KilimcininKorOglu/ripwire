@@ -69,16 +69,20 @@ inline void emitGraphQueryLegend( const rw::IngestResult& ing, const rw::Graph& 
 // gains `"tested":true`; the key is OMITTED otherwise, matching the tested= "absence-meaningful, never
 // false" convention every other tested= site in this tree already follows (serialize.h/verbs_for.h) — zero
 // extra bytes on the untested row, the common case.
+// 0.6.5: `depth` is optional too (--impact passes transitiveCallersDepth's hop per node) — when given, every row
+// carries "d":N, the XML row's d=; a JSON row is read on its own, so the key rides every row, never only on a change.
 inline void printJsonSymbolRows( const rw::IngestResult& ing, const std::vector<rw::NodeId>& ids, std::size_t begin, std::size_t end,
-                                 std::string_view rootPrefix = {}, const std::vector<char>* testReach = nullptr )
+                                 std::string_view rootPrefix = {}, const std::vector<char>* testReach = nullptr,
+                                 const std::vector<std::uint32_t>* depth = nullptr )
 {
     for( std::size_t i = begin; i < end; ++i )
     {
         const rw::Symbol&      s = ing.symbols[ ids[i] ];
         const std::string_view p = rootPrefix.empty() ? std::string_view( ing.files[ s.fileId ] )
                                                        : rw::sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix );
-        rw::emitTo( stdout, "{}{{\"t\":\"{}\",\"n\":\"{}\",\"p\":\"{}:{}\"{}}}", i == begin ? "" : ",",
+        rw::emitTo( stdout, "{}{{\"t\":\"{}\",\"n\":\"{}\",\"p\":\"{}:{}\"{}{}}}", i == begin ? "" : ",",
                      rw::symTag( s.kind ), rw::jsonStr( s.name ).c_str(), rw::jsonStr( p ).c_str(), s.line,
+                     depth ? ",\"d\":" + std::to_string( ( *depth )[ ids[i] ] ) : std::string(),
                      ( testReach && rw::isTestedByReach( ing, *testReach, ids[i] ) ) ? ",\"tested\":true" : "" );
     }
 }
@@ -2241,6 +2245,8 @@ struct ImpactView
     std::size_t                    radiusUntested;  // A6: reaches - radiusTested
     std::size_t                    declinedCalls;   // tier-3 declines naming SYM or a radius symbol (graph.h declinedCallsNaming)
     const rw::Graph&               g;               // M15: the gauge pair (graphCountFloorAttrXml) reads ambOut/unresolvedOut
+    const std::vector<std::uint32_t>& depth;        // 0.6.5: transitiveCallersDepth's hop per node — the row's d=
+    std::span<const std::uint32_t> byDepth;         // 0.6.5: graph.h depthCounts over the FULL reach set — the root's by_depth=
 };
 
 // --format=columnar (RESEARCH lever 1): same page window, path-table + parallel arrays.
@@ -2261,6 +2267,7 @@ int emitImpactColumnar( const ImpactView& v )
     const std::string       attr = "of=\"" + std::string( escapeXml( v.sym, esc ) ) + "\" defs=\"" + std::to_string( v.defs )
                                  + "\" reaches=\"" + std::to_string( v.reaches ) + "\""
                                  + rw::unprovenDefsAttrXml( v.unprovenDefs )                      // H1: where the XML root carries it
+                                 + rw::byDepthAttrXml( v.byDepth )                                // 0.6.5: the XML root's, same place
                                  + " importers=\"" + std::to_string( v.imports.files.size() ) + "\""
                                  + rw::importsUnresolvedAttrXml( v.imports.importsUnresolved )   // #220: the XML root's, absent at 0
                                  + rw::countAttrXmlOrEmpty( "tsconfig_unread", std::size_t( v.imports.tsconfigUnread ) )
@@ -2284,7 +2291,7 @@ int emitImpactColumnar( const ImpactView& v )
                                                             : " lens=\"shown_importers,importers_capped,importers_next\"" )
                                  + rw::renderDisclosure( v.prD, rw::DiscloseAs::XmlAttrs )   // W2-F
                                  + rw::nextAttrXml( rw::nextFlag( "--safe-delete=", v.sym ) );   // P3 (L7): the XML root's next=, same set
-    emitColumnarSymbolRows( stdout, v.ing, "impact", attr.c_str(), rows, v.rootPrefix, v.testReach );
+    emitColumnarSymbolRows( stdout, v.ing, "impact", attr.c_str(), rows, v.rootPrefix, v.testReach, &v.depth );
     return 0;
 }
 
@@ -2300,8 +2307,9 @@ int emitImpactJson( const ImpactView& v )
     using namespace rw;
     char ipab[ kPageDisclosureCap ];
     const std::size_t shownRows = v.page.end - v.page.begin;
-    rw::emitTo( stdout, "{{\"of\":\"{}\",\"defs\":{},\"reaches\":{}{}", jsonStr( v.sym ).c_str(), v.defs, v.reaches,
-                 rw::unprovenDefsKeyJson( v.unprovenDefs ).c_str() );   // H1: absent at zero, like its XML twin
+    rw::emitTo( stdout, "{{\"of\":\"{}\",\"defs\":{},\"reaches\":{}{}{}", jsonStr( v.sym ).c_str(), v.defs, v.reaches,
+                 rw::unprovenDefsKeyJson( v.unprovenDefs ).c_str(),   // H1: absent at zero, like its XML twin
+                 rw::byDepthKeyJson( v.byDepth ) );                   // 0.6.5: the XML root's by_depth=, as an array
     rw::emitTo( stdout, ",\"importers\":{},\"shown_importers\":{},\"importers_capped\":{}",
                  v.imports.files.size(), v.imports.shown, v.imports.capped ? "true" : "false" );
     if( !v.imports.next.empty() )   // cut-fix E: the XML root's importers_next=, present on a cut only
@@ -2318,7 +2326,7 @@ int emitImpactJson( const ImpactView& v )
                                  v.pageLimit, v.pageOffset, true, kJsonPageSyntax ),
                  rw::graphCountFloorAttrJson( v.g ).c_str(),                                                // §H4 §3.4
                  rw::renderDisclosure( v.prD, rw::DiscloseAs::JsonKeys ).c_str() );           // W2-F: ONE keyset
-    printJsonSymbolRows( v.ing, v.show, v.page.begin, v.page.end, v.rootPrefix, v.testReach );
+    printJsonSymbolRows( v.ing, v.show, v.page.begin, v.page.end, v.rootPrefix, v.testReach, &v.depth );
     rw::emitTo( stdout, "],\"import_reach\":[" );
     rw::emitImportRowsJson( stdout, v.ing, v.importPage, v.rootPrefix, v.importLazyPage );
     rw::emitTo( stdout, "]}}" );
@@ -2336,8 +2344,9 @@ int emitImpactXml( const ImpactView& v )
     const auto        ex        = [ & ]( std::string_view t ) -> std::string { return std::string( escapeXml( t, esc ) ); };
     char              ipab[ kPageDisclosureCap ];
     const std::size_t shownRows = v.page.end - v.page.begin;
-    rw::emitTo( stdout, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
+    rw::emitTo( stdout, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
                  ex( v.sym ).c_str(), v.defs, v.reaches, rw::unprovenDefsAttrXml( v.unprovenDefs ).c_str(),   // H1: beside the reaches= it qualifies
+                 rw::byDepthAttrXml( v.byDepth ),                                                              // 0.6.5: partitions reaches= by hop depth
                  v.imports.xmlAttrs.c_str(), v.radiusTested, v.radiusUntested,
                  rw::declinedCallsAttrXml( v.declinedCalls ).c_str(),   // tier-3 declines into the radius
                  std::string( v.rootAttr ).c_str(),
@@ -2350,8 +2359,9 @@ int emitImpactXml( const ImpactView& v )
         const Symbol&          s  = v.ing.symbols[ v.show[i] ];
         const std::string_view rp = v.singleRoot ? rw::sarif::rootRelativeUri( v.ing.files[ s.fileId ], v.rootPrefix )
                                                  : std::string_view( v.ing.files[ s.fileId ] );
-        // A6: tested="1" only (never a literal 0) — see kTestedRowLegend.
-        rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+        // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= the row's hop depth, run-length (graph.h depthRunAttrXml).
+        rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+                     rw::depthRunAttrXml( v.show, v.depth, i, v.page.begin ),
                      rw::isTestedByReach( v.ing, *v.testReach, v.show[i] ) ? " tested=\"1\"" : "" );
     }
     rw::emitImportRowsXml( stdout, v.ing, v.importPage, v.rootPrefix, v.importLazyPage );
@@ -2385,11 +2395,14 @@ std::optional<int> runImpact( const MainDispatch& d )
                                                                    cfg.impactSym, "--impact=" ).c_str() );   // §B4.2
             return 1;
         }
-        const std::vector<NodeId> reach = rw::transitiveCallers( g, seeds );
+        // 0.6.5: the SAME walk, keeping each node's hop depth — the rows' d= and the root's by_depth=.
+        std::vector<std::uint32_t>       imDepth;
+        const std::vector<NodeId>        reach = rw::transitiveCallersDepth( g, seeds, &imDepth );
         const auto [ rank, prIters, prConverged ] = rankGraph( g );
-        const rw::RankDisclosure  prD{ prIters, prConverged, true };   // W2-F: the listing is PageRank-ordered
-        std::vector<NodeId>       show  = reach;
-        std::sort( show.begin(), show.end(), [ & ]( NodeId a, NodeId b ) { return rank[a] != rank[b] ? rank[a] > rank[b] : a < b; } );
+        const rw::RankDisclosure         prD{ prIters, prConverged, true };   // W2-F: the listing is PageRank-ordered within a depth
+        std::vector<NodeId>              show  = reach;
+        rw::orderByDepthThenRank( show, imDepth, rank );   // ranked BEFORE the page window below cuts: the deepest rows go first
+        const std::vector<std::uint32_t> imByDepth = rw::depthCounts( reach, imDepth );
 
         // A6 (survey card A6, agent-lsp): tested/untested partition of the blast radius, over the FULL
         // un-windowed reach set (not just the shown page) — the same isTestSymbol-seeded lens --safe-delete's
@@ -2428,7 +2441,8 @@ std::optional<int> runImpact( const MainDispatch& d )
             // #60: exactly when a module-scope owner is one of the rows this answer prints — the PAGE, which
             // is what `anyModuleScopeRow`'s own contract asks for ("a page of rows, never the corpus").
             const bool imHasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) );
-            rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
+            rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
+                         reach.empty() ? "" : rw::impactDepthLegend( cfg.columnar ),   // 0.6.5: exactly when rows (d=) and by_depth= exist
                          cfg.columnar ? rw::kImpactImportTierColumnarLegend : rw::kImpactImportTierLegend,
                          rw::impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread ).c_str(),   // #220: exactly when the root carries them
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
@@ -2446,7 +2460,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                                imPage,   // the same window the legend predicate above reads — one expression, not two
                                imports, importPage, importLazyPage, prD, imSingleRoot, imRootPrefix, imRootAttr,
                                imSingleRoot ? cfg.roots[0] : std::string_view(), cfg.pageLimit, cfg.pageOffset,
-                               &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, g };
+                               &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, g, imDepth, imByDepth };
 
         if( cfg.columnar ) { return emitImpactColumnar( view ); }
         if( cfg.json     ) { return emitImpactJson( view ); }
