@@ -15,64 +15,6 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality verbs measure it
-
-`const f = (x) => {…}`, `export const f = function(…) {…}`, a class-field arrow, an object-literal arrow, a CommonJS
-`module.exports.f = function`, Lua's `M.f = function(x) … end` / `local f = function` / `{ f = function … }`, and a
-Python class-body `f = lambda self, x: g(x)` were captured as definitions whose def node (the declaration, the
-assignment, the table) owns no `body:` field, so each read as a bodyless declaration: `--callees=f` and MCP
-`find_symbol` answered `bodyless_defs="1"` — false — and every verb that measures only bodied functions skipped them.
-A name bound to a function literal now owns that literal's body (one data table, `kFnLiteralBinding` in
-`src/ingest_relations.h`: the languages, the literal node kinds, the value-carrying fields, the positional value
-list and the cast/paren wrappers — JS, TS/TSX, Lua and Python today). Params, cx and nest read from the literal, so a
-typed const's annotation no longer lends the arrow its parameter count, a bare `x => …` counts its one parameter, and
-a declaration binding several names
-(`const a = () => …, b = () => …`, a Lua table of function fields) gives each name its own span, so its calls
-attribute to it. On a 583-file TypeScript agent repo: `--biggest-first`, `--ensemble` and `--quality-panel` measure
-2,083 functions (was 63), `--clones` sees 32,714 lines of function body (was 819); summed
-`bodyless_defs` over every function/method name 2,043 → 23 (the 23 are interface signatures and data keys). A real
-declaration (`declare function`, an overload signature, an interface member) stays bodyless. `kParserVer` 128.
-
-A bodied closure also competes for calls, so the resolver now knows where one can be named: a function bound inside
-another function's body (named or anonymous — a factory's `const start = () => …`, a `const run` in an `it()` callback,
-a nested `def`, in every language) records that function's span, and a call outside it cannot reach the closure by
-name. A nested function the language binds GLOBALLY is not such a closure and competes as before: PHP's nested
-`function`, a nested Bash function, Lua's non-`local` nested `function`/assignment, and a JS assignment-bound def
-(`exports.f = function`). A call the builtin-method gate or the external-name veto already answers (`d.get()`,
-`re.sub()`) resolves exactly as before. There the closure YIELDS to every candidate the call can name instead of competing: `tui.start()` on an imported
-class binds to the class's method even when another imported module holds a factory-local `start` (on main this
-declined for a nested `function start(){}`), and a helper's `run` parameter no longer binds to a `const run` inside
-another test's callback. It keeps its edge through a factory the caller imports when nothing reachable competes
-(`createTracker().stop()`). On the same repo: edges 3,894 → 3,851, `ambiguous` 24 → 0, tier-3 `declined` 55 → 129.
-Of the edge rows main had and this build does not, 41 were guesses — 40 `process.stdout`/`stderr.write()` calls bound
-to a same-named stub method and one `render()` of a dynamically imported library bound to an unrelated class method; both
-now decline — and 7 were splits that now bind one target: 5 over same-named closures, to the one in the caller's own
-function, and 2 over a declaration and its implementation, to the implementation. 8 calls into closures that had no
-body before are new edges. Still guessed, and stated: a call whose ONLY same-named definition is such a closure can
-bind to it (a parameter call included), and a closure returned by a factory and called through the result in the SAME
-file declines when an unrelated same-named definition exists elsewhere — a TS/JS call records no member bit, so the
-resolver cannot tell `provider.get()` from a bare `get()`. A Python function that declares `global g` and then defines
-a nested `def g` binds `g` globally, but it is read as local (the `global` statement is not read), so a bare `g()`
-elsewhere can bind to a same-named method in another file where main bound the nested def. Known limit, and a new false edge in this shape: when a
-returned closure is called by name (Python `py_incr = make_counter(); py_incr(1)`, or a JS `module.exports = { jsInit }`
-from an IIFE) and the caller ALSO imports another module that defines the same name, main split the call across both
-definitions; this build pins the other module's definition, because a lone import candidate the call can reach wins
-over a closure it cannot name. The fix is the same missing member bit. The index format changes with it: `kCacheVersion` 27, so a
-cache written by an earlier build re-parses once (27, not 26: a 26 cache from an intermediate build of this change holds
-wrong scope spans and is refused too). Gate: `test/fnliteralcheck.sh` (section 6 for the edges).
-
-`--naming-consistency` no longer proposes camelCase for a JSX component: a PascalCase function in a `.tsx`/`.jsx`
-file neither votes nor is flagged (JSX reads a lowercase tag as an intrinsic element), and the header counts it as
-`component_exempt=N`. It reads the extension, not the body: a component in a plain `.js`/`.ts` file still votes. On the
-same repo the bodied arrows bring 7 React components into the vote; all 7 are exempt (`component_exempt="7"`, 0
-flagged). Gate: `test/namingconsistencycheck.sh` arm 12.
-
-### Changed — `ripwire-quality-bar` gains a bounded debt fix loop
-
-A new section drives paying down EXISTING debt: pick the top `--quality-panel=strict` row, write the test first when
-nothing reaches the code, apply the table/playbook recipe for its shape, and prove it with the closed fix loop plus an
-anti-gaming rule (measure before committing, one fix per commit; `regressions="0"` and `acked=` not rising — a fix
-may not worsen any other kind); at most 3 fixes per session (a default, not a measured optimum).
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
@@ -122,6 +64,255 @@ recognised; `--legend=full` (the frozen 0.6.1 prose) does not define the `memory
 from a partial index without disclosure. Deferred: layer 2 (the non-git crawl budget and default heavy-directory
 pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
 llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
+
+### Added — `--quality-delta` placeholder kind (the eleventh): stubs and TODOs a change adds
+
+A new kind, `placeholder`, lists the stubs and TODO comments a change added, per symbol: `todo!()` /
+`unimplemented!()`, Kotlin `TODO()`, `NotImplementedException`, a bare `raise NotImplementedError` as a free
+function's whole body, a throw/raise/panic/assert whose message says "not implemented", and a comment line
+opening with `TODO`/`FIXME` that names no issue. Every row is `origin="new-symbol"` and never gates; a
+change with no stub prints nothing new. `--help`, the MCP `quality_delta` description and the full legend
+now say eleven kinds.
+
+### Added — `--mcp-tools=LIST`: the MCP server can list a subset of its tools
+
+`ripwire --mcp --mcp-tools=LIST` (and `--listen`) lists and answers only the named tools. LIST is a comma list of
+tool names and/or two profiles: `core` (explore, batch, from_trace, impact, uses, fetch_body, edit_check,
+quality_delta; the tools the server's own instructions name, plus fetch_body) and `full` (all 33, the default).
+Measured on this build with a bare stdio server, `tools/list` is 46,368 bytes for `full`, 13,834 for `core` and
+4,224 for `grep,impact,uses`; `initialize` grows from 1,035 to 1,252 bytes under `core` for the sentence that
+announces the subset. With no flag, or `--mcp-tools=full`, every byte the server sends is unchanged.
+
+A call to a tool the subset leaves out is refused (`-32602`) with the restart that enables it, and with the
+`batch` sub-query that answers it when `batch` is listed and serves that verb; `batch` keeps serving its own
+sub-verbs. The instructions text keeps only the hints whose tool is listed. An unknown name (with a near miss and
+the valid names), a repeated name or an empty name exits 1 before the server starts. `ripwire wrap AGENT
+--mcp-tools=LIST` writes the flag into the printed server command for claude, cursor, windsurf, gemini and
+opencode, and prints a note to add it by hand for codex, openclaw and hermes. Gate: `test/mcptoolsubsetcheck.sh`.
+
+### Added — RSpec's `described_class` is the class its example group names, so a spec's calls pin to the class under test (#338)
+
+`described_class` is how RSpec spells the class under test. Inside `RSpec.describe Calc do … end`,
+`described_class.m( 1 )` is `Calc.m( 1 )`. Its receiver is a bare identifier that no binding names, though, so every
+such call declined. A spec reached nothing through it, and `tested=`, `--seams` and `--test-gate` read the class under
+test as unreached by the spec written for it.
+
+The call now pins the way a written `Calc.m( 1 )` does (#267's constant-receiver arm). The rule is RSpec's own
+(rspec-core 3.13, `Metadata::ExampleGroupHash#described_class`): a group's described class is its first description
+argument, unless that is `nil` or a String, in which case it is the parent group's. So the innermost enclosing example
+group with a constant first argument answers. An example group is `describe` / `context` (and `feature`,
+`example_group` and the `x`- / `f`- spellings), called bare or on `RSpec`, with a block. A shared group
+(`shared_examples`, `shared_examples_for`, `shared_context`) stops the walk with no answer, because its body runs in
+whichever group includes it.
+
+Stated floors, each pinned by `test/rubydescribedclasscheck.sh`:
+- **(a)** A chained receiver (`described_class.new.m`) is untouched: #267's one-hop bound.
+- **(b)** A group with no constant (`describe "text"` at the top, `describe :sym`) names no class.
+- **(c)** A `describe` on any other receiver (`Docs.describe Calc do`) is not an RSpec example group.
+- **(d)** `subject`, the implicit `described_class.new`, is not modelled.
+- **(e)** A redefined `described_class` declines. A **method** of that name (any `:described_class` symbol, as in
+  `let( :described_class )`, or `def described_class`) declines every site in the file. A **local** of that name (an
+  assignment, `||=`, a multiple-assignment target, or a block or method parameter) declines the sites Ruby reads as
+  that local: after the binding in its own scope and in the blocks nested inside it, never in a sibling block, and
+  never across a `def`. The name is matched as a whole word, so `my_described_class = x` redefines nothing.
+- **(f)** A qualified describe is named by its final segment: `RSpec.describe Cask::Tab` reads as `Tab`. Where another
+  `Tab` defines the method too, the call splits between them. Where only the other `Tab` defines it, the call pins
+  there, unmarked. A written `Cask::Tab.m` behaves the same way.
+
+Measured with `--no-cache`, `--report` edge totals, `main` (3fcd515f) against this change:
+
+| Corpus | Edges |
+| --- | --- |
+| Rails app A | 26,649 → 26,755 (+106) |
+| Rails app B | 20,807 → 21,149 (+342) |
+| activerecord, activesupport, actionpack 8.1.3 `lib/`; this repo's `src/` | default map byte-identical |
+
+`RawRef::recv` / `recvVar` change value for these call sites (the PR carried this as parser version 121, then 125);
+the record layout is unchanged.
+
+### Added — Ruby has inheritance edges: `class Child < Parent` reaches the lego view and the resolver's base walk
+
+No Ruby corpus has ever carried an inheritance edge. `captureBases` turns a class's base clause into
+inherit refs, which `buildGraph` reads into the CHA-lite name graph the resolver walks after a type's
+OWN method set misses — and Ruby reached none of it. The clause kind was never the problem
+(`superclass` is already in the table; Java's `extends` clause carries the same node name): the
+base-TYPE table held no node kind Ruby uses. Ruby names a base with `(constant)` — `class Child <
+Parent` — or `(scope_resolution)` — `class Derived < Space::Base`. Both are now read, under a
+language test rather than appended to the shared table, because both kind names are generic enough
+to mean something else in another grammar.
+
+This is floor (a) of the constant-receiver round above, lifted — and it is what held that round's
+gem numbers down, since a gem reaches its class methods up an `ActiveRecord::Base` hierarchy. Two
+things follow at once: `--lego` answers for Ruby, and `Child.build` resolves to `Parent::build`.
+
+A base is found by its final segment, like every language's, and then SCOPED by Ruby's own constant
+lookup: the superclass as written is resolved innermost-first along the enclosing `Module.nesting`,
+then at the top level (`::X` absolute), against every class and module the tree opens — the #57
+constant index, namespace wrappers included — and only the classes that ARE that constant are its
+base. So `class Rec < ActiveRecord::Base` is not an implementor of an in-tree `Space::Base`, `class
+Inner < Base` inside `module Beta` lands on `Beta::Base` alone, and a base the tree never opens adds
+nothing to the CHA name graph, so its class's walk cannot reach an unrelated in-tree `Base`. That
+join needs no new extraction: every `class X < Y` already carries its written superclass as the
+symbolic directive #57 records. The bases are read by constant rather than through `byName`, whose
+C-family decl/def collapse takes a body-less `class Base < StandardError; end` for a forward
+declaration and drops it next to any same-named class with a body.
+
+| corpus | `--lego` implementors | edges | ambiguous |
+| --- | --- | --- | --- |
+| activerecord 8.1.3 `lib`, `--lego=active_record/base.rb:Base` | 0 → 0 | 9,152 → 9,001 | 1,479 → 1,288 |
+| activerecord 8.1.3 `lib`, `--lego=active_record/encryption/errors.rb:Base` | 0 → 6 | — | — |
+| activesupport 8.1.3 `lib` | — | 3,912 → 3,915 | 434 → 422 |
+| actionpack 8.1.3 `lib` | — | 3,140 → 3,127 | 364 → 355 |
+| Rails app A, `--lego=ApplicationRecord` | 0 → 129 | 24,376 → 24,392 | 1,263 → 1,268 |
+| Rails app A, `--lego=app/controllers/application_controller.rb:ApplicationController` | 0 → 114 | — | — |
+| Rails app A, `--lego=app/controllers/admin/application_controller.rb:ApplicationController` | 0 → 19 | — | — |
+| Rails app B | — | 16,112 → 16,121 | 440 → 445 |
+
+`ambiguous` falls on the gems because a two-way split collapses into one pinned edge, which is also
+why `edges` falls where it does — 151 fewer on activerecord is 151 calls that stopped naming two
+candidates. No `ActiveRecord::Base` subclass lives in activerecord's own `lib`, so 0 is its answer;
+before the scoping, the final-segment key gave it 11, every one a collision (`ActiveJob::Base`, the
+encryption errors' own `Errors::Base`, the generators' `Base`). On the apps the scoping is what
+moves `ambiguous` UP: a call that reached an in-tree `Base` only through an out-of-tree one is no
+longer pinned there. App A's `self.data` in a model (`< ApplicationRecord < ActiveRecord::Base`) was
+pinned to a report handler's `data` through `Reports::ResolutionHandlers::Base`; it is an honest
+split now. App B's twelve `SomeModel.polymorphic_name` sites were each split three ways over the
+app's own `User::Base`, `Organization::Base` and `BankAccount::Base`; ActiveRecord answers them, and
+they mint nothing.
+
+Stated floors, each pinned by an arm of `test/rubyinheritcheck.sh`: a COMPUTED superclass (`class
+Dynamic < Struct.new( :a )`) is a call, not a name, and mints nothing — not even an edge to the
+call's receiver, which `captureBases`' one-level wrapper descent used to hand over; a MIXIN
+(`include Helper`) is NOT an inheritance edge in this round — it is a receiver-less call in the class
+BODY, the same shape and the same decision as PHP's in-body `use SomeTrait;`, and Ruby's ancestor
+chain really does hold included modules, so it is a stated residue rather than a claim that it is not
+inheritance; the base walk's METHOD probe is keyed by the immediate scope (`Base::m`), so two in-tree
+bases that share a final name still share one probe — `UsesAlpha.beta_make` pins `Beta::Base`'s
+method although `UsesAlpha < Alpha::Base`; and `Built = Class.new( Parent )`, with or without a block,
+makes `Built < Parent` at runtime but is a constant assignment whose value is a call, not a `class`
+open, so it mints no class and no edge — the same decision as a computed superclass. A class
+reopened with its superclass repeated (`class Reop < Parent … end` twice) is two symbols and one
+constant, and the lego view lists it once — app A's 129 was 130 before, one model counted twice
+because a stub reopens it with the superclass repeated. A fifth floor, of `queries/ruby/tags.scm` rather than of
+this round, is pinned beside them: a receiver-less call written with no parentheses and no arguments
+parses as `(identifier)`, not `(call)`, and is not a call site at all.
+
+The scoping is defensive in one place: an inherit reference with no superclass directive at its class
+open keeps the final-segment name rule. That fallback is now counted, and the graph gauge carries
+`ruby_bases_unscoped=N` when it was taken (absent at zero, defined in the full and compact legends).
+No well-formed input is known to reach it; `test/rubyinheritcheck.sh` drives it through a test seam.
+
+`--deps` is byte-identical on activerecord, and the default map is byte-identical on four Ruby-free
+corpora, with this repository's `--report` totals unchanged. `kParserVer` 129 in this release (carried as 97 → 99 on the PR, in two steps: 98 added the
+inheritance records; 99 dropped a computed superclass's stray receiver ref); the record layout is unchanged, and
+the `quality.h` mirror and `test/qschemetrip.hash` move with it.
+
+### Changed — `ripwire-quality-bar` gains a bounded debt fix loop
+
+A new section drives paying down EXISTING debt: pick the top `--quality-panel=strict` row, write the test first when
+nothing reaches the code, apply the table/playbook recipe for its shape, and prove it with the closed fix loop plus an
+anti-gaming rule (measure before committing, one fix per commit; `regressions="0"` and `acked=` not rising — a fix
+may not worsen any other kind); at most 3 fixes per session (a default, not a measured optimum).
+
+### Changed — `--quality-delta` error-masking also counts log-only and rethrow-only handlers
+
+`error-masking` counted only an empty handler (empty braces, `pass`, `...`, a comment-only body). It now also
+counts two shapes read off the same parse: **log-only**, a broad handler (one that catches everything or the
+root error type) whose body only logs or prints and never names the caught error, and **rethrow-only**, the
+only handler of its try re-throwing the error unchanged. Both are conservative: a log that names the error
+(`logger.exception`, `exc_info=`, the variable itself), a narrow handler, a wrapped re-throw, a re-throw
+ahead of a broader sibling handler and a C# `when` filter are not counted. The two shapes gate only in
+Python, where a hand-labelled sample measured precision 0.976 (40 of 41) and 1.000 (33 of 33); in every
+other language the row is printed as `sev="minor"` and never fires exit 2 (`kHandlerShapeGates`,
+`src/lintrules.h`; method and table in `docs/EVALS.md`). `kQSnapCacheScheme` 15 → 16.
+
+### Changed — `--metrics` prints one row per definition
+
+`--metrics` prints one row per definition. Same-name definitions in one file and scope (Java, C++ or C#
+overloads; a macro defined in several preprocessor branches) used to share ONE row that carried one
+body's `cx`/`ccx`/`loc`, so the other bodies' metrics were hidden and a join by function missed them.
+Each body now has its own row with `l=` (its start line; `"l"` in `--json`). The same split applies to a
+Python, JavaScript or Dart property's getter/setter pair and to a function defined in several `#ifdef`
+branches: each body is its own row. Bodyless declarations add
+no row: they fold into `overloads=` of the group's first body, so `rows + sum(overloads-1) = shown`
+still holds. A prototype plus its definition stays one row, now carrying the definition's metrics
+instead of the prototype's. Rows of code without same-name definitions are byte-identical, and the
+default map (no `--metrics`) keeps its collapse unchanged. The `docs/COMMANDS.md` `--metrics` example shows
+the split rows. Gate: `test/metricscheck.sh` (per-def arms).
+
+### Changed — `--impact` lists the blast radius nearest first, with its hop depth
+
+`--impact=SYM` (and the MCP `impact` twin) used to list the reach set in PageRank order with no depth, so a
+direct caller and a four-hop dependent looked alike, and the page window (40 rows by default) cut across every
+depth at once: a well-ranked distant dependent could push a direct caller off the page. Rows now run by hop
+depth first (1 = calls SYM directly), in the previous PageRank order within a depth, and the order is applied
+before the window cuts, so a cut drops the deepest rows first. Each XML row states its depth as `d=`, printed on
+the first row shown and wherever the depth changes (a row without it has the depth of the row above); the root
+carries `by_depth="1:n,2:n,…"`, which counts `reaches=` per depth, so a capped answer says which depth it stopped
+in. `--json` carries `"by_depth":[…]` and `"d"` on every row; `--format=columnar` a `<depth>` column. The set of
+symbols and every existing count are unchanged; with more than one depth in the reach set, which rows fill a cut
+page changes. Measured on this repository's own answers (four symbols, blast radius 4 to 204 symbols):
+`by_depth=` adds 27–45 B and `d=` 6–24 B, and the compact legend 127 B; `d=` on every row would have cost 240 B
+per page instead. Gate: `test/impactdepthcheck.sh`.
+
+### Changed — the versions this release moves, stated once
+
+`kParserVer` 124 → 129 (the function-literal fix takes 128; #338 and #325 take one more), `kCacheVersion` 25 → 27
+(the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
+placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
+
+### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality verbs measure it
+
+`const f = (x) => {…}`, `export const f = function(…) {…}`, a class-field arrow, an object-literal arrow, a CommonJS
+`module.exports.f = function`, Lua's `M.f = function(x) … end` / `local f = function` / `{ f = function … }`, and a
+Python class-body `f = lambda self, x: g(x)` were captured as definitions whose def node (the declaration, the
+assignment, the table) owns no `body:` field, so each read as a bodyless declaration: `--callees=f` and MCP
+`find_symbol` answered `bodyless_defs="1"` — false — and every verb that measures only bodied functions skipped them.
+A name bound to a function literal now owns that literal's body (one data table, `kFnLiteralBinding` in
+`src/ingest_relations.h`: the languages, the literal node kinds, the value-carrying fields, the positional value
+list and the cast/paren wrappers — JS, TS/TSX, Lua and Python today). Params, cx and nest read from the literal, so a
+typed const's annotation no longer lends the arrow its parameter count, a bare `x => …` counts its one parameter, and
+a declaration binding several names
+(`const a = () => …, b = () => …`, a Lua table of function fields) gives each name its own span, so its calls
+attribute to it. On a 583-file TypeScript agent repo: `--biggest-first`, `--ensemble` and `--quality-panel` measure
+2,083 functions (was 63), `--clones` sees 32,714 lines of function body (was 819); summed
+`bodyless_defs` over every function/method name 2,043 → 23 (the 23 are interface signatures and data keys). A real
+declaration (`declare function`, an overload signature, an interface member) stays bodyless.
+
+A bodied closure also competes for calls, so the resolver now knows where one can be named: a function bound inside
+another function's body (named or anonymous — a factory's `const start = () => …`, a `const run` in an `it()` callback,
+a nested `def`, in every language) records that function's span, and a call outside it cannot reach the closure by
+name. A nested function the language binds GLOBALLY is not such a closure and competes as before: PHP's nested
+`function`, a nested Bash function, Lua's non-`local` nested `function`/assignment, and a JS assignment-bound def
+(`exports.f = function`). A call the builtin-method gate or the external-name veto already answers (`d.get()`,
+`re.sub()`) resolves exactly as before. There the closure YIELDS to every candidate the call can name instead of competing: `tui.start()` on an imported
+class binds to the class's method even when another imported module holds a factory-local `start` (on main this
+declined for a nested `function start(){}`), and a helper's `run` parameter no longer binds to a `const run` inside
+another test's callback. It keeps its edge through a factory the caller imports when nothing reachable competes
+(`createTracker().stop()`). On the same repo: edges 3,894 → 3,851, `ambiguous` 24 → 0, tier-3 `declined` 55 → 129.
+Of the edge rows main had and this build does not, 41 were guesses — 40 `process.stdout`/`stderr.write()` calls bound
+to a same-named stub method and one `render()` of a dynamically imported library bound to an unrelated class method; both
+now decline — and 7 were splits that now bind one target: 5 over same-named closures, to the one in the caller's own
+function, and 2 over a declaration and its implementation, to the implementation. 8 calls into closures that had no
+body before are new edges. Still guessed, and stated: a call whose ONLY same-named definition is such a closure can
+bind to it (a parameter call included), and a closure returned by a factory and called through the result in the SAME
+file declines when an unrelated same-named definition exists elsewhere — a TS/JS call records no member bit, so the
+resolver cannot tell `provider.get()` from a bare `get()`. A Python function that declares `global g` and then defines
+a nested `def g` binds `g` globally, but it is read as local (the `global` statement is not read), so a bare `g()`
+elsewhere can bind to a same-named method in another file where main bound the nested def. Known limit, and a new false edge in this shape: when a
+returned closure is called by name (Python `py_incr = make_counter(); py_incr(1)`, or a JS `module.exports = { jsInit }`
+from an IIFE) and the caller ALSO imports another module that defines the same name, main split the call across both
+definitions; this build pins the other module's definition, because a lone import candidate the call can reach wins
+over a closure it cannot name. The fix is the same missing member bit. The index format changes with it: `kCacheVersion` 27, so a
+cache written by an earlier build re-parses once (27, not 26: a 26 cache from an intermediate build of this change holds
+wrong scope spans and is refused too). Gate: `test/fnliteralcheck.sh` (section 6 for the edges).
+
+`--naming-consistency` no longer proposes camelCase for a JSX component: a PascalCase function in a `.tsx`/`.jsx`
+file neither votes nor is flagged (JSX reads a lowercase tag as an intrinsic element), and the header counts it as
+`component_exempt=N`. It reads the extension, not the body: a component in a plain `.js`/`.ts` file still votes. On the
+same repo the bodied arrows bring 7 React components into the vote; all 7 are exempt (`component_exempt="7"`, 0
+flagged). Gate: `test/namingconsistencycheck.sh` arm 12.
 
 ### Fixed — `--flags` reads JavaScript and TypeScript `process.env` switches
 
@@ -395,185 +586,6 @@ print are unchanged.
 `test/recallpassagecheck.sh` and `test/impactpartitioncheck.sh` are executable now (mode 100755 like every
 other gate); direct `./test/…` invocation exits 126 no more.
 
-### Changed — `--quality-delta` error-masking also counts log-only and rethrow-only handlers
-
-`error-masking` counted only an empty handler (empty braces, `pass`, `...`, a comment-only body). It now also
-counts two shapes read off the same parse: **log-only**, a broad handler (one that catches everything or the
-root error type) whose body only logs or prints and never names the caught error, and **rethrow-only**, the
-only handler of its try re-throwing the error unchanged. Both are conservative: a log that names the error
-(`logger.exception`, `exc_info=`, the variable itself), a narrow handler, a wrapped re-throw, a re-throw
-ahead of a broader sibling handler and a C# `when` filter are not counted. The two shapes gate only in
-Python, where a hand-labelled sample measured precision 0.976 (40 of 41) and 1.000 (33 of 33); in every
-other language the row is printed as `sev="minor"` and never fires exit 2 (`kHandlerShapeGates`,
-`src/lintrules.h`; method and table in `docs/EVALS.md`). `kQSnapCacheScheme` 15 → 16.
-
-### Added — `--quality-delta` placeholder kind (the eleventh): stubs and TODOs a change adds
-
-A new kind, `placeholder`, lists the stubs and TODO comments a change added, per symbol: `todo!()` /
-`unimplemented!()`, Kotlin `TODO()`, `NotImplementedException`, a bare `raise NotImplementedError` as a free
-function's whole body, a throw/raise/panic/assert whose message says "not implemented", and a comment line
-opening with `TODO`/`FIXME` that names no issue. Every row is `origin="new-symbol"` and never gates; a
-change with no stub prints nothing new. `--help`, the MCP `quality_delta` description and the full legend
-now say eleven kinds.
-
-### Changed
-- `--metrics` prints one row per definition. Same-name definitions in one file and scope (Java, C++ or C#
-  overloads; a macro defined in several preprocessor branches) used to share ONE row that carried one
-  body's `cx`/`ccx`/`loc`, so the other bodies' metrics were hidden and a join by function missed them.
-  Each body now has its own row with `l=` (its start line; `"l"` in `--json`). Bodyless declarations add
-  no row: they fold into `overloads=` of the group's first body, so `rows + sum(overloads-1) = shown`
-  still holds. A prototype plus its definition stays one row, now carrying the definition's metrics
-  instead of the prototype's. Rows of code without same-name definitions are byte-identical, and the
-  default map (no `--metrics`) keeps its collapse unchanged. Gate: `test/metricscheck.sh` (per-def arms).
-
-### Added — `--mcp-tools=LIST`: the MCP server can list a subset of its tools
-
-`ripwire --mcp --mcp-tools=LIST` (and `--listen`) lists and answers only the named tools. LIST is a comma list of
-tool names and/or two profiles: `core` (explore, batch, from_trace, impact, uses, fetch_body, edit_check,
-quality_delta; the tools the server's own instructions name, plus fetch_body) and `full` (all 33, the default).
-Measured on this build with a bare stdio server, `tools/list` is 46,368 bytes for `full`, 13,834 for `core` and
-4,224 for `grep,impact,uses`; `initialize` grows from 1,035 to 1,252 bytes under `core` for the sentence that
-announces the subset. With no flag, or `--mcp-tools=full`, every byte the server sends is unchanged.
-
-A call to a tool the subset leaves out is refused (`-32602`) with the restart that enables it, and with the
-`batch` sub-query that answers it when `batch` is listed and serves that verb; `batch` keeps serving its own
-sub-verbs. The instructions text keeps only the hints whose tool is listed. An unknown name (with a near miss and
-the valid names), a repeated name or an empty name exits 1 before the server starts. `ripwire wrap AGENT
---mcp-tools=LIST` writes the flag into the printed server command for claude, cursor, windsurf, gemini and
-opencode, and prints a note to add it by hand for codex, openclaw and hermes. Gate: `test/mcptoolsubsetcheck.sh`.
-
-### Changed — `--impact` lists the blast radius nearest first, with its hop depth
-
-`--impact=SYM` (and the MCP `impact` twin) used to list the reach set in PageRank order with no depth, so a
-direct caller and a four-hop dependent looked alike, and the page window (40 rows by default) cut across every
-depth at once: a well-ranked distant dependent could push a direct caller off the page. Rows now run by hop
-depth first (1 = calls SYM directly), in the previous PageRank order within a depth, and the order is applied
-before the window cuts, so a cut drops the deepest rows first. Each XML row states its depth as `d=`, printed on
-the first row shown and wherever the depth changes (a row without it has the depth of the row above); the root
-carries `by_depth="1:n,2:n,…"`, which counts `reaches=` per depth, so a capped answer says which depth it stopped
-in. `--json` carries `"by_depth":[…]` and `"d"` on every row; `--format=columnar` a `<depth>` column. The set of
-symbols and every existing count are unchanged; with more than one depth in the reach set, which rows fill a cut
-page changes. Measured on this repository's own answers (four symbols, blast radius 4 to 204 symbols):
-`by_depth=` adds 27–45 B and `d=` 6–24 B, and the compact legend 127 B; `d=` on every row would have cost 240 B
-per page instead. Gate: `test/impactdepthcheck.sh`.
-
-### Added — RSpec's `described_class` is the class its example group names, so a spec's calls pin to the class under test (#338)
-
-`described_class` is how RSpec spells the class under test. Inside `RSpec.describe Calc do … end`,
-`described_class.m( 1 )` is `Calc.m( 1 )`. Its receiver is a bare identifier that no binding names, though, so every
-such call declined. A spec reached nothing through it, and `tested=`, `--seams` and `--test-gate` read the class under
-test as unreached by the spec written for it.
-
-The call now pins the way a written `Calc.m( 1 )` does (#267's constant-receiver arm). The rule is RSpec's own
-(rspec-core 3.13, `Metadata::ExampleGroupHash#described_class`): a group's described class is its first description
-argument, unless that is `nil` or a String, in which case it is the parent group's. So the innermost enclosing example
-group with a constant first argument answers. An example group is `describe` / `context` (and `feature`,
-`example_group` and the `x`- / `f`- spellings), called bare or on `RSpec`, with a block. A shared group
-(`shared_examples`, `shared_examples_for`, `shared_context`) stops the walk with no answer, because its body runs in
-whichever group includes it.
-
-Stated floors, each pinned by `test/rubydescribedclasscheck.sh`:
-- **(a)** A chained receiver (`described_class.new.m`) is untouched: #267's one-hop bound.
-- **(b)** A group with no constant (`describe "text"` at the top, `describe :sym`) names no class.
-- **(c)** A `describe` on any other receiver (`Docs.describe Calc do`) is not an RSpec example group.
-- **(d)** `subject`, the implicit `described_class.new`, is not modelled.
-- **(e)** A redefined `described_class` declines. A **method** of that name (any `:described_class` symbol, as in
-  `let( :described_class )`, or `def described_class`) declines every site in the file. A **local** of that name (an
-  assignment, `||=`, a multiple-assignment target, or a block or method parameter) declines the sites Ruby reads as
-  that local: after the binding in its own scope and in the blocks nested inside it, never in a sibling block, and
-  never across a `def`. The name is matched as a whole word, so `my_described_class = x` redefines nothing.
-- **(f)** A qualified describe is named by its final segment: `RSpec.describe Cask::Tab` reads as `Tab`. Where another
-  `Tab` defines the method too, the call splits between them. Where only the other `Tab` defines it, the call pins
-  there, unmarked. A written `Cask::Tab.m` behaves the same way.
-
-Measured with `--no-cache`, `--report` edge totals, `main` (3fcd515f) against this change:
-
-| Corpus | Edges |
-| --- | --- |
-| Rails app A | 26,649 → 26,755 (+106) |
-| Rails app B | 20,807 → 21,149 (+342) |
-| activerecord, activesupport, actionpack 8.1.3 `lib/`; this repo's `src/` | default map byte-identical |
-
-`kParserVer` → 125 (carried as 121 on the PR): `RawRef::recv` / `recvVar` change value for these call sites.
-The record layout is unchanged, so `kCacheVersion` stays 25.
-
-### Added — Ruby has inheritance edges: `class Child < Parent` reaches the lego view and the resolver's base walk
-
-No Ruby corpus has ever carried an inheritance edge. `captureBases` turns a class's base clause into
-inherit refs, which `buildGraph` reads into the CHA-lite name graph the resolver walks after a type's
-OWN method set misses — and Ruby reached none of it. The clause kind was never the problem
-(`superclass` is already in the table; Java's `extends` clause carries the same node name): the
-base-TYPE table held no node kind Ruby uses. Ruby names a base with `(constant)` — `class Child <
-Parent` — or `(scope_resolution)` — `class Derived < Space::Base`. Both are now read, under a
-language test rather than appended to the shared table, because both kind names are generic enough
-to mean something else in another grammar.
-
-This is floor (a) of the constant-receiver round above, lifted — and it is what held that round's
-gem numbers down, since a gem reaches its class methods up an `ActiveRecord::Base` hierarchy. Two
-things follow at once: `--lego` answers for Ruby, and `Child.build` resolves to `Parent::build`.
-
-A base is found by its final segment, like every language's, and then SCOPED by Ruby's own constant
-lookup: the superclass as written is resolved innermost-first along the enclosing `Module.nesting`,
-then at the top level (`::X` absolute), against every class and module the tree opens — the #57
-constant index, namespace wrappers included — and only the classes that ARE that constant are its
-base. So `class Rec < ActiveRecord::Base` is not an implementor of an in-tree `Space::Base`, `class
-Inner < Base` inside `module Beta` lands on `Beta::Base` alone, and a base the tree never opens adds
-nothing to the CHA name graph, so its class's walk cannot reach an unrelated in-tree `Base`. That
-join needs no new extraction: every `class X < Y` already carries its written superclass as the
-symbolic directive #57 records. The bases are read by constant rather than through `byName`, whose
-C-family decl/def collapse takes a body-less `class Base < StandardError; end` for a forward
-declaration and drops it next to any same-named class with a body.
-
-| corpus | `--lego` implementors | edges | ambiguous |
-| --- | --- | --- | --- |
-| activerecord 8.1.3 `lib`, `--lego=active_record/base.rb:Base` | 0 → 0 | 9,152 → 9,001 | 1,479 → 1,288 |
-| activerecord 8.1.3 `lib`, `--lego=active_record/encryption/errors.rb:Base` | 0 → 6 | — | — |
-| activesupport 8.1.3 `lib` | — | 3,912 → 3,915 | 434 → 422 |
-| actionpack 8.1.3 `lib` | — | 3,140 → 3,127 | 364 → 355 |
-| Rails app A, `--lego=ApplicationRecord` | 0 → 129 | 24,376 → 24,392 | 1,263 → 1,268 |
-| Rails app A, `--lego=app/controllers/application_controller.rb:ApplicationController` | 0 → 114 | — | — |
-| Rails app A, `--lego=app/controllers/admin/application_controller.rb:ApplicationController` | 0 → 19 | — | — |
-| Rails app B | — | 16,112 → 16,121 | 440 → 445 |
-
-`ambiguous` falls on the gems because a two-way split collapses into one pinned edge, which is also
-why `edges` falls where it does — 151 fewer on activerecord is 151 calls that stopped naming two
-candidates. No `ActiveRecord::Base` subclass lives in activerecord's own `lib`, so 0 is its answer;
-before the scoping, the final-segment key gave it 11, every one a collision (`ActiveJob::Base`, the
-encryption errors' own `Errors::Base`, the generators' `Base`). On the apps the scoping is what
-moves `ambiguous` UP: a call that reached an in-tree `Base` only through an out-of-tree one is no
-longer pinned there. App A's `self.data` in a model (`< ApplicationRecord < ActiveRecord::Base`) was
-pinned to a report handler's `data` through `Reports::ResolutionHandlers::Base`; it is an honest
-split now. App B's twelve `SomeModel.polymorphic_name` sites were each split three ways over the
-app's own `User::Base`, `Organization::Base` and `BankAccount::Base`; ActiveRecord answers them, and
-they mint nothing.
-
-Stated floors, each pinned by an arm of `test/rubyinheritcheck.sh`: a COMPUTED superclass (`class
-Dynamic < Struct.new( :a )`) is a call, not a name, and mints nothing — not even an edge to the
-call's receiver, which `captureBases`' one-level wrapper descent used to hand over; a MIXIN
-(`include Helper`) is NOT an inheritance edge in this round — it is a receiver-less call in the class
-BODY, the same shape and the same decision as PHP's in-body `use SomeTrait;`, and Ruby's ancestor
-chain really does hold included modules, so it is a stated residue rather than a claim that it is not
-inheritance; the base walk's METHOD probe is keyed by the immediate scope (`Base::m`), so two in-tree
-bases that share a final name still share one probe — `UsesAlpha.beta_make` pins `Beta::Base`'s
-method although `UsesAlpha < Alpha::Base`; and `Built = Class.new( Parent )`, with or without a block,
-makes `Built < Parent` at runtime but is a constant assignment whose value is a call, not a `class`
-open, so it mints no class and no edge — the same decision as a computed superclass. A class
-reopened with its superclass repeated (`class Reop < Parent … end` twice) is two symbols and one
-constant, and the lego view lists it once — app A's 129 was 130 before, one model counted twice
-because a stub reopens it with the superclass repeated. A fifth floor, of `queries/ruby/tags.scm` rather than of
-this round, is pinned beside them: a receiver-less call written with no parentheses and no arguments
-parses as `(identifier)`, not `(call)`, and is not a call site at all.
-
-The scoping is defensive in one place: an inherit reference with no superclass directive at its class
-open keeps the final-segment name rule. That fallback is now counted, and the graph gauge carries
-`ruby_bases_unscoped=N` when it was taken (absent at zero, defined in the full and compact legends).
-No well-formed input is known to reach it; `test/rubyinheritcheck.sh` drives it through a test seam.
-
-`--deps` is byte-identical on activerecord, and the default map is byte-identical on four Ruby-free
-corpora, with this repository's `--report` totals unchanged. `kParserVer` 129 in this release (carried as 97 → 99 on the PR, in two steps: 98 added the
-inheritance records; 99 dropped a computed superclass's stray receiver ref); the record layout is unchanged, and
-the `quality.h` mirror and `test/qschemetrip.hash` move with it.
-
 ### Fixed — `--scan-skills` scans a skill's bundled shell scripts as code, and discloses the code it cannot flow-scan (`.py` `.js` `.mjs` `.cjs` `.jsx` `.ts` `.mts` `.cts` `.tsx` `.rb` `.pl` `.pm` `.lua` `.php` `.ps1` `.psm1` `.psd1` `.bat` `.cmd`, a non-shell `#!`)
 
 `--scan-skills` reads every regular file under a skill, but ran each through the markdown fence tracker. So
@@ -615,11 +627,18 @@ A file an unmerged local branch holds that cannot be line-diffed (a binary or ov
 image) is listed as `<file … diffable="0"/>` with its counts at 0, but no legend defined `diffable=`: not the default
 (compact) legend, not `--legend=full`, not the MCP `stray_content` twin or the session dictionary. So
 `legendcoveragecheck` arm (G) went red in any clone whose local branches held such a file and green everywhere else.
-The compact legend (and with it the session dictionary: `entries=` 730 → 731) and the full legend now define it;
+The compact legend (and with it the session dictionary, one entry more) and the full legend now define it;
 the compact reading is present-only, so a default answer with no such row is byte-identical to before (the full
 legend gains one sentence). `legendcoveragecheck`
 gains arm (H), which builds that state in a throwaway repo — a text file and a binary on an unmerged branch — and
 requires the CLI default, `--legend=full` and the MCP twin to define every attribute they emit.
+
+### Documented — adding a language is data first; common mechanisms stay common
+
+`CONTRIBUTING.md` gains "Adding a language: common stays common", and `prompts/add-a-language.md` follows it: a new
+language is a `kLangTable` row, a `tags.scm` in the shared capture vocabulary and its `switch( Lang )` rows, plus small
+per-language pieces only where semantics truly differ; the shared scope, shadowing and import mechanisms are extended,
+never copied, and an unresolvable qualified call is counted as unresolved rather than guessed.
 
 ## [0.6.5] — 2026-09-27
 

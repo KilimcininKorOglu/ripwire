@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-30, train 22 (qd-masking-stubs, fn-literal-bodies, #338 and #325 merged): RE-DERIVED ONCE on the merged tree
+#   with UPDATE_GOLDEN=1 (hash 5d82542872…4b49c3d3e). kParserVer 124 -> 129 (fn-literal's 128, then ONE bump for #338 and
+#   #325, whose PRs carried 125 and 98/99), kCacheVersion 25 -> 27 (fn-literal), kQSnapCacheScheme 15 -> 16 (qd-masking);
+#   quality.h's mirrors move with them. The lane entries below record each lane's own pin.
 # 2026-09-30, lane/fn-literal-bodies-066 fix round 2: RE-DERIVED with UPDATE_GOLDEN=1 (hash c120c79284…1a5038). kCacheVersion
 #   26 -> 27, same record layout: the fnScopeStart/End VALUES changed (the scope search descends to the outer def node;
 #   globally-binding nested functions stay out), so a 26 blob written by the first fix round must be refused.
