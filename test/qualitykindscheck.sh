@@ -823,5 +823,63 @@ qd_pair stub_none a.py 'def keep():
 printf '%s' "$QD_OUT" | grep -q 'placeholder' && no "placeholder: a stub-free diff mentions placeholder: $QD_OUT" \
     || ok "placeholder: a stub-free diff carries no placeholder row or attribute"
 
+# 5l) 0.6.6 review: a log RECEIVER is a whole word, not a substring. isLogReceiver matched "log" anywhere in the last
+#     segment, so catalog / backlog / dialog read as loggers, and a Python handler that STORES the record
+#     (`except Exception: store.catalog.write(x)`) became a gating log-only row. The words log / logger / logging (first
+#     or last word of the segment, split on _ and camelCase) still qualify: logger.error and app_log.warning stay rows.
+LRB='def save_catalog(store, x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def save_backlog(x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def save_logged(x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def save_app_log(x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+'
+LRE='def save_catalog(store, x):
+    try:
+        risky()
+    except Exception:
+        store.catalog.write(x)
+
+def save_backlog(x):
+    try:
+        risky()
+    except Exception:
+        backlog.info(x)
+
+def save_logged(x):
+    try:
+        risky()
+    except Exception:
+        logger.error("save failed")
+
+def save_app_log(x):
+    try:
+        risky()
+    except Exception:
+        app_log.warning("save failed")
+'
+qd_pair logrecv m.py "$LRB" "$LRE"
+qd_none "5l python" error-masking save_catalog "store.catalog.write stores the record: catalog is not a logger"
+qd_none "5l python" error-masking save_backlog "backlog.info: backlog is not a logger"
+qd_has  "5l python" error-masking save_logged gating
+qd_has  "5l python" error-masking save_app_log gating
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
