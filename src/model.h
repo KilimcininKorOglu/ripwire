@@ -541,6 +541,11 @@ struct Symbol
     // no enclosing namespace at all. Shares internalLinkage's byte as a 3rd bit of the SAME bit-field —
     // Symbol has no pad byte left (the static_assert below holds unchanged; this is not a new byte).
     std::uint8_t  scopeRootsStd : 1 = 0;
+    // FUNCTION-LOCAL (every language; gate test/fnliteralcheck.sh §6): 1 ⇒ this FUNCTION's name is bound inside
+    // another function's body (ingest_names.h enclosingFunctionScope), and IngestResult::fnLocalScopes holds that
+    // function's byte span under this id. graph.h reachableByName reads it: a call outside the span cannot name this
+    // def, so it yields to every candidate that call can. A 4th bit of the same byte (no new byte; the assert holds).
+    std::uint8_t  fnLocal : 1 = 0;
     // EXTENT HONESTY (src/extentsuspect.h, gate test/extentcheck.sh): the containment rules this def's extent,
     // scope or recovered kind FAILED, as extent::kSuspect* bits (name/head/scope/error); 0 ⇒ every rule held.
     // Computed at LOAD from facts the cache already carries (the extents, the name byte, the `recovered`
@@ -586,6 +591,15 @@ struct Symbol
 // uint8_t saturating at 255 inherits humps' justification instead.
 static_assert( sizeof( Symbol ) == 64 + 2 * sizeof( std::string ),
                "Symbol size changed — verify the new field uses the smallest type + is grouped (SoA); see model.h" );
+
+// The byte span of the function whose body binds a function-local def's name (Symbol::fnLocal). A call site inside
+// [start, end) of the def's own file can name the def; any other site cannot (graph.h reachableByName).
+struct FnLocalScope
+{
+    NodeId        id    = kNoNode;
+    std::uint32_t start = 0;
+    std::uint32_t end   = 0;
+};
 
 // Is this symbol a DEFINITION rather than a forward DECLARATION? The house test is `endByte > sigEndByte` — a span that
 // runs past its signature owns a body — and every consumer that must tell the two apart routes through here: graph.h's
@@ -1258,6 +1272,8 @@ struct IngestResult
                                            // INTO THIS VECTOR (a FieldId, not a NodeId), kind == SymKind::Field, scope == the
                                            // owner, canonical id path::Owner::field. Sorted like symbols ((fileId, line, name,
                                            // startByte)); reachable only through graph.h's resolveFieldSelector.
+    std::vector<FnLocalScope> fnLocalScopes;   // one row per Symbol::fnLocal def, ascending id: the span of the function
+                                               // whose body binds its name (SoA side table: Symbol has no byte left for it)
     std::vector<Reference>   references;   // unresolved calls
     std::vector<Include>     includes;     // #include / import directives (physical dependencies)
     std::vector<ConstOpen>   constOpens;   // parser version 82: Ruby class/module opens, for the constant index (resolve.h)

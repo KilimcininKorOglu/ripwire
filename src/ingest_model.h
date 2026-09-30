@@ -450,6 +450,11 @@ inline void assignSymbols( IngestResult& result, std::vector<RawDef>& rawDefs, b
             s.sigEndByte   = 0;
             s.endByte      = 0;
         }
+        if( d.fnScopeEnd != 0 )   // a function-local def: its binding function's span, ascending id by construction
+        {
+            s.fnLocal = 1;
+            result.fnLocalScopes.push_back( FnLocalScope{ s.id, d.fnScopeStart, d.fnScopeEnd } );
+        }
         result.symbols.push_back( std::move( s ) );
     }
 

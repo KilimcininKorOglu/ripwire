@@ -98,6 +98,44 @@ if grep -qE '<s t="[^"]*" n=""' "$TMP/m"; then no "an unnamed symbol row appeare
 ( cd "$FIX" && "$BIN" . --no-cache >"$TMP/a" 2>/dev/null; "$BIN" . --no-cache >"$TMP/b" 2>/dev/null )
 if diff -q "$TMP/a" "$TMP/b" >/dev/null; then ok "default map byte-identical run-to-run"; else no "non-deterministic default map"; fi
 
+# ---- 6. edges: a FUNCTION-LOCAL def yields to what a call outside its function can name ----------------------------
+# A name bound inside another function's body (a factory's `const start = () => …`, a nested `function done()`, a
+# `const run` inside an it() callback) is reachable BY NAME only inside that function; outside it, only as a member of
+# the value the function returns (src/graph.h reachableByName). Once such a def has a body it competes for calls, so
+# the resolver must rank it below every candidate the call can name — without losing the returned-value edge.
+# Fixtures: test/fnliteraledgefix/import (typed receiver + imported factories) and .../shadow (a helper's PARAMETER).
+echo "=== 6. edges: function-local defs yield outside their function ==="
+EDGE="$ROOT/test/fnliteraledgefix"
+callees(){ ( cd "$EDGE/$1" && "$BIN" . --callees="$2" --no-cache --legend=compact 2>/dev/null ) | sed 's/></>\n</g'; }
+edge(){ # dir caller callee-name callee-path why
+    if callees "$1" "$2" | grep -qE "<s t=\"[^\"]*\" n=\"$3\" p=\"$4\""; then ok "$2 -> $3@$4 ($5)"; else no "$2: expected an edge to $3@$4 ($5) — got: $( callees "$1" "$2" | grep -E '^<callees |^<s t="' | tr '\n' ' ' )"; fi
+}
+noedge(){ # dir caller callee-name why
+    if callees "$1" "$2" | grep -qE "<s t=\"[^\"]*\" n=\"$3\""; then no "$2: must not bind $3 ($4) — got: $( callees "$1" "$2" | grep -E '^<s t="' | tr '\n' ' ' )"; else ok "$2 binds no $3 ($4)"; fi
+}
+# (a) the typed-receiver shape: `tui.start()` / `tui.done()` on an imported Tui, beside two imported factories whose
+#     local `start` (arrow const) and `done` (function declaration) are out of reach
+edge import cmd/use.ts:declCaller  start ui/tui.ts:4 "the imported class's method, not a factory-local closure"
+edge import cmd/use.ts:declCaller  done  ui/tui.ts:5 "function-declaration form of the same shape"
+edge import cmd/use.ts:arrowCaller start ui/tui.ts:4 "an arrow-const caller, same answer"
+h="$( callees import cmd/use.ts:declCaller | grep -oE '<callees [^>]*>' )"
+if printf '%s' "$h" | grep -q 'declined_calls='; then no "declCaller: a call was declined — $h"; else ok "declCaller: no declined call"; fi
+# (b) the returned-value shape stays bound: `createTracker().stop()` reaches the factory's `stop` through the imported
+#     module, not the same-named method in a file the caller never imports
+edge import cmd/use.ts:stopCaller stop agents/tracker.ts:5 "the returned member, reached through the imported factory"
+# (c) inside its own function a local def is in reach: `stop` calls its sibling closure `start`
+edge import agents/tracker.ts:stop start agents/tracker.ts:4 "a sibling closure in the same factory"
+# (d) the shadow shape: `run` is captureStdout's own PARAMETER — neither the same file's it()-callback `const run`
+#     nor a sibling test file's may answer it
+noedge shadow tests/a.test.ts:captureStdout run "its own parameter; the it() callback's const is out of reach"
+noedge shadow tests/b.test.ts:captureStdout run "its own parameter; another file's callback const is out of reach"
+# ...while the call INSIDE that it() callback does reach it (a file-scope caller: the callback is anonymous)
+if ( cd "$EDGE/shadow" && "$BIN" . --callers=tests/a.test.ts:run --no-cache --legend=compact 2>/dev/null ) | grep -q 'n="&lt;file-scope&gt;" p="tests/a.test.ts:1"'; then
+    ok "tests/a.test.ts:run is called from inside its it() callback"
+else
+    no "tests/a.test.ts:run lost its in-scope caller"
+fi
+
 echo
 if [ "$fail" = 0 ]; then echo "fnliteralcheck: ALL PASS"; else echo "fnliteralcheck: FAIL"; fi
 exit "$fail"

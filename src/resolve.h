@@ -6640,8 +6640,12 @@ struct Narrower
     //
     // Deterministic: `cands` is in symbol-id order (byName insertion order) and `fileIncludes[callerFileId]` is a
     // sorted id set, so the "which single file" decision and the emitted `out` are a pure function of the inputs.
+    //
+    // `minCands` (default 2): the smallest set this rule reads. graph.h passes 1 for the set a call can reach BY NAME
+    // after function-local defs were set aside (reachableByName) — there a lone survivor is not "already
+    // unambiguous": the name is shared with the set-aside defs, and only import evidence may pick it.
     bool rule3IncludeFile( const rw::SmallVec<NodeId, 2>& cands, std::uint32_t callerFileId,
-                           std::vector<NodeId>& out ) const
+                           std::vector<NodeId>& out, std::size_t minCands = 2 ) const
     {
         if( callerFileId >= fileIncludes.size() )
         {
@@ -6652,7 +6656,7 @@ struct Narrower
         {
             return false; // caller includes nothing → no narrow
         }
-        if( cands.size() < 2 )
+        if( cands.size() < minCands || cands.empty() )
         {
             return false; // already unambiguous → nothing for Rule 3 to do
         }

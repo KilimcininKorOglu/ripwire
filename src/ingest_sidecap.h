@@ -2118,6 +2118,14 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             // Internal linkage (model.h Symbol::internalLinkage): C and C++ only, read off defNode — the node that owns
             // the storage class and whose ancestors are the enclosing namespaces (ingest_names.h::cppInternalLinkage).
             d.internalLinkage = internalLinkageBit( le.lang, defNode, src );
+            // A FUNCTION bound inside another function's body records that function's span (ingest_names.h
+            // enclosingFunctionScope): graph.h reachableByName ranks it below every def a call outside it can name.
+            if( kind == SymKind::Function )
+            {
+                const FnScope fnScope = enclosingFunctionScope( defNode );
+                d.fnScopeStart = fnScope.start;
+                d.fnScopeEnd   = fnScope.end;
+            }
             if( le.lang == Lang::Cpp )                              // canonical scope (E#4): out-of-line `A::b` → "A", else enclosing class/namespace
             {
                 d.scope = qualifierOfDefinition( nameNode, src );   // `Box<T>::grow` (primary) → "Box"; a specialization keeps its id

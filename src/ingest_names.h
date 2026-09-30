@@ -1512,6 +1512,47 @@ inline bool inFileTestScope( TSNode defNode, std::string_view src, Lang lang ) n
     }
 }
 
+// ---- a FUNCTION-LOCAL definition: a name bound inside another function's body ----------------------------------
+// `const start = () => {…}` inside `createTracker = () => {…}`, a `def helper()` inside a `def`, a `local function`
+// inside a Lua function, a `const run = …` inside an `it( "…", () => {…} )` callback: the NAME is a binding of the
+// enclosing function's scope, so a call can reach it BY NAME only from inside that function — never through an
+// import, never from another function in the file. Outside it the def is reachable only as a VALUE the function hands
+// out (`return { start }` → `tracker.start()`). graph.h's resolve loop reads the span recorded here (RawDef::fnScope*,
+// model.h IngestResult::fnLocalScopes) to rank such a def BELOW every candidate a call can reach by name; see
+// graph.h reachableByName.
+//
+// Language-neutral by construction: the enclosing function is the first ancestor that isFunctionBoundaryKind (the ev
+// arena's own probe-verified list: a named function, a method, an arrow/lambda/closure/func literal, in every grammar),
+// and the walk stops — NOT local — at the first ancestor that is a MEMBER container (a class/impl/record body): a
+// method of a class declared inside a function is reached through its instance by dispatch, from anywhere. A
+// language joins by its grammar's spelling appearing in either list, never by a branch here. Stated floors: PHP binds
+// a nested named `function` globally once the outer one runs, and Lua a non-`local` nested `function g()`; both read
+// as local here (rare shapes; the graph rule only re-ranks, it never removes the last candidate).
+inline constexpr std::array<std::string_view, 5> kMemberContainerKinds = {
+    "class_body", "class_definition", "declaration_list", "field_declaration_list", "enum_body"
+};
+struct FnScope
+{
+    std::uint32_t start = 0;
+    std::uint32_t end   = 0;   // 0: the def is not function-local (a real function span always ends past byte 0)
+};
+inline FnScope enclosingFunctionScope( TSNode defNode ) noexcept
+{
+    for( TSNode n = ts_node_is_null( defNode ) ? defNode : ts_node_parent( defNode ); !ts_node_is_null( n ); n = ts_node_parent( n ) )
+    {
+        const char* t = ts_node_type( n );
+        if( namesNode( kMemberContainerKinds, t ) )
+        {
+            return {};
+        }
+        if( isFunctionBoundaryKind( t ) )
+        {
+            return { ts_node_start_byte( n ), ts_node_end_byte( n ) };
+        }
+    }
+    return {};
+}
+
 // ---- LB-E (r10 gitnexus harvest 2026-08-20): macro-defined test bodies ----------------------------------
 // `TEST_CASE( "title" ) { … }` — doctest/Catch2's block-forming test macros — cannot be expanded by
 // tree-sitter, so the source parses as TWO SIBLING nodes: an (expression_statement (call_expression …)
