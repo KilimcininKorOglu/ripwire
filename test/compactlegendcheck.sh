@@ -53,6 +53,11 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 FIX="$ROOT/test/fixture"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
+# HERMETIC HOME (0.6.6 review M2): the (U)/(UG) probe runs bare --scan-skills, which walks the skill homes under $HOME
+# (.claude/skills, .codex/skills). With the caller's HOME the answer — and its legend's byte count against the pin — was
+# whatever skills that machine had installed (a Codex install ships .py helpers), and the gate read the real home. Every
+# probe here now runs under an empty HOME of its own (clean-env.sh already drops CLAUDE_CONFIG_DIR / CODEX_HOME).
+export HOME="$TMP/home"; mkdir -p "$HOME"
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
@@ -484,10 +489,9 @@ probeFor()
 # shared sub-cap clause (+27 B), the present-only shown_symbols= row (+34 B) and "top 3" in the purpose line (+2 B). The
 # fixture has files with more than 3 symbols, so the probe is a cut page. No other schema moved (the --zoom bridge and
 # --impact importers_next= readings are present-only and ride neither probe).
-# RE-PINNED 2026-09-30 (train22 fixups, bundled-script scan): ripwire.scan-skills/v1 380 -> 520 (measured 506). The probe
-# runs --scan-skills with no DIR, so it scans the skill homes of the $HOME it runs under; a Codex install ships .py helpers
-# (~/.codex/skills/.system/imagegen/scripts), and the answer then carries the present-only code_not_flow_scanned= and its
-# reading (+137 B). The pin is taken from that case; a HOME with no code in its skill homes measures 369, as before.
+# RE-PINNED BACK 2026-09-30 (train22 fixups, review M2): ripwire.scan-skills/v1 520 -> 380 (measured 369). An earlier commit on
+# this branch pinned 520 from the developer's own HOME (a Codex install's .py helpers made the answer carry
+# code_not_flow_scanned=); the gate now runs under an empty HOME of its own, so the probe measures the same bytes everywhere.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
@@ -518,7 +522,7 @@ ripwire.skipped/v1               1510  1498
 ripwire.lint/v1                   340   324
 ripwire.lint-catalog/v1           220   204
 ripwire.external-surface/v1       250   234
-ripwire.scan-skills/v1            520   506
+ripwire.scan-skills/v1            380   369
 ripwire.owners/v1                 430   414
 ripwire.dead-code/v1              620   604
 ripwire.quality-delta/v1          940   928

@@ -97,6 +97,11 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative binary
 BASELINE="$ROOT/test/legendcoverage_baseline.txt"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
+# HERMETIC HOME (0.6.6 review M2): every run below inherits this environment, and a bare --scan-skills (or any verb that reads
+# the Claude/Codex homes) would otherwise answer from the caller's real HOME — different bytes on every machine, and a read of
+# the real home. Each run gets an empty HOME of its own.
+export HOME="$TMP/home"; mkdir -p "$HOME"
+unset CLAUDE_CONFIG_DIR CODEX_HOME
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
