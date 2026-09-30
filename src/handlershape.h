@@ -126,26 +126,41 @@ inline void statementsOf( TSNode body, std::vector<TSNode>& out )
 }
 
 // How deep mentionsName reads below the node it is handed — the handler walk's own pathological-depth bound
-// (walkHandlerShapes' frame.depth > 512), so a deeply nested log argument cannot recurse past it on a worker stack.
+// (walkHandlerShapes' frame.depth > 512).
 inline constexpr int kMentionsNameMaxDepth = 512;
 
-// mentionsName's recursion: true when a named leaf below n spells `name`, OR when the read reached depthLeft == 0
-// with named children still below — a subtree too deep to read answers "mentions it", which excludes the handler
-// from log-only: a miss, never a finding.
-inline bool mentionsNameBelow( TSNode n, std::string_view src, std::string_view name, int depthLeft )
+// mentionsName's walk: true when a named leaf below n spells `name`, OR when it meets a node with named children at
+// kMentionsNameMaxDepth levels down — a subtree too deep to read answers "mentions it", which excludes the handler from
+// log-only: a miss, never a finding. An explicit stack, like walkHandlerShapes: a recursive walk 512 levels deep
+// overflowed a 512 KiB worker-thread stack under AddressSanitizer's larger frames.
+inline bool mentionsNameBelow( TSNode n, std::string_view src, std::string_view name )
 {
-    if( depthLeft <= 0 )
+    struct Frame { TSNode node; int depth; };
+    std::vector<Frame> stack( 1, Frame{ n, 0 } );
+    while( !stack.empty() )
     {
-        return true;
+        const Frame frame = stack.back();
+        stack.pop_back();
+        if( ts_node_named_child_count( frame.node ) == 0 )
+        {
+            if( frame.depth > 0 && nodeTextOf( frame.node, src ) == name )
+            {
+                return true;
+            }
+            continue;
+        }
+        if( frame.depth >= kMentionsNameMaxDepth )
+        {
+            return true;
+        }
+        ChildCursor cursor( frame.node );
+        forEachNamedChild( frame.node, cursor.cur, [ & ]( TSNode c )
+        {
+            stack.push_back( { c, frame.depth + 1 } );
+            return true;
+        } );
     }
-    ChildCursor cursor( n );   // this frame's own: the body recurses
-    bool        found = false;
-    forEachNamedChild( n, cursor.cur, [ & ]( TSNode c )
-    {
-        found = ts_node_named_child_count( c ) == 0 ? nodeTextOf( c, src ) == name : mentionsNameBelow( c, src, name, depthLeft - 1 );
-        return !found;
-    } );
-    return found;
+    return false;
 }
 
 // Does any NAMED LEAF below n spell `name`? Identifiers in every grammar are leaves, so this reads an
@@ -162,7 +177,7 @@ inline bool mentionsName( TSNode n, std::string_view src, std::string_view name 
     {
         return !ts_node_is_null( n ) && ts_node_is_named( n ) && nodeTextOf( n, src ) == name;
     }
-    return mentionsNameBelow( n, src, name, kMentionsNameMaxDepth );
+    return mentionsNameBelow( n, src, name );
 }
 
 // The spellings that carry the CURRENT error without naming the caught identifier: Python's
