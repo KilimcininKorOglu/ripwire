@@ -13,6 +13,9 @@
 #   FIXTURE_UNREAD_FEATURE — declared, never tested                         -> ABSENT (a dead name, not a gate)
 #   flagsfix_wiringFlags_h — a plain include guard (valueless #define)      -> ABSENT (else every header is a gate)
 #   a getenv(computedName) — non-literal argument                           -> ABSENT (cannot be named)
+# 0.6.6 D5 (arm 12, a temp JS/TS corpus): `process.env.NAME` / `process.env["NAME"]` reads are the Node getenv —
+#   a comparison, a `??` default and a bare truthiness test each make a kind="env" gate; a read inside a comment or a
+#   string literal, and `const env = process.env` (no name), do not.
 #
 # Exit 0 = ALL PASS, non-zero = SOME FAILED.
 
@@ -190,6 +193,32 @@ PY
         fi
     fi
 fi
+
+# ── 12) 0.6.6 D5: JavaScript / TypeScript process.env reads are env gates ─────────────────────────────────────
+JS="$TMP/jsenv"; mkdir -p "$JS/src"
+cat >"$JS/src/client.ts" <<'TS'
+const POSTHOG_HOST = process.env.AISLOP_POSTHOG_HOST ?? "https://example.invalid";
+export const isDebug = (): boolean => process.env.AISLOP_TELEMETRY_DEBUG === "1";
+export function send(): void {
+    if (process.env["AISLOP_DRY_RUN"] === "1") {
+        return;
+    }
+    const env = process.env;
+    // process.env.COMMENTED_OUT is not a read
+    const s = "process.env.IN_STRING";
+    void env; void s; void POSTHOG_HOST;
+}
+TS
+printf 'export function run() {\n    if (process.env.FEATURE_X) {\n        return 1;\n    }\n    return 0;\n}\n' >"$JS/src/util.js"
+"$BIN" "$JS" --flags --no-cache --legend=full >"$TMP/js.xml" 2>/dev/null
+JSROOT="$( grep -o '<flags [^>]*>' "$TMP/js.xml" | head -1 )"
+case "$JSROOT" in *'env="4"'*) ok "12: four process.env reads are env gates (env=\"4\")";; *) no "12: expected env=\"4\" on the JS/TS corpus: $JSROOT";; esac
+for n in AISLOP_POSTHOG_HOST AISLOP_TELEMETRY_DEBUG AISLOP_DRY_RUN FEATURE_X; do
+    grep -q "<gate name=\"$n\" kind=\"env\"" "$TMP/js.xml" && ok "12: $n is a kind=\"env\" gate" || no "12: no kind=\"env\" gate for $n"
+done
+for n in COMMENTED_OUT IN_STRING; do
+    grep -q "<gate name=\"$n\"" "$TMP/js.xml" && no "12: $n (comment/string) must not be a gate" || ok "12: $n (comment/string) is not a gate"
+done
 
 [ $fail -eq 0 ] && echo "flagscheck: ALL PASS" || echo "flagscheck: FAILURES"
 exit $fail

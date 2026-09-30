@@ -63,6 +63,15 @@ from a partial index without disclosure. Deferred: layer 2 (the non-git crawl bu
 pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
 llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
 
+### Fixed — `--flags` reads JavaScript and TypeScript `process.env` switches
+
+A TypeScript repository whose switches are all `process.env.X === "1"` checks answered `gates="0" env="0"`. The env
+lane now reads `process.env.NAME`, `process.env["NAME"]` and `process.env['NAME']` in code as `kind="env"` gates
+(default unset), the same way it reads `getenv("NAME")` and Python's `os.environ`; a read inside a comment or a
+string, and `process.env` without a name (`const env = process.env`), are not gates. As for Python env gates,
+`regions=` and `loc=` stay 0: the guarded code of an env gate is not measured. The full legend names the new
+spelling. On the aislop TypeScript repository the verb now reports 21 env gates. Gate: `flagscheck` arm 12.
+
 ### Fixed — `--doc-drift`: three false drifts on a Python repository
 
 - A doc's `NAME = 15,000` was read as 15 and reported against the code's `15_000`. In prose, a 1–3 digit lead

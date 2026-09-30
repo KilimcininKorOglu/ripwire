@@ -14,7 +14,7 @@
 //   compile — `#ifndef NAME` immediately followed by `#define NAME VALUE` (the build-dark-then-flip idiom:
 //             the guard is what lets `-DNAME=1` win from the command line without editing the header).
 //   cmake   — `option( NAME "doc" ON|OFF )` in CMakeLists.txt / *.cmake.
-//   env     — `getenv("NAME")` / `std::getenv` / Python `os.environ.get` / `os.getenv`. Default: unset.
+//   env     — `getenv("NAME")` / `std::getenv` / Python `os.environ.get` / `os.getenv` / JS/TS `process.env.NAME`. Default: unset.
 //
 // ── the override rule (the actual bug this verb catches) ─────────────────────────────────────────────────
 // A name is routinely BOTH a header gate defaulting to 0 AND a CMake option defaulting to ON — the header
@@ -566,6 +566,50 @@ inline std::string_view envNameAt( std::string_view line, std::size_t at, std::s
     return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
 }
 
+// 0.6.6 D5: Node's environment read — `process.env.NAME`, `process.env["NAME"]`, `process.env['NAME']` — is the getenv of
+// JavaScript and TypeScript, and a TS repo whose switches are all `process.env.X === "1"` answered gates="0" env="0".
+// The name after the dot (or the one quoted literal in the brackets) must be identifier-shaped; `process.env` alone
+// (`const env = process.env`, a spread) names nothing and is not a read. Same CODE-only filter as the probes above.
+inline std::string_view processEnvNameAt( std::string_view line, std::size_t at )
+{
+    constexpr std::string_view probe = "process.env";
+    if( line.compare( at, probe.size(), probe ) != 0 )
+    {
+        return {};
+    }
+    std::size_t i = at + probe.size();
+    if( i < line.size() && line[i] == '.' )
+    {
+        std::size_t end = i + 1;
+        while( end < line.size() && identByte( (unsigned char)line[end] ) )
+        {
+            ++end;
+        }
+        const std::string_view name = line.substr( i + 1, end - i - 1 );
+        return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
+    }
+    if( i >= line.size() || line[i] != '[' )
+    {
+        return {};
+    }
+    ++i;
+    while( i < line.size() && std::isspace( (unsigned char)line[i] ) )
+    {
+        ++i;
+    }
+    if( i >= line.size() || ( line[i] != '"' && line[i] != '\'' && line[i] != '`' ) )
+    {
+        return {}; // computed key — cannot be named
+    }
+    const std::size_t close = line.find( line[i], i + 1 );
+    if( close == std::string_view::npos )
+    {
+        return {};
+    }
+    const std::string_view name = line.substr( i + 1, close - i - 1 );
+    return isIdentShaped( name, 1, kMaxEnvNameLen ) ? name : std::string_view{};
+}
+
 inline void harvestEnvReads( std::string_view line, std::uint32_t lineNo, FileHarvest& fh,
                              const LineSyntax& syn, bool& isInBlockComment )
 {
@@ -581,6 +625,11 @@ inline void harvestEnvReads( std::string_view line, std::uint32_t lineNo, FileHa
             fh.reads.push_back( FileHarvest::Read{ std::string( name ), lineNo } );
             fh.defs.push_back( FileHarvest::Def{ std::string( name ), "unset", lineNo, GateKind::Env } );
             return;
+        }
+        if( const std::string_view nodeName = processEnvNameAt( line, at ); !nodeName.empty() )   // 0.6.6 D5
+        {
+            fh.reads.push_back( FileHarvest::Read{ std::string( nodeName ), lineNo } );
+            fh.defs.push_back( FileHarvest::Def{ std::string( nodeName ), "unset", lineNo, GateKind::Env } );
         } } );
 }
 
@@ -1214,7 +1263,7 @@ inline void writeFlags( std::FILE* out, const FlagsResult& res, std::size_t maxS
 
     rw::emitRaw( out, "<!-- ripwire flags: what is BUILT but DARK here. Three gate patterns in one report: ifndef/define "
                        "header gates (kind=\"compile\"), CMake option() switches (kind=\"cmake\"), and getenv reads "
-                       "(kind=\"env\", default unset). dark=\"1\" means the default keeps the guarded code out of the build; "
+                       "(kind=\"env\", default unset; os.environ in Python, process.env in JavaScript/TypeScript). dark=\"1\" means the default keeps the guarded code out of the build; "
                        "regions/loc size what it turns off. When one name is BOTH a header gate and a CMake option the CMake "
                        "default wins (that is what the build passes) and the header shows as an also row. Lexical, not "
                        "preprocessed: this reports the in-repo default, never the value your build used. dark_gates on this root "
