@@ -24,8 +24,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "model.h"              // Lang enum
@@ -33,6 +35,7 @@
 #include "docparse.h"           // detail::readWholeFile — THE canonical whole-file byte read; never re-rolled
 #include "infra/namesplit.h"   // namesplit::stripQuotePair — THE canonical quote-strip; never re-rolled
 #include "infra/Diagnostics.h"  // DISCLOSE (no-op in release; the fprintf below is the visible line)
+#include "infra/tablelookup.h"   // findByField
 
 namespace rw
 {
@@ -1289,7 +1292,8 @@ inline bool errorMaskConfirmOnDisk( const IngestResult& ing, const AstMatch& m,
 
 // One error-masking hit: the suppressing block's file + start byte (so a caller can attribute it to the
 // enclosing symbol by span containment), the 1-based line, and the rule id. Shaped for span attribution,
-// not for direct emission — quality.h owns the delta accounting.
+// not for direct emission — quality.h owns the delta accounting. The same shape carries a PLACEHOLDER hit
+// (id "stub" or "todo"), which quality.h counts under its own kind.
 struct ErrorMaskHit
 {
     std::uint32_t fileId    = 0;
@@ -1298,50 +1302,72 @@ struct ErrorMaskHit
     std::string   id;
 };
 
-// Run the built-in error-masking table over the tree and return the surviving hits (empty-block filter
-// applied). Deterministic: astQuery sorts (file, startByte, tag); we keep that order and only drop
-// non-empty blocks for `emptyOnly` rules. Never throws (astQuery degrades per-file internally).
-inline std::vector<ErrorMaskHit> findErrorMasking( const IngestResult& ing )
+// ── which WIDENED error-masking shapes GATE, per language (noise control: only a measured-precise rule gates) ──
+// The kErrorMaskRules rows above (empty / pass / `...` / comment-only) always gate. The two handler shapes
+// from src/handlershape.h gate ONLY where a row below says so: their precision was hand-labelled on a sample
+// of real hits (docs/EVALS.md, "error-masking widened: log-only and rethrow-only") and a (shape, language)
+// pair gates only at a measured precision of 0.8 or better on at least 20 labelled hits. Every other pair —
+// including every language the sample could not reach — is REPORT-ONLY: its row is still printed, as
+// sev="minor", and never fires exit 2. A declarative table, so moving a pair across the line is one row.
+struct HandlerShapeGate
 {
-    std::vector<ErrorMaskHit> out;
-    if( ing.files.empty() )
-    {
-        return out;
-    }
+    Lang lang;
+    bool logOnlyGates;       // kShapeLogOnly gates in this language
+    bool rethrowOnlyGates;   // kShapeRethrowOnly gates in this language
+};
 
-    // Build one astQuery spec per rule, tagging with the rule index so the empty-block gate routes back.
-    std::vector<AstQuerySpec> specs;
-    specs.reserve( kErrorMaskRules.size() );
-    for( std::size_t r = 0; r < kErrorMaskRules.size(); ++r )
-    {
-        specs.push_back( { std::string( kErrorMaskRules[r].query ), std::to_string( r ) } );
-    }
+inline constexpr HandlerShapeGate kHandlerShapeGates[] = {
+    { Lang::Python, true, true },   // log-only 40 of 41 hand-labelled hits TRUE (0.976); rethrow-only 33 of 33 (1.000)
+};
 
-    // The @m block capture is the WIDEST node in each match (it encloses the inner @p property id), so it is
-    // the span astQuery reports for that match's block. But a match with a #eq? predicate also captures @p;
-    // filter to the block capture by picking, per (file,startByte) match, the row's node — astQuery emits one
-    // AstMatch per CAPTURE, so a swallow rule yields both a @p hit and a @m hit. We keep only the @m block by
-    // its emptiness signature: @p (a bare identifier "catch"/"then") is never "{}", and for non-emptyOnly
-    // Python rules @p does not exist, so every emitted capture is the block. Route by tag → rule.
+inline bool handlerShapeGates( std::string_view shape, Lang lang ) noexcept
+{
+    const HandlerShapeGate* row = findByField( kHandlerShapeGates, &HandlerShapeGate::lang, lang );
+    return row != nullptr && ( shape == kShapeLogOnly ? row->logOnlyGates : row->rethrowOnlyGates );
+}
+
+// Is this error-masking hit one of the classic always-gating rows, or a widened shape that gates in `lang`?
+inline bool errorMaskHitGates( std::string_view id, Lang lang ) noexcept
+{
+    return !( id == kShapeLogOnly || id == kShapeRethrowOnly ) || handlerShapeGates( id, lang );
+}
+
+// Both families --quality-delta counts per symbol, from ONE read and parse of the tree: the error-masking
+// hits (the kErrorMaskRules query rows plus the log-only / rethrow-only walk shapes) and the placeholder
+// hits (stub / todo). Each list is in (file path, startByte, id) order.
+struct QualityConstructHits
+{
+    std::vector<ErrorMaskHit> mask;
+    std::vector<ErrorMaskHit> placeholder;
+};
+
+// The rule index a query row was tagged with (its position in kErrorMaskRules), or kErrorMaskRules.size()
+// for a tag that is not one.
+inline std::size_t errorMaskRuleIndex( std::string_view tag ) noexcept
+{
+    std::uint64_t v = 0;
+    for( char c : tag )
+    {
+        if( c >= '0' && c <= '9' )
+        {
+            v = v * 10 + std::uint64_t( c - '0' );
+        }
+    }
+    return v < kErrorMaskRules.size() ? std::size_t( v ) : kErrorMaskRules.size();
+}
+
+// The query half: keep a row only when its rule's empty-block filter (and, for a comment-only block, the
+// raw-bytes confirm) says the block swallows. The @p identifier capture of the two promise rules is
+// dropped here too — a bare "catch"/"then" is never "{}".
+inline void keepErrorMaskQueryRows( const IngestResult& ing, std::vector<AstMatch>& rows, std::vector<ErrorMaskHit>& out )
+{
     // one-entry raw-bytes memo for the confirm below: astQuery already sorts (file, startByte, tag), so the
     // candidates of one file arrive together and a single slot is the whole cache.
     std::uint32_t rawFileId = ~std::uint32_t( 0 );
     std::string   rawBytes;
-
-    for( const AstMatch& m : astQuery( ing, specs ) )
+    for( const AstMatch& m : rows )
     {
-        std::size_t r = 0;
-        {
-            std::uint64_t v = 0;
-            for( char c : m.tag )
-            {
-                if( c >= '0' && c <= '9' )
-                {
-                    v = v * 10 + std::uint64_t( c - '0' );
-                }
-            }
-            r = std::size_t( v );
-        }
+        const std::size_t r = errorMaskRuleIndex( m.tag );
         if( r >= kErrorMaskRules.size() )
         {
             continue;
@@ -1349,25 +1375,53 @@ inline std::vector<ErrorMaskHit> findErrorMasking( const IngestResult& ing )
         const ErrorMaskRule& rule = kErrorMaskRules[r];
         if( rule.emptyOnly && !errorMaskBlockIsEmpty( m.text ) )
         {
-            continue; // the @p identifier capture is dropped here too (never "{}")
+            continue;
         }
-        if( rule.emptyOnly && !errorMaskBlockIsBareBraces( m.text )
-            && !errorMaskConfirmOnDisk( ing, m, rawFileId, rawBytes ) )
+        if( rule.emptyOnly && !errorMaskBlockIsBareBraces( m.text ) && !errorMaskConfirmOnDisk( ing, m, rawFileId, rawBytes ) )
         {
             continue;       // a comment OPENS the block but code follows it — that is a handler
         }
         out.push_back( { m.fileId, m.startByte, m.line, std::string( rule.id ) } );
     }
+}
 
-    // Deterministic order: (file path, startByte, id). astQuery already sorts (file, startByte, tag); re-sort
-    // on the final key so the id tiebreak is the rule id, not its numeric tag.
-    std::sort( out.begin(), out.end(), [ & ]( const ErrorMaskHit& a, const ErrorMaskHit& b )
-               {
-        if( ing.files[a.fileId] != ing.files[b.fileId] ) { return ing.files[a.fileId] < ing.files[b.fileId];
+// Deterministic order: (file path, startByte, id) — astQuery sorts (file, startByte, tag), and this re-sort
+// makes the tiebreak the rule id rather than its numeric tag.
+inline void sortConstructHits( const IngestResult& ing, std::vector<ErrorMaskHit>& hits )
+{
+    std::sort( hits.begin(), hits.end(), [ & ]( const ErrorMaskHit& a, const ErrorMaskHit& b )
+               { return std::tie( ing.files[a.fileId], a.startByte, a.id ) < std::tie( ing.files[b.fileId], b.startByte, b.id ); } );
 }
-        if( a.startByte != b.startByte ) { return a.startByte < b.startByte;
-}
-        return a.id < b.id; } );
+
+// Run the built-in error-masking table AND the handler/placeholder walk over the tree, in ONE shared read
+// and parse (astQueryGrouped: a spec group and an AstWalk::HandlerShapes group). The walk group's budget is
+// unbounded on purpose: a per-tag cap truncates a PATH-sorted list, so the two sides of a delta would be cut
+// at different files and a TODO past the cap would read as added or removed. Never throws (astQuery
+// degrades per file internally).
+inline QualityConstructHits findQualityConstructs( const IngestResult& ing )
+{
+    QualityConstructHits out;
+    if( ing.files.empty() )
+    {
+        return out;
+    }
+    std::vector<AstQuerySpec> specs;
+    specs.reserve( kErrorMaskRules.size() );
+    for( std::size_t r = 0; r < kErrorMaskRules.size(); ++r )
+    {
+        specs.push_back( { std::string( kErrorMaskRules[r].query ), std::to_string( r ) } );
+    }
+    std::vector<std::vector<AstMatch>> groups = astQueryGrouped( ing, { { &specs, 5000, nullptr },
+                                                                        { nullptr, std::numeric_limits<std::size_t>::max(), nullptr, AstWalk::HandlerShapes } } );
+    ASSUME( groups.size() == 2, "astQueryGrouped returns exactly one bucket per group it was given" );
+    keepErrorMaskQueryRows( ing, groups[0], out.mask );
+    for( const AstMatch& m : groups[1] )
+    {
+        const bool isPlaceholder = m.tag == kShapeStub || m.tag == kShapeTodo;
+        ( isPlaceholder ? out.placeholder : out.mask ).push_back( { m.fileId, m.startByte, m.line, m.tag } );
+    }
+    sortConstructHits( ing, out.mask );
+    sortConstructHits( ing, out.placeholder );
     return out;
 }
 

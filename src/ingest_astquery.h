@@ -666,14 +666,38 @@ inline void pat_walkTree( const pattern::PatternProgramSet* set, TSNode root, st
 // `grammar` is the language THIS file was parsed with: the pattern walk needs it because one --pattern
 // string compiles to a different node shape per grammar, and the wrong program against the right tree
 // would silently match nothing. The unreachable-code walk ignores it (its rule is kind-name based).
+// --quality-delta's handler/placeholder shapes (src/handlershape.h): the shape logic is a pure function of
+// (tree, bytes, language) and lives there; this adapter only turns its spans into rows, through the same
+// makeAstMatch cut every other walk uses. The tag is the shape name.
+inline void hs_walkTree( TSNode root, std::uint32_t fileId, std::string_view bytes, const std::vector<std::uint32_t>& nlOffsets, Lang lang,
+                         std::vector<AstMatch>& hits )
+{
+    std::vector<hshape::ShapeSpan> spans;
+    hshape::walkHandlerShapes( root, bytes, lang, spans );
+    for( const hshape::ShapeSpan& span : spans )
+    {
+        if( span.startByte < span.endByte && span.endByte <= bytes.size() )
+        {
+            hits.push_back( makeAstMatch( fileId, bytes, nlOffsets, span.startByte, span.endByte, std::string( span.tag ) ) );
+        }
+    }
+}
+
+// `lang` is the file's language: the handler-shape walk reads a handler differently per grammar, and
+// several grammars share node-type names (catch_clause is JS, Java, C# and C++).
 inline void runWalkGroups( const std::vector<AstQueryGroup>& groups, TSNode root, std::uint32_t fileId, std::string_view bytes,
-                           const std::vector<std::uint32_t>& nlOffsets, const TSLanguage* grammar, std::vector<std::vector<AstMatch>>& perGroupHits )
+                           const std::vector<std::uint32_t>& nlOffsets, const TSLanguage* grammar, Lang lang,
+                           std::vector<std::vector<AstMatch>>& perGroupHits )
 {
     for( std::size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex )
     {
         if( groups[groupIndex].walk == AstWalk::UnreachableCode )
         {
             ur_walkTree( root, fileId, bytes, nlOffsets, perGroupHits[groupIndex] );
+        }
+        else if( groups[groupIndex].walk == AstWalk::HandlerShapes )
+        {
+            hs_walkTree( root, fileId, bytes, nlOffsets, lang, perGroupHits[groupIndex] );
         }
         else if( groups[groupIndex].walk == AstWalk::Pattern )
         {
@@ -1140,7 +1164,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
                     if( anyWalk )
                     {
                         PROFILE_SCOPE_DESCRIBE( "astQuery/worker: built-in tree walk" );
-                        runWalkGroups( groups, root, std::uint32_t( fileId ), bytes, nlOffsets, g, tHits[t] );
+                        runWalkGroups( groups, root, std::uint32_t( fileId ), bytes, nlOffsets, g, le->lang, tHits[t] );
                     }
                     if( !hasQueries )
                     {

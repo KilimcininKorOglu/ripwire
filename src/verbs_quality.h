@@ -517,7 +517,7 @@ std::optional<int> refuseForeignAckSelection( const rw::Config& cfg, const rw::q
 // this prose either: several gates grep the header counters (regressions=, gating=, stale=) and a
 // quoted example here would be matched ahead of the real one.
 
-// Always. The verb, the ten kinds, the three axes, the exit predicate, and the two counters that are
+// Always. The verb, the eleven kinds, the three axes, the exit predicate, and the two counters that are
 // printed even at zero. Every row in the document — finding rows and stale-ack rows alike — carries
 // kind=, so it is defined here rather than in either conditional row dictionary.
 // P8 (L7): the bar= literals in emitRow mirror quality.h's constants — pinned here so a moved bar cannot drift the row
@@ -527,9 +527,10 @@ static_assert( rw::quality::kCcxBar == 15 && rw::quality::kLocBar == 60 && rw::q
 inline constexpr const char* kQdLegendCore =
     "<!-- ripwire quality-delta: only what a change made WORSE against the floor baseline= names below. "
     "Descriptive: weigh and fix the real ones, do not game the number (a wrong abstraction beats a low "
-    "score). TEN KINDS, and kind= on every row names which one: complexity over the ccx bar, verbosity "
+    "score). ELEVEN KINDS, and kind= on every row names which one: complexity over the ccx bar, verbosity "
     "(LOC), nesting, params, duplication, dead-code, api-surface (new public contract drift), "
-    "error-masking, short-horizon-churn, new-clone-of-reused-helper. THREE independent axes, in this "
+    "error-masking, short-horizon-churn, new-clone-of-reused-helper, placeholder (added stub/TODO). "
+    "THREE independent axes, in this "
     "order: (1) acked findings are suppressed entirely (acked= counts them); (2) ORIGIN — a finding on a "
     "symbol that EXISTED at the baseline is preexisting-worse (no origin attribute), one that exists only "
     "because the code is NEW carries origin=\"new-symbol\"; (3) MATERIALITY — a small numeric delta is "
@@ -621,7 +622,7 @@ inline constexpr const char* kQdBaseRefPair =
     "compared two COMMITTED trees and no sidecar was read, written or deleted. base_ref= and target_ref= "
     "are the two RESOLVED shas, at full length because a wave number gets quoted into handoffs, and they "
     "are the anchor, so at= is omitted. churn= is reported unavailable there, which is the honest statement "
-    "that one of the ten kinds, short-horizon-churn, cannot be measured at all in that form: it needs git "
+    "that one kind, short-horizon-churn, cannot be measured at all in that form: it needs git "
     "history at the tree being judged, and both trees are materialized OUT of the repo into temp dirs. Its "
     "silence in such a report is not evidence that nothing churned. ";
 // #228 — emitted only when head_basis= is on the root, i.e. only when the identity basis produced the floor.
@@ -711,6 +712,19 @@ inline constexpr const char* kQdRowLegend =
     "Every row the header's gating= counter counts also carries a gating attribute "
     "set to 1 — marked positively, never by the ABSENCE of sev or origin. ";
 
+// Emitted only when a placeholder row is in the document: why every one of them carries origin="new-symbol",
+// including one that landed in a symbol that existed at the baseline.
+inline constexpr const char* kQdPlaceholderLegend =
+    "placeholder is new-symbol by construction: the finding is the stub or TODO the change added, never "
+    "something that existed getting worse, so it never gates. ";
+
+// Emitted only when an error-masking row is sev="minor" — the one way that kind is ever minor, so the
+// sentence explains a state the reader is looking at and costs nothing on any other report.
+inline constexpr const char* kQdMaskReportOnlyLegend =
+    "An error-masking row is sev=\"minor\" when every construct it added is a widened shape that does not "
+    "gate in that language yet: log-only (a broad handler whose body only logs and never names the error) "
+    "or rethrow-only (the sole handler re-throws the error unchanged). ";
+
 // Emitted only when a clone-family row (duplication / new-clone-of-reused-helper) is in the document,
 // which is what puts members=, tokens= and idiom= on a first screen. A clean tree has none.
 inline constexpr const char* kQdCloneLegend =
@@ -798,6 +812,14 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
         }
         return false;
     };
+    const auto anyMinorMaskRow = [] ( const std::vector<rw::quality::Regression>& v )
+    {
+        return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "error-masking" && r.isMinor; } );
+    };
+    const auto anyPlaceholderRow = [] ( const std::vector<rw::quality::Regression>& v )
+    {
+        return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "placeholder"; } );
+    };
 
     std::fputs( kQdLegendCore, stdout );
 
@@ -872,6 +894,14 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
         if( anyCloneRow( p.rows ) || anyCloneRow( p.disclosedRows ) )
         {
             std::fputs( kQdCloneLegend, stdout );
+        }
+        if( anyMinorMaskRow( p.rows ) || anyMinorMaskRow( p.disclosedRows ) )
+        {
+            rw::emitRaw( stdout, kQdMaskReportOnlyLegend );
+        }
+        if( anyPlaceholderRow( p.rows ) || anyPlaceholderRow( p.disclosedRows ) )
+        {
+            rw::emitRaw( stdout, kQdPlaceholderLegend );
         }
     }
 

@@ -108,9 +108,13 @@ mcpCount="$( "$BIN" wrap codex --force 2>/dev/null | sed -n 's/.*(\([0-9][0-9]*\
 grep -q "$mcpCount MCP verbs" "$MCPSKILL" \
     && ok "MCP skill matches the binary's $mcpCount MCP verbs" \
     || no "MCP skill does not match the binary's $mcpCount MCP verbs"
-grep -q '10 kinds' "$QUAL" \
-    && ok "quality skill documents the current 10 quality kinds" \
-    || no "quality skill still has a stale quality-kind count"
+# The kind count is read from the binary's own --help line, like the MCP count above, so adding a kind
+# moves this arm with the binary instead of leaving a literal behind to go stale.
+kindCount="$( "$BIN" --help=all 2>/dev/null | sed -n 's/.*--quality-delta .*across \([0-9][0-9]*\) kinds.*/\1/p' | head -1 )"
+[ -n "$kindCount" ] || kindCount=0
+[ "$kindCount" -gt 0 ] && grep -q "$kindCount kinds" "$QUAL" \
+    && ok "quality skill documents the binary's $kindCount quality kinds" \
+    || no "quality skill does not match the binary's quality-kind count ($kindCount)"
 grep -q 'all 21 MCP verbs' "$ROOT/src/wrap.h" \
     && no "wrap source retains the stale 21-verb comment" \
     || ok "wrap source does not hardcode a stale MCP verb count"

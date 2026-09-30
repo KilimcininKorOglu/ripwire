@@ -185,6 +185,7 @@ extern "C"
 #include "ingest_crawl.h"
 #include "ingest_cache.h"
 #include "ingest_metrics.h"
+#include "handlershape.h"   // --quality-delta's handler/placeholder shapes — AstWalk::HandlerShapes rides the shared file walk (reads nodeTextOf above)
 #include "ingest_relations.h"
 #include "ingest_jsimports.h"
 #include "ingest_docs.h"

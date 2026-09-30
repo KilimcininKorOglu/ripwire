@@ -2,7 +2,7 @@
 name: ripwire-quality-bar
 description: >
   Code QUALITY of what YOU just wrote, before you commit or say 'done', or verifying a cleanup:
-  --quality-delta lists what got WORSE in 10 kinds and exits 2 only when pre-existing code got
+  --quality-delta lists what got WORSE in 11 kinds and exits 2 only when pre-existing code got
   materially worse; which restructuring a measured shape (humps/deep, a tangle) calls for. Merge
   safety → change-check. Even a single-line leaf fix runs it.
 allowed-tools: Bash, Read
@@ -132,7 +132,7 @@ something always fires.)
 2. **Make your change.**
 3. **Measure the delta** — `ripwire <dir> --quality-delta --legend=compact` → only the regressions you
    introduced, across the
-   10 kinds in the table below. Each emits `<r kind="…" sym=… was=… now=…>` (`members=` for duplication).
+   11 kinds in the table below. Each emits `<r kind="…" sym=… was=… now=…>` (`members=` for duplication).
    Test-fixture dirs are exempt from `dead-code`; `short-horizon-churn` ignores your own current edit and
    exempts brand-new symbols/markdown/fixtures. Two exemptions are DISCLOSED on the report rather than
    silent, and both change how you read a zero: a symbol defined by a self-registering test/benchmark
@@ -254,15 +254,17 @@ Thresholds/definitions are the catalog in [`quality-metrics.md`](quality-metrics
 | `duplication` | `--clones` | reuse the existing body — Rule of Three; wrong abstraction beats two honest copies |
 | `dead-code` | — | delete what you orphaned, or wire the caller you forgot |
 | `api-surface` (new public symbol) | `--callers=SYM` | intentional? keep it. Accidental? narrow it (should've been file-local) |
-| `error-masking` (empty catch / bare `except: pass` / swallowed `.catch`) | `--expand=SYM` | handle, log, or rethrow — AI code adds these +47% vs human (GitClear 2026) |
+| `error-masking` (empty catch / bare `except: pass` / swallowed `.catch`; a broad handler that only logs and never names the error; a sole handler that re-throws it unchanged) | `--expand=SYM` | handle it, log the error itself, or drop the try — AI code adds these +47% vs human (GitClear 2026). The two widened shapes gate only in Python (measured precision); elsewhere `sev="minor"` |
 | `short-horizon-churn` | `--hotspots` · `git log -p <file>` | rewritten again inside 2 weeks (+15% AI) — is the design unsettled? consolidate |
 | `new-clone-of-reused-helper` | `--clones` · `--callers=HELPER` | call the existing well-reused helper — reuse is declining in AI code (GitClear) |
+| `placeholder` (an added stub or TODO: `todo!()`, `NotImplementedException`, a "not implemented" throw/panic, a TODO/FIXME naming no issue) | `--expand=SYM` | finish it, or name the issue that tracks it — never gates, but do not call the work done over it |
 
-These 10 kinds aren't a generic lint list — each targets a large-N-validated agent-code degradation mode
+These 11 kinds aren't a generic lint list — ten target a large-N-validated agent-code degradation mode (the
+eleventh, `placeholder`, is an honesty check on your own "done")
 (verbosity, structural erosion, smell rate, contract drift; passing tests ≠ clean design). Numbers + why the
 loop must be continuous, not a one-time prompt → [`quality-metrics.md`](quality-metrics.md).
 
-**Read the Fix column as DIRECTION, not a computed answer.** None of these 10 kinds has a corpus-derivable
+**Read the Fix column as DIRECTION, not a computed answer.** None of these 11 kinds has a corpus-derivable
 correct replacement — "split the fn" names a move, not a target function shape, and you still judge it. That
 is deliberate: complexity, coupling, and colocation don't have a computable right answer the way a naming
 CONVENTION does. The one exception in this whole tool is `--naming-consistency` (→ **ripwire-fresh-eyes**),
