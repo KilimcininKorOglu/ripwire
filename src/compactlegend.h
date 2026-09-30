@@ -654,6 +654,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "candidates", "candidates=N: multi-token styled names scanned", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     { "decided", "decided=N: groups whose leading style cleared both the sample and agreement floors", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     { "flagged", "flagged=N: off-convention names in decided groups (the f rows)", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
+    { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (JSX components), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     // path: src/verbs_navigate.h (the <path> root emit)
     { "from_p", "from_p=/to_p=: the definitions from= and to= were bound to", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_p=
     { "from_defs", "from_defs=/to_defs=: definitions of each name, all searched; above 1, qualify file:name", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_defs=
