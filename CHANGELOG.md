@@ -63,6 +63,15 @@ from a partial index without disclosure. Deferred: layer 2 (the non-git crawl bu
 pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
 llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
 
+### Fixed — `--from-trace` no longer pairs one file's line with another file's definition in `next=`
+
+When the innermost frame's function name bound to a definition in a different file than the frame's own path
+(`resolved_by="name"`), `next=` spliced the frame's line onto the definition's file: a frame at
+`src/verbs_doctor.h:304` naming `escapeXml` produced `next="--slice=@src/serialize.h:304"`, a line inside another
+function. That case now hands over the definition's handle, `next="--expand=src/serialize.h:escapeXml"`, and marks
+the root `line_mismatch="1"` (present only then; defined in both legends). A frame in the definition's own file
+keeps `--slice=@FILE:LINE` byte-identically, the MCP `from_trace` twin included. Gate: `nextverbcheck` arm (5).
+
 ### Fixed — `--connect` searches a many-definition terminal from the definition that joins
 
 `--connect` resolved each terminal to one definition, the lowest id, before searching. On this repository

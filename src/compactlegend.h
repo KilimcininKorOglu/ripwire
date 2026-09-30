@@ -1117,6 +1117,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "rank", "rank=N: frame order, innermost in-corpus first; p= is the trace's own path:line, defs are sigs l=", true, "frame", MapHeaderRead::No, {}, "from-trace" },
     { "resolved_by", "resolved_by=name|line: bound by the frame's own name, else by the def enclosing its line", true, "frame", MapHeaderRead::No, {}, "from-trace" },
     { "innermost", "innermost=1: the innermost in-corpus frame (rank 1); its full body is served", true, "frame", MapHeaderRead::No, {}, "from-trace" },
+    // 0.6.6 D2: present-only — the root marker beside a next= that names a def handle instead of a spliced line
+    { "line_mismatch", "line_mismatch=1: the innermost frame's name bound to a def in another file; next= names the def, not a line", true, "ctx", MapHeaderRead::No, {}, "from-trace" },
     // batch: src/mcpverbs.h (the <batch>/<q> emit)
     { "verb", "i=/verb=/ok=: sub-query index, its verb text, 1 answered (payload in CDATA) or 0 failed", true, "q", MapHeaderRead::No, {}, "batch" },   // also defines i= ok=
     { "err", "err=: why an ok=0 sub-query failed; no payload follows", true, "q", MapHeaderRead::No, {}, "batch" },
