@@ -214,7 +214,7 @@ printf 'export function run() {\n    if (process.env.FEATURE_X) {\n        retur
 JSROOT="$( grep -o '<flags [^>]*>' "$TMP/js.xml" | head -1 )"
 case "$JSROOT" in *'env="4"'*) ok "12: four process.env reads are env gates (env=\"4\")";; *) no "12: expected env=\"4\" on the JS/TS corpus: $JSROOT";; esac
 for n in AISLOP_POSTHOG_HOST AISLOP_TELEMETRY_DEBUG AISLOP_DRY_RUN FEATURE_X; do
-    grep -q "<gate name=\"$n\" kind=\"env\"" "$TMP/js.xml" && ok "12: $n is a kind=\"env\" gate" || no "12: no kind=\"env\" gate for $n"
+    if grep -q "<gate name=\"$n\" kind=\"env\"" "$TMP/js.xml"; then ok "12: $n is a kind=\"env\" gate"; else no "12: no kind=\"env\" gate for $n"; fi
 done
 for n in COMMENTED_OUT IN_STRING; do
     grep -q "<gate name=\"$n\"" "$TMP/js.xml" && no "12: $n (comment/string) must not be a gate" || ok "12: $n (comment/string) is not a gate"

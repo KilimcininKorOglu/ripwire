@@ -102,6 +102,7 @@
 #include "ingest.h"             // isSkippedCrawlDir — the SHARED crawl denylist, for the on-disk existence probe
 #include "mention.h"            // mention_detail::pathSuffixMatches — the whole-segment suffix match
 #include "workspace.h"          // wsdetail::segmentsOf
+#include "infra/sortutil.h"     // svLess — the language-builtin tables sort and search in byte order, never through operator<
 #include "smallvec.h"           // rw::SmallVec — small basename→path lists
 #include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 #include "gitstamp.h"           // r26-stamp Task A: gitstamp::stampAt — the at="<sha>[+dirty]" root anchor
@@ -1912,14 +1913,14 @@ inline constexpr std::string_view kJsTsBuiltinNames[] = {
     "setInterval", "setTimeout", "structuredClone",
 };
 
-static_assert( std::is_sorted( std::begin( kPythonBuiltinNames ), std::end( kPythonBuiltinNames ) ), "kPythonBuiltinNames must stay sorted (binary_search)" );
-static_assert( std::is_sorted( std::begin( kJsTsBuiltinNames ), std::end( kJsTsBuiltinNames ) ), "kJsTsBuiltinNames must stay sorted (binary_search)" );
+static_assert( std::is_sorted( std::begin( kPythonBuiltinNames ), std::end( kPythonBuiltinNames ), sortutil::svLess ), "kPythonBuiltinNames must stay sorted (binary_search)" );
+static_assert( std::is_sorted( std::begin( kJsTsBuiltinNames ), std::end( kJsTsBuiltinNames ), sortutil::svLess ), "kJsTsBuiltinNames must stay sorted (binary_search)" );
 
 inline bool isLanguageBuiltinName( bool hasPython, bool hasJsTs, std::string_view name ) noexcept
 {
     const auto listed = []( std::span<const std::string_view> table, std::string_view n ) noexcept
     {
-        return std::binary_search( table.begin(), table.end(), n );
+        return std::binary_search( table.begin(), table.end(), n, sortutil::svLess );   // portablebuildcheck #6: never the default sv comparator
     };
     return ( hasPython && listed( kPythonBuiltinNames, name ) ) || ( hasJsTs && listed( kJsTsBuiltinNames, name ) );
 }

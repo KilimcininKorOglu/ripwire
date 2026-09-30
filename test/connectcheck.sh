@@ -206,7 +206,7 @@ printf '%s' "$OUT10B" | grep -q 'ambiguous_terminal="main"' \
     && ok "10b two equally-joining mains: ambiguous_terminal=\"main\" on the root" || no "10b tie not disclosed: $OUT10B"
 printf '%s' "$OUT10B" | grep -q '<unconnected radius=' && no "10b tie case must still connect: $OUT10B" || ok "10b tie case connects"
 OUT10C="$( "$BIN" "$MD" --no-cache --connect=main,island2 2>/dev/null )"
-printf '%s' "$OUT10C" | grep -q '<unconnected radius=' && ok "10c no definition of main joins island2: <unconnected> kept" || no "10c expected <unconnected>: $OUT10C"
+if printf '%s' "$OUT10C" | grep -q '<unconnected radius='; then ok "10c no definition of main joins island2: <unconnected> kept"; else no "10c expected <unconnected>: $OUT10C"; fi
 printf '%s' "$OUT10C" | grep -q 'ambiguous_terminal=' && no "10c an all-unconnected name must not claim ambiguous_terminal=" || ok "10c no ambiguous_terminal= when nothing joins"
 if command -v python3 >/dev/null 2>&1; then
     CMSG10='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"connect","arguments":{"path":"'"$MD"'","symbols":["main","leaf"]}}}'
