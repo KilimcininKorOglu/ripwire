@@ -1749,7 +1749,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
         // 0.6.6 command sweep: on a depth-1 clone every file came back bf="1" share="1.00" from ONE squashed commit,
         // with at='s +shallow suffix the only hint. The shares are still what the fetched history says, so the answer
         // is QUALIFIED rather than refused: shallow="1" on the root, and its clause in the legend. One probe.
-        const bool owShallow = anyMinedRootShallow( root, multiRoot, ws, onlyFileId != UINT32_MAX ? ing.fileRoot[ onlyFileId ] : UINT32_MAX );
+        const bool owShallow = anyMinedRootShallow( root, multiRoot, ws, ( multiRoot && onlyFileId != UINT32_MAX ) ? ing.fileRoot[ onlyFileId ] : UINT32_MAX );   // fileRoot is filled on a multi-root run only
         // XML comments forbid a literal "--" (G4): the flag is spelled "detail=1" below, not "--detail=1".
         rw::emitTo( stdout, "<!-- ripwire owners: recency-weighted author ownership (half-life=6mo). "
                      "bf=1 = one person holds >80% of weighted commits (bus-factor risk); "
