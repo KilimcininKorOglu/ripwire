@@ -55,7 +55,8 @@ restarted (a floor: on macOS the allocator may keep freed pages, so the re-read 
 trimming the allocator is deferred). The trip seam `RIPWIRE_TEST_MEMGUARD=crawl:N|pressure:N|parse:N|request:N` is additive — it only adds a
 trip and never replaces a real reading, so it can make a run stricter, never unguarded — and it and
 `RIPWIRE_MAX_MEMORY` are cleared by `test/lib/clean-env.sh`. Gate: `test/memguardcheck.sh` (B)–(D), including a
-real-footprint arm (this repo's `src/` under `--max-memory=64M`), a warm-cache arm and a two-run snapshot arm.
+real-footprint arm (a generated tree whose parsed facts sit far over `--max-memory=64M`), a warm-cache arm and a
+two-run snapshot arm.
 Known floors: the cgroup limit read is the v2 leaf `memory.max` only — a limit on an ancestor (a systemd slice's
 `MemoryMax`) and cgroup v1 fall back to physical RAM; `HOME` unset (no `USERPROFILE` either) means no home directory is
 recognised; `--legend=full` (the frozen 0.6.1 prose) does not define the `memory_*` attributes; the LSP server answers
