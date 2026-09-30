@@ -807,7 +807,8 @@ inline constexpr ValueClaimDialect kCodeClaim  = { false, literalTerminates,    
 // read as 15 and reported as a const-value drift against the code's `15_000`. Only the grouping shape continues the
 // literal: a 1-3 digit plain decimal lead, then `,ddd` groups, each followed by a non-digit (so `10,20`, `1,2345` and a
 // hex or `_`-separated lead stop where they did). `end` is one past the lead literal; the new end is returned, `value`
-// updated in place. The digit cap is parseIntLiteral's, so the accumulate cannot wrap.
+// updated in place. The digit cap is parseIntLiteral's, so the accumulate cannot wrap; a complete group that would pass
+// it returns npos — `1,099,511,627,776` is not the claim 1099511627, it is no claim at all.
 inline std::size_t extendThousandsGroups( std::string_view s, std::size_t begin, std::size_t end, std::uint64_t& value )
 {
     EXPECTS( begin <= end && end <= s.size() );
@@ -825,9 +826,12 @@ inline std::size_t extendThousandsGroups( std::string_view s, std::size_t begin,
     }
     std::size_t digits = leadDigits;
     while( end + 3 < s.size() && s[end] == ',' && std::isdigit( (unsigned char)s[end + 1] ) && std::isdigit( (unsigned char)s[end + 2] )
-           && std::isdigit( (unsigned char)s[end + 3] ) && ( end + 4 == s.size() || !std::isdigit( (unsigned char)s[end + 4] ) )
-           && digits + 3 <= kMaxDecDigits )
+           && std::isdigit( (unsigned char)s[end + 3] ) && ( end + 4 == s.size() || !std::isdigit( (unsigned char)s[end + 4] ) ) )
     {
+        if( digits + 3 > kMaxDecDigits )
+        {
+            return std::string_view::npos;   // a complete group past the cap: the prefix is not the number — no claim
+        }
         value = value * 1000u + std::uint64_t( ( s[end + 1] - '0' ) * 100 + ( s[end + 2] - '0' ) * 10 + ( s[end + 3] - '0' ) );
         digits += 3;
         end += 4;
@@ -867,6 +871,10 @@ inline ValueClaim matchValueClaim( std::string_view line, std::size_t afterName,
     if( dialect.allowsThousandsCommas )
     {
         v = extendThousandsGroups( line, literalBegin, v, value );
+        if( v == std::string_view::npos )
+        {
+            return {};
+        }
     }
     if( !dialect.terminates( line, v ) )
     {

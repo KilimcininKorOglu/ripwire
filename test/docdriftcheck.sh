@@ -401,6 +401,22 @@ PY
     fi
 fi
 
+# ── (FDB) 0.6.6 review: a thousands-grouped number past the digit cap is NO claim, not its prefix ─────────────────
+# `LARGE_LIMIT = 1,099,511,627,776` stopped at the 10-digit cap with a successful PREFIX (1099511627), and the prose
+# terminator accepted the comma after it: a false const-value drift against the code's equal 0x10000000000. A complete
+# group past the cap now rejects the whole claim; a 10-digit grouped number (`1,000,000,000`) still reads whole.
+FDB="$TMP/fdb"; mkdir -p "$FDB/docs" "$FDB/pkg"
+printf 'LARGE_LIMIT = 0x10000000000\nSMALL_LIMIT = 1_000_000_000\n' >"$FDB/pkg/limits.py"
+printf '# Limits\n\n- `LARGE_LIMIT = 1,099,511,627,776` bytes.\n- `SMALL_LIMIT = 1,000,000,000` bytes.\n- `SMALL_LIMIT = 2,000,000,000` in the old release.\n' >"$FDB/docs/LIMITS.md"
+"$BIN" "$FDB" --doc-drift --legend=full --no-cache >"$TMP/fdb.xml" 2>/dev/null; FDBRC=$?
+FDBROWS="$( sed 's/<!--[^>]*-->//g' "$TMP/fdb.xml" | grep -o '<a [^>]*>' )"
+if [ "$FDBRC" -gt 1 ]; then no "(FDB) --doc-drift exited $FDBRC"
+elif printf '%s\n' "$FDBROWS" | grep -q 'ref="LARGE_LIMIT '; then no "(FDB) \`LARGE_LIMIT = 1,099,511,627,776\` read as a prefix: $( printf '%s\n' "$FDBROWS" | grep 'LARGE_LIMIT' )"
+else ok "(FDB) a grouped number past the 10-digit cap is no claim (no const-value row on LARGE_LIMIT)"; fi
+printf '%s\n' "$FDBROWS" | grep 'ref="SMALL_LIMIT ' | grep -q 'want="2000000000"' && ! printf '%s\n' "$FDBROWS" | grep -q 'want="1000000000"' \
+    && ok "(FDB) control: a 10-digit grouped number still reads whole (1,000,000,000 agrees; 2,000,000,000 drifts)" \
+    || no "(FDB) control lost: $FDBROWS"
+
 # ── (FD) 0.6.6 D3: thousands separators, language builtins, a changelog's inherited release date ─────────────
 FD="$TMP/fd"; mkdir -p "$FD/docs" "$FD/pkg"
 printf '_MODULE_CACHE_MAX = 15_000\n\n\ndef helper_lookup(key):\n    return key\n' >"$FD/pkg/cache.py"

@@ -267,6 +267,7 @@ cached quality snapshot is recomputed. The session legend dictionary is `dictv=0
 - `--quality-delta` log-only handlers: a receiver is a logger only when the first or last word of its last segment is `log`, `logger` or `logging` (words split on `_`, `-` and camelCase), or a known logger package, not whenever it contains "log". A Python `except Exception: store.catalog.write(x)` no longer gates as log-only.
 - `--quality-delta` error-masking: the built-in query rules are no longer capped at 5000 matches per rule. The cap cut a path-sorted list, so on a tree with more than 5000 catch clauses the baseline and the working tree were cut at different files, and untouched code past the cut could read as a pre-existing regression (exit 2).
 - `--quality-delta`: a log call whose argument nests thousands of levels deep no longer overflows the stack (exit 138). The search for the caught error's name stops at 512 levels and then treats the handler as not log-only.
+- `--doc-drift`: a thousands-grouped number longer than 10 digits (`1,099,511,627,776`) is no longer read as its 10-digit prefix and reported as a `const-value` drift. It makes no claim.
 
 ### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality verbs measure it
 
