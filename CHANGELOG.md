@@ -198,8 +198,10 @@ Markdown input is byte-identical. Code in a language the scanner has no network-
 or another `#!` — is read as before and disclosed: `<skillscan
 code_not_flow_scanned="N">`, defined in the compact and full legends and counted on the stderr tally; `clean` does
 not cover those files. Python and JavaScript flow shapes (`requests.post` or `urllib` with `os.environ`, which is
-missed even inside a ```` ```python ```` fence) are 0.6.7 work. `ripwire wrap`'s pre-install scan still reads only
-`.md` files. Gate: `test/skillscan.sh` check 19. The `<f rule= sev=>` row attributes are now defined in both
+missed even inside a ```` ```python ```` fence) are 0.6.7 work. `ripwire wrap`'s pre-install scan read only `.md`
+files, so it emitted the recipe (rc 0, empty stderr) for a skill whose `scripts/helper.sh` uploads a credential; it now
+scans every regular file of `./skills` and `.agents/skills` through the same kind-aware scan, refuses such a skill
+(rc 1 unless `--force`), and counts code files it cannot flow-scan on stderr. Gate: `test/skillscan.sh` check 19. The `<f rule= sev=>` row attributes are now defined in both
 `--scan-skills` legends (present only when the answer has rows; they never were, on any earlier build), and past the
 200-row cap the shown rows are the worst severity first (every CRITICAL, then WARN), so a WARN flood cannot hide the
 CRITICAL evidence row; an uncapped answer keeps scan order.
