@@ -271,14 +271,12 @@ pattern-defeating quicksort's pivot choices. The only consumer of the pdqsort wr
 (`src/infra/fastSort.h`) is a benchmark that no build target compiles. It stays vendored and stays
 disclosed; it is not a lesson this tool folded, so it does not get a row above.
 
-**Owed a row: [NVIDIA SkillSpector](https://github.com/NVIDIA/SkillSpector).** `src/skillscan.h` — the
-`--scan-skill`/`--scan-skills` scanner and the `wrap` pre-install scan — descends from its work on vetting an agent
-skill before it is installed, by category (injection, exfiltration, scope creep), with the skill file treated as
-untrusted input. Its later move, from matching a line to following a secret-shaped source (credential environment
-variables, key files) to a network sink, is the direction for `EXFILTRATE:net-exfil` (issue #353). The 0.6.6 step is
-line-local: a net-exfil hit is CRITICAL only when a credential-shaped source is on the same line, and WARN with
-`why="no-cred-source"` otherwise. It is named here, not yet counted in the table above, because a new row moves the
-repository count that README.md and the deck restate; the row lands with the source-to-sink flow fix.
+**Related work, not counted: [NVIDIA SkillSpector](https://github.com/NVIDIA/SkillSpector) (Apache-2.0).** The later
+hardening of `src/skillscan.h` — the `--scan-skill`/`--scan-skills` scanner and the `wrap` pre-install scan — was
+informed by ideas from SkillSpector, surveyed as related work: in 0.6.6, `EXFILTRATE:net-exfil` is graded by whether a
+credential-shaped source is on the line (issue #353). No SkillSpector code or pattern text is included today. A
+counted lineage row, with exact per-rule attribution, will be added once the planned port of its code-based checks
+lands; until then it is not in the table above, and the counts stay at 49 repositories.
 
 ### 3b. Surveyed — the labelled landscape
 

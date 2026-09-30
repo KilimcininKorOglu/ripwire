@@ -132,8 +132,9 @@ WARN (including the three `http://<host>:<port>` doc placeholders), and the `com
 the first-histogram set, 109 CRITICAL become 6 CRITICAL, 102 WARN and one silent line. The decision is still
 line-local. It does not resolve a `$VAR` to its assignment, does not tell a token's own service from another host,
 and does not follow a read on one line to an upload on the next. That is the source-to-sink flow decision, which
-is still to come. `src/skillscan.h` now names its lineage (NVIDIA SkillSpector), and `docs/LINEAGE.md` names it
-too; its counted row, which moves the repository count README.md and the deck restate, is owed with the flow fix.
+is still to come. `src/skillscan.h` and `docs/LINEAGE.md` now note that this hardening was informed by ideas from NVIDIA SkillSpector
+(Apache-2.0), surveyed as related work; no SkillSpector code or pattern text is included. A counted lineage row, with
+per-rule attribution, will be added once the planned port of its code-based checks lands.
 Gated by `test/skillscan.sh` check 18 over the five blocks of `test/skillfix/netexfil_severity.md`, and by
 `test/regexguardcheck.sh` arm (f1), whose oracle now specifies the destination rule too and agrees with the scanner
 on 3,000 generated lines; each of its destination branches (the netcat pair, the socket address, the `/dev/tcp`

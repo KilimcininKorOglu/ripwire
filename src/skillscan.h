@@ -1,4 +1,4 @@
-// Lineage: this scanner descends from NVIDIA SkillSpector's work on vetting agent skills before install (see docs/LINEAGE.md).
+// Lineage: informed by ideas from NVIDIA SkillSpector (Apache-2.0), related work; no code or pattern text taken; see docs/LINEAGE.md.
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
@@ -15,9 +15,10 @@
 //   SCOPE-CREEP — body requests tools absent from the allowed-tools: frontmatter (WARN)
 //   FRONTMATTER — YAML keys attempting to set model/system/temperature (WARN)
 //
-// No tree-sitter — ripwire has no markdown grammar. Pure line-iteration, PLUS a second pass inside
-// `scanSkillText` over a whitespace-normalized join of the body (INJECTION only) to catch a phrase
-// split across a newline.
+// No tree-sitter parse here: tree_sitter_markdown is vendored (the index reads .md with it), but this scanner does not
+// call it. It reads a file line by line with its own fence tracker (``` / ~~~ open and close, and whether the opening
+// tag marks an EXAMPLE fence), PLUS a second pass inside `scanSkillText` over a whitespace-normalized join of the body
+// (INJECTION only) to catch a phrase split across a newline.
 // Pattern matching: guarded regexes (src/regexguard.h — ECMAScript, icase where relevant); INJECTION patterns
 // are word-boundary-anchored phrases, not bare substrings (a bare substring like "disregard"
 // false-positives on "disregarding", and "new persona" on "new personal"). A skill file is UNTRUSTED input, so a
