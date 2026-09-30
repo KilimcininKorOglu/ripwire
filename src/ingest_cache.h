@@ -296,7 +296,11 @@ constexpr std::uint32_t kCacheVersion = 27;           // 27: same record layout 
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 128;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 129;          // bump on any grammar/.scm/extraction change
+                                                      // 129 = 2026-09-30 (train 22): ONE bump past fn-literal's 128 for the two community
+                                                      //   PRs that merge after it — #338 (RSpec described_class, its 125 note below) and #325
+                                                      //   (Ruby inheritance edges, its note below). Each note keeps the number its PR carried.
+                                                      //   Record values change for Ruby only; kCacheVersion stays 27.
                                                       // 128 = 2026-09-29 (test/fnliteralcheck.sh): a name bound
                                                       //   to a function literal (JS/TS `const f = (x) => …`, Lua
                                                       //   `M.f = function … end`, a Python class-body lambda) owns
@@ -308,6 +312,16 @@ constexpr std::uint32_t kParserVer    = 128;          // bump on any grammar/.sc
                                                       //   span (ingest_names.h enclosingFunctionScope) — a record
                                                       //   layout change, so kCacheVersion 25 -> 26 rejects every
                                                       //   older blob, including one this lane's first build wrote.
+                                                      // 125 = 2026-09-27 (#338, test/rubydescribedclasscheck.sh): RSpec's
+                                                      //   `described_class` receiver is classified as the constant
+                                                      //   the innermost constant-described example group names
+                                                      //   (ingest_binds.h::rspecDescribedClass), so RawRef::recv /
+                                                      //   recvVar change VALUE for those call sites — NamedVar
+                                                      //   "Calc" where they were NamedVar "described_class". Carried
+                                                      //   as 121 on the PR; renumbered 125 after #310 (121), #320
+                                                      //   (122) and #220 (124), with 123 reserved for #325. No record
+                                                      //   layout change: kCacheVersion stays 25 (NOT 24); a Ruby cache
+                                                      //   written at 124 holds the old receiver and must re-parse.
                                                       // 124 = 2026-09-26 (#220 part 2, test/depsprecisecheck.sh
                                                       //   P2-O): a TS/JS RE-EXPORT (`export … from './y'`) is an
                                                       //   Include like an import (ingest_relations.h

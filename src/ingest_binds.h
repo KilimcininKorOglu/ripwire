@@ -87,6 +87,228 @@ struct RecvShape
 // through to the honest ladder. `Outer::run( 1 )` never arrives as a scope_resolution at all —
 // tree-sitter-ruby parses it as an ordinary (call) with a (constant) receiver, exactly like
 // `Outer.run( 1 )`, so both spellings narrow through the (constant) arm. test/rubyrecvnarrowcheck.sh.
+// The FINAL constant segment a (constant) / (scope_resolution) names — `Calc` → `Calc`, `Outer::Engine` → `Engine` —
+// or empty when the node is a (scope_resolution) whose `name:` is not a (constant). Callers have checked the kind.
+inline std::string_view rubyFinalConstant( TSNode node, std::string_view src )
+{
+    if( kindIs( ts_node_type( node ), "constant" ) )
+    {
+        return pattern::nodeText( node, src );
+    }
+    return fieldChildTextOfKind( node, NodeField::Name, "constant", src );
+}
+
+inline bool isRubyConstantNode( TSNode node ) noexcept
+{
+    const char* t = ts_node_type( node );
+    return kindIs( t, "constant" ) || kindIs( t, "scope_resolution" );
+}
+
+// An RSpec EXAMPLE GROUP call: describe/context (and the feature/example_group and x-/f- spellings), called bare or
+// on `RSpec`. 1 = a group, 2 = a SHARED group (shared_examples/_for, shared_context), 0 = neither. A shared group's
+// body runs inside whichever group INCLUDES it, so its described_class is not its lexical parent's.
+inline int rspecGroupKind( TSNode call, std::string_view src )
+{
+    const TSNode recv = fieldChild( call, NodeField::Receiver );
+    if( !ts_node_is_null( recv ) && !( kindIs( ts_node_type( recv ), "constant" ) && pattern::nodeText( recv, src ) == "RSpec" ) )
+    {
+        return 0;
+    }
+    const TSNode method = fieldChild( call, NodeField::Method );
+    if( ts_node_is_null( method ) )
+    {
+        return 0;
+    }
+    static constexpr std::string_view kGroups[] = { "describe", "context", "feature", "example_group",
+                                                    "xdescribe", "fdescribe", "xcontext", "fcontext" };
+    static constexpr std::string_view kShared[] = { "shared_examples", "shared_examples_for", "shared_context" };
+    const std::string_view m = pattern::nodeText( method, src );
+    if( std::ranges::find( kGroups, m ) != std::end( kGroups ) )
+    {
+        return 1;
+    }
+    return std::ranges::find( kShared, m ) != std::end( kShared ) ? 2 : 0;
+}
+
+// One example group's FIRST description argument, as RSpec reads it: nullopt when it is nil or a String (the parent
+// group's described class stands), otherwise the answer — a constant's final segment, or empty for anything else
+// (`describe :sym`, a variable), which names no class this tool can resolve.
+inline std::optional<std::string_view> rspecGroupArgument( TSNode call, std::string_view src )
+{
+    const TSNode args  = fieldChild( call, NodeField::Arguments );
+    const TSNode first = ts_node_is_null( args ) ? args : ts_node_named_child( args, 0 );
+    if( ts_node_is_null( first ) || kindIs( ts_node_type( first ), "string" ) || kindIs( ts_node_type( first ), "nil" ) )
+    {
+        return std::nullopt;
+    }
+    return isRubyConstantNode( first ) ? rubyFinalConstant( first, src ) : std::string_view {};
+}
+
+// True when the file defines a METHOD named described_class — any `:described_class` symbol (`let( :described_class )`,
+// `subject( :described_class )`, `define_method( :described_class )`) or `def described_class` / `def self.described_class`.
+// A method reaches every example in its group, so the file's sites decline (floor (e)). Conservative on purpose, but a
+// whole word: `:described_class_name` and `my_described_class` are other names.
+inline bool rubyDefinesDescribedClassMethod( std::string_view src ) noexcept
+{
+    static constexpr std::string_view kName = "described_class";
+    for( std::size_t at = src.find( kName ); at != std::string_view::npos; at = src.find( kName, at + kName.size() ) )
+    {
+        const std::size_t end = at + kName.size();
+        if( end < src.size() && ( namesplit::isIdentChar( src[ end ] ) || src[ end ] == '?' || src[ end ] == '!' ) )
+        {
+            continue;   // `described_class_name`, `described_class?` — another name
+        }
+        const std::string_view before = src.substr( 0, at );
+        if( before.ends_with( ':' ) || before.ends_with( "def " ) || before.ends_with( "def self." ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// How a Ruby node kind takes part in LOCAL scoping, for rubyDescribedClassIsLocal. A Closure (a block, a lambda) keeps
+// its locals in but sees the enclosing ones; a Wall (a def, a class, a module) sees no outer local; the Binds* kinds
+// bind a local — the `left:` child, the `name:` child (not a parameter's default value), or any child identifier.
+enum class RubyLocalRole : std::uint8_t { Closure, Wall, BindsLeft, BindsName, BindsChildren };
+struct RubyLocalKind
+{
+    std::string_view kind;
+    RubyLocalRole    role;
+};
+inline constexpr RubyLocalKind kRubyLocalKinds[] = {
+    { "block", RubyLocalRole::Closure },                        { "do_block", RubyLocalRole::Closure },
+    { "lambda", RubyLocalRole::Closure },                       { "method", RubyLocalRole::Wall },
+    { "singleton_method", RubyLocalRole::Wall },                { "class", RubyLocalRole::Wall },
+    { "singleton_class", RubyLocalRole::Wall },                 { "module", RubyLocalRole::Wall },
+    { "assignment", RubyLocalRole::BindsLeft },                 { "operator_assignment", RubyLocalRole::BindsLeft },
+    { "optional_parameter", RubyLocalRole::BindsName },         { "keyword_parameter", RubyLocalRole::BindsName },
+    { "block_parameters", RubyLocalRole::BindsChildren },       { "method_parameters", RubyLocalRole::BindsChildren },
+    { "lambda_parameters", RubyLocalRole::BindsChildren },      { "left_assignment_list", RubyLocalRole::BindsChildren },
+    { "destructured_left_assignment", RubyLocalRole::BindsChildren }, { "rest_assignment", RubyLocalRole::BindsChildren },
+    { "destructured_parameter", RubyLocalRole::BindsChildren }, { "splat_parameter", RubyLocalRole::BindsChildren },
+    { "hash_splat_parameter", RubyLocalRole::BindsChildren },   { "block_parameter", RubyLocalRole::BindsChildren },
+    { "exception_variable", RubyLocalRole::BindsChildren },
+};
+
+inline std::optional<RubyLocalRole> rubyLocalRole( const char* t ) noexcept
+{
+    const auto it = std::ranges::find( kRubyLocalKinds, std::string_view( t ), &RubyLocalKind::kind );
+    return it == std::end( kRubyLocalKinds ) ? std::nullopt : std::optional<RubyLocalRole>( it->role );
+}
+
+// True when `n`, whose kind plays `role`, itself BINDS the local described_class.
+inline bool rubyNodeBindsDescribedClass( TSNode n, std::optional<RubyLocalRole> role, std::string_view src )
+{
+    const auto named = [ & ]( TSNode c ) { return !ts_node_is_null( c ) && kindIs( ts_node_type( c ), "identifier" ) && pattern::nodeText( c, src ) == "described_class"; };
+    if( role == RubyLocalRole::BindsLeft || role == RubyLocalRole::BindsName )
+    {
+        return named( fieldChild( n, role == RubyLocalRole::BindsLeft ? NodeField::Left : NodeField::Name ) );
+    }
+    if( role != RubyLocalRole::BindsChildren )
+    {
+        return false;
+    }
+    const std::uint32_t cc = ts_node_named_child_count( n );
+    for( std::uint32_t i = 0; i < cc; ++i )
+    {
+        if( named( ts_node_named_child( n, i ) ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// True when a child of `n` that ENDS before byte `at` — an earlier statement, a block's or a def's parameters — binds
+// described_class, searched without entering a nested block, lambda, def, class or module, whose locals never reach
+// past it. `stack` is the caller's scratch, so a hostile nesting depth costs heap, not stack.
+inline bool rubyEarlierChildBindsDescribedClass( TSNode n, std::uint32_t at, std::string_view src, std::vector<TSNode>& stack )
+{
+    stack.clear();
+    const std::uint32_t cc = ts_node_named_child_count( n );
+    for( std::uint32_t i = 0; i < cc && ts_node_end_byte( ts_node_named_child( n, i ) ) <= at; ++i )
+    {
+        stack.push_back( ts_node_named_child( n, i ) );
+    }
+    while( !stack.empty() )
+    {
+        const TSNode cur = stack.back();
+        stack.pop_back();
+        const std::optional<RubyLocalRole> role = rubyLocalRole( ts_node_type( cur ) );
+        if( rubyNodeBindsDescribedClass( cur, role, src ) )
+        {
+            return true;
+        }
+        if( role == RubyLocalRole::Closure || role == RubyLocalRole::Wall )
+        {
+            continue;   // a nested scope's locals never reach the site
+        }
+        const std::uint32_t kids = ts_node_named_child_count( cur );
+        for( std::uint32_t i = 0; i < kids; ++i )
+        {
+            stack.push_back( ts_node_named_child( cur, i ) );
+        }
+    }
+    return false;
+}
+
+// True when the (identifier) `site` reads a LOCAL named described_class, not RSpec's method — Ruby's own rule: a local
+// is visible after its binding, in its own scope and in the blocks nested inside it. So the walk climbs from the site,
+// searching each enclosing node's earlier children, and stops after the first def, class or module. An enclosing
+// assignment counts too: in `described_class = described_class.m` the right side already reads the local. Floor (e).
+inline bool rubyDescribedClassIsLocal( TSNode site, std::string_view src )
+{
+    const std::uint32_t at = ts_node_start_byte( site );
+    std::vector<TSNode> stack;
+    for( TSNode n = ts_node_parent( site ); !ts_node_is_null( n ); n = ts_node_parent( n ) )
+    {
+        const std::optional<RubyLocalRole> role = rubyLocalRole( ts_node_type( n ) );
+        if( rubyNodeBindsDescribedClass( n, role, src ) || rubyEarlierChildBindsDescribedClass( n, at, src, stack ) )
+        {
+            return true;
+        }
+        if( role == RubyLocalRole::Wall )
+        {
+            break;   // a def, class or module: no outer local reaches in
+        }
+    }
+    return false;
+}
+
+// RSpec's `described_class` — a bare (identifier) receiver no binding names — read as the constant it IS. RSpec's
+// own rule (rspec-core 3.13, Metadata::ExampleGroupHash#described_class): a group's described class is its FIRST
+// description argument unless that is nil or a String; otherwise it is the parent group's. So the walk climbs the
+// enclosing calls whose BLOCK holds the site (the child it came from is a do_block/block), and the innermost example
+// group with a constant first argument answers. A string or absent argument passes outward; any other argument
+// (`describe :sym`, a variable) and a shared group stop the walk with no answer, and the site is left exactly as it
+// was. test/rubydescribedclasscheck.sh.
+inline std::string_view rspecDescribedClass( TSNode node, std::string_view src )
+{
+    TSNode prev = node;
+    for( TSNode n = ts_node_parent( node ); !ts_node_is_null( n ); prev = n, n = ts_node_parent( n ) )
+    {
+        const char* pt = ts_node_type( prev );
+        if( !kindIs( ts_node_type( n ), "call" ) || !( kindIs( pt, "do_block" ) || kindIs( pt, "block" ) ) )
+        {
+            continue;   // not a call, or the site is in its receiver/arguments rather than its block
+        }
+        const int group = rspecGroupKind( n, src );
+        if( group == 2 )
+        {
+            return {};  // a shared group: its body runs in whichever group includes it
+        }
+        if( group == 1 )
+        {
+            if( const std::optional<std::string_view> arg = rspecGroupArgument( n, src ) )
+            {
+                return *arg;
+            }
+        }
+    }
+    return {};
+}
+
 // nullopt when the node is neither (classifyReceiver's shared arms decide it); otherwise the answer, which is empty for a
 // (scope_resolution) whose `name:` is not a (constant).
 inline std::optional<RecvShape> classifyRubyReceiver( TSNode node, std::string_view src )
@@ -96,16 +318,21 @@ inline std::optional<RecvShape> classifyRubyReceiver( TSNode node, std::string_v
     {
         return RecvShape { RecvKind::ThisObj, {}, {} }; // Ruby `self` — its own node kind, not an identifier
     }
-    if( !kindIs( rt, "constant" ) && !kindIs( rt, "scope_resolution" ) )
+    if( kindIs( rt, "identifier" ) && pattern::nodeText( node, src ) == "described_class" )
+    {
+        const bool             redefined = rubyDefinesDescribedClassMethod( src ) || rubyDescribedClassIsLocal( node, src );
+        const std::string_view cls       = redefined ? std::string_view {} : rspecDescribedClass( node, src );
+        if( cls.empty() )
+        {
+            return std::nullopt;   // redefined, or no constant-described group encloses it: the identifier arm answers as before
+        }
+        return RecvShape { RecvKind::NamedVar, std::string( cls ), {} };             // the group's constant — Rule 2c fuel
+    }
+    if( !isRubyConstantNode( node ) )
     {
         return std::nullopt;
     }
-    const TSNode leaf = kindIs( rt, "constant" ) ? node : fieldChild( node, NodeField::Name );
-    if( ts_node_is_null( leaf ) || !kindIs( ts_node_type( leaf ), "constant" ) )
-    {
-        return RecvShape {};
-    }
-    const std::string_view v = pattern::nodeText( leaf, src );
+    const std::string_view v = rubyFinalConstant( node, src );
     if( v.empty() )
     {
         return RecvShape {};
