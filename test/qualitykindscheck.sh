@@ -881,5 +881,35 @@ qd_none "5l python" error-masking save_backlog "backlog.info: backlog is not a l
 qd_has  "5l python" error-masking save_logged gating
 qd_has  "5l python" error-masking save_app_log gating
 
+# 5m) 0.6.6 review: the error-masking QUERY group had a 5000-per-tag budget over a PATH-sorted list, and
+#     empty-catch-java captures EVERY catch body. At the baseline A.java holds 6000 catches, so the cut fell inside it
+#     and Z.java's untouched empty catch was never counted; the working tree trims A.java to 100 catches, the cut moved
+#     past Z.java, and victim() read as a PRE-EXISTING error-masking regression that gated exit 2 on code nobody touched.
+#     Both groups are unbounded now: no victim row, exit 0.
+CAPD="$WORK/maskcap"; mkdir -p "$CAPD"
+( cd "$CAPD" && git init -q && git config user.email t@t && git config user.name t )
+mkjava(){   # N methods of 100 catches each → A.java
+    python3 - "$1" <<'PY' >"$CAPD/A.java"
+import sys
+n = int( sys.argv[1] )
+print( "class A {" )
+for m in range( n ):
+    print( "  void m%d() {" % m )
+    for c in range( 100 ):
+        print( "    try { f(); } catch (Exception e) { use(e); }" )
+    print( "  }" )
+print( "  void f() {}\n  void use(Exception e) {}\n}" )
+PY
+}
+mkjava 60
+printf 'class Z {\n  void victim() {\n    try { g(); } catch (Exception e) { }\n  }\n  void g() {}\n}\n' >"$CAPD/Z.java"
+( cd "$CAPD" && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+mkjava 1
+CAPOUT="$( cd "$CAPD" && "$BIN" . --quality-delta --no-cache 2>/dev/null )"; CAPRC=$?
+if printf '%s' "$CAPOUT" | tr '>' '\n' | grep -q '<r kind="error-masking" sym="[^"]*victim"'; then
+    no "5m cap: untouched Z.victim reads as an error-masking regression (the per-tag cut moved): $( printf '%s' "$CAPOUT" | tr '>' '\n' | grep 'victim' | head -2 )"
+else ok "5m cap: 6000 -> 100 catches in A.java leaves untouched Z.victim with no error-masking row"; fi
+[ "$CAPRC" = 0 ] && ok "5m cap: the delta exits 0 (removing catches is not a regression)" || no "5m cap: the delta exits $CAPRC, want 0"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

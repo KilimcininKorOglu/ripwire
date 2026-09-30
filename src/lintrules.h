@@ -1394,10 +1394,13 @@ inline void sortConstructHits( const IngestResult& ing, std::vector<ErrorMaskHit
 }
 
 // Run the built-in error-masking table AND the handler/placeholder walk over the tree, in ONE shared read
-// and parse (astQueryGrouped: a spec group and an AstWalk::HandlerShapes group). The walk group's budget is
+// and parse (astQueryGrouped: a spec group and an AstWalk::HandlerShapes group). BOTH groups' budgets are
 // unbounded on purpose: a per-tag cap truncates a PATH-sorted list, so the two sides of a delta would be cut
-// at different files and a TODO past the cap would read as added or removed. Never throws (astQuery
-// degrades per file internally).
+// at different files and a TODO or a swallowing catch past the cap would read as added or removed — a phantom
+// preexisting-worse row that gates on untouched code. The spec group used to be capped at 5000 per tag, and
+// empty-catch-java / empty-catch-cfamily capture EVERY catch body (keepErrorMaskQueryRows filters after the
+// query), so a tree with more than 5000 catches crossed it. A match row is a few words; the cost stays linear in
+// the matches. Never throws (astQuery degrades per file internally).
 inline QualityConstructHits findQualityConstructs( const IngestResult& ing )
 {
     QualityConstructHits out;
@@ -1411,7 +1414,7 @@ inline QualityConstructHits findQualityConstructs( const IngestResult& ing )
     {
         specs.push_back( { std::string( kErrorMaskRules[r].query ), std::to_string( r ) } );
     }
-    std::vector<std::vector<AstMatch>> groups = astQueryGrouped( ing, { { &specs, 5000, nullptr },
+    std::vector<std::vector<AstMatch>> groups = astQueryGrouped( ing, { { &specs, std::numeric_limits<std::size_t>::max(), nullptr },
                                                                         { nullptr, std::numeric_limits<std::size_t>::max(), nullptr, AstWalk::HandlerShapes } } );
     ASSUME( groups.size() == 2, "astQueryGrouped returns exactly one bucket per group it was given" );
     keepErrorMaskQueryRows( ing, groups[0], out.mask );
