@@ -182,7 +182,7 @@ print are unchanged.
 `test/recallpassagecheck.sh` and `test/impactpartitioncheck.sh` are executable now (mode 100755 like every
 other gate); direct `./test/…` invocation exits 126 no more.
 
-### Fixed — `--scan-skills` scans a skill's bundled shell scripts as code, and discloses code it cannot flow-scan
+### Fixed — `--scan-skills` scans a skill's bundled shell scripts as code, and discloses the code it cannot flow-scan (`.py` `.js` `.mjs` `.cjs` `.jsx` `.ts` `.mts` `.cts` `.tsx` `.rb` `.pl` `.pm` `.lua` `.php` `.ps1` `.psm1` `.psd1` `.bat` `.cmd`, a non-shell `#!`)
 
 `--scan-skills` reads every regular file under a skill, but ran each through the markdown fence tracker. So
 `EXFILTRATE:net-exfil`, which fires only inside a fenced code block, never fired in `scripts/helper.sh`: a
@@ -192,8 +192,8 @@ heredoc could close a fence the scan thought open. A `.sh`/`.bash`/`.zsh`/`.ksh`
 `bash`, `zsh`, `dash` or `ksh` (through `env` too), now also gets a whole-file-code pass — no YAML frontmatter (bash runs a
 leading `---` line and everything after it), every line is command context, and no ```` ``` ```` line toggles anything — merged with the markdown pass, so a script can only gain rows
 (measured over the 1,242 code files in this repo: no row lost, 23 added, 17 of them WARN `why="no-cred-source"`).
-Markdown input is byte-identical. Code in a language the scanner has no network-flow model for (`.py`, `.js`, `.mjs`,
-`.cjs`, `.ts`, `.rb`, `.pl`, `.ps1`, or another `#!`) is read as before and disclosed: `<skillscan
+Markdown input is byte-identical. Code in a language the scanner has no network-flow model for — exactly `.py`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.rb`, `.pl`, `.pm`, `.lua`, `.php`, `.ps1`, `.psm1`, `.psd1`, `.bat`, `.cmd`,
+or another `#!` — is read as before and disclosed: `<skillscan
 code_not_flow_scanned="N">`, defined in the compact and full legends and counted on the stderr tally; `clean` does
 not cover those files. Python and JavaScript flow shapes (`requests.post` or `urllib` with `os.environ`, which is
 missed even inside a ```` ```python ```` fence) are 0.6.7 work. `ripwire wrap`'s pre-install scan still reads only

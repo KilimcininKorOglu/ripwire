@@ -1446,7 +1446,7 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
 // fired in scripts/helper.sh (no ``` line, so never "in a fence"), and a ``` pair in a heredoc could close a fence.
 //   ShellScript — .sh .bash .zsh .ksh, or a first line `#!` whose interpreter (through `env`) is sh, bash, zsh, dash or
 //                 ksh: also scanned as whole-file code (scanSkillTextOn's wholeFileIsCode), merged with the markdown pass.
-//   OtherCode   — .py .js .mjs .cjs .ts .rb .pl .ps1, or any other `#!`: read exactly as before, but the scanner has no
+//   OtherCode   — .py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or any other `#!`: read exactly as before, but the scanner has no
 //                 network-flow vocabulary for these languages (Python `requests.post` of `os.environ` is missed even in
 //                 a ```python fence), so the answer DISCLOSES them: <skillscan code_not_flow_scanned="N">.
 //   Markdown    — .md / .markdown whatever their first line says, and everything else: unchanged.
@@ -1512,7 +1512,7 @@ inline SkillFileKind skillFileKindOf( std::string_view path, std::string_view te
     {
         return SkillFileKind::ShellScript;
     }
-    if( text.starts_with( "#!" ) || extIs( { "py", "js", "mjs", "cjs", "ts", "rb", "pl", "ps1" } ) )
+    if( text.starts_with( "#!" ) || extIs( { "py", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "rb", "pl", "pm", "lua", "php", "ps1", "psm1", "psd1", "bat", "cmd" } ) )
     {
         return SkillFileKind::OtherCode;
     }
@@ -1726,7 +1726,7 @@ inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillSca
                       "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
                       "worst finding's severity, the same read as the exit code (0/1/2).{}{} -->", kSkillScanFindingCap,
                       codeNotFlowScanned > 0 ? " code_not_flow_scanned=N (present only then): N scanned files are code in a language this "
-                                               "scanner has no network-flow model for (.py .js .mjs .cjs .ts .rb .pl .ps1, or a non-shell #!); "
+                                               "scanner has no network-flow model for (.py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or a non-shell #!); "
                                                "they were read line by line like markdown, so an upload of a secret written in that language "
                                                "is not detected: clean does not cover them. Shell scripts are scanned as code." : "",
                       anyWhy ? " An f row's why= says why EXFILTRATE:net-exfil graded as it did: why=no-cred-source, a network "
