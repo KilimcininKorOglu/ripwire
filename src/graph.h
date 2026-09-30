@@ -7681,6 +7681,46 @@ inline std::vector<std::uint16_t> connectUndirectedDistances( const Graph& g, st
     return dist;
 }
 
+// One terminal's choice among its definitions, against the other terminals' distance maps: the candidate reaching the
+// most of them, then the fewest summed hops; `preferred` (resolveFocus's pick) wins a tie it is part of, the lowest id any
+// other tie (candidates ascend by id). reached == 0 ⇒ no candidate joins anything, and `chosen` is `preferred`.
+struct TerminalChoice { NodeId chosen = kNoNode; std::uint32_t reached = 0, hops = 0, tied = 1; };
+
+inline TerminalChoice scoreTerminalCandidates( std::span<const NodeId> candidates, NodeId preferred, std::size_t self,
+                                               const std::vector<std::vector<std::uint16_t>>& distFrom )
+{
+    TerminalChoice best{ preferred, 0, 0, 1 };
+    bool           bestIsPreferred = false;
+    for( const NodeId candidate : candidates )
+    {
+        std::uint32_t reached = 0, hops = 0;
+        for( std::size_t j = 0; j < distFrom.size(); ++j )
+        {
+            const bool reaches = j != self && candidate < distFrom[ j ].size() && distFrom[ j ][ candidate ] != connectcfg::kUnreachable;
+            reached += reaches ? 1u : 0u;
+            hops    += reaches ? distFrom[ j ][ candidate ] : 0u;
+        }
+        const bool isTie = reached > 0 && reached == best.reached && hops == best.hops;
+        if( reached > best.reached || ( reached > 0 && reached == best.reached && hops < best.hops ) )
+        {
+            best            = TerminalChoice{ candidate, reached, hops, 1 };
+            bestIsPreferred = candidate == preferred;
+        }
+        else if( isTie )
+        {
+            ++best.tied;
+            best.chosen     = ( candidate == preferred && !bestIsPreferred ) ? candidate : best.chosen;
+            bestIsPreferred = bestIsPreferred || candidate == preferred;
+        }
+    }
+    if( best.reached == 0 )
+    {
+        best = TerminalChoice{ preferred, 0, 0, 1 };
+    }
+    ENSURES( best.tied >= 1 );
+    return best;
+}
+
 inline void chooseJoiningTerminals( const Graph& g, const std::vector<std::vector<NodeId>>& defsPerTerminal, std::vector<NodeId>& picks,
                                     std::vector<std::uint32_t>& tiedOut, std::uint32_t radius )
 {
@@ -7705,46 +7745,12 @@ inline void chooseJoiningTerminals( const Graph& g, const std::vector<std::vecto
         std::vector<NodeId> next = picks;
         for( std::size_t i = 0; i < T; ++i )
         {
-            if( defsPerTerminal[ i ].size() < 2 )
+            if( defsPerTerminal[ i ].size() > 1 )
             {
-                continue;
+                const TerminalChoice choice = scoreTerminalCandidates( defsPerTerminal[ i ], firstPicks[ i ], i, distFrom );
+                next[ i ]    = choice.chosen;
+                tiedOut[ i ] = choice.tied;
             }
-            std::uint32_t bestReached = 0, bestHops = 0, tied = 0;
-            NodeId        best = firstPicks[ i ];
-            bool          bestIsDefault = false;
-            for( const NodeId candidate : defsPerTerminal[ i ] )
-            {
-                std::uint32_t reached = 0, hops = 0;
-                for( std::size_t j = 0; j < T; ++j )
-                {
-                    if( j != i && candidate < distFrom[ j ].size() && distFrom[ j ][ candidate ] != connectcfg::kUnreachable )
-                    {
-                        ++reached;
-                        hops += distFrom[ j ][ candidate ];
-                    }
-                }
-                if( reached == 0 )
-                {
-                    continue;
-                }
-                const bool better = reached > bestReached || ( reached == bestReached && hops < bestHops );
-                if( better )
-                {
-                    bestReached = reached;  bestHops = hops;  best = candidate;  tied = 1;
-                    bestIsDefault = candidate == firstPicks[ i ];
-                }
-                else if( reached == bestReached && hops == bestHops )
-                {
-                    ++tied;
-                    if( candidate == firstPicks[ i ] && !bestIsDefault )
-                    {
-                        best = candidate;   // resolveFocus's pick wins a tie it is part of (keeps the answer it gave before)
-                        bestIsDefault = true;
-                    }
-                }
-            }
-            next[ i ]    = bestReached == 0 ? firstPicks[ i ] : best;
-            tiedOut[ i ] = bestReached == 0 ? 1u : tied;
         }
         picks = std::move( next );
     }
