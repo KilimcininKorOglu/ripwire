@@ -63,6 +63,20 @@ from a partial index without disclosure. Deferred: layer 2 (the non-git crawl bu
 pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
 llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
 
+### Fixed — `--doc-drift`: three false drifts on a Python repository
+
+- A doc's `NAME = 15,000` was read as 15 and reported against the code's `15_000`. In prose, a 1–3 digit lead
+  followed by `,ddd` groups is now read whole (code keeps reading `15, 000` as two values). This also clears two
+  rows on this repository (`kForPayloadBudgetBytes` = 7,500 and `kGrepCollectionBudget`=4,000,000).
+- A Python built-in exception (`NameError`) or a JavaScript/TypeScript global (`TypeError`, `structuredClone`)
+  named in a doc was "undefined". It is now counted as `<unchecked r="language-builtin">` when the corpus indexes
+  that language.
+- A section inherits the ISO date of the heading it sits under (levels 2 and deeper), so a Keep a Changelog rename
+  under `### Fixed` below `## [1.8.2] - 2026-03-17` is a dated record (`rec="block"`), not live drift. On this
+  repository 23 rows move from `drift=` to `dated=`.
+
+Gate: `docdriftcheck` arm FD.
+
 ### Fixed — `--from-trace` no longer pairs one file's line with another file's definition in `next=`
 
 When the innermost frame's function name bound to a definition in a different file than the frame's own path
