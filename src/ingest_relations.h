@@ -45,6 +45,17 @@ inline bool isBaseTypeNode( const char* nt ) noexcept
     return false;
 }
 
+// The base-type test for one base-clause child, by language. Ruby names a base with its OWN node kinds, and only Ruby
+// does: `class Child < Parent` hands the `superclass` clause a (constant), `class Derived < Space::Base` a
+// (scope_resolution). They are asked under a language test here, rather than added as rows of isBaseTypeNode's shared
+// table, because both kind names are generic enough to occur in another grammar with another meaning, and that table is
+// consulted for every base clause in every language. `class Dynamic < Struct.new( :a )` hands over a (call) and is
+// correctly nothing — a computed superclass is not a name this tool can resolve. test/rubyinheritcheck.sh.
+inline bool isBaseTypeNodeIn( const char* nt, Lang lang ) noexcept
+{
+    return lang == Lang::Ruby ? ( kindIs( nt, "constant" ) || kindIs( nt, "scope_resolution" ) ) : isBaseTypeNode( nt );
+}
+
 // Emit one inherit RawRef (derived → base) for a base-type node. startByte sits inside the class header
 // (the type node's own start), so the byte-span enclosing attribution binds fromSymbol = the derived class.
 inline void emitBaseRef( TSNode typeNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs )
@@ -428,7 +439,11 @@ void captureMacroBodyCalls( TSNode defineNode, std::uint32_t fileId, Lang lang, 
 // Capture base classes for the inheritance/Lego view: walk a class node's base clause and emit an
 // inherit RawRef per base (derived → base). startByte sits inside the class header, so the enclosing
 // attribution assigns fromSymbol = the derived class. Explicit-syntax langs: C++/TS/JS/Java/Python/Swift/
-// C#/PHP/Kotlin. Lua is deliberately absent and it is a DISCLOSED non-goal, not an omission: Lua inheritance IS
+// C#/PHP/Kotlin/Ruby. Ruby reuses the `superclass` clause name Java's extends clause already has, and
+// names its base with (constant)/(scope_resolution) — see isBaseTypeNodeIn. A Ruby MIXIN
+// (`include M` / `extend M` / `prepend M`) is NOT captured here, for the same reason the PHP note below
+// gives: it is a call in the class BODY, not a clause. Ruby's ancestor chain does hold included modules,
+// so that is a stated residue (test/rubyinheritcheck.sh floor (b)), not a claim it is not inheritance. Lua is deliberately absent and it is a DISCLOSED non-goal, not an omission: Lua inheritance IS
 // `setmetatable( Derived, { __index = Base } )`, an ordinary runtime call over an ordinary table, so there
 // is no syntax to read and a Lua corpus correctly reports no inheritance edges at all.
 //
@@ -483,9 +498,16 @@ void captureBases( TSNode classNode, std::uint32_t fileId, Lang lang, std::strin
         forEachChild( clause, clauseCursor.cur, [ & ]( TSNode bn )
         {
             const char* bt = ts_node_type( bn );
-            if( isBaseTypeNode( bt ) )                 // DIRECT: type node right under the clause
+            if( isBaseTypeNodeIn( bt, lang ) )         // DIRECT: type node right under the clause
             {
                 emitBaseRef( bn, fileId, lang, src, refs );
+                return true;
+            }
+            // Ruby has no wrapper: its `superclass` clause holds ONE expression, and anything but a constant is
+            // COMPUTED (`class Dynamic < Struct.new( :a )`). Descending into that (call) lands on its receiver
+            // `Struct` and minted an edge to it — the receiver is not the base (test/rubyinheritcheck.sh floor (a)).
+            if( lang == Lang::Ruby )
+            {
                 return true;
             }
             // WRAPPED: descend ONE level into a wrapper (extends_clause / implements_clause / type_list)

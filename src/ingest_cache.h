@@ -301,6 +301,12 @@ constexpr std::uint32_t kParserVer    = 129;          // bump on any grammar/.sc
                                                       //   PRs that merge after it — #338 (RSpec described_class, its 125 note below) and #325
                                                       //   (Ruby inheritance edges, its note below). Each note keeps the number its PR carried.
                                                       //   Record values change for Ruby only; kCacheVersion stays 27.
+                                                      // 129 (#325, train 22) = 2026-09-30 (Ruby inheritance edges, test/rubyinheritcheck.sh; carried as
+                                                      //   98 and 99 on the PR): isBaseTypeNodeIn gains a Ruby arm ((constant)/(scope_resolution)), so
+                                                      //   `class Child < Parent` emits an inherit RawRef (role Extends) where it emitted none, and
+                                                      //   captureBases does not descend into a computed superclass (`Struct.new( :a )` mints no ref to
+                                                      //   its receiver). New records, same layout: kCacheVersion unchanged (27; NOT the PR's 22/24);
+                                                      //   kQSnapCacheScheme unchanged. A Ruby cache written before this holds no inheritance refs.
                                                       // 128 = 2026-09-29 (test/fnliteralcheck.sh): a name bound
                                                       //   to a function literal (JS/TS `const f = (x) => …`, Lua
                                                       //   `M.f = function … end`, a Python class-body lambda) owns
