@@ -521,6 +521,16 @@ inline std::string_view flowReadOperand( std::string_view low, std::string_view 
     return {};
 }
 
+// The scan state where a shell word's FIRST piece starts: what the whole word is read against once it ends.
+struct WordStart
+{
+    std::string_view prev;              // the token before the word
+    bool             redirectIn;        // the word follows `<`
+    bool             commandPosition;   // the word is the segment's command (or a runner prefix)
+    bool             skipValue;         // the word is a runner option's value (`sudo -u ro''ot cat`)
+    const CommandPrefix* activePrefix;  // the runner whose options the word may be (`sudo "-"u root cat`)
+};
+
 // netFlow's state, one pipeline segment at a time. Split out so each step reads alone: punctuation() consumes the
 // separators and redirects, word() classifies one shell word (prefixWord() while the segment's command is still to come),
 // endSegment() settles a segment.
@@ -645,45 +655,6 @@ struct NetFlowScan
         flow.credentialRead = flow.credentialRead || isCredentialName( namesplit::afterLast( operand, "/" ) );
     }
 
-    // The scan state where a shell word's FIRST piece starts: what the whole word is read against once it ends.
-    struct WordStart
-    {
-        std::string_view prev;              // the token before the word
-        bool             redirectIn;        // the word follows `<`
-        bool             commandPosition;   // the word is the segment's command (or a runner prefix)
-    };
-    [[nodiscard]] WordStart wordStart() const noexcept { return { prevToken, redirectIn, expectCommand && !redirectIn }; }
-
-    // A shell word that quotes or backslashes split (`/etc/"passwd"`, `@"/etc/shadow"`, `< /etc/"passwd"`, `\cat`,
-    // `c"url"`), read WHOLE once its last piece is done: `whole` is lowered with its quotes and backslashes dropped.
-    // word() still classified every piece, so this only adds: a read operand, and in command position the command it
-    // names (`\cat` is cat; `\sudo curl` leaves curl the command). Called once per word, so a word of k pieces costs
-    // its length, never k times it.
-    void wholeWord( std::string_view whole, const WordStart& at ) noexcept
-    {
-        if( at.commandPosition )
-        {
-            if( prefixWord( whole, whole ) )
-            {
-                expectCommand = true;
-            }
-            else
-            {
-                noteCommand( whole );
-            }
-            return;
-        }
-        std::string_view operand = flowReadOperand( whole, at.prev, at.redirectIn );
-        if( operand.empty() && segReader && !whole.starts_with( '-' ) )
-        {
-            operand = whole;
-        }
-        if( !operand.empty() )
-        {
-            noteRead( operand );
-        }
-    }
-
     void word( std::string_view token, std::string_view low ) noexcept
     {
         if( low.find( "/dev/tcp/" ) != std::string_view::npos || low.find( "/dev/udp/" ) != std::string_view::npos )
@@ -722,6 +693,45 @@ struct NetFlowScan
     }
 };
 
+// The state a shell word's first piece meets (WordStart).
+inline WordStart wordStartOf( const NetFlowScan& scan ) noexcept
+{
+    return { scan.prevToken, scan.redirectIn, scan.expectCommand && !scan.redirectIn, scan.skipValue, scan.activePrefix };
+}
+
+// A shell word that quotes or backslashes split (`/etc/"passwd"`, `@"/etc/shadow"`, `< /etc/"passwd"`, `\cat`,
+// `c"url"`), read WHOLE once its last piece is done: `whole` is lowered with its quotes and backslashes dropped.
+// word() still classified every piece, so this only adds: a read operand, and in command position the command it
+// names (`\cat` is cat; `\sudo curl` leaves curl the command). Called once per word, so a word of k pieces costs
+// its length, never k times it.
+inline void wholeWord( NetFlowScan& scan, std::string_view whole, const WordStart& at ) noexcept
+{
+    if( at.commandPosition )
+    {   // re-judge the whole word from the state its first piece met: a value stays a value, a flag stays a flag
+        scan.expectCommand = true;
+        scan.skipValue     = at.skipValue;
+        scan.activePrefix  = at.activePrefix;
+        if( scan.prefixWord( whole, whole ) )
+        {
+            scan.expectCommand = true;
+        }
+        else
+        {
+            scan.noteCommand( whole );
+        }
+        return;
+    }
+    std::string_view operand = flowReadOperand( whole, at.prev, at.redirectIn );
+    if( operand.empty() && scan.segReader && !whole.starts_with( '-' ) )
+    {
+        operand = whole;
+    }
+    if( !operand.empty() )
+    {
+        scan.noteRead( operand );
+    }
+}
+
 // The shell word a piece belongs to: pieces separated only by quotes (`/etc/"passwd"`, `"/etc/"'shadow'`) are one word,
 // and backslash escapes drop (`/etc/pass\wd`, `\cat`). Each piece is appended once and the word is handed back once,
 // when it ends, so the cost is linear in the line however many pieces a hostile word is cut into.
@@ -748,7 +758,7 @@ inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexce
     constexpr std::string_view kFlowSeparators = " \t\"'`|;&()<>\r\n";
     NetFlowScan            scan;
     ShellWordJoin          join;
-    NetFlowScan::WordStart at{};
+    WordStart              at{};
     for( std::size_t i = 0; i < line.size(); )
     {
         if( const std::size_t consumed = scan.punctuation( line, i ); consumed > 0 )
@@ -759,7 +769,7 @@ inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexce
         const std::size_t end = std::min( line.find_first_of( kFlowSeparators, i ), line.size() );
         if( join.whole.empty() && !join.split )
         {
-            at = scan.wordStart();
+            at = wordStartOf( scan );
         }
         join.add( lowered.substr( i, end - i ) );
         scan.word( line.substr( i, end - i ), lowered.substr( i, end - i ) );
@@ -767,7 +777,7 @@ inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexce
         {
             if( join.split )
             {
-                scan.wholeWord( join.whole, at );
+                wholeWord( scan, join.whole, at );
             }
             join.whole.clear();
             join.split = false;
