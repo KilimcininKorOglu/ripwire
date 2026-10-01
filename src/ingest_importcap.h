@@ -86,7 +86,7 @@ std::uint16_t importContainerReach( TSNode directive, Lang lang, bool& reachable
             reachable = false;                       // the walk would not have entered this node
             break;
         }
-        if( ++depth >= kMaxImportContainerDepth )
+        if( ++depth > kMaxImportContainerDepth )
         {
             break;                                   // STOPS AT THE BOUND: past it the answer cannot change, and
         }                                            // a hostile file must not buy an unbounded parent walk
@@ -180,7 +180,7 @@ void emitCapturedImport( TSNode pathNode, std::uint32_t fileId, Lang lang, std::
 {
     const TSNode directive = ts_node_parent( pathNode );
     bool           reachable = false;
-    if( importContainerReach( directive, lang, reachable ) >= kMaxImportContainerDepth )
+    if( importContainerReach( directive, lang, reachable ) > kMaxImportContainerDepth )
     {
         DISCLOSE( shortfall, ExtractShortfall::DisclosureWhy::ImportNestingTooDeep,
                   "ingest: import-container nesting past the depth bound — deeper imports not captured" );

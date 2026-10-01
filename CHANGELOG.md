@@ -24,12 +24,15 @@ This lands the **C-family slice** of #358 (c, cpp, objc, and the `.h`/`.hpp`/`.c
 those grammars) on the shared vocabulary the issue asks for, so the remaining languages can land one at a time.
 
 `@import.path` is now the capture name for "the written specifier of one import directive", declared once per grammar
-in `queries/{c,cpp,objc}/tags.scm` and unanchored, so an include inside an `#if`/`#else`/`#elif` guard is reached
-without the C++ walk descending to meet it. `src/ingest_importcap.h` holds what is left: **one specifier normaliser per
-`DepDialect`**, not one extractor per language — the dialect is the unit at which "what does a written specifier mean"
-actually varies, and `dependencyDialect` already groups languages by exactly that. `DepDialect` moved out of
-`lintrules.h` into its own `src/depdialect.h` so the ingest TU can name it (`lintrules.h` includes it back; the enum and
-its table are unchanged). Dependency **resolution** stays in `src/resolve.h` and is untouched.
+in `queries/{c,cpp,objc}/tags.scm` and unanchored, so an include inside an `#if`/`#else`/`#elif` guard is matched at any
+depth rather than being anchored to the file root — with the walk's own reach re-imposed afterwards in C++ by
+`importContainerReach`, which walks the captured node's ancestry and keeps exactly the ancestors the old walk would have
+entered (so an include under `extern "C" { … }`, a `namespace`, or a function body is still NOT captured, exactly as
+before). `src/ingest_importcap.h` holds what is left: **one specifier normaliser per `DepDialect`**, not one extractor per
+language — the dialect is the unit at which "what does a written specifier mean" actually varies, and `dependencyDialect`
+already groups languages by exactly that. `DepDialect` moved out of `lintrules.h` into its own `src/depdialect.h` so the
+ingest TU can name it (`lintrules.h` includes it back; the enum and its table are unchanged). Dependency **resolution**
+stays in `src/resolve.h` and is untouched.
 
 Two gates that a query cannot express stayed in C++, as normaliser arms: the C and C++ grammars have no `#import`
 rule, so it parses as a generic `preproc_call` — and so do `#pragma once`, `#error` and `#warning`, which the same
@@ -42,7 +45,18 @@ behaviour change: the **decided-dead filter now covers the includes window** in 
 an `#if 0` arm is dead — without this line the round would have resurrected every dead include), and the
 **import-container nesting bound** is recovered from the captured node's ancestry with the same `DISCLOSE`
 (`test/preproccondcheck.sh`'s 600-deep arm pins drop + announce + still-index, and is the only thing pinning that
-announcement for the walk-based languages).
+announcement for the walk-based languages). The bound's last three rows are pinned by `test/importcapcheck.sh` at 255, 256
+and 257 nested conditionals: an include under exactly 256 containers is still captured and the cut starts at 257, which is
+what the old walk did — it pushed a frame at `depth + 1` and refused to descend a container whose own depth had reached the
+bound.
+
+**One disclosure difference is intended, and it is in `--skipped` only.** `extract-partial` for import nesting now fires
+only when a captured import is actually cut at the bound. Previously it also fired when the walk merely *entered* a too-deep
+container on its way to a file that turned out to contain no import at all — so a file with 300 nested `#ifdef` and no
+`#include` is no longer announced (the more accurate answer: nothing was dropped), while an include inside a function body
+under 260 nested conditionals *is* still announced (the safe direction: the depth test completes before the reach test can
+conclude the walk would never have entered the function). Matching the previous behaviour exactly would need an unbounded
+parent walk, which is the thing the bound exists to prevent. Both directions are pinned in `test/importcapcheck.sh`.
 
 **Dependency edges are byte-identical** on every dependency-capable language this round touches. Verified by keeping
 both binaries and running them against one unchanged tree — the pre-change build and this one agree byte-for-byte on

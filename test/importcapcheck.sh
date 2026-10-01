@@ -292,6 +292,85 @@ else
     sed 's/></>\n</g' "$TMP/reach.xml" | grep -o '<inc t="[^"]*"' | sed 's/^/              /'
 fi
 
+# ── arm 12b: the DEPTH BOUND's last three rows — 255, 256, 257 ─────────────────────────────────────────
+# The one-character boundary at the nesting bound, which was wrong until the maintainer measured it.
+# importContainerReach counts the containers ABOVE the directive; the walk it replaces counted from the
+# other end. Main pushes a frame at `frame.depth + 1` and refuses to descend a container whose OWN depth
+# has reached kMaxImportContainerDepth — so main captures a directive under exactly 256 containers and
+# the cut starts at 257. Testing that count with `>=` against the same constant cuts at 256 instead and
+# silently drops that one edge. Both halves moved together: the loop's break and emitCapturedImport's
+# disclose test.
+#
+# Why no other arm caught it: test/preproccondcheck.sh's 600-deep arm is past the boundary on BOTH sides,
+# so it passes either way, and a 256-deep file is not a shape a human writes. The maintainer's
+# #elif-chain probe reaches it without hand-written nesting at all, which is the argument for pinning the
+# boundary directly instead of trusting a deeper probe to cover it.
+#
+# These are the SPECIFICATION, read off main's own descend condition rather than reasoned out here: kept
+# at 255 and 256, cut and disclosed at 257. The 256 row is the one that fails on the old comparison.
+BD="$TMP/bound"
+bd_shape(){ # $1=depth -> a dir holding one include under $1 nested containers, target inside it
+    mkdir -p "$BD/$1"; printf 'int helper;\n' > "$BD/$1/deep.h"
+    local i=0
+    while [ "$i" -lt "$1" ]; do printf '#ifdef G%s\n' "$i" >> "$BD/$1/a.c"; i=$((i + 1)); done
+    printf '#include "deep.h"\n' >> "$BD/$1/a.c"
+    i=0; while [ "$i" -lt "$1" ]; do printf '#endif\n' >> "$BD/$1/a.c"; i=$((i + 1)); done
+}
+BD_BAD=0
+for d in 255 256 257; do
+    bd_shape "$d"
+    "$BIN" "$BD/$d" --deps    --no-cache > "$TMP/bd$d.dep"  2>/dev/null
+    "$BIN" "$BD/$d" --skipped --no-cache > "$TMP/bd$d.skip" 2>/dev/null
+    e=$(grep -o '<inc ' "$TMP/bd$d.dep" | wc -l)
+    f=$(grep -c 'why="extract-partial"' "$TMP/bd$d.skip" || true)
+    # 255 and 256: the edge survives and nothing is announced. 257: the edge is gone AND announced.
+    if [ "$d" -le 256 ]; then want_e=1; want_f=0; else want_e=0; want_f=1; fi
+    if [ "$e" != "$want_e" ] || [ "$f" != "$want_f" ]; then
+        BD_BAD=1
+        no "depth bound at $d: edge=$e extract-partial=$f (want $want_e/$want_f) — the nesting bound is off by one against main"
+    fi
+done
+[ "$BD_BAD" -eq 0 ] \
+    && ok "depth bound matches main exactly: kept at 255 and 256 containers, cut AND disclosed at 257" \
+    || true
+
+# ── arm 12c: the two DISCLOSURE differences from main, pinned in BOTH directions ───────────────────────
+# Re-deriving the bound from ancestry cannot reproduce main's disclosure on two shapes, because main's
+# answer comes from a walk that never made the trip this round makes. The maintainer reviewed both and
+# asked for OUR behaviour to be kept and documented, not reverted — matching main here would need an
+# unbounded parent walk, which is the very thing the bound exists to prevent. So these two rows are
+# DELIBERATE, and this arm exists so that a later change to either direction is caught rather than
+# discovered: one row pins where this round is QUIETER than main, one where it is LOUDER.
+DS="$TMP/disc"
+# (i) QUIETER, and the more accurate answer: no import was actually dropped, so there is nothing to
+#     announce. Main flags these because its walk entered a too-deep container on the way to a file that
+#     turned out to hold no import at all.
+mkdir -p "$DS/quiet"
+{ i=0; while [ "$i" -lt 300 ]; do printf '#ifdef G%s\n' "$i" >> "$DS/quiet/a.c"; i=$((i + 1)); done
+  printf 'int y;\n' >> "$DS/quiet/a.c"
+  i=0; while [ "$i" -lt 300 ]; do printf '#endif\n' >> "$DS/quiet/a.c"; i=$((i + 1)); done
+} >/dev/null 2>&1
+printf 'int x;\n' > "$DS/quiet/x.c"
+# (ii) LOUDER, and the safe direction: the include sits inside a function body whose OWN 260 nested
+#      conditionals put it past the bound, so the depth test fires before the reach test can conclude
+#      the walk would never have entered the function anyway.
+mkdir -p "$DS/loud"; printf 'int x;\n' > "$DS/loud/deep.h"
+{ printf 'void f( void ){\n'
+  i=0; while [ "$i" -lt 260 ]; do printf '#ifdef G%s\n' "$i" >> "$DS/loud/a.c"; i=$((i + 1)); done
+  printf '#include "deep.h"\n' >> "$DS/loud/a.c"
+  i=0; while [ "$i" -lt 260 ]; do printf '#endif\n' >> "$DS/loud/a.c"; i=$((i + 1)); done
+  printf '}\n'
+} >/dev/null 2>&1
+"$BIN" "$DS/quiet" --skipped --no-cache > "$TMP/dq.xml" 2>/dev/null
+"$BIN" "$DS/loud"  --skipped --no-cache > "$TMP/dl.xml" 2>/dev/null
+Q=$(grep -c 'why="extract-partial"' "$TMP/dq.xml" || true)
+L=$(grep -c 'why="extract-partial"' "$TMP/dl.xml" || true)
+if [ "$Q" -eq 0 ] && [ "$L" -eq 1 ]; then
+    ok "the two deliberate disclosure differences hold: silent when nothing was dropped, loud when the bound cut an import"
+else
+    no "disclosure differences moved: no-include-under-300-nesting extract-partial=$Q (want 0), import-in-fn-under-260 extract-partial=$L (want 1)"
+fi
+
 # ── arm 9: cache round-trip, on --deps — where the include edges actually show ────────────────────────
 # The map view does not carry Include rows, so the earlier version of this arm compared two documents in
 # which the cached records are invisible. --deps is the view that reads them.
@@ -326,11 +405,24 @@ if [ -n "$BASE_BIN" ] && [ -x "$BASE_BIN" ]; then
     PCACHE="$TMP/pre.bin"
     rm -f "$PCACHE"
     "$BASE_BIN" "$WORK" --cache="$PCACHE" --deps >/dev/null 2>&1
+    # A copy, not a checksum: `sha256sum` is absent on stock macOS and `shasum -a 256` is absent on
+    # some Linux images, and 8 of the 24 release legs are macOS. cmp against a copy is the portable
+    # spelling of "these bytes did not change".
+    cp "$PCACHE" "$TMP/pre.bin.copy"
     "$BIN" "$WORK" --cache="$PCACHE" --deps > "$TMP/prewarm.xml" 2>/dev/null
     if cmp -s "$TMP/prewarm.xml" "$TMP/nocache.xml"; then
         ok "a pre-change binary's cache is accepted and reads identically — no kParserVer bump is owed"
     else
         no "a pre-change cache reads DIFFERENTLY from --no-cache — extraction output changed, so kParserVer must be bumped"
+    fi
+    # Reading identically is NOT the same as being accepted: a binary that silently rejected the cache
+    # and rebuilt it from source would produce the same document and sail the arm above. Acceptance is
+    # the stronger claim — kParserVer accepted the pre-change stamp AND the bytes on disk came back
+    # untouched — so it gets its own assertion.
+    if cmp -s "$PCACHE" "$TMP/pre.bin.copy"; then
+        ok "the pre-change cache file is byte-for-byte UNCHANGED after this binary read it — accepted, not silently rebuilt"
+    else
+        no "the pre-change cache file was REWRITTEN — this binary rebuilt it rather than accepting the pre-change stamp"
     fi
 else
     skip "pre-change-cache arm (set RIPWIRE_BASE_BIN=<path to a pre-change ripwire> to run it)"
