@@ -115,6 +115,7 @@
 #include <string_view>
 #include <thread>       // the git-spawn pool (fork/exec is the cost, not compute)
 #include "infra/os.h"   // rw::os::getpid / unlink / popen — the blob-batch temp list and its git reader
+#include <tuple>        // std::tie — the rename probe's candidate order
 #include <utility>
 #include <vector>
 
@@ -1373,6 +1374,7 @@ struct WhereHit
     bool          isDef = false;      // LEXICAL definition heuristic — see definitionShaped()
     std::string   text;               // the trimmed source line (evidence, so the caller can judge)
     bool          fromWorktree = false;   // read from the WORKING-TREE copy of a path that differs from HEAD (ref="worktree")
+    bool          testLocal    = false;   // a TEST-LOCAL definition, demoted below the production ones (test_local="1")
 
     // The CHECKOUT is HEAD's tree overlaid with the working copy of every path that differs from it: those rows
     // sort, label and count as one group, ahead of the other refs. Keyed on the flag, never on the ref name, so a
@@ -1387,6 +1389,7 @@ struct IndexDefSite
 {
     std::string   path;
     std::uint32_t line = 0;
+    bool          testLocal = false;   // filter.h isTestSymbol: in a test file, or in a test scope of any file
 };
 
 // The optional EVIDENCE a caller can hand the tree scan — both members are "extra knowledge this surface
@@ -1410,7 +1413,8 @@ inline std::vector<IndexDefSite> whereisIndexDefSites( const IngestResult& ing, 
     {
         if( s.name == name )
         {
-            sites.push_back( IndexDefSite{ std::string( relForHash( ing.files[ s.fileId ], root ) ), s.line } );
+            sites.push_back( IndexDefSite{ std::string( relForHash( ing.files[ s.fileId ], root ) ), s.line,
+                                           isTestSymbol( ing, std::size_t( &s - ing.symbols.data() ) ) } );
         }
     }
     return sites;
@@ -1727,7 +1731,7 @@ inline bool relabelHeadHitsFromIndex( std::vector<WhereHit>& hits, std::span<con
         return false;
     }
 
-    std::vector<char> promoted( hits.size(), 0 );
+    std::vector<char> promoted( hits.size(), 0 );   // 1 = a production def site, 2 = a test-local one
     for( const IndexDefSite& def : indexDefs )
     {
         std::size_t   bestHit  = hits.size();
@@ -1748,11 +1752,11 @@ inline bool relabelHeadHitsFromIndex( std::vector<WhereHit>& hits, std::span<con
         }
         if( bestHit != hits.size() )
         {
-            promoted[bestHit] = 1;
+            promoted[bestHit] = def.testLocal ? 2 : 1;
         }
     }
 
-    const bool anyPromoted = std::find( promoted.begin(), promoted.end(), 1 ) != promoted.end();
+    const bool anyPromoted = std::any_of( promoted.begin(), promoted.end(), []( char p ) { return p != 0; } );
     if( !anyPromoted )
     {
         DISCLOSE( "whereis: the index's def sites match no HEAD row (working tree drifted from HEAD?) — keeping the lexical labels" );
@@ -1762,7 +1766,8 @@ inline bool relabelHeadHitsFromIndex( std::vector<WhereHit>& hits, std::span<con
     {
         if( hits[hitIndex].inCheckout() )
         {
-            hits[hitIndex].isDef = promoted[hitIndex] != 0;
+            hits[hitIndex].isDef     = promoted[hitIndex] != 0;
+            hits[hitIndex].testLocal = promoted[hitIndex] == 2;
         }
     }
     return true;
@@ -1947,6 +1952,149 @@ inline WorktreeScan scanWorktree( const std::string& root, std::string_view sym,
     return scan;
 }
 
+// ── the working-tree RENAME behind a "not found" (2026-10-01, the comparison table's F-textual-2b) ─────────────
+//
+// `--callers=line_trim` after the working tree renamed it to `trim_line` refused with "did you mean 'line_type'?":
+// the edit-distance suggester ranks names by spelling, and a token swap is far from its source by spelling. The
+// working tree holds better evidence than spelling. A name the index lacks but HEAD's copy of a CHANGED file has,
+// beside a definition in that file's working copy that HEAD's copy lacks, is a rename in progress. This finds the
+// best such definition, so the not-found answers can offer it first. Read-only, git plumbing only, and it runs only
+// on a refusal path.
+
+// The lower-cased identifier words of a name: split at '_', '-', digits-to-letters and lower-to-upper case changes.
+inline std::vector<std::string> identWordsOf( std::string_view name )
+{
+    std::vector<std::string> words;
+    std::string              cur;
+    for( std::size_t i = 0; i < name.size(); ++i )
+    {
+        const unsigned char c        = static_cast<unsigned char>( name[ i ] );
+        const bool          boundary = i > 0 && std::isupper( c ) && std::islower( static_cast<unsigned char>( name[ i - 1 ] ) );
+        if( !std::isalnum( c ) || boundary )
+        {
+            if( !cur.empty() ) { words.push_back( std::move( cur ) ); cur.clear(); }
+            if( !std::isalnum( c ) ) { continue; }
+        }
+        cur.push_back( static_cast<char>( std::tolower( c ) ) );
+    }
+    if( !cur.empty() ) { words.push_back( std::move( cur ) ); }
+    std::sort( words.begin(), words.end() );
+    words.erase( std::unique( words.begin(), words.end() ), words.end() );
+    return words;
+}
+
+// Whether `word` occurs in `bytes` as a whole identifier (the same flank rule as every whereis row).
+inline bool hasWholeWord( std::string_view bytes, std::string_view word )
+{
+    for( std::size_t at = bytes.find( word ); at != std::string_view::npos; at = bytes.find( word, at + 1 ) )
+    {
+        if( wholeWordAt( bytes, at, word.size() ) ) { return true; }
+    }
+    return false;
+}
+
+constexpr std::size_t kMaxRenameProbeFiles = 32;   // HEAD copies one rename probe reads; past it the probe stops (a hint, never a claim)
+
+// The definition the working tree most likely renamed `missing` to, or "" when the evidence names none. A candidate
+// is an indexed definition in a path that differs from HEAD, whose HEAD copy holds `missing` as a whole word and
+// does NOT hold the candidate's own name, and which shares a strict majority of identifier words with `missing`.
+// Best = most shared words, then the closest length, then the name (determinism).
+inline std::string worktreeRenameOf( const IngestResult& ing, std::string_view missing, const std::string& root )
+{
+    const std::vector<std::string> missingWords = identWordsOf( missing );
+    if( missing.empty() || missingWords.empty() || !quality::gitRepoHasHistory( root ) )
+    {
+        return {};
+    }
+    const GitListing changed = worktreeChangedPaths( root, quality::gitHeadSha( root ) );
+    if( !changed.ok || changed.lines.empty() )
+    {
+        return {};
+    }
+
+    struct Candidate { std::string path; std::string_view name; std::size_t shared; };
+    std::vector<Candidate> candidates;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.kind == SymKind::Section || s.name == missing )
+        {
+            continue;
+        }
+        const std::string path( relForHash( ing.files[ s.fileId ], root ) );
+        if( !std::binary_search( changed.lines.begin(), changed.lines.end(), path ) )
+        {
+            continue;
+        }
+        const std::vector<std::string> words  = identWordsOf( s.name );
+        std::size_t                    shared = 0;
+        for( const std::string& w : words )
+        {
+            shared += std::binary_search( missingWords.begin(), missingWords.end(), w ) ? 1 : 0;
+        }
+        // A strict majority of the larger word set: line_trim/trim_line (2 of 2) and getUserName/fetchUserName (2 of 3)
+        // qualify; a shared project prefix alone (zqDoomed/zqFresh, 1 of 2) does not, so a deletion is not read as a rename.
+        if( shared * 2 > std::max( words.size(), missingWords.size() ) )
+        {
+            candidates.push_back( Candidate{ path, s.name, shared } );
+        }
+    }
+    std::sort( candidates.begin(), candidates.end(), [ & ]( const Candidate& a, const Candidate& b )
+    {
+        const std::size_t da = a.name.size() > missing.size() ? a.name.size() - missing.size() : missing.size() - a.name.size();
+        const std::size_t db = b.name.size() > missing.size() ? b.name.size() - missing.size() : missing.size() - b.name.size();
+        return std::tie( b.shared, da, a.name, a.path ) < std::tie( a.shared, db, b.name, b.path );
+    } );
+
+    // Best first, so the first candidate whose HEAD copy proves the rename is the answer; one HEAD read per file.
+    std::vector<std::pair<std::string, std::string>> headCopies;   // path → its HEAD copy, read at most once
+    for( const Candidate& c : candidates )
+    {
+        if( c.path.front() == '"' )
+        {
+            continue;   // a git-quoted spelling is not the path's name
+        }
+        auto copy = std::find_if( headCopies.begin(), headCopies.end(), [ & ]( const auto& h ) { return h.first == c.path; } );
+        if( copy == headCopies.end() )
+        {
+            if( headCopies.size() >= kMaxRenameProbeFiles )
+            {
+                break;
+            }
+            headCopies.emplace_back( c.path, gitCapture( root, "show " + shSingleQuote( "HEAD:./" + c.path ) + " 2>/dev/null" ) );
+            copy = std::prev( headCopies.end() );
+        }
+        if( hasWholeWord( copy->second, missing ) && !hasWholeWord( copy->second, c.name ) )
+        {
+            return std::string( c.name );
+        }
+    }
+    return {};
+}
+
+// The comparison table's hono-05 row: a test file's local `const serveStatic = …` read as a definition beside the
+// real one, and a reader takes the first kind="def" row. A definition is TEST-LOCAL when the index says so
+// (isTestSymbol: a test file or a test scope), or, on a lexical row, when its path is in the test tier. Only when
+// the answer holds BOTH kinds are the test-local rows marked (test_local="1") and ordered after the production ones;
+// nothing is dropped. An answer with one kind keeps its rows, its order and its bytes. True when it marked any.
+inline bool demoteTestLocalDefs( std::vector<WhereHit>& hits )
+{
+    for( WhereHit& h : hits )
+    {
+        h.testLocal = h.isDef && ( h.testLocal || pathTierOf( h.path ) == PathTier::TestOrBench );
+    }
+    const bool anyProduction = std::any_of( hits.begin(), hits.end(), []( const WhereHit& h ) { return h.isDef && !h.testLocal; } );
+    const bool anyTestLocal  = std::any_of( hits.begin(), hits.end(), []( const WhereHit& h ) { return h.testLocal; } );
+    if( anyProduction && anyTestLocal )
+    {
+        return true;
+    }
+    for( WhereHit& h : hits )
+    {
+        h.testLocal = false;
+    }
+    return false;
+}
+
 // The emitted ORDER of --whereis rows (see computeWhereis' header): the checkout (HEAD plus its worktree rows) first
 // as ONE group — a definition the edit just added sorts among HEAD's definitions, not after them; the two never
 // share a path, so the group needs no ref order inside it — then the other refs by name; within a group SOURCE
@@ -1967,9 +2115,11 @@ inline bool whereHitBefore( const WhereHit& a, const WhereHit& b )
     {
         return at < bt;
     }
-    if( a.isDef != b.isDef )
+    // Production definitions, then test-local ones (test_local="1", see demoteTestLocalDefs), then references.
+    const auto defRank = []( const WhereHit& h ) { return !h.isDef ? 2 : ( h.testLocal ? 1 : 0 ); };
+    if( defRank( a ) != defRank( b ) )
     {
-        return a.isDef;
+        return defRank( a ) < defRank( b );
     }
     if( a.path != b.path )
     {
@@ -2077,6 +2227,7 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
     // §A7: HEAD's rows are the INDEX's answer, not the shape test's — before the sort, because "definitions
     // before references" is a sort key and a wrong label re-orders the first screen.
     result.headLabelsFromIndex = relabelHeadHitsFromIndex( result.hits, evidence.indexDefs );
+    demoteTestLocalDefs( result.hits );
 
     // The checkout first, then refs by name; within a group, SOURCE before test before docs (§P11.5, see this
     // function's header), then definitions before references, then path/line — whereHitBefore states it.
@@ -2548,6 +2699,14 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
     {
         std::fputs( gitoracle::kHistoryProbeLegend, out );
     }
+    // test_local= rides only an answer that holds both kinds of definition (demoteTestLocalDefs), and so does its reading.
+    if( std::any_of( res.hits.begin(), res.hits.end(), []( const WhereHit& h ) { return h.testLocal; } ) )
+    {
+        rw::emitRaw( out, "TEST-LOCAL: test_local=\"1\" on a kind=\"def\" row marks a definition in a test file or a test scope "
+                           "(the index's test lens; on a lexical row, a test-tier path). It appears only when the same answer also "
+                           "holds a production definition, and those rows are ordered after the production definitions and before "
+                           "the references of their tier. Nothing is dropped. " );
+    }
     // The overlay's own vocabulary, only on an answer that carries it — a clean checkout pays no bytes for it.
     if( res.worktree != WorktreeOverlay::Clean )
     {
@@ -2649,9 +2808,9 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
     {
         const WhereHit& h = res.hits[ hitIndex ];
         ++shownCount;
-        rw::emitTo( out, "<hit ref=\"{}\" tip=\"{:.9}\" date=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\" t=\"{}\"/>",
+        rw::emitTo( out, "<hit ref=\"{}\" tip=\"{:.9}\" date=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{} t=\"{}\"/>",
                       ex( h.ref ).c_str(), h.tip.c_str(), ex( h.date ).c_str(), ex( h.path ).c_str(),
-                      h.line, h.isDef ? "def" : "ref", ex( h.text ).c_str() );
+                      h.line, h.isDef ? "def" : "ref", h.testLocal ? " test_local=\"1\"" : "", ex( h.text ).c_str() );
     }
     ASSUME( shownCount == hitPage.end - hitPage.begin );
     // <more hits="N"/> = the rows AFTER this page, so shown + more == the rows from this page's offset on.

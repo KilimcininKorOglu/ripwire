@@ -795,7 +795,7 @@ Artifact written:
 **exit code: 1**
 
 `````
-(empty)
+<!-- ripwire callers: NOT FOUND, an answer and a refusal at once. found=0: no indexed definition matched the selector echoed on this element, so nothing was listed or counted. Zero means none found, not none exists: an unindexed file, a typo or an uncommitted rename can each hide the definition. near=: the indexed name to retry with; near_renamed=1: the working tree renamed the selector to it (a changed file's HEAD copy holds the selector and not near=). The exit status stays 1, a refusal, and stderr carries the same diagnosis. --><callers of="DoesNotExist" found="0"/>
 `````
 
 stderr:
@@ -5351,7 +5351,7 @@ ripwire: --run-timeout=SECONDS modifies --run-trace — pass it too (e.g. ripwir
 *The session legend dictionary the MCP server serves as ripwire://legend-dict/full — one definition per line, headed by its dictv= version; no corpus needed. =roster lists the completeness attributes it defines.*
 
 `````
-ripwire legend dictionary ripwire.dict/v1 dictv=a90a6b2e403c48c9 entries=751
+ripwire legend dictionary ripwire.dict/v1 dictv=60e4f13d938291e3 entries=768
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)

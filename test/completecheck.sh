@@ -490,9 +490,105 @@ chmod 644 "$WT/src/main.c"
     && ok 'whereis (18j): a name the working tree deleted answers rc 0 with a hits="0" document' \
     || no "whereis (18j): the deleted name did not answer as a document (rc=$rc)"
 "$BIN" "$WT" --callers=zqDoomed --no-cache >"$TMP/wt0c.xml" 2>"$TMP/wt0c.err"; rc=$?
-{ [ $rc -eq 1 ] && [ ! -s "$TMP/wt0c.xml" ] && grep -q 'not found' "$TMP/wt0c.err"; } \
-    && ok 'callers (18j): the same name is the documented refusal (exit 1, stderr names it, stdout empty)' \
+{ [ $rc -eq 1 ] && grep -q 'not found' "$TMP/wt0c.err"; } \
+    && ok 'callers (18j): the same name is still the documented refusal (exit 1, stderr names it)' \
     || no "callers (18j): the unknown-symbol contract moved (rc=$rc)"
+
+# 18l) ...and the refusal now ALSO answers on stdout (fix list #2): the verb's own root, the selector echoed, found="0",
+# the legend defining it — so an agent reading stdout gets an answer, not nothing. Exit 1 is unchanged.
+for v in callers callees uses impact; do
+    "$BIN" "$WT" --$v=zqDoomed --no-cache >"$TMP/nf.xml" 2>/dev/null; rc=$?
+    { [ $rc -eq 1 ] && grep -q "<$v [^>]*of=\"zqDoomed\" found=\"0\"" "$TMP/nf.xml" && grep -q 'found=0: ' "$TMP/nf.xml" \
+      && { ! command -v xmllint >/dev/null 2>&1 || xmllint --noout "$TMP/nf.xml" 2>/dev/null; }; } \
+        && ok "$v (18l): not found answers on stdout (<$v of= found=\"0\">, legend-defined, well-formed) and still exits 1" \
+        || { no "$v (18l): not found printed no answer document (rc=$rc)"; head -c 300 "$TMP/nf.xml"; echo; }
+done
+"$BIN" "$WT" --path=zqUser,zqDoomed --no-cache >"$TMP/nf.xml" 2>/dev/null; rc=$?
+{ [ $rc -eq 1 ] && grep -q '<path [^>]*from="zqUser" to="zqDoomed" found="0" missing="to"' "$TMP/nf.xml"; } \
+    && ok 'path (18l): an endpoint that matched nothing answers <path from= to= found="0" missing="to"> and exits 1' \
+    || { no "path (18l): no answer document (rc=$rc)"; head -c 300 "$TMP/nf.xml"; echo; }
+"$BIN" "$WT" --callers=zqDoomed --json --no-cache 2>/dev/null \
+    | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); sys.exit(0 if d.get("of")=="zqDoomed" and d.get("found")==0 else 1)' 2>/dev/null \
+    && ok 'callers (18l): under --json the not-found answer is one JSON object with found:0' \
+    || no 'callers (18l): --json not-found printed no JSON answer'
+
+# 18m) the near-miss ranks a WORKING-TREE RENAME first: zqOldName became zqNewName in the working tree, so the answer
+# offers zqNewName (near_renamed="1"), and stderr names the rename before any spelling near-miss.
+"$BIN" "$WT" --callers=zqOldName --no-cache >"$TMP/rn.xml" 2>"$TMP/rn.err"; rc=$?
+{ [ $rc -eq 1 ] && grep -q 'near="zqNewName" near_renamed="1"' "$TMP/rn.xml" \
+  && grep -q "symbol not found: zqOldName (renamed in the working tree: did you mean 'zqNewName'?)" "$TMP/rn.err"; } \
+    && ok 'callers (18m): a name the working tree renamed offers the new name first (near_renamed="1", stderr says renamed)' \
+    || { no 'callers (18m): the rename is not offered first'; cat "$TMP/rn.err"; head -c 400 "$TMP/rn.xml"; echo; }
+"$BIN" "$WT" --callers=zqNoSuchNameAtAll --no-cache >"$TMP/rn0.xml" 2>/dev/null
+grep -q 'near_renamed' "$TMP/rn0.xml" \
+    && no 'callers (18m): a name no file ever had was offered as a rename' \
+    || ok 'callers (18m): a name no file ever had gets no rename claim'
+
+# 18n) fix list #9: a TEST-LOCAL definition (a test file's own `def helper`, hono-05's `const serveStatic =`) is
+# ordered after the production definition when both exist, and marked test_local="1"; nothing is dropped. An answer
+# with only one kind keeps its bytes.
+TL="$TMP/testlocal"; mkdir -p "$TL/pkg" "$TL/tests"
+printf 'def helper( x ):\n    return x\n' >"$TL/pkg/lib.py"
+printf 'from pkg.lib import helper as real\n\ndef helper( x ):\n    return real( x )\n\ndef only_in_test():\n    return helper( 1 )\n' >"$TL/tests/test_lib.py"
+( cd "$TL" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+TLO="$( "$BIN" "$TL" --whereis=helper --no-cache 2>/dev/null )"
+FIRSTDEF="$( printf '%s' "$TLO" | grep -o '<hit [^>]*kind="def"[^>]*>' | head -1 )"
+TESTDEF="$( printf '%s' "$TLO" | grep -o '<hit [^>]*p="tests/test_lib.py" l="3" kind="def"[^>]*>' )"
+{ printf '%s' "$FIRSTDEF" | grep -q 'p="pkg/lib.py" l="1" kind="def" t=' && printf '%s' "$TESTDEF" | grep -q 'kind="def" test_local="1"' \
+  && [ "$( printf '%s' "$TLO" | sed 's/<!--.*-->//' | grep -o '<hit ' | wc -l | tr -d ' ' )" = "$( printf '%s' "$TLO" | grep -o ' hits="[0-9]*"' | grep -o '[0-9]*' )" ]; } \
+    && ok 'whereis (18n): the production def leads; the test-local def is marked test_local="1" and kept (every hit printed)' \
+    || { no 'whereis (18n): a test-local definition is not demoted beside the production one'; printf '%s\n' "$TLO" | sed 's/<!--.*-->//' | head -c 900; echo; }
+printf '%s' "$TLO" | grep -q 'TEST-LOCAL: \|test_local=1: ' \
+    && ok 'whereis (18n): test_local= is defined in the legend where it rides' || no 'whereis (18n): test_local= rides undefined'
+"$BIN" "$TL" --whereis=only_in_test --no-cache 2>/dev/null | grep -q 'test_local' \
+    && no 'whereis (18n): an answer with only test definitions grew test_local=' \
+    || ok 'whereis (18n): an answer with one kind of definition carries no test_local= (bytes unchanged)'
+
+# 18n, the ORDER half: a test-scope def in a source file whose path sorts first (src/a.rs) used to lead the answer;
+# the production def (src/z.rs) now does.
+TR="$TMP/testscope"; mkdir -p "$TR/src"
+printf '#[cfg(test)]\nmod tests {\n    fn helper() -> i32 { 2 }\n    #[test]\n    fn t() { assert_eq!(helper(), 2); }\n}\n' >"$TR/src/a.rs"
+printf 'pub fn helper() -> i32 { 1 }\n' >"$TR/src/z.rs"
+( cd "$TR" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+TRF="$( "$BIN" "$TR" --whereis=helper --no-cache 2>/dev/null | sed 's/<!--.*-->//' | grep -o '<hit [^>]*kind="def"[^>]*>' )"
+{ printf '%s\n' "$TRF" | head -1 | grep -q 'p="src/z.rs" l="1" kind="def" t=' && printf '%s\n' "$TRF" | sed -n 2p | grep -q 'p="src/a.rs" l="3" kind="def" test_local="1"'; } \
+    && ok 'whereis (18n): a test-scope def in a source file sorts after the production def (test_local="1")' \
+    || { no 'whereis (18n): a test-scope def still leads the production def'; printf '%s\n' "$TRF"; }
+
+# 18o) the MCP twins keep their -32602 refusal and carry the same answer document in error.data.answer
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$BIN" "$WT" <<'PY' && ok 'MCP (18o): find_referencing_symbols / impact / path_between refuse -32602 AND carry the answer (found 0, the rename first)' \
+                               || no 'MCP (18o): the twins do not carry the not-found answer'
+import json, subprocess, sys
+BIN, WT = sys.argv[1], sys.argv[2]
+calls = [ ( "find_referencing_symbols", { "path": WT, "symbol": "zqOldName" }, '"found":0', '"near":"zqNewName"' ),
+          ( "impact", { "path": WT, "symbol": "zqDoomed" }, 'found="0"', 'of="zqDoomed"' ),
+          ( "path_between", { "path": WT, "from": "zqUser", "to": "zqDoomed" }, 'found="0"', 'missing="to"' ) ]
+msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" } ] + [
+    { "jsonrpc": "2.0", "id": 10 + i, "method": "tools/call", "params": { "name": n, "arguments": a } } for i, ( n, a, _, _ ) in enumerate( calls ) ]
+p = subprocess.run( [ BIN, "--mcp" ], input = "".join( json.dumps( m ) + "\n" for m in msgs ), capture_output = True, text = True, timeout = 300 )
+byId = {}
+for line in p.stdout.splitlines():
+    try:
+        d = json.loads( line )
+    except ValueError:
+        continue
+    byId[ d.get( "id" ) ] = d
+bad = 0
+for i, ( n, a, want1, want2 ) in enumerate( calls ):
+    d = byId.get( 10 + i, {} )
+    e = d.get( "error", {} )
+    ans = e.get( "data", {} ).get( "answer", "" )
+    if e.get( "code" ) != -32602 or want1 not in ans or want2 not in ans:
+        print( "  MCP %s: %s" % ( n, json.dumps( d )[ :300 ] ) ); bad = 1
+rn = byId.get( 10, {} ).get( "error", {} ).get( "message", "" )
+if "renamed in the working tree: did you mean 'zqNewName'" not in rn:
+    print( "  MCP rename clause missing: " + rn ); bad = 1
+sys.exit( bad )
+PY
+fi
 # 18k) a Class.method / Class#method selector is searched as a LITERAL, and no tree spells a method's definition
 # that way. It used to answer hits="0" on-head="0" complete="1" with no note — a zero shaped exactly like a name this
 # repo never had (the edit-check lane's finding). The zero now carries a selector-note r="dotted-selector" whose

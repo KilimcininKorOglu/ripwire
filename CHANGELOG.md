@@ -260,9 +260,9 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 `kParserVer` 124 → 129 (the function-literal fix takes 128; #338 and #325 take one more), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=a90a6b2e403c48c9 entries=751`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=60e4f13d938291e3 entries=768`.
 
-### Fixed — `--whereis` answers for the checkout, not only for HEAD's commit
+### Fixed — `--whereis` answers for the checkout, and a not-found refusal also answers on stdout
 
 `--whereis` scanned committed trees only (HEAD and the local branches). On a checkout with uncommitted changes it
 still printed `complete="1"` and a bare `at=`: a function the edit had just added read `hits="0"`, and one it had
@@ -274,8 +274,8 @@ the root says `worktree="read"`. A changed path that cannot be read (permission,
 git quotes, or more than 8192 changed paths) keeps its HEAD rows, and the root says `worktree="partial"`. When git
 cannot list the changes, the root says `worktree="unlisted"`. Neither claims `complete=`. Other refs are still read
 as their committed trees. A clean checkout's answer is byte-identical. The MCP `whereis` tool shares the code. Both
-legends define `worktree=` and print it only when the root carries it; the session legend dictionary gains that one
-entry (751). The full legend's sentence "at= is sha-only here (never +dirty)" is replaced. Gates: `test/completecheck.sh` §18 (add, rename, delete, deleted file, untracked
+legends define `worktree=` and print it only when the root carries it. The full legend's sentence "at= is sha-only
+here (never +dirty)" is replaced. Gates: `test/completecheck.sh` §18 (add, rename, delete, deleted file, untracked
 file, the no-stale-row invariant, MCP twin, an unreadable changed path) and `test/gitstampcheck.sh` (the documented
 whereis exception is closed).
 
@@ -284,9 +284,29 @@ method's definition that way, so they answered `hits="0" on-head="0" complete="1
 carries `<selector-note r="dotted-selector" spec= retry=>`, whose `retry=` is the bare method name, and claims no
 `complete=`. The full legend names the fourth reason. Gate: `test/completecheck.sh` §18k.
 
-A symbol that is not in the index is still a refusal (exit 1) on `--callers`, `--callees`, `--impact`, `--uses` and
-the other symbol verbs, as README §6.2 and the `--callers` example in docs/COMMANDS.md document. `--whereis` already
-answers a zero as a document (exit 0, `hits="0"`). completecheck §18j pins both.
+A selector that matches no indexed definition is still a refusal (exit 1) on `--callers`, `--callees`, `--uses`,
+`--impact` and `--path`, as README §6.2 and the `--callers` example in docs/COMMANDS.md document. The refusal now also
+prints an answer on stdout, so an agent that reads stdout gets an answer instead of nothing. The answer is the verb's
+own element with the selector echoed, `found="0"`, and `near=` (the name to retry with), plus `missing="from|to"` on
+`--path`. Under `--json` it is one JSON object. Both legends define it.
+
+When the working tree renamed the selector, the rename is offered first. The evidence is a changed file whose HEAD copy
+holds the old name and not the new one, and the two names share most of their identifier words. In that case
+`near_renamed="1"` is set, and stderr gains "(renamed in the working tree: did you mean 'X'?)" ahead of the spelling
+near-miss. `line_trim` → `trim_line` used to get a suggestion of `line_type`. stderr is otherwise unchanged.
+
+The MCP twins `find_referencing_symbols`, `impact` and `path_between` keep their -32602 refusal and carry the same
+document in `error.data.answer`. The MCP `uses` tool already answered `count="0"`.
+
+Gates: `test/completecheck.sh` §18j, §18l, §18m and §18o.
+
+`--whereis` orders a test-local definition after the production definition of the same name when the answer holds
+both, and marks it `test_local="1"`. A test-local definition is one in a test file, or in a test scope such as Rust
+`#[cfg(test)]`. Nothing is dropped, and an answer with only one kind is unchanged. Gate: `test/completecheck.sh`
+§18n.
+
+The new attributes (`worktree=`, `test_local=`, and `found=`, `near=`, `near_renamed=` and `missing=` on the not-found
+answers) bring the session legend dictionary to `dictv=60e4f13d938291e3 entries=768`.
 
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
 
