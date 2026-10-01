@@ -111,6 +111,9 @@ COLD_FILES = (
       "per-node tree-sitter walk — is covered by ingest_binds.h and ingest_relations.h, which run for every grammar." ),
     ( "src/ingest_elixir.h",
       "Elixir-specific capture helpers: per node, but for one grammar with a small corpus share. Same argument as ingest_jsimports.h above." ),
+    ( "src/handlershape.h",
+      "--quality-delta's handler and placeholder shape walk (AstWalk::HandlerShapes). The AST-query engine in ingest_astquery.h drives it, so like that "
+      "engine it does not run at all on a plain `ripwire <dir>`, and a remark here cannot move the number every other verb pays." ),
 
     # ── the other translation units under src/ ────────────────────────────────────────────────────
     ( "src/main.cpp",

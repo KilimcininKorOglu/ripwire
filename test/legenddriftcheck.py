@@ -185,7 +185,10 @@ def extract_flag_tokens_from_legend(legend_text):
     # something emits bodyless=, which --pack-task's section-dropped placeholder branch started doing in
     # this train — so the bareword entered the live arm's corpus and manufactured a phantom on correct
     # legend text. Added by NAME, per this list's own rule, never by narrowing pattern 5.
-    placeholder_exclude = {"bodies", "bodyless", "overloads", "files", "hits", "toks", "noedge", "total", "shown"}
+    # depth-labelled --impact (0.6.5): "d" joins for the same documented reason. src/graphlegend.h kImpactDepthLegend
+    # defines the <s> row's OUTPUT ATTRIBUTE as "d=N on <s>: hop depth", and there is no --d flag (single-letter flags
+    # do not exist in this CLI). Added by NAME, per this list's own rule.
+    placeholder_exclude = {"bodies", "bodyless", "overloads", "files", "hits", "toks", "noedge", "total", "shown", "d"}
     for match in re.finditer(r'\b([a-z][a-z0-9\-]*)=[NM]\b', legend_text):
         word = match.group(1)
         if word not in placeholder_exclude:

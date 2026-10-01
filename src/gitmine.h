@@ -2243,12 +2243,19 @@ inline std::vector<float> churnDecayTeleportWorkspace( const std::vector<std::st
 // Without it, `rank_by="churn" window="18mo"` sits over ranks byte-identical to pagerank — and --help sells
 // that stamp as the thing that stops churn "passing for the structural one" (cli.h:1070-1071), which it cannot
 // do while both cases are spelled the same.
-inline std::string churnWindowStamp( std::string_view minedWindow, bool hasChurnEvidence )
+// 0.6.6 command sweep: `shallow` is the third fact of the same kind. On a depth-limited clone the mined span is
+// the FETCHED history, not the window the label names, so the stamp says so in the same qualified-value form
+// (`18mo@HEAD (shallow clone)`); false keeps every full-history stamp byte-identical.
+inline std::string churnWindowStamp( std::string_view minedWindow, bool hasChurnEvidence, bool shallow = false )
 {
     std::string stamp{ minedWindow };   // brace-init: stamp( minedWindow ) parses as a function declarator (the vexing-parse lookalike hasEnclosingGitRepo warns about) and pollutes the symbol map
     if( !hasChurnEvidence )
     {
         stamp += " (no churn evidence)";
+    }
+    if( shallow )
+    {
+        stamp += " (shallow clone)";
     }
     return stamp;
 }

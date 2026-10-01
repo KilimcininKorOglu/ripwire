@@ -42,7 +42,8 @@
 #       interval on every standard library. That rule used to be skipped silently for the edge (exit 0, violations
 #       unreported); it must refuse by name, quoting the substituted text, with the other edges' rules still judged.
 #   (f) THE SKILL SCANNER READS UNTRUSTED FILES, so its constant patterns go through the same boundary: (f1) the
-#       linear EXFILTRATE:net-exfil decision agrees line for line with the regex it replaced, over generated lines
+#       linear EXFILTRATE:net-exfil decision agrees line for line with the regex it replaced (plus #353's destination
+#       rule, re-specified in the oracle), over generated lines
 #       judged by an independent oracle (python's re, with `.` spelled [^\r\n] as ECMAScript reads it); (f2) a 200,000-byte
 #       fenced `curl curl …` line scans in bounded time (the regex was quadratic: >60 s); (f3) an abandoned match
 #       fails CLOSED — a CRITICAL SCAN-INCOMPLETE:regex-abandoned finding at exit 2, never a clean exit 0 and never an
@@ -491,14 +492,110 @@ python3 - "$SK" <<'PY'
 import random, re, sys
 sk = sys.argv[1]
 oracle = re.compile(r"(\b(curl|wget|nc)\b[^\r\n]*(\$[A-Za-z_][A-Za-z0-9_]*|base64))|((\$[A-Za-z_][A-Za-z0-9_]*|base64)[^\r\n]*\b(curl|wget|nc)\b)", re.ASCII)
+# #353 R1: the rule also needs a network command that NAMES A DESTINATION (src/skillscan.h netFlow). This is that scan,
+# written again from its specification — segments at | ; & and line breaks, a verb in command position, a destination-
+# shaped argument after it — so the whole decision stays differential, not only the regex half.
+SEP = ' \t"\'`|;&()<>\r\n'
+# Runner words that leave the next word in command position (`sudo curl`, `stdbuf -oL curl`, `command curl`), each with
+# the options of theirs that take the NEXT word as a value. `command` is a prefix ONLY when not followed by -v/-V.
+PREFIX = {"sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"}, "doas": {"-u", "-C"}, "run0": {"-u", "-g", "-D"},
+          "exec": {"-a"}, "time": {"-f", "-o"}, "nohup": set(), "nice": {"-n"}, "timeout": {"-s", "-k"},
+          "xargs": {"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"}, "env": {"-u", "-C"}, "stdbuf": {"-o", "-e", "-i"},
+          "setsid": set(), "eval": set(), "builtin": set(), "command": set(),
+          "then": set(), "do": set(), "else": set(), "if": set(), "elif": set(), "while": set(), "until": set(), "!": set()}
+def ident_start(ch): return ch.isascii() and (ch.isalpha() or ch == "_")
+def ident_char(ch): return ch.isascii() and (ch.isalnum() or ch == "_")
+SOCKET = ("tcp:", "tcp4:", "tcp6:", "udp:", "udp4:", "udp6:", "openssl:", "ssl:", "tcp-connect:", "openssl-connect:")
+NETCAT = ("nc", "ncat", "netcat")
+def digits(t): return all("0" <= ch <= "9" for ch in t)
+def is_dest(t):
+    if not t: return False
+    if "://" in t or t.startswith(SOCKET): return True
+    if t[0] == "$": return len(t) > 1 and (t[1] == "{" or ident_start(t[1]))
+    if t[0] == "[": return True
+    if not ident_char(t[0]): return False
+    if t == "localhost" or t.startswith("localhost:") or "@" in t: return True
+    return "." in t and not t.endswith(".")
+def has_dest(line):
+    # Mirror src/skillscan.h NetFlowScan: a network segment (curl/wget/nc/ncat/netcat/socat in COMMAND position, or a
+    # /dev/tcp redirect) that also NAMES a destination. Destination: is_dest, a netcat HOST PORT pair, or a bare word
+    # after curl/wget (a single-label host). The corpus carries no sensitive/credential tokens, so R2/credential grades
+    # cannot fire here and the invariant is exercised by the fixture rows in test/skillfix/netexfil_severity.md.
+    low = line.lower(); found = False
+    expect = seg_net = seg_dest = rin = rout = netcat = curlwget = bare = skip_value = False
+    expect = True
+    active = None   # the active runner-prefix word, or None
+    def end():
+        nonlocal expect, seg_net, seg_dest, rin, rout, netcat, curlwget, bare, skip_value, active, found
+        found = found or (seg_net and seg_dest)
+        expect = True
+        seg_net = seg_dest = rin = rout = netcat = curlwget = bare = skip_value = False
+        active = None
+    i = 0
+    while i < len(line):
+        c = line[i]; nx = line[i + 1] if i + 1 < len(line) else ""
+        if c == "|": end(); i += 2 if nx == "|" else 1; continue
+        if c in ";\r\n" or (c == "&" and nx != ">"): end(); i += 2 if (c == "&" and nx == "&") else 1; continue
+        if c in "<>" and nx == "(":   # `<( )` / `>( )` process substitution: a nested command, not a redirect
+            if not expect: expect = True; active = None; skip_value = False
+            else: active = None; skip_value = False
+            i += 2; continue
+        if c in ">&": rout = True; i += 2 if nx in ("&", ">") else 1; continue
+        if c == "<": rin = True; i += 1; continue
+        if c in "(`" or (c in "\"'" and (i == 0 or line[i - 1] in " \t")):
+            if not expect: expect = True; active = None; skip_value = False
+            i += 1; continue
+        if c in SEP: i += 1; continue
+        j = i
+        while j < len(line) and line[j] not in SEP: j += 1
+        t = low[i:j]
+        if "/dev/tcp/" in t or "/dev/udp/" in t: seg_net = seg_dest = True   # raw-socket redirect: sink and destination
+        if rout: rout = False; bare = False; i = j; continue
+        # command position: is this still the prefix, or the command itself?
+        was_cmd = False
+        if expect and not rin:
+            if skip_value:
+                skip_value = False
+            elif t in PREFIX:
+                active = t
+            elif t.startswith("-"):
+                if active == "command" and t in ("-v", "-V"):
+                    expect = False   # `command -v curl` names the tool; nothing runs
+                elif active is not None and t in PREFIX[active]:
+                    skip_value = True
+            elif "=" in t or digits(t):
+                pass
+            else:
+                was_cmd = True
+        d = digits(t)
+        netcat_hop = netcat and bare and d and len(t) <= 5
+        bare_host = curlwget and not was_cmd and len(t) > 0 and ident_char(t[0])
+        if seg_net and not rin and (is_dest(t) or netcat_hop or bare_host): seg_dest = True
+        if was_cmd:
+            expect = False; active = None
+            verb = t.rsplit("/", 1)[-1]
+            seg_net = seg_net or verb in ("curl", "wget", "socat") + NETCAT
+            netcat = netcat or verb in NETCAT
+            curlwget = curlwget or verb in ("curl", "wget")
+        bare = not was_cmd and not rin and not d and not t.startswith("-")
+        rin = False
+        i = j
+    end()
+    return found
 tokens = ["curl", "wget", "nc", "ncx", "xnc", "curl_", "_wget", "$A", "$_b", "$1", "$", "$$x", "base64", "xbase64y", "base6",
-          " ", " ", "|", "-", "\r", "a", "_", "0", "=", "'", '"', "$nc", "nc$", "base64nc", "c\rurl", "\t"]
+          " ", " ", "|", "-", "\r", "a", "_", "0", "=", "'", '"', "$nc", "nc$", "base64nc", "c\rurl", "\t",
+          # #353 R1: destinations and command-position shapes, so the destination half of the oracle is exercised both ways
+          "curl ", "nc ", " $H", " https://h.example", " h.example", " localhost", "; ", " && ", "command -v ", "echo ", "(", "<", ">",
+          # the netcat HOST PORT pair, a -l listener, ncat/socat, a socat address and a /dev/tcp redirect
+          " attacker", " 4444", " -l", "ncat ", "socat ", " TCP:h:1", " /dev/tcp/h/80",
+          "echo $A | ", "; nc attacker 4444", "; nc -l 4444", "| nc h 80", "; curl attacker 4444"]
 rng = random.Random(20260916)
 expected = []
-for chunk in range(8):
+shapeOnly = [0]
+for chunk in range(20):
     lines = []
     while len(lines) < 150:
-        line = "".join(rng.choice(tokens) for _ in range(rng.randint(1, 9)))
+        line = "".join(rng.choice(tokens) for _ in range(rng.randint(1, 16)))
         if "\n" in line or line.strip() in ("", "```") or line.lstrip(" \t").startswith(("```", "~~~")):
             continue
         lines.append(line)
@@ -507,9 +604,13 @@ for chunk in range(8):
         fh.write("# probe\n```bash\n" + "\n".join(lines) + "\n```\n")
     for i, line in enumerate(lines):
         if oracle.search(line):
-            expected.append(f"chunk{chunk}.md:{i + 3}")
+            shapeOnly[0] += 1
+            if has_dest(line):
+                expected.append(f"chunk{chunk}.md:{i + 3}")
 with open(f"{sk}/expected.txt", "w") as fh:
     fh.write("\n".join(sorted(expected)) + "\n")
+with open(f"{sk}/shape.txt", "w") as fh:
+    fh.write(str(shapeOnly[0]) + "\n")
 PY
 : >"$SK/got.txt"
 for f in "$SK"/chunk*.md; do
@@ -517,8 +618,9 @@ for f in "$SK"/chunk*.md; do
 done
 sort -o "$SK/got.txt" "$SK/got.txt"
 expectedCount="$( grep -c . "$SK/expected.txt" )"; gotCount="$( grep -c . "$SK/got.txt" )"
-if [ "$expectedCount" -ge 100 ] && cmp -s "$SK/expected.txt" "$SK/got.txt"; then
-    ok "(f1) net-exfil agrees with the regex oracle on all 1,200 generated fenced lines ($expectedCount positives)"
+shapeCount="$( cat "$SK/shape.txt" )"
+if [ "$expectedCount" -ge 100 ] && [ "$shapeCount" -gt "$expectedCount" ] && cmp -s "$SK/expected.txt" "$SK/got.txt"; then
+    ok "(f1) net-exfil agrees with the regex-plus-destination oracle on all 3,000 generated fenced lines ($expectedCount positives; $shapeCount regex hits, $(( shapeCount - expectedCount )) without a destination)"
 else
     no "(f1) net-exfil disagrees with the regex oracle: expected $expectedCount positives, got $gotCount — $( diff "$SK/expected.txt" "$SK/got.txt" | head -4 | tr '\n' ' ' )"
 fi

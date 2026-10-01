@@ -1408,7 +1408,7 @@ inline AffectedReportResult writeAffectedReport( std::FILE* out, const IngestRes
                  // definitions were dropped seeded the walk with declarations alone, which reached the reader as a bare
                  // tests="0" — on the verb whose answer is the list of tests to run. Exactly when the root carries it.
                  unprovenDefsVerbLegend( UnprovenDefsVerb::Affected, sel.unprovenDefs > 0 ).c_str(),
-                 graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rootRelPathsLegend( singleRoot ) );
+                 graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( singleRoot ) );
     rw::emitTo( out, "<affected changed=\"{}\" seeded_by=\"{}\" seeds=\"{}\" seed_test_files=\"{}\" tests=\"{}\" reached=\"{}\"{} script_gates_unmodelled=\"{}\""
                  " order=\"evidence\" partners=\"{}\"{}{}>",
                  ex( spec ).c_str(), affectedSeededBy( sel ), seeds.size(), sel.seedTestFiles.size(), testFiles.size(), reach.size(),

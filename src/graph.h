@@ -23,6 +23,7 @@
 #include "pincensus.h"           // eval-only per-call-site decision census (--pin-census); inert unless armed
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
 #include "infra/sortutil.h"      // radix edge sorting for large integer-key graph edge lists
+#include "infra/namesplit.h"     // isIdentChar — BuiltinMethodGate::namedBeyondDefinition's identifier-token scan
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 
@@ -110,6 +111,10 @@ struct Graph
     // files call THIS symbol, which nothing in the pipeline can support. Asset extensions never enter it
     // (ingest.h's withheld list), so a .png is not disclosed as a language ripwire failed to read.
     std::size_t                unindexedFiles = 0;
+    // #325: Ruby superclass references the scoped base lookup could not place (no superclass directive at their
+    // class open), so their base stayed on the final-segment byName rule — resolve.h RubyBaseScopeDisclosure.
+    // A whole-corpus gauge beside unindexedFiles, emitted as ruby_bases_unscoped= and ABSENT AT ZERO.
+    std::size_t                rubyBasesUnscoped = 0;
     std::size_t                externalCalls = 0;   // Phase 5 (docs/EVALS.md "Phase 5"): call sites the external-name
                                                      // VETO refused — a bare name or receiver provably bound OUTSIDE the
                                                      // indexed tree (a builtin/stdlib name with no in-repo evidence, an
@@ -935,6 +940,66 @@ inline void collapseDeclarationsOfName( const IngestResult& ing, bool multiRoot,
     {
         ids = std::move( kept );
     }
+}
+
+// FUNCTION-LOCAL DEFS YIELD OUTSIDE THEIR FUNCTION (every language; gate test/fnliteralcheck.sh §6).
+//
+// A function bound inside another function's body (model.h Symbol::fnLocal: `const start = () => {…}` inside a factory,
+// a nested `def`, a `const run` inside an `it()` callback) is named only inside that function: an import cannot reach
+// it, and neither can another function of the same file. From anywhere else it is reachable only as a VALUE the
+// function hands out — `return { start }`, then `tracker.start()` — which is a real call the resolver can see only by
+// name. So such a def is not DROPPED outside its function; it YIELDS: Rule 3 and the name-based ladder first run over
+// the candidates the call can reach by name, and fall back to the whole list only when that set does not decide.
+//   * Rule 3 on the reachable set first — even a lone reachable candidate, when it sits in a file the caller imports;
+//     on the whole list only when no reachable candidate does — the returned-value idiom: the caller imports the
+//     factory's module and calls a member of its result.
+//   * The ladder's same-file and same-directory tiers over the reachable set; over the whole list only when nothing
+//     reachable is left. Its unique-global tier still counts the set-aside defs: the NAME is shared, so a lone
+//     reachable survivor with no import or locality evidence declines, exactly as it did while the local competed.
+// It can never empty a candidate set nor add one the ladder would not reach, and it is inert unless a local def is out
+// of reach. Measured on a 583-file TypeScript agent repo: `tui.start()` on an imported `AgentTui` binds again (7 call
+// sites a bodied factory-local `start` had turned into declines), and a test helper's own `run` PARAMETER stops binding
+// to another test's `const run` (4 false edges). WHY NOT "a typed receiver outranks import evidence": a TS/JS member
+// call carries no receiver today (ingest_binds.h receiverOf returns None past a literal), so Rule 2 never sees
+// `tui: AgentTui`; giving it one re-reads every `recv == None` guard in this loop, a far wider change than this one.
+// WHY NOT drop the local def outside its function outright: TS/JS cannot tell `tracker.stop()` from a bare `stop()`
+// here (both None), and the drop would lose the returned-value edge while handing the call to an unrelated same-named
+// method elsewhere — the edge this rule keeps.
+inline bool localDefOutOfReach( const IngestResult& ing, NodeId c, const Reference& r ) noexcept
+{
+    const Symbol& s = ing.symbols[ c ];
+    if( s.fnLocal == 0 )
+    {
+        return false;
+    }
+    const auto row = std::lower_bound( ing.fnLocalScopes.begin(), ing.fnLocalScopes.end(), c,
+                                       []( const FnLocalScope& f, NodeId id ) noexcept { return f.id < id; } );
+    if( row == ing.fnLocalScopes.end() || row->id != c )
+    {
+        return false;   // no span recorded: claim nothing past the evidence — the def stays reachable
+    }
+    return s.fileId != r.fileId || r.startByte < row->start || r.startByte >= row->end;
+}
+
+// the candidates of `ids` a call at `r` can reach BY NAME, into `out`; true iff a function-local def was set aside AND
+// something reachable is left (only then does the caller have a narrower set to try first).
+inline bool reachableByName( const IngestResult& ing, const rw::SmallVec<NodeId, 2>& ids, const Reference& r, rw::SmallVec<NodeId, 2>& out )
+{
+    out.clear();
+    bool setAside = false;
+    for( NodeId c : ids )
+    {
+        if( localDefOutOfReach( ing, c, r ) )
+        {
+            setAside = true;
+        }
+        else
+        {
+            out.push_back( c );
+        }
+    }
+    ENSURES( out.size() <= ids.size(), "reachableByName only removes candidates" );
+    return setAside && !out.empty();
 }
 
 // JVM OWN-LANGUAGE-FIRST — the candidate filter that keeps the Kotlin<->Java bridge from deleting edges.
@@ -2165,7 +2230,10 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 //     FILE names that class or a class in its inheritance cone (ChaConeMemo) — defines it, or a reference there names it
 //     as callee/receiver/qualifier (constructor, annotation, import, extends, `Cls.new`), or a binding names it (type,
 //     variable, imported name), or an ES import binding there resolves to it (a default or renamed import). Else
-//     NoEvidence. A JS/TS literal receiver (`"a".split`) is a builtin by construction: Impossible.
+//     NoEvidence. A JS/TS literal receiver (`"a".split`) is a builtin by construction: Impossible. Python, a receiver
+//     other than self/cls: the class's own DEFINITION in the caller's file (its `class` statement and the VarDecl of
+//     its name) is not evidence — only a reference, binding or import naming it is (a same-file `data.get( "repos" )`
+//     bound to ConnectionPool.get before; test/builtinbindcheck.sh arm T).
 //   * a NESTED function (its innermost container is a function): reachable only by a bare call in its own file. Admit
 //     there, Impossible otherwise (no member access and no other file can name a closure).
 //   * a top-level FREE function:
@@ -2185,7 +2253,8 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 // STATED FLOORS, each measured or probed:
 //   (1) the evidence is a class NAME, as CHA-lite's is: two same-named classes share it;
 //   (2) the grain is the FILE: a builtin call in a file that also works with the in-repo class keeps its edge (the
-//       gate removes less there, never adds);
+//       gate removes less there, never adds) — in Python "works with" means names it beyond defining it, unless the
+//       receiver is self/cls;
 //   (3) a split with one evidenced arm is kept whole, false arms included;
 //   (4) an object handed to the caller with no mention of its class in the file (an unannotated parameter, dependency
 //       injection, a factory return) no longer reaches the in-repo method by name; the call is declined and counted;
@@ -2200,6 +2269,29 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 //       `Get` by name, and needs the declared-type evidence Go's extractor does not record either); C and C++ (they
 //       carry declared-type evidence, so the fix there is an evidence-AGAINST rule for a receiver of a std or builtin
 //       type, not a name list).
+// THE SAME-FILE ANNOTATION RULE (BuiltinMethodGate::fileNames, byReferenceOnly). Python records no annotation as a binding
+// or reference, so `def f( p: Pool )`, `x: Pool = …`, `"Pool"`, `Optional[Pool]`, `isinstance( o, Pool )` and `-> Pool`
+// leave fileRefClasses empty in the file that DEFINES Pool. A class the file defines still counts there when its name
+// occurs as an identifier token more often than the file defines a class of that name: a `class Pool:` line (and the
+// module-level name Python binds for it) is one token per definition, and any other occurrence — including a comment or a
+// docstring — is evidence. Errs toward keeping the edge: an unreadable file admits, and prose counts, so the gate removes
+// less there, never more. The gate caches one file's bytes (its calls arrive file by file). Stops at limit + 1.
+inline bool identifierTokenCountExceeds( std::string_view text, std::string_view name, std::size_t limit ) noexcept
+{
+    std::size_t tokens   = 0;
+    std::size_t runStart = 0;
+    for( std::size_t at = 0; at <= text.size() && tokens <= limit; ++at )
+    {
+        if( at < text.size() && namesplit::isIdentChar( text[ at ] ) )
+        {
+            continue;
+        }
+        tokens  += ( text.substr( runStart, at - runStart ) == name ) ? 1u : 0u;
+        runStart = at + 1;
+    }
+    return tokens > limit;
+}
+
 struct BuiltinMethodGate
 {
     static constexpr std::uint32_t kNoClass  = 0xFFFFFFFFu;   // a top-level free definition
@@ -2215,11 +2307,16 @@ struct BuiltinMethodGate
     HashMap<std::string, std::uint32_t>            classId;       // every class-like definition NAME in the corpus → a dense id
     std::vector<std::string>                       className;     // dense id → name (ChaConeMemo::contains takes a std::string)
     std::vector<std::vector<std::uint32_t>>        fileClasses;   // fileId → the sorted class ids that file names (gated files only)
+    std::vector<std::vector<std::uint32_t>>        fileRefClasses;   // the same, minus the file's own class DEFINITIONS: a reference,
+                                                                     // binding or import names the class (sameFileReceiverEvidence)
     SymbolsByFile                                  containersByFile; // fileId → class-like and function-like symbol ids (ownerOf)
     mutable HashMap<NodeId, std::uint32_t>         ownerMemo;     // target → owning class id, kNoClass or kNested
     mutable HashMap<std::uint64_t, char>           namesMemo;     // (caller file << 32 | class id) → does the file name it (cone included)
+    mutable HashMap<std::uint64_t, char>           refNamesMemo;  // the same question over fileRefClasses
     mutable std::string                            key;           // reused "<fileId>#name" buffer
     bool                                           active = false;
+    mutable std::uint32_t                          textFileId = 0xFFFFFFFFu;   // namedBeyondDefinition's one-file byte cache
+    mutable std::optional<std::string>             text;
 
     static bool isClassLike( const Symbol& s ) noexcept
     {
@@ -2294,18 +2391,19 @@ struct BuiltinMethodGate
 
     // Does the caller's file name `owner` or a class in its inheritance cone? Memoised per (file, class), so a call site
     // costs one probe per target however many classes its file names.
-    bool fileNames( std::uint32_t fileId, std::uint32_t owner, ChaConeMemo& cones ) const
+    bool fileNames( std::uint32_t fileId, std::uint32_t owner, ChaConeMemo& cones, bool byReferenceOnly = false ) const
     {
         EXPECTS( owner < className.size(), "judge() handles kNoClass and kNested before asking" );
-        const auto [ memo, fresh ] = namesMemo.try_emplace( ( std::uint64_t( fileId ) << 32 ) | owner, char( 0 ) );
+        const std::vector<std::vector<std::uint32_t>>& lists = byReferenceOnly ? fileRefClasses : fileClasses;
+        const auto [ memo, fresh ] = ( byReferenceOnly ? refNamesMemo : namesMemo ).try_emplace( ( std::uint64_t( fileId ) << 32 ) | owner, char( 0 ) );
         if( !fresh )
         {
             return memo->second != 0;
         }
         bool names = false;
-        if( fileId < fileClasses.size() )
+        if( fileId < lists.size() )
         {
-            const std::vector<std::uint32_t>& named = fileClasses[ fileId ];
+            const std::vector<std::uint32_t>& named = lists[ fileId ];
             names = std::binary_search( named.begin(), named.end(), owner );
             if( !names && !named.empty() )
             {
@@ -2313,8 +2411,32 @@ struct BuiltinMethodGate
                 names = std::ranges::any_of( named, [ & ]( std::uint32_t k ) { return cones.contains( cone, className[ owner ], className[ k ] ); } );
             }
         }
+        if( !names && byReferenceOnly && fileId < fileClasses.size() )   // identifierTokenCountExceeds: why
+        {
+            const ChaConeMemo::Cone cone = cones.coneFor( className[ owner ] );
+            names = std::ranges::any_of( fileClasses[ fileId ], [ & ]( std::uint32_t k )
+            {
+                return ( k == owner || cones.contains( cone, className[ owner ], className[ k ] ) ) && namedBeyondDefinition( fileId, k );
+            } );
+        }
         memo->second = names ? 1 : 0;
         return names;
+    }
+
+    bool namedBeyondDefinition( std::uint32_t fileId, std::uint32_t k ) const   // unreadable: true (keep the edge)
+    {
+        if( textFileId != fileId )
+        {
+            textFileId = fileId;
+            text       = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
+        }
+        if( !text || fileId >= containersByFile.size() )
+        {
+            return true;
+        }
+        const auto defs = std::ranges::count_if( containersByFile[ fileId ], [ & ]( NodeId t )
+                                                 { return isClassLike( ing.symbols[ t ] ) && ing.symbols[ t ].name == className[ k ]; } );
+        return identifierTokenCountExceeds( *text, className[ k ], static_cast<std::size_t>( defs ) );
     }
 
     // Python: is the receiver of `x.m()` a MODULE whose file holds `target`? See the struct comment for the three shapes.
@@ -2370,7 +2492,16 @@ struct BuiltinMethodGate
         }
         if( owner != kNoClass )
         {
-            return fileNames( r.fileId, owner, cones ) ? Verdict::Admit : Verdict::NoEvidence;
+            // Python, a receiver other than self/cls: the class being DEFINED in the caller's file is no evidence that
+            // this receiver is an instance of it. registry.py defines ConnectionPool and calls `data.get( "repos" )` on
+            // a json dict and `entry.get( "alias" )` on a dict row; the file-grain rule bound all four such calls to
+            // ConnectionPool.get (4 of its 9 callers on the Python corpus the gate was measured on). Only a
+            // reference, binding or import naming the class — a construction, an annotation, an import — admits it
+            // there. Python records the receiver shape, so self./cls. calls (ThisObj, the NamedVar `cls`) inside the class keep the
+            // file-grain rule; JS/TS record none (floor 3) and Ruby's bare call IS a self call, so both keep it too.
+            const bool selfOrCls                = r.recv == RecvKind::ThisObj || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" );
+            const bool sameFileReceiverEvidence = r.lang == Lang::Python && !selfOrCls;
+            return fileNames( r.fileId, owner, cones, sameFileReceiverEvidence ) ? Verdict::Admit : Verdict::NoEvidence;
         }
         if( r.lang == Lang::Python )
         {
@@ -2406,25 +2537,51 @@ struct BuiltinMethodGate
 // collectFileClassEvidence: every class NAME each gated file mentions — the classes it defines, any class a reference
 // there names as callee, receiver or qualifier, or a binding names as type, variable or imported name — and every class
 // an ES import binding in that file resolves to (a default or renamed import names it under another spelling).
+// One class NAME a gated file mentions. A DEFINITION (the class-like symbol, or the bare declared name its statement
+// leaves) names it in fileClasses only; any other mention names it in fileRefClasses too — the list a Python call on a
+// receiver other than self/cls reads (BuiltinMethodGate::judge).
+inline void noteFileClass( BuiltinMethodGate& gate, const std::vector<char>& fileGated, std::uint32_t fileId, const std::string& name, bool definition )
+{
+    if( fileId >= fileGated.size() || fileGated[ fileId ] == 0 || name.empty() )
+    {
+        return;
+    }
+    const auto it = gate.classId.find( name );
+    if( it == gate.classId.end() )
+    {
+        return;
+    }
+    gate.fileClasses[ fileId ].push_back( it->second );
+    if( !definition )
+    {
+        gate.fileRefClasses[ fileId ].push_back( it->second );
+    }
+}
+
+// The class names one binding mentions: its type, its variable and its imported name. A bare declared NAME with no type
+// and no import is how Python records the `class Pool:` statement's own module-level name (a VarDecl) — the definition
+// again, not a use of the class — so that variable names it as a definition.
+inline void noteBindingClasses( BuiltinMethodGate& gate, const std::vector<char>& fileGated, const Binding& b )
+{
+    const bool bareDeclaration = b.kind == LocalBindKind::VarDecl && b.typeName.empty() && b.importedName.empty();
+    noteFileClass( gate, fileGated, b.fileId, b.typeName, false );
+    noteFileClass( gate, fileGated, b.fileId, b.var, bareDeclaration );
+    noteFileClass( gate, fileGated, b.fileId, b.importedName, false );
+}
+
 inline void collectFileClassEvidence( const IngestResult& ing, const std::vector<char>& fileGated, const JsImportTables& jsImports, BuiltinMethodGate& gate )
 {
     gate.fileClasses.assign( ing.files.size(), {} );
-    const auto note = [ & ]( std::uint32_t fileId, const std::string& name )
+    gate.fileRefClasses.assign( ing.files.size(), {} );
+    const auto note = [ & ]( std::uint32_t fileId, const std::string& name, bool definition = false )
     {
-        if( fileId >= fileGated.size() || fileGated[ fileId ] == 0 || name.empty() )
-        {
-            return;
-        }
-        if( const auto it = gate.classId.find( name ); it != gate.classId.end() )
-        {
-            gate.fileClasses[ fileId ].push_back( it->second );
-        }
+        noteFileClass( gate, fileGated, fileId, name, definition );
     };
     for( const Symbol& s : ing.symbols )
     {
         if( BuiltinMethodGate::isClassLike( s ) )
         {
-            note( s.fileId, s.name );   // defined here: every call in the file may be on an instance of it
+            note( s.fileId, s.name, /*definition=*/true );   // defined here: every call in the file may be on an instance of it
         }
     }
     for( const Reference& r : ing.references )
@@ -2438,9 +2595,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
     }
     for( const Binding& b : ing.bindings )
     {
-        note( b.fileId, b.typeName );
-        note( b.fileId, b.var );
-        note( b.fileId, b.importedName );
+        noteBindingClasses( gate, fileGated, b );
     }
     for( const auto& [ importKey, bound ] : jsImports.targets )   // key "<fileId>#<local name>" (jsImportKey)
     {
@@ -2460,13 +2615,18 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
         std::sort( named.begin(), named.end() );
         named.erase( std::unique( named.begin(), named.end() ), named.end() );
     }
+    for( std::vector<std::uint32_t>& named : gate.fileRefClasses )
+    {
+        std::sort( named.begin(), named.end() );
+        named.erase( std::unique( named.begin(), named.end() ), named.end() );
+    }
 }
 
 inline BuiltinMethodGate buildBuiltinMethodGate( const IngestResult& ing, const ExternalVeto& veto, const ExternalVetoTables& vetoTables,
                                                  const std::vector<std::vector<std::uint32_t>>& directIncludes, const JsImportTables& jsImports )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: builtin-method name gate" );
-    BuiltinMethodGate gate{ ing, veto, vetoTables, directIncludes, jsImports, {}, {}, {}, {}, {}, {}, {}, false };
+    BuiltinMethodGate gate{ ing, veto, vetoTables, directIncludes, jsImports, {}, {}, {}, {}, {}, {}, {}, {}, {}, false };
     std::vector<char> fileGated( ing.files.size(), 0 );
     for( const Symbol& s : ing.symbols )
     {
@@ -2888,6 +3048,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // for `class C(A, B)` Python's MRO puts A's chain before B's, so when both A and B define `m`, `super().m()`
     // in C names A::m. chaUp is sorted for its membership uses and cannot say which base came first.
     HashMap<std::string, std::vector<std::string>> chaUpDeclared;
+    // Ruby bases, SCOPED by Ruby's own constant lookup (resolve.h::RubyBaseScope; test/rubyinheritcheck.sh floor
+    // (c)). Read here — a base the tree never opens (`< ActiveRecord::Base`) adds no CHA edge, so its class's walk
+    // cannot reach an unrelated in-tree `Base` — and by the implementor pass below. Empty on a Ruby-free corpus.
+    const RubyBaseScope rubyBases = buildRubyBaseScope( ing );
+    g.rubyBasesUnscoped = rubyBases.disclosure.unscoped;   // ruby_bases_unscoped= (absent at zero)
     {
         const auto isClassLikeK = []( SymKind k ) noexcept
         { return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface; };
@@ -2897,6 +3062,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             if( !ir.isInherit )
             {
                 continue;
+            }
+            if( const std::string* scoped = rubyBases.resolvedBase( std::size_t( &ir - ing.references.data() ) ); scoped && scoped->empty() )
+            {
+                continue;   // a Ruby base the tree never opens: nothing in-tree to walk to
             }
             std::string_view derivedName;
             if( !ir.qualifier.empty() )
@@ -2927,6 +3096,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     ChaConeMemo              chaCones( chaUp, chaDown );   // one cone per receiver type, computed on first use (see the type)
     const ClassIdentity      classIds = buildClassIdentity( ing, chaUp );   // Rule 2's class identity: nesting, owners, real inheritance (resolve.h)
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
+    rw::SmallVec<NodeId, 2>  reachScratch; // reused per-call buffer: the candidates a call can reach by name (reachableByName)
 
     // ---- census arming + the ORACLE side (eval-only; src/pincensus.h) ------------------------------
     // The oracle rows are a straight transcription of the overlay's own (from, calleeName) → target table
@@ -3401,9 +3571,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // above resolved is FLAGGED here, before Rule 3 (whose transitive-import evidence says nothing about a receiver),
         // and filtered after the whole ladder has decided — see the post-filter just before the edge is committed.
         const bool builtinGated = !scipPinned && !canonical && !narrowed && it != byName.end() && builtinGate.appliesTo( r );
+        // A function-local def out of this call's reach YIELDS (reachableByName, above): `nameIds` is the set the call
+        // can name, and the whole list is consulted only when that set does not decide. Not on a call the builtin-method
+        // gate flagged or the external-name veto below refuses (`d.get()`, `re.sub()`): their answer is "outside the tree"
+        // whichever same-named def competes, and yielding would move them from external= into declined=, so such a call
+        // resolves exactly as it did before local defs had bodies.
+        const bool localsYield = !scipPinned && !canonical && !narrowed && !builtinGated && it != byName.end() && !ing.fnLocalScopes.empty()
+                                 && reachableByName( ing, it->second, r, reachScratch )
+                                 && !( r.role == RefRole::Call && r.qualifier.empty() && bindingTier.empty() && externalVeto.isExternalBound( r ) );
+        const rw::SmallVec<NodeId, 2>* nameIds = localsYield ? &reachScratch : ( it != byName.end() ? &it->second : nullptr );
         if( !scipPinned && !canonical && !narrowed && it != byName.end() )
         {
-            if( narrower.rule3IncludeFile( it->second, r.fileId, rule3Out ) )
+            if( narrower.rule3IncludeFile( *nameIds, r.fileId, rule3Out, localsYield ? 1u : 2u )
+                || ( localsYield && narrower.rule3IncludeFile( it->second, r.fileId, rule3Out ) ) )
             {
                 for( NodeId c : rule3Out )
                 {
@@ -3443,11 +3623,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             else
             {
-                for( NodeId c : it->second )
+                for( NodeId c : *nameIds )
                 {
                     if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
                     {
                         cand.push_back( c ); // same lang, or ObjC↔C++ bridge; same ROOT (A10)
+                    }
+                }
+                for( std::size_t i = 0; localsYield && cand.empty() && i < it->second.size(); ++i )   // nothing reachable survived: the whole list
+                {
+                    const NodeId c = it->second[ i ];
+                    if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    {
+                        cand.push_back( c );
                     }
                 }
                 // §3.1 cross-root EVIDENCE channel for a name with NO same-root def: admit another root's
@@ -3596,7 +3784,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 //
                 // H4 V3 M-3: `canonical` belongs in the same rescue, for the same reason — see the note above
                 // buildGraph ("the tier-3 canonical rescue").
-                if( cand.size() == 1 || narrowed || canonical ) { tier = cand; tierConf = 0.2f; }
+                // A lone survivor is a unique global only when the NAME is: a function-local def set aside by
+                // reachableByName still shares it, so that call declines like any other shared name (a bare `render()`
+                // of a destructured import must not fall to the one class method left once the closures step aside).
+                if( ( cand.size() == 1 && !localsYield ) || narrowed || canonical ) { tier = cand; tierConf = 0.2f; }
                 else
                 {
                     // DECLINED. Still no edge and still no guess — that precision rule is the ladder's point. What is gone is the silence: the decline counts on the
@@ -4107,14 +4298,36 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             continue;
         }
-
-        const auto it = byName.find( r.calleeName );
-        if( it == byName.end() )
+        if( ing.symbols[ derived ].lang == Lang::Ruby )
         {
-            continue;
+            derived = rubyBases.canonicalClass( ing, derived );   // a reopened class is ONE implementor, not one per open
+        }
+
+        // A Ruby base resolved by Ruby's own lookup: the bases are the classes whose constant it IS, read by constant
+        // (RubyBaseScope::classesByFqn — byName's decl/def collapse would hide a body-less Ruby class). nullptr ⇒ not
+        // a scoped Ruby base (every other language, or a Ruby site the join could not place) ⇒ byName stands.
+        const rw::SmallVec<NodeId, 2>* baseIds    = nullptr;
+        const std::string*             rubyScoped = rubyBases.resolvedBase( std::size_t( &r - ing.references.data() ) );
+        if( rubyScoped != nullptr )
+        {
+            const auto sit = rubyScoped->empty() ? rubyBases.classesByFqn.end() : rubyBases.classesByFqn.find( *rubyScoped );
+            if( sit == rubyBases.classesByFqn.end() )
+            {
+                continue;   // the tree never opens the written base — no in-tree row to list it under
+            }
+            baseIds = &sit->second;
+        }
+        else
+        {
+            const auto it = byName.find( r.calleeName );
+            if( it == byName.end() )
+            {
+                continue;
+            }
+            baseIds = &it->second;
         }
         baseCand.clear();
-        for( NodeId baseId : it->second )
+        for( NodeId baseId : *baseIds )
         {
             if( !isClassLike( ing.symbols[baseId].kind ) )
             {
@@ -7074,6 +7287,63 @@ inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<con
 }
 inline std::vector<NodeId> transitiveCallers( const Graph& g, std::span<const NodeId> seeds ) { return transitiveCallersDepth( g, seeds, nullptr ); }
 
+// ── Depth-labelled --impact (0.6.5) — the hop depth the walk above already records, put on the listing ──────
+// A flat blast radius cannot tell a direct caller from a four-hop dependent, and a page window cut over a
+// PageRank-only order drops rows of every depth at once, so a capped answer had no clean boundary. Both
+// helpers read transitiveCallersDepth's depthOut; neither walks the graph again.
+//
+// The ORDER: hop depth first (1 = calls a seed directly), then the order the listing always had within a depth
+// (PageRank descending, node id ascending). Ranked BEFORE the page window cuts (docs/METHODOLOGY.md §9.1), so a
+// cut drops the deepest rows first and a capped answer is complete through every depth its rows pass.
+inline void orderByDepthThenRank( std::vector<NodeId>& show, const std::vector<std::uint32_t>& depth, const std::vector<float>& rank )
+{
+    EXPECTS( depth.size() == rank.size(), "depth and rank are both indexed by node id" );
+    std::sort( show.begin(), show.end(), [ & ]( NodeId a, NodeId b )
+               {
+                   if( depth[a] != depth[b] )
+                   {
+                       return depth[a] < depth[b];
+                   }
+                   return rank[a] != rank[b] ? rank[a] > rank[b] : a < b;
+               } );
+}
+
+// The per-depth counts over the FULL reach set (never the page): element k is the number of reached nodes first
+// reached at hop k+1. A BFS reaches hop k only through a node at hop k-1, so every element is non-zero and the
+// elements sum to reach.size() — the root's by_depth= therefore partitions reaches= exactly.
+inline std::vector<std::uint32_t> depthCounts( std::span<const NodeId> reach, const std::vector<std::uint32_t>& depth )
+{
+    std::vector<std::uint32_t> counts;
+    for( NodeId n : reach )
+    {
+        const std::uint32_t d = depth[n];
+        ASSUME( d >= 1, "transitiveCallersDepth: a returned node is never a seed, so its depth is at least 1" );
+        if( counts.size() < d )
+        {
+            counts.resize( d, 0 );
+        }
+        ++counts[d - 1];
+    }
+    ENSURES( std::all_of( counts.begin(), counts.end(), []( std::uint32_t c ) { return c != 0; } ), "BFS depths are contiguous from 1" );
+    return counts;
+}
+
+// The XML row's d=, RUN-LENGTH: printed on the first row of the emitted window and on every row whose depth differs from
+// the row before it; empty otherwise (the legend: a row without d= has the depth of the row above it). Measured on this
+// repo's own --impact answers (0.6.5 lane report): d= on every row cost 240 B on a 40-row page (+4.9..5.9%), the run form
+// 6..24 B (one per depth shown), and the depth is still unambiguous because the rows are emitted in depth order. The JSON
+// and columnar dialects carry it on every row / as a dense column: a JSON object and a parallel array are read per entry.
+inline std::string depthRunAttrXml( std::span<const NodeId> show, const std::vector<std::uint32_t>& depth, std::size_t rowIndex, std::size_t windowBegin )
+{
+    EXPECTS( rowIndex < show.size() && windowBegin <= rowIndex );
+    const std::uint32_t d = depth[ show[ rowIndex ] ];
+    if( rowIndex != windowBegin && depth[ show[ rowIndex - 1 ] ] == d )
+    {
+        return {};
+    }
+    return " d=\"" + std::to_string( d ) + "\"";
+}
+
 // symbols transitively reachable FROM `seeds` via OUT-edges (everything the seeds call, transitively) — the
 // forward dual of transitiveCallers. Returns a per-node mask (seeds included). Used by --seams as testReach:
 // a cross-module edge u→v is exercised by a test iff testReach[u] (a test transitively reaches the caller).
@@ -7622,6 +7892,173 @@ inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>&
     return res;
 }
 
+// 0.6.6 D1: WHICH definition of a many-definition terminal name --connect searches from. connectSubgraph takes one node
+// per terminal, and the callers used to hand it resolveFocus's single pick (the lowest id), so `--connect=main,escapeXml`
+// searched from the one `main` of 107 that happened to sort first (a Python bench script) and printed every terminal
+// <unconnected> beside a --path that joins main to escapeXml in 2 hops. The pick is now the definition that JOINS: every
+// definition of the name is scored by how many OTHER terminals it reaches within the radius on the same undirected view
+// connectSubgraph walks, then by the fewest summed hops; resolveFocus's pick wins a tie it is part of, the lowest id any
+// other tie. Two passes: the first scores against every definition of the other names, the second re-scores against the
+// picks the first made — the nodes connectSubgraph will actually search from. A name none of whose definitions reaches
+// another terminal keeps resolveFocus's pick (so <unconnected> there is true of EVERY definition). tiedOut[i] > 1 says
+// that many definitions joined exactly as well as the pick: the answer is about one of them, disclosed by the emitter
+// (ambiguous_terminal=), never a silent choice.
+inline std::vector<std::uint16_t> connectUndirectedDistances( const Graph& g, std::span<const NodeId> sources, std::uint32_t radius )
+{
+    const std::size_t N = g.wOutDeg.size();
+    std::vector<std::uint16_t> dist( N, connectcfg::kUnreachable );
+    const auto* inRo   = g.inEdges.rowOffsets();
+    const auto* inCi   = g.inEdges.colIndices();
+    const bool  haveIn = g.inEdges.rows() == N;                // the same degrade connectSubgraph takes
+    std::vector<NodeId> q;
+    q.reserve( 256 );
+    for( const NodeId src : sources )
+    {
+        if( src < N && dist[ src ] != 0 )
+        {
+            dist[ src ] = 0;
+            q.push_back( src );
+        }
+    }
+    const auto relax = [ & ]( std::uint16_t du, NodeId v )
+    {
+        if( v < N && dist[ v ] == connectcfg::kUnreachable )
+        {
+            dist[ v ] = std::uint16_t( du + 1 );
+            q.push_back( v );
+        }
+    };
+    for( std::size_t head = 0; head < q.size(); ++head )
+    {
+        const NodeId        u  = q[ head ];
+        const std::uint16_t du = dist[ u ];
+        if( du >= radius )
+        {
+            continue;
+        }
+        for( std::uint32_t k = g.outOff[ u ]; k < g.outOff[ u + 1 ]; ++k )
+        {
+            relax( du, g.outTargets[ k ] );
+        }
+        if( haveIn )
+        {
+            for( std::uint32_t k = inRo[ u ]; k < inRo[ u + 1 ]; ++k )
+            {
+                relax( du, inCi[ k ] );
+            }
+        }
+    }
+    return dist;
+}
+
+// One terminal's choice among its definitions, against the other terminals' distance maps: the candidate reaching the
+// most of them, then the fewest summed hops; `preferred` (resolveFocus's pick) wins a tie it is part of, the lowest id any
+// other tie (candidates ascend by id). reached == 0 ⇒ no candidate joins anything, and `chosen` is `preferred`.
+struct TerminalChoice { NodeId chosen = kNoNode; std::uint32_t reached = 0, hops = 0, tied = 1; };
+
+inline TerminalChoice scoreTerminalCandidates( std::span<const NodeId> candidates, NodeId preferred, std::size_t self,
+                                               const std::vector<std::vector<std::uint16_t>>& distFrom )
+{
+    TerminalChoice best{ preferred, 0, 0, 1 };
+    bool           bestIsPreferred = false;
+    for( const NodeId candidate : candidates )
+    {
+        std::uint32_t reached = 0, hops = 0;
+        for( std::size_t j = 0; j < distFrom.size(); ++j )
+        {
+            const bool reaches = j != self && candidate < distFrom[ j ].size() && distFrom[ j ][ candidate ] != connectcfg::kUnreachable;
+            reached += reaches ? 1u : 0u;
+            hops    += reaches ? distFrom[ j ][ candidate ] : 0u;
+        }
+        const bool isTie = reached > 0 && reached == best.reached && hops == best.hops;
+        if( reached > best.reached || ( reached > 0 && reached == best.reached && hops < best.hops ) )
+        {
+            best            = TerminalChoice{ candidate, reached, hops, 1 };
+            bestIsPreferred = candidate == preferred;
+        }
+        else if( isTie )
+        {
+            ++best.tied;
+            best.chosen     = ( candidate == preferred && !bestIsPreferred ) ? candidate : best.chosen;
+            bestIsPreferred = bestIsPreferred || candidate == preferred;
+        }
+    }
+    if( best.reached == 0 )
+    {
+        best = TerminalChoice{ preferred, 0, 0, 1 };
+    }
+    ENSURES( best.tied >= 1 );
+    return best;
+}
+
+inline void chooseJoiningTerminals( const Graph& g, const std::vector<std::vector<NodeId>>& defsPerTerminal, std::vector<NodeId>& picks,
+                                    std::vector<std::uint32_t>& tiedOut, std::uint32_t radius )
+{
+    EXPECTS( defsPerTerminal.size() == picks.size() );
+    const std::size_t T = picks.size();
+    tiedOut.assign( T, 1u );
+    const bool anyMany = std::any_of( defsPerTerminal.begin(), defsPerTerminal.end(), []( const std::vector<NodeId>& d ) { return d.size() > 1; } );
+    if( !anyMany || T < 2 )
+    {
+        return;   // one definition per name: nothing to choose, and no BFS is paid for
+    }
+    const std::uint32_t r = std::clamp( radius, connectcfg::kMinRadius, connectcfg::kMaxRadius );
+    const std::vector<NodeId> firstPicks = picks;
+    for( int pass = 0; pass < 2; ++pass )
+    {
+        std::vector<std::vector<std::uint16_t>> distFrom( T );
+        for( std::size_t j = 0; j < T; ++j )
+        {
+            distFrom[ j ] = pass == 0 ? connectUndirectedDistances( g, defsPerTerminal[ j ], r )
+                                      : connectUndirectedDistances( g, std::span<const NodeId>( &picks[ j ], 1 ), r );
+        }
+        std::vector<NodeId> next = picks;
+        for( std::size_t i = 0; i < T; ++i )
+        {
+            if( defsPerTerminal[ i ].size() > 1 )
+            {
+                const TerminalChoice choice = scoreTerminalCandidates( defsPerTerminal[ i ], firstPicks[ i ], i, distFrom );
+                next[ i ]    = choice.chosen;
+                tiedOut[ i ] = choice.tied;
+            }
+        }
+        picks = std::move( next );
+    }
+    ENSURES( picks.size() == T && tiedOut.size() == T );
+}
+
+// The CLI --connect and the MCP connect verb both resolve their specs with resolveFocus, then hand the picks here: one
+// call re-reads every spec's full definition set (the same resolver, so `file:name` narrows it exactly as before),
+// lets chooseJoiningTerminals move a many-definition pick onto the definition that joins, and returns the names whose
+// pick tied with another equally-joining definition, comma-joined in spec order ("" when none) — the root's
+// ambiguous_terminal= attribute. Specs whose name has one definition cost nothing and never move.
+template<class SpecList>
+inline std::string joinTerminalPicks( const IngestResult& ing, const Graph& g, const SpecList& specs, std::vector<NodeId>& picks, std::uint32_t radius )
+{
+    EXPECTS( specs.size() == picks.size() );
+    std::vector<std::vector<NodeId>> defsPerTerminal;
+    defsPerTerminal.reserve( specs.size() );
+    for( const auto& spec : specs )
+    {
+        defsPerTerminal.push_back( resolveAllByNameQualified( ing, std::string_view( spec ), nullptr ) );
+    }
+    std::vector<std::uint32_t> tied;
+    chooseJoiningTerminals( g, defsPerTerminal, picks, tied, radius );
+    std::string ambiguous;
+    for( std::size_t i = 0; i < picks.size(); ++i )
+    {
+        if( tied[ i ] > 1 && picks[ i ] < ing.symbols.size() )
+        {
+            if( !ambiguous.empty() )
+            {
+                ambiguous += ',';
+            }
+            ambiguous += ing.symbols[ picks[ i ] ].name;
+        }
+    }
+    return ambiguous;
+}
+
 // ---- community detection (--communities): one level of Louvain local-moving on the UNDIRECTED projection
 //      of the call graph (unit edge weights). Deterministic: nodes processed in id order; on a (near-)tie
 //      the move resolves to the LOWER community id; fixed pass cap; ankerl insertion-ordered maps. Returns
@@ -7878,11 +8315,16 @@ inline ZoomHierarchy multiLevelCommunities( const Graph& g, std::uint32_t maxTop
 // unresolvedOut totals (the map header's ambiguous=/unresolved=, same fold); counts_floor="1" stays LAST.
 inline std::string graphCountFloorAttrXml( const Graph& g )
 {
-    return graphGaugeAttrXml( g.ambOut, g.unresolvedOut, g.unindexedFiles ) + kGraphCountFloorAttrXml;
+    return graphGaugeAttrXml( g.ambOut, g.unresolvedOut, g.unindexedFiles, g.rubyBasesUnscoped ) + kGraphCountFloorAttrXml;
 }
 inline std::string graphCountFloorAttrJson( const Graph& g )
 {
-    return graphGaugeAttrJson( g.ambOut, g.unresolvedOut, g.unindexedFiles ) + kGraphCountFloorAttrJson;
+    return graphGaugeAttrJson( g.ambOut, g.unresolvedOut, g.unindexedFiles, g.rubyBasesUnscoped ) + kGraphCountFloorAttrJson;
+}
+// The legend clauses a root's absent-at-zero gauges call for, read off the same two fields the attribute is.
+inline GaugeClauses graphGaugeClauses( const Graph& g ) noexcept
+{
+    return GaugeClauses( g.unindexedFiles > 0, g.rubyBasesUnscoped > 0 );
 }
 
 // THE DECLINED-LIST INTERNER — tier 3's record of what a declined call could equally have meant, stored once per DISTINCT

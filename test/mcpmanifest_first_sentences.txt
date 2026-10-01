@@ -18,7 +18,7 @@ flags	WHAT IS BUILT BUT DARK here — the answer to 'why don't I see feature X?'
 for	Task-lens ranked, signatures-only inventory of the building blocks most relevant to a task (cx=complexity, in=reuse-count).
 from_trace	Paste a stack trace / sanitizer report / compiler error and get it mapped onto indexed symbols, ranked INNERMOST-first: the parsed <trace> frame map, the ranked suspects' signatures, and the innermost in-corpus symbol's FULL body.
 grep	Trigram literal search; each hit annotated with its enclosing symbol (which function/class it is in).
-impact	IS IT SAFE TO CHANGE X? — the TRANSITIVE blast radius of a symbol via calls, ranked by PageRank.
+impact	IS IT SAFE TO CHANGE X? — the TRANSITIVE blast radius of a symbol via calls, nearest first (d= hop depth), then PageRank.
 insert_after_symbol	Insert text immediately AFTER a symbol's definition (past its final byte, which is preserved exactly); padded to the file's own blank-line seam (separator_padded=N); one trailing newline folds (trailing_newline_folded).
 insert_before_symbol	Insert text immediately BEFORE a symbol's definition (its first byte); padded to the file's own blank-line seam (separator_padded=N).
 lego	Interface-to-impls view for ONE named interface/base: its method contract plus EVERY implementor (own-language only), each with file path.

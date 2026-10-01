@@ -39,6 +39,7 @@
                       // queryshape::classify — the shipped trace classifier (rule a)
 #include "infra/namesplit.h"   // isIdentChar — the ONE ASCII identifier-character predicate
 #include "infra/sortutil.h"    // svLess — string_view order without libstdc++'s length subtraction (portablebuildcheck #6)
+#include "docparse.h"   // docparse::detail::readWholeFile — countUnbacktickedDocFiles reads the markdown the index holds
 #include "graph.h"   // R5: applyDocMentionBoost reads g.mentions (the doc->code backtick edges the
                       // --mentions=SYM verb already exposes) — same header gitmine.h already pulls in for
                       // an analogous "read one more Graph field" reason.
@@ -272,8 +273,7 @@ inline bool isTokenChar( char c ) noexcept { return isIdentChar( c ) || c == '.'
 // basename of an indexed path, and the same with its extension stripped ("src/a/b.py" → "b.py", "b")
 inline std::string_view baseNameOf( std::string_view path ) noexcept
 {
-    const std::size_t slash = path.rfind( '/' );
-    return slash == std::string_view::npos ? path : path.substr( slash + 1 );
+    return rw::namesplit::afterLast( path, "/" );
 }
 inline std::string_view stripExt( std::string_view name ) noexcept
 {
@@ -1418,6 +1418,118 @@ inline std::vector<MentionFileRow> collapseMentionsToFileRows( const IngestResul
     std::sort( fileRows.begin(), fileRows.end(), [ & ]( const MentionFileRow& a, const MentionFileRow& b )
                { return ing.files[ a.fileId ] < ing.files[ b.fileId ]; } );
     return fileRows;
+}
+
+// ── THE BACKTICK RULE'S RESIDUE (lane honesty-cuts-066) ─────────────────────────────────────────────────────────────
+// docs= counts markdown files whose `backtick` span IS the name (ingest_docs.h: one line, a clean identifier of 3+
+// characters). Prose that names the symbol bare, a fenced block, `callers:escapeXml`, or a span opened on one line and
+// closed on the next are not doc links by that rule, and the answer never said so: --mentions=escapeXml answered
+// docs="2" on this repository while a help-wanted prompt named it four times in prose and COMMANDS.md and CHANGELOG.md
+// named it too. This counts the markdown files the index holds that name one of the definitions' names as a whole
+// identifier and are NOT among the rows — the files the rule left out — so the answer can say unbackticked_docs=N
+// beside a docs= that is exact for what it measures. A whole-word text match, so it is a CEILING on real mentions
+// of THIS symbol (a namesake elsewhere counts); files that cannot be read are skipped. Single root only (a doc edge
+// never crosses roots); the caller does not ask on a multi-root run.
+// Does `text` hold one of `names` as a whole identifier token? One pass over the identifier runs of the text (a run is
+// a maximal stretch of namesplit::isIdentChar bytes), each compared with the few names a selector resolved to. A name
+// that is not itself an identifier (an operator overload) never matches, so the residue below says nothing about it.
+inline bool holdsIdentifierToken( std::string_view text, const std::vector<std::string_view>& names ) noexcept
+{
+    std::size_t runStart = 0;
+    for( std::size_t at = 0; at <= text.size(); ++at )
+    {
+        if( at < text.size() && namesplit::isIdentChar( text[ at ] ) )
+        {
+            continue;
+        }
+        const std::string_view run = text.substr( runStart, at - runStart );
+        if( !run.empty() && std::find( names.begin(), names.end(), run ) != names.end() )
+        {
+            return true;
+        }
+        runStart = at + 1;
+    }
+    return false;
+}
+
+// The residue count, and how many candidate files could not be read back at answer time (deleted, unreadable) — those
+// are not in `residue`, so a non-zero `unread` makes it a floor over the files that were read.
+struct UnbacktickedCount
+{
+    std::size_t residue = 0;
+    std::size_t unread  = 0;
+};
+
+inline UnbacktickedCount countUnbacktickedDocFiles( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted )
+{
+    std::vector<std::string_view> names;
+    for( const NodeId d : defs )
+    {
+        if( std::find( names.begin(), names.end(), ing.symbols[ d ].name ) == names.end() )
+        {
+            names.push_back( ing.symbols[ d ].name );
+        }
+    }
+    // a file is a candidate when it holds a Markdown symbol (every indexed markdown file has its file section) and is
+    // not already a row; walked in file-id order, which is the crawl's sorted order, so the count is deterministic
+    std::vector<char> candidate( ing.files.size(), 0 );
+    for( const Symbol& s : ing.symbols )
+    {
+        candidate[ s.fileId ] = static_cast<char>( candidate[ s.fileId ] | ( s.lang == Lang::Markdown ? 1 : 0 ) );
+    }
+    for( const MentionFileRow& row : counted )
+    {
+        candidate[ row.fileId ] = 0;
+    }
+    UnbacktickedCount out;
+    for( std::uint32_t fileId = 0; fileId < candidate.size(); ++fileId )
+    {
+        if( candidate[ fileId ] == 0 )
+        {
+            continue;
+        }
+        const std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
+        out.unread  += bytes ? 0u : 1u;
+        out.residue += ( bytes && holdsIdentifierToken( *bytes, names ) ) ? 1u : 0u;
+    }
+    return out;
+}
+
+// unbackticked_docs= (present only when non-zero): its reading, beside the root that carries it.
+inline constexpr const char* kUnbacktickedDocsLegend =
+    "<!-- unbackticked_docs=N: N more markdown files, over readable indexed markdown, name of= as a whole word but not as "
+    "a clean one-line backtick span (prose, a code block, a span broken across lines) - not in docs=; a text match, so a ceiling -->";
+// unbackticked_unread= (present only when non-zero): the indexed markdown files that scan could not read back.
+inline constexpr const char* kUnbacktickedUnreadLegend =
+    "<!-- unbackticked_unread=N: N indexed markdown files could not be read back for the unbackticked_docs scan (deleted "
+    "or unreadable since indexing) - not scanned, so unbackticked_docs= (or its absence) says nothing about them -->";
+
+// The CLI root's share of it: the counts, the attributes and the readings, all empty at zero and on a multi-root run.
+struct UnbacktickedDocs
+{
+    std::size_t count  = 0;
+    std::size_t unread = 0;
+    std::string attr;
+    std::string legend;
+};
+inline UnbacktickedDocs unbacktickedDocsFor( const IngestResult& ing, const std::vector<NodeId>& defs, const std::vector<MentionFileRow>& counted,
+                                             bool singleRoot )
+{
+    UnbacktickedDocs        out;
+    const UnbacktickedCount n = singleRoot ? countUnbacktickedDocFiles( ing, defs, counted ) : UnbacktickedCount{};
+    out.count                 = n.residue;
+    out.unread                = n.unread;
+    if( out.count > 0 )
+    {
+        out.attr   = " unbackticked_docs=\"" + std::to_string( out.count ) + "\"";
+        out.legend = kUnbacktickedDocsLegend;
+    }
+    if( out.unread > 0 )
+    {
+        out.attr   += " unbackticked_unread=\"" + std::to_string( out.unread ) + "\"";
+        out.legend += kUnbacktickedUnreadLegend;
+    }
+    return out;
 }
 
 // ── R2-AF (round 2, answer-first ordering) — the S4 "named file's decl/impl partner" lookup ────────────

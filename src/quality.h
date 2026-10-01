@@ -24,7 +24,7 @@
 #include "graph.h"
 #include "clones.h"
 #include "cloneidiom.h"         // idiom-class demotion — the closed 3-idiom shape classifier that turns an idiom-COLLISION clone group into a minor row instead of a gating one
-#include "lintrules.h"          // findErrorMasking — the built-in error-masking rule table (GitClear +47% kind)
+#include "lintrules.h"          // findQualityConstructs — the built-in error-masking rule table (GitClear +47% kind) + the placeholder shapes
 #include "arch.h"               // fnv1a64
 #include "pathguard.h"          // CWE-59/367: rw::pathguard::openNoFollowTruncate — writeBaseline truncates, so its open must refuse a link atomically
 #include "gitmine.h"            // shSingleQuote + gitFileCommitCountsInDayWindow — short-horizon-churn window mining
@@ -260,6 +260,8 @@ struct Snapshot
     gtl::btree_map<std::uint64_t, std::uint32_t> paramsBySym; // Q1 erosion    — hash(canonId) → MAX parameter count
     gtl::btree_map<std::uint64_t, std::uint32_t> defsBySym;   // hash(canonId) → COUNT of definitions sharing the id (an overload set's CARDINALITY, deliberately NOT a MAX — see computeSnapshot)
     gtl::btree_map<std::uint64_t, std::uint32_t> maskBySym;   // §D#4 error-masking — hash(canonId) → COUNT of error-masking constructs in the symbol (SUM over overloads, see computeSnapshot)
+    gtl::btree_map<std::uint64_t, std::uint32_t> maskReportBySym; // the REPORT-ONLY part of maskBySym's count: widened handler shapes that do not gate in the symbol's language (kHandlerShapeGates); absent = 0
+    gtl::btree_map<std::uint64_t, std::uint32_t> placeholderBySym; // the placeholder kind — hash(canonId) → COUNT of stub / TODO constructs in the symbol (SUM over overloads, like maskBySym)
     gtl::btree_map<std::uint64_t, std::uint64_t> bodyHashBySym; // §D#4 short-horizon-churn — pathQualifiedKey(path,scope,name) → fnv1a64 of the RAW body bytes (change detection; literal-only edits move NO metric, so metrics can't detect them). Path-qualified since v6: a bare canonId key folded every scope-less same-named symbol ACROSS FILES into one join identity (the W1-S2 cross-file churn misattribution)
     std::vector<std::uint64_t>             cloneGroups; // sorted hash(sorted member canonIds)
     std::vector<std::uint64_t>             dead;        // sorted hash(canonId) of dead-candidate symbols
@@ -866,20 +868,52 @@ inline std::uint64_t pathQualifiedKey( std::string_view relPath, const Symbol& s
     return pathQualifiedKey( relPath, s.scope, s.lang == Lang::Elixir ? elixirBaseName( s.name ) : std::string_view( s.name ) );
 }
 
-// §D#4 error-masking — attribute each error-masking hit (findErrorMasking) to its ENCLOSING symbol by byte-span
-// containment, then COUNT hits per baseline canonId. A symbol contains a hit iff the hit's start byte lies in
-// the symbol's full def span [sigStartByte, endByte) in the same file. Overloads sharing a canonId SUM (the
-// count is a magnitude, not a max — two overloads each masking once = 2 masks under that id, and the delta then
-// fires when the total grows). Deterministic: findErrorMasking is deterministic and the fold is a pure sum.
+// §D#4 error-masking and placeholder — attribute each hit (findQualityConstructs) to its ENCLOSING symbol by
+// byte-span containment, then COUNT hits per baseline canonId. A symbol contains a hit iff the hit's start byte
+// lies in the symbol's full def span [sigStartByte, endByte) in the same file. Overloads sharing a canonId SUM
+// (the count is a magnitude, not a max — two overloads each masking once = 2 masks under that id, and the delta
+// then fires when the total grows). Deterministic: findQualityConstructs is deterministic and the fold is a
+// pure sum.
 //
 // Attribution is O(hits · symbols-per-file) via a per-file symbol index; a hit inside no def (file-scope) is
-// dropped (no owning symbol → nothing to attribute a regression to). Byte-span containment mirrors how ingest
-// attributes References to their enclosing definition, so the same-file, same-span discipline is consistent.
-inline gtl::btree_map<std::uint64_t, std::uint32_t> errorMaskCountsBySym( const IngestResult& ing, std::string_view root )
+// dropped (no owning symbol → nothing to attribute a regression to — for a file-level TODO comment that is a
+// stated floor of the placeholder kind). Byte-span containment mirrors how ingest attributes References to
+// their enclosing definition, so the same-file, same-span discipline is consistent.
+struct ConstructCounts
 {
-    gtl::btree_map<std::uint64_t, std::uint32_t> counts;
-    const std::vector<ErrorMaskHit> hits = findErrorMasking( ing );
-    if( hits.empty() )
+    gtl::btree_map<std::uint64_t, std::uint32_t> mask;         // every error-masking hit (→ Snapshot::maskBySym)
+    gtl::btree_map<std::uint64_t, std::uint32_t> maskReport;   // the REPORT-ONLY subset of `mask` (→ maskReportBySym): widened shapes whose (shape, language) is not in kHandlerShapeGates
+    gtl::btree_map<std::uint64_t, std::uint32_t> placeholder;  // stub / TODO hits (→ Snapshot::placeholderBySym)
+};
+
+// The innermost def whose span holds `startByte` in file `fileId`, or kNoNode. Smallest enclosing def wins
+// (a nested lambda/method inside a method), so a count lands on the innermost owning symbol.
+inline NodeId enclosingDefOf( const IngestResult& ing, const SymbolsByFile& byFile, std::uint32_t fileId, std::uint32_t startByte )
+{
+    if( fileId >= byFile.size() )
+    {
+        return kNoNode;
+    }
+    NodeId        owner   = kNoNode;
+    std::uint32_t bestLen = UINT32_MAX;
+    for( NodeId i : byFile[ fileId ] )
+    {
+        const Symbol& s = ing.symbols[i];
+        if( startByte >= s.sigStartByte && startByte < s.endByte && s.endByte - s.sigStartByte < bestLen )
+        {
+            bestLen = s.endByte - s.sigStartByte;
+            owner   = i;
+        }
+    }
+    ENSURES( owner == kNoNode || owner < ing.symbols.size(), "an owner is a def id taken from byFile, which indexes ing.symbols" );
+    return owner;
+}
+
+inline ConstructCounts constructCountsBySym( const IngestResult& ing, std::string_view root )
+{
+    ConstructCounts            counts;
+    const QualityConstructHits hits = findQualityConstructs( ing );
+    if( hits.mask.empty() && hits.placeholder.empty() )
     {
         return counts;
     }
@@ -887,33 +921,32 @@ inline gtl::btree_map<std::uint64_t, std::uint32_t> errorMaskCountsBySym( const 
     // per-file symbol id list (only real-body defs can enclose a masking block). `symbols[i].id == i`, so
     // the shared bucket-and-sort's `s.id` is the same value the hand-written loop pushed as `i`.
     const SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s ) { return s.endByte > s.sigStartByte; } );
-    for( const ErrorMaskHit& h : hits )
+    // pathQualifiedKey, via the SAME rule maskBySym is stored under (see qualityKey). These counts are compared
+    // against that map key-for-key, so a scheme that differs by one byte silently reports every construct as new.
+    const auto keyOf = [ & ]( NodeId owner ) { return pathQualifiedKey( relForHash( ing.files[ing.symbols[owner].fileId], root ), ing.symbols[owner] ); };
+    for( const ErrorMaskHit& h : hits.mask )
     {
-        if( h.fileId >= byFile.size() )
+        const NodeId owner = enclosingDefOf( ing, byFile, h.fileId, h.startByte );
+        if( owner == kNoNode )
         {
             continue;
         }
-        // smallest enclosing def wins (a nested lambda/method inside a method) — pick the tightest [start,end)
-        // that contains the hit so the count lands on the innermost owning symbol. Linear per file is fine.
-        NodeId        owner   = kNoNode;
-        std::uint32_t bestLen = UINT32_MAX;
-        for( NodeId i : byFile[ h.fileId ] )
+        const std::uint64_t key = keyOf( owner );
+        ++counts.mask[ key ];
+        if( !errorMaskHitGates( h.id, ing.symbols[owner].lang ) )
         {
-            const Symbol& s = ing.symbols[i];
-            if( h.startByte >= s.sigStartByte && h.startByte < s.endByte )
-            {
-                const std::uint32_t len = s.endByte - s.sigStartByte;
-                if( len < bestLen ) { bestLen = len; owner = i; }
-            }
-        }
-        if( owner != kNoNode )
-        {
-            // pathQualifiedKey, via the SAME rule maskBySym is stored under (see qualityKey). These counts are
-            // compared against that map key-for-key, so a scheme that differs by one byte silently reports every
-            // masking construct as new.
-            ++counts[ pathQualifiedKey( relForHash( ing.files[ing.symbols[owner].fileId], root ), ing.symbols[owner] ) ];
+            ++counts.maskReport[ key ];
         }
     }
+    for( const ErrorMaskHit& h : hits.placeholder )
+    {
+        const NodeId owner = enclosingDefOf( ing, byFile, h.fileId, h.startByte );
+        if( owner != kNoNode )
+        {
+            ++counts.placeholder[ keyOf( owner ) ];
+        }
+    }
+    ENSURES( counts.maskReport.size() <= counts.mask.size(), "every report-only hit was also counted in the total, under the same key" );
     return counts;
 }
 
@@ -973,7 +1006,7 @@ inline std::uint64_t qualityKey( const IngestResult& ing, NodeId i, std::string_
 template<class Fn>
 inline void forEachSymbolBody( const IngestResult& ing, Fn&& visit )
 {
-    // per-file def ids with a real body (see errorMaskCountsBySym above on `symbols[i].id == i`).
+    // per-file def ids with a real body (see constructCountsBySym above on `symbols[i].id == i`).
     const SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s ) { return s.endByte > s.sigStartByte; } );
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
@@ -1978,6 +2011,39 @@ inline bool gitRepoHasHistory( const std::string& root )
     return rc == 0 && gotHead;
 }
 
+// ─── SHALLOW-HISTORY HONESTY (0.6.6 command sweep) ──────────────────────────────────────────────────────
+// A `--depth=N` clone (actions/checkout's default) holds only the newest N commits. Every history verb then
+// answers from that stub, and the sweep found them saying things that are false about the REPOSITORY:
+// "a root commit" for a commit whose parent was simply not fetched, "git unavailable" for a git repo with a
+// short history, `window="all-history"` over one commit, bf="1" from one squashed commit. The at= stamp's
+// `+shallow` suffix was the only disclosure. These three are the ONE probe and the ONE sentence every such
+// verb now shares (gitstamp::isShallow and the shallow="1" root attribute read the same probe).
+//
+// Not memoized: the MCP server is long-lived, and a `git fetch --unshallow` mid-session must be seen.
+inline bool gitIsShallow( const std::string& root )
+{
+    return gitOneLine( root, "rev-parse --is-shallow-repository 2>/dev/null" ) == "true";
+}
+
+// Is `sha` a shallow BOUNDARY — a commit whose object records a parent the clone never fetched? The raw
+// commit object still carries its `parent` lines when the parent is missing (the shallow file grafts them
+// away from rev-parse/rev-list, not from the object), so this tells a boundary from a TRUE root commit in
+// a shallow clone whose depth happens to reach the root. `sha` must be a resolved commit name (the caller's
+// gitResolveCommitSha output); anything else answers false.
+inline bool gitIsShallowBoundary( const std::string& root, const std::string& sha )
+{
+    if( !isBareCommitSha( sha ) || !gitIsShallow( root ) )
+    {
+        return false;
+    }
+    return !gitOneLine( root, "cat-file commit " + sha + " 2>/dev/null | sed -n '/^parent /{p;q;}'" ).empty();
+}
+
+// The one way to say how to get the missing history, so no two verbs name it differently.
+// (Worded so no string literal here OPENS with a git command: githardencheck (L) reads such a literal as an
+// executed git invocation spelled outside rw::gitCmd(); this one is advice to a reader, never run.)
+inline constexpr std::string_view kShallowDeepenHint = "deepen it with git fetch --deepen=N, or git fetch --unshallow";
+
 // A4-P1 — the HEAD-snapshot ingest cache. The HEAD tree is IMMUTABLE for a given HEAD sha, so its cold ingest
 // (~12.5 s on the 1498-file corpus) is perfectly cacheable: we hand the archived-tree ingest an incremental
 // content-hash cache file (the SAME format ingest()/loadCache()/saveCache() use for the auto-cache), so a
@@ -2112,8 +2178,13 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 25;   // MUST equal ingest.cpp's kCacheVersion (gated); 25 = #157 + #150
-constexpr std::uint32_t kIngestParserVerMirror    = 124;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 27;   // MUST equal ingest.cpp's kCacheVersion (gated); 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 129;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 129 = 2026-09-30 (train 22: #338 + #325 after fn-literal's 128, see kParserVer
+                                                          //   note; kIngestCacheVersionMirror stays 27)
+                                                          // 128 = 2026-09-29 (fn-literal-bodies, see kParserVer note)
+                                                          // 125 = 2026-09-27 (#338, RSpec described_class, see kParserVer note;
+                                                          //   kIngestCacheVersionMirror stays 25)
                                                           // 122 = 2026-09-25 (#320/#67, Astro frontmatter, see kParserVer note;
                                                           //   kIngestCacheVersionMirror stays 25)
                                                           // 121 = 2026-09-24 (#310, Ruby attr DSL, see kParserVer note)
@@ -3288,7 +3359,12 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // builtin-method name gate DECLINED could have meant it (graph.h BuiltinMethodGate, Graph::gateDeclinedTarget):
 // the dead SET moved, as in v9/v12. The producer identity already keeps this build's blobs apart from older ones;
 // bumped 14 -> 15 so the history above stays complete. No extraction change: kParserVer 122 and its mirror stay.
-constexpr std::uint32_t kQSnapCacheScheme = 15;
+// v16 (2026-09-27, the masking/placeholder round) — the blob gained two per-symbol count maps after
+// maskBySym (maskReportBySym, placeholderBySym), and maskBySym itself now counts the widened handler shapes
+// (log-only, rethrow-only): a BLOB SHAPE change and a change to what a cached Snapshot's mask counts mean.
+// A v15 blob is short two maps and its mask counts are low, so served here it would read every widened shape
+// as newly added. Bumped by the v4/v5 rule.
+constexpr std::uint32_t kQSnapCacheScheme = 16;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -3412,6 +3488,8 @@ inline std::string serializeSnapshot( const Snapshot& s, const std::string& head
     putValMap( s.paramsBySym );
     putValMap( s.defsBySym );
     putValMap( s.maskBySym );
+    putValMap( s.maskReportBySym );
+    putValMap( s.placeholderBySym );
     putHashMap( s.bodyHashBySym );
     putVec( s.cloneGroups );
     putVec( s.dead );
@@ -3539,7 +3617,7 @@ inline bool deserializeSnapshot( const std::string& blob, const std::string& hea
         return true;
     };
 
-    if( !getValMap( s.ccxBySym ) || !getValMap( s.locBySym ) || !getValMap( s.nestBySym ) || !getValMap( s.paramsBySym ) || !getValMap( s.defsBySym ) || !getValMap( s.maskBySym ) || !getHashMap( s.bodyHashBySym ) || !getVec( s.cloneGroups ) || !getVec( s.dead ) || !getVec( s.publicApi ) )
+    if( !getValMap( s.ccxBySym ) || !getValMap( s.locBySym ) || !getValMap( s.nestBySym ) || !getValMap( s.paramsBySym ) || !getValMap( s.defsBySym ) || !getValMap( s.maskBySym ) || !getValMap( s.maskReportBySym ) || !getValMap( s.placeholderBySym ) || !getHashMap( s.bodyHashBySym ) || !getVec( s.cloneGroups ) || !getVec( s.dead ) || !getVec( s.publicApi ) )
     {
         return false;
     }
@@ -3686,7 +3764,38 @@ struct MaterializedTree
     }
 };
 
-inline std::string materializeCommitTree( const std::string& root, const std::string& committish, const char* tag )
+// The crawl denylist (ingest.h kCrawlSkipDirs / isSkippedCrawlDir) spelled as `git archive` exclude pathspecs, each
+// single-quoted and space-led. A caller that only INGESTS the tree (merge-scout's per-arm index) gains nothing from
+// extracting a subtree the crawl prunes by name anyway, and on this repository that subtree is most of the bytes:
+// third_party/ is 249 MB of a 325 MB archive, so every scouted arm wrote and deleted a quarter-gigabyte it never read
+// (--stray-content --plan: 12 arms, 116 s, timed out a 60 s caller with nothing printed). `glob` magic keeps `*` inside
+// one path component, the leading `**/` matches the root level too, and an exclude-only pathspec list still means
+// "everything else" (git >= 2.13). The one crawl prune a pathspec cannot express — a directory holding CMakeCache.txt —
+// is still extracted and still pruned by the crawl. What the prune CAN change is a tracked SYMLINK: one whose target sits
+// under a pruned directory (`src/v.c -> ../vendor/lib/v.c`) dangles in the pruned tree, and the crawl drops a dangling
+// link silently where the full tree indexed it. So a tree holding any symlink (mode 120000) is never pruned
+// (treeHasNoSymlink); with that guard the ingest result is the one an unpruned archive gives.
+// True only when `rev`'s tree provably holds no symlink: `git ls-tree -r` lists every entry's mode, and none is 120000.
+// An empty listing (an empty tree, or a git too old for --format) is not proof, so it answers false: the plain archive.
+inline bool treeHasNoSymlink( const std::string& root, const std::string& rev )
+{
+    const std::string modes = gitOneLine( root, "ls-tree -r " + shSingleQuote( "--format=%(objectmode)" ) + " " + shSingleQuote( rev ) + " 2>/dev/null" );
+    return !modes.empty() && modes.find( "120000" ) == std::string::npos;
+}
+
+inline std::string crawlSkipDirPathspecs()
+{
+    std::string specs;
+    for( const std::string_view dir : kCrawlSkipDirs )
+    {
+        specs += " " + shSingleQuote( ":(exclude,glob)**/" + std::string( dir ) + "/**" );
+    }
+    specs += " " + shSingleQuote( ":(exclude,glob)**/cmake-build-?*/**" );   // isSkippedCrawlDir: the prefix plus at least one byte
+    specs += " " + shSingleQuote( ":(exclude,glob)**/?*.dSYM/**" );          // isSkippedCrawlDir: a name longer than the suffix
+    return specs;
+}
+
+inline std::string materializeCommitTree( const std::string& root, const std::string& committish, const char* tag, bool pruneCrawlSkipDirs = false )
 {
     namespace fs = std::filesystem;
     MaterializedTree tree;
@@ -3722,8 +3831,14 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // TmpTreeGuard owns.
     const std::string archiveFile = tmpRoot + ".tar";
     const std::string archiveCmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " -- 2>/dev/null";
-    if( os::system( archiveCmd.c_str() ) != 0 )
+                                  + " archive --format=tar --output=" + shSingleQuote( archiveFile ) + " " + shSingleQuote( rev ) + " -- ";
+    // The pruned archive is an optimisation, never a new way to fail: git refuses an exclude-only pathspec over an
+    // EMPTY tree ("pathspec … did not match any files", measured on git 2.50), which is a legal base. Any refusal of
+    // the pruned form falls back to the plain archive, whose exit status then decides as it always did.
+    // A tree with a symlink is archived whole (see crawlSkipDirPathspecs: a link into a pruned subtree would dangle).
+    const bool archivedPruned = pruneCrawlSkipDirs && treeHasNoSymlink( root, rev )
+                             && os::system( ( archiveCmd + crawlSkipDirPathspecs() + " 2>/dev/null" ).c_str() ) == 0;
+    if( !archivedPruned && os::system( ( archiveCmd + " 2>/dev/null" ).c_str() ) != 0 )
     {
         DISCLOSE( tree, MaterializedTree::DisclosureWhy::ArchiveFailed, "quality: git archive failed — committed tree unavailable" );
         std::error_code e;
@@ -3768,7 +3883,7 @@ enum class RefSpecStatus : std::uint8_t
     NoGit,          // environment: not a repo, or no commit on HEAD — `reason` says which
     BadRange,       // USER error: the three-dot form — `badToken` is the spec verbatim
     BadRev,         // USER error: `badToken` does not resolve to a commit
-    NoParent,       // environment: the REV form landed on a root commit — `reason` says so
+    NoParent,       // environment: the REV form landed on a root commit or a shallow boundary — `reason` says which
 };
 
 struct RefSpec
@@ -3780,6 +3895,18 @@ struct RefSpec
     std::string   badToken;                    // BadRev/BadRange only: the offending token, verbatim
     std::string   reason;                      // NoGit/NoParent only: the environment sentence
 };
+
+// The NoParent sentence: a shallow clone's boundary commit is named as one (its parent exists upstream and was not
+// fetched), a true root commit keeps the sentence it always had.
+inline std::string noParentReason( const std::string& root, const std::string& sha )
+{
+    if( gitIsShallowBoundary( root, sha ) )
+    {
+        return "shallow clone: that commit's parent was not fetched, so there is no earlier tree here to be a delta against "
+               "(it is the shallow boundary, not a root commit; " + std::string( kShallowDeepenHint ) + ")";
+    }
+    return "that commit has no parent — a root commit has no earlier tree to be a delta against";
+}
 
 inline RefSpec resolveRefSpec( const std::string& root, std::string_view spec )
 {
@@ -3834,12 +3961,14 @@ inline RefSpec resolveRefSpec( const std::string& root, std::string_view spec )
         return r;
     }
     // The per-commit form: the commit against its FIRST parent. A root commit has none — an environment fact,
-    // not a typo, so it degrades with a stated reason rather than refusing.
+    // not a typo, so it degrades with a stated reason rather than refusing. 0.6.6: so does a shallow clone's
+    // BOUNDARY commit, whose parent exists but was never fetched; calling that "a root commit" was false
+    // (--quality-delta=HEAD and --dmm=HEAD on every depth-1 clone), so the reason names which one it is.
     r.baseSha = gitResolveCommitSha( root, r.targetSha + "^" );
     if( r.baseSha.empty() )
     {
         r.status = RefSpecStatus::NoParent;
-        r.reason = "that commit has no parent — a root commit has no earlier tree to be a delta against";
+        r.reason = noParentReason( root, r.targetSha );
     }
     return r;
 }
@@ -4343,7 +4472,7 @@ inline bool cloneGroupIsInBaseline( const CloneGroup& cg, const IngestResult& in
     return true;
 }
 
-// errorMaskCountsBySym and bodyHashesBySym walk EVERY symbol, so the membership filter reaches their results
+// constructCountsBySym and bodyHashesBySym walk EVERY symbol, so the membership filter reaches their results
 // here, on their keys. The key space is path-qualified (qualityKey), so a key belongs to exactly ONE file:
 // dropping a non-baseline file's key can never take a baseline file's record with it.
 inline void dropNonBaselineKeys( Snapshot& snap, const IngestResult& ing, std::string_view root,
@@ -4364,9 +4493,12 @@ inline void dropNonBaselineKeys( Snapshot& snap, const IngestResult& ing, std::s
     std::sort( dropKeys.begin(), dropKeys.end() );
     const auto dropped = [ & ]( std::uint64_t k ) noexcept
     { return std::binary_search( dropKeys.begin(), dropKeys.end(), k ); };
-    for( auto it = snap.maskBySym.begin(); it != snap.maskBySym.end(); )
+    for( gtl::btree_map<std::uint64_t, std::uint32_t>* m : { &snap.maskBySym, &snap.maskReportBySym, &snap.placeholderBySym } )
     {
-        it = dropped( it->first ) ? snap.maskBySym.erase( it ) : std::next( it );
+        for( auto it = m->begin(); it != m->end(); )
+        {
+            it = dropped( it->first ) ? m->erase( it ) : std::next( it );
+        }
     }
     for( auto it = snap.bodyHashBySym.begin(); it != snap.bodyHashBySym.end(); )
     {
@@ -4438,8 +4570,13 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
     }
     snap.cloneGroups = baselineCloneGroupHashes( ing, root, fileInBaseline );
 
-    // §D#4 error-masking baseline: per-canonId count of error-masking constructs (the SUM the delta compares).
-    snap.maskBySym = errorMaskCountsBySym( ing, root );
+    // §D#4 error-masking + placeholder baseline: per-canonId counts (the SUMs the delta compares), from one pass.
+    {
+        ConstructCounts counts = constructCountsBySym( ing, root );
+        snap.maskBySym         = std::move( counts.mask );
+        snap.maskReportBySym   = std::move( counts.maskReport );
+        snap.placeholderBySym  = std::move( counts.placeholder );
+    }
 
     // §D#4 short-horizon-churn baseline: per-canonId RAW-body hash so the delta detects a rewrite that moved no
     // metric (a literal-only edit). Compared, never bar-checked — presence-or-difference IS the rewrite signal.
@@ -4822,6 +4959,14 @@ inline bool writeBaseline( const Snapshot& s, const std::string& path, std::stri
     {
         f << "mask " << std::hex << h << std::dec << ' ' << v << '\n'; // §D#4 error-masking count
     }
+    for( const auto& [h, v] : s.maskReportBySym )
+    {
+        f << "maskr " << std::hex << h << std::dec << ' ' << v << '\n'; // the report-only part of that count
+    }
+    for( const auto& [h, v] : s.placeholderBySym )
+    {
+        f << "stub " << std::hex << h << std::dec << ' ' << v << '\n'; // the placeholder count
+    }
     for( const auto& [h, v] : s.defsBySym )
     {
         f << "defs " << std::hex << h << std::dec << ' ' << v << '\n'; // overload-set CARDINALITY (a count, not a max)
@@ -4983,7 +5128,7 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         { std::uint64_t h = 0, v = 0; is >> std::hex >> h >> v;
           if( is.fail() ) { DISCLOSE( stats, BaselineReadStats::DisclosureWhy::MalformedLine ); return; } m[h] = v; };
 
-        if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs"
+        if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "maskr" || kind == "stub" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs"
          || kind == "producer" )
         {
             ++recognizedLineCount;                                    // structure seen — this file IS a baseline
@@ -5008,6 +5153,14 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         else if( kind == "mask" )
         {
             readValMap( out.maskBySym );
+        }
+        else if( kind == "maskr" )
+        {
+            readValMap( out.maskReportBySym );
+        }
+        else if( kind == "stub" )
+        {
+            readValMap( out.placeholderBySym );
         }
         else if( kind == "defs" )
         {
@@ -5045,7 +5198,8 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
     // (computeDelta would gate every one and name phantom findings). Refuse it the way the foreign-header
     // sidecar above is refused: loudly, with the re-pin, instead of comparing against a floor it cannot read.
     const bool whollyEmpty = out.locBySym.empty() && out.ccxBySym.empty() && out.nestBySym.empty() && out.paramsBySym.empty()
-                          && out.maskBySym.empty() && out.bodyHashBySym.empty() && out.cloneGroups.empty() && out.dead.empty() && out.publicApi.empty();
+                          && out.maskBySym.empty() && out.placeholderBySym.empty() && out.bodyHashBySym.empty() && out.cloneGroups.empty() && out.dead.empty()
+                          && out.publicApi.empty();
     if( out.locBySym.empty() && !whollyEmpty )
     {
         stats.preQ1 = true;
@@ -5576,7 +5730,7 @@ inline std::uint32_t churnEditWindowCommitCount( DiffHunkMemo& memo, const std::
 struct Regression
 {
     std::string   kind;   // "complexity" | "duplication" | "dead-code" | "verbosity" | "nesting" | "params" | "api-surface"
-                          //   | "error-masking" | "short-horizon-churn" | "new-clone-of-reused-helper" (§D#4)
+                          //   | "error-masking" | "short-horizon-churn" | "new-clone-of-reused-helper" (§D#4) | "placeholder"
     std::string   sym;    // canonical id (or, for duplication, the space-joined member ids)
     std::uint32_t was = 0;
     std::uint32_t now = 0;
@@ -7012,6 +7166,8 @@ inline std::size_t remapSnapshotIdentity( Snapshot& base, const IdentityAliases&
     healMap( base.paramsBySym );
     healMap( base.defsBySym );
     healMap( base.maskBySym );
+    healMap( base.maskReportBySym );
+    healMap( base.placeholderBySym );
     healMap( base.bodyHashBySym );
 
     // the two SORTED SETS — same add-never-overwrite rule, then restore the sorted invariant every
@@ -7337,9 +7493,9 @@ inline std::size_t applyAckRatchet( std::vector<Regression>& regs, const gtl::bt
 //     decides whether it still crosses that kind's bar.
 //   dead-code / api-surface — locBySym for existence, membership in the current `dead` / `publicApi` set
 //     for whether the state the finding named is still true right now.
-//   error-masking — locBySym for existence, `maskBySym[key] > 0` for whether a masking construct is still
-//     there (maskBySym only carries symbols with at least one hit — see errorMaskCountsBySym — so absence
-//     IS zero, not "unknown").
+//   error-masking / placeholder — locBySym for existence, `maskBySym[key] > 0` / `placeholderBySym[key] > 0`
+//     for whether a construct is still there (each map only carries symbols with at least one hit — see
+//     constructCountsBySym — so absence IS zero, not "unknown").
 //   duplication / new-clone-of-reused-helper — the ack key IS a member-set hash (cloneGroupHash), not a
 //     single symbol's key, so there is no one "target" to test existence of; only whether that EXACT group
 //     still clones today is checkable. Its absence is reported finding-gone, never target-gone: decomposing
@@ -7422,14 +7578,16 @@ inline std::optional<StaleAckWhy> staleForSetMembership( std::uint64_t key, cons
     return std::binary_search( liveSet.begin(), liveSet.end(), key ) ? std::nullopt : std::optional<StaleAckWhy>( StaleAckWhy::FindingGone );
 }
 
-inline std::optional<StaleAckWhy> staleForErrorMasking( std::uint64_t key, const Snapshot& snap )
+// error-masking and placeholder share one shape: locBySym for existence, then the kind's per-symbol COUNT
+// map (maskBySym / placeholderBySym, each carrying only symbols with at least one hit, so absence IS zero).
+inline std::optional<StaleAckWhy> staleForConstructCount( std::uint64_t key, const Snapshot& snap, const gtl::btree_map<std::uint64_t, std::uint32_t>& counts )
 {
     if( snap.locBySym.find( key ) == snap.locBySym.end() )
     {
         return StaleAckWhy::TargetGone;
     }
-    const auto it = snap.maskBySym.find( key );   // absent or zero — maskBySym only carries symbols with >=1 hit
-    return ( it == snap.maskBySym.end() || it->second == 0 ) ? std::optional<StaleAckWhy>( StaleAckWhy::FindingGone ) : std::nullopt;
+    const auto it = counts.find( key );
+    return ( it == counts.end() || it->second == 0 ) ? std::optional<StaleAckWhy>( StaleAckWhy::FindingGone ) : std::nullopt;
 }
 
 // duplication / new-clone-of-reused-helper: the key IS a member-set hash, not one symbol's key, so a miss
@@ -7476,7 +7634,11 @@ inline std::vector<StaleAck> computeStaleAcks( const gtl::btree_map<std::string,
         }
         else if( base == "error-masking" )
         {
-            why = staleForErrorMasking( rec.key, snap );
+            why = staleForConstructCount( rec.key, snap, snap.maskBySym );
+        }
+        else if( base == "placeholder" )
+        {
+            why = staleForConstructCount( rec.key, snap, snap.placeholderBySym );
         }
         else if( base == "duplication" || base == "new-clone-of-reused-helper" )
         {
@@ -7838,7 +8000,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // THE ORACLE is `base.locBySym` — computeSnapshot populates it for EVERY symbol that has a canonId
     // (public or not, body or not), so "is this canonId in locBySym" is the one clean, kind-independent
     // "existed at the baseline" test. It generalizes the api-surface kind's own isNewSymbol tier (B10.2e),
-    // which used exactly this map, to all ten kinds rather than adding a parallel mechanism.
+    // which used exactly this map, to every kind rather than adding a parallel mechanism.
     //
     // PER-KIND RULE (the ambiguous kinds decided deliberately, not by default):
     //   complexity / verbosity / nesting / params / api-surface / error-masking — the finding IS a symbol:
@@ -7858,6 +8020,10 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     //     be present in the baseline's bodyHashBySym ("a symbol absent from the baseline is a first write,
     //     never a REwrite"), so this kind can never produce a new-symbol row. Recorded explicitly below
     //     rather than derived, so the invariant is visible at the push site.
+    //   placeholder — ALWAYS new-symbol by construction, the mirror image of churn: the finding is the added
+    //     stub or TODO comment, which did not exist at the baseline whatever symbol it lands in. A placeholder
+    //     is an unfinished statement about new code, never evidence that something that worked got worse, so
+    //     it is printed and never gates.
     //
     // WHAT "PREEXISTING" CANNOT DETECT (stated in the XML comment + --help too): identity is the
     // root-relative canonId `path::scope::name`, so a symbol that was RENAMED or MOVED to another file reads
@@ -7882,7 +8048,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // a canonId, so ANY other per-symbol record existing while locBySym is empty is only possible for a v1
     // sidecar; a genuinely-empty HEAD leaves every map and vector empty together.
     const bool baselineIsWhollyEmpty = base.locBySym.empty() && base.ccxBySym.empty() && base.nestBySym.empty()
-                                    && base.paramsBySym.empty() && base.maskBySym.empty() && base.bodyHashBySym.empty()
+                                    && base.paramsBySym.empty() && base.maskBySym.empty() && base.placeholderBySym.empty() && base.bodyHashBySym.empty()
                                     && base.cloneGroups.empty() && base.dead.empty() && base.publicApi.empty();
     const bool originOracleOk = !base.locBySym.empty() || baselineIsWhollyEmpty;
     if( !originOracleOk )
@@ -8373,12 +8539,28 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
 
     // ── §D#4-1 error-masking (GitClear +47%) ──────────────────────────────────────────────────────────────
     // NEW error-masking constructs vs baseline, per symbol: aggregate the current side to a per-canonId COUNT
-    // (SUM over overloads, mirroring computeSnapshot's errorMaskCountsBySym), and flag a symbol whose count
+    // (SUM over overloads, mirroring computeSnapshot's constructCountsBySym), and flag a symbol whose count
     // GREW vs the baseline count (was 0 for a symbol/mask absent from the baseline). No bar — any NEW masking
     // construct is the regression; the count magnitude is the was/now signal. A pre-existing empty catch in an
     // UNTOUCHED symbol keeps the same count on both sides → not flagged (the quality-delta contract).
+    //
+    // REPORT-ONLY SHAPES (noise control). The widened handler shapes (log-only / rethrow-only) gate only in a
+    // language kHandlerShapeGates lists; elsewhere they are counted in maskReportBySym as well. A row whose
+    // growth is entirely report-only shapes — the GATING part of the count (total minus report-only) did not
+    // grow — is still printed, as sev="minor", so it never fires exit 2. One row per symbol either way, so the
+    // ack identity (kind, key) and the magnitude it ratchets on stay what they were.
+    //
+    // PLACEHOLDER (the eleventh kind) rides the same pass: a stub or TODO the change ADDED, per symbol, the same
+    // grew-vs-baseline count. It is new-symbol BY CONSTRUCTION — the finding is the added placeholder itself,
+    // code that did not exist at the baseline — so it is marked origin="new-symbol" on every row and never
+    // gates, whatever symbol it lands in (the same way short-horizon-churn is preexisting by construction).
     {
-        const gtl::btree_map<std::uint64_t, std::uint32_t> nowMask = errorMaskCountsBySym( ing, root );
+        const ConstructCounts nowCounts = constructCountsBySym( ing, root );
+        const auto countIn = []( const gtl::btree_map<std::uint64_t, std::uint32_t>& m, std::uint64_t key )
+        {
+            const auto it = m.find( key );
+            return ( it == m.end() ) ? 0u : it->second;
+        };
         // report each canonId once, at its first defining symbol (a mask count is a per-canonId magnitude).
         ScratchMap<std::uint8_t> maskSeen( ing.symbols.size() );
         for( NodeId i = 0; i < ing.symbols.size(); ++i )
@@ -8387,22 +8569,25 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             {
                 continue;
             }
-            const std::uint64_t key = keyByNode[i];
-            const auto          nit = nowMask.find( key );
-            if( nit == nowMask.end() )
+            const std::uint64_t key     = keyByNode[i];
+            const std::uint32_t nowMask = countIn( nowCounts.mask, key );
+            const std::uint32_t nowStub = countIn( nowCounts.placeholder, key );
+            if( ( nowMask == 0 && nowStub == 0 ) || !insertScratchSeen( maskSeen, key ) )
             {
-                continue; // this symbol masks no errors now
+                continue; // nothing here now, or already reported at an earlier overload of this id
             }
-            if( !insertScratchSeen( maskSeen, key ) )
+            const std::uint32_t wasMask = countIn( base.maskBySym, key );
+            if( nowMask > wasMask )
             {
-                continue; // already reported at an earlier overload of this id
+                const std::uint32_t nowGating = nowMask - std::min( nowMask, countIn( nowCounts.maskReport, key ) );
+                const std::uint32_t wasGating = wasMask - std::min( wasMask, countIn( base.maskReportBySym, key ) );
+                regs.push_back( { "error-masking", g.canonId[i], wasMask, nowMask, key, nowGating <= wasGating, {}, !existedAtBaseline( key ) } );
+                stampLoc( i );
             }
-            const std::uint32_t now = nit->second;
-            const auto          bit = base.maskBySym.find( key );
-            const std::uint32_t was = ( bit == base.maskBySym.end() ) ? 0u : bit->second;
-            if( now > was )
+            const std::uint32_t wasStub = countIn( base.placeholderBySym, key );
+            if( nowStub > wasStub )
             {
-                regs.push_back( { "error-masking", g.canonId[i], was, now, key, false, {}, !existedAtBaseline( key ) } );
+                regs.push_back( { "placeholder", g.canonId[i], wasStub, nowStub, key, false, {}, true } );   // new-symbol by construction (above)
                 stampLoc( i );
             }
         }
@@ -8667,6 +8852,28 @@ inline bool isHeaderPath( std::string_view path ) noexcept
 // re-deriving it. The --dead-code block below keeps only what is its own — the per-file sourceFor() cache
 // that amortizes this scan across every candidate in the tree; a single-symbol check has nothing to
 // amortize, so it calls this directly on its own one-off read.
+//
+// 0.6.6 D4: a `static` inside a COMMENT is not a linkage specifier. A Python def's signature span runs on through the
+// comment lines that open its body, so `# the static type is unchanged` there made a pytest method a "high-confidence"
+// internal-linkage row. offsetInComment answers, for a byte of the span, whether a line comment (`//` or `#`) opened
+// earlier on its line or a `/*` opened earlier in the span is still unclosed — language-agnostic, because a sig span
+// opens at the def itself, so a `#` or `//` before the token on its line is a comment in every grammar that has one
+// (a `#` inside a string literal reads as a comment too: the conservative side, one row fewer, never one more).
+inline bool offsetInComment( std::string_view source, std::size_t spanBegin, std::size_t position ) noexcept
+{
+    EXPECTS( spanBegin <= position && position <= source.size() );
+    const std::size_t newline   = position == 0 ? std::string_view::npos : source.rfind( '\n', position - 1 );
+    const std::size_t lineBegin = std::max( spanBegin, newline == std::string_view::npos ? std::size_t( 0 ) : newline + 1 );
+    const std::string_view head = source.substr( lineBegin, position - lineBegin );
+    if( head.find( '#' ) != std::string_view::npos || head.find( "//" ) != std::string_view::npos )
+    {
+        return true;
+    }
+    const std::string_view span  = source.substr( spanBegin, position - spanBegin );
+    const std::size_t      open  = span.rfind( "/*" );
+    return open != std::string_view::npos && span.find( "*/", open + 2 ) == std::string_view::npos;
+}
+
 inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartByte, std::size_t sigEndByte ) noexcept
 {
     const std::size_t begin = std::min( sigStartByte, source.size() );
@@ -8682,13 +8889,100 @@ inline bool sourceHasStaticToken( std::string_view source, std::size_t sigStartB
         const auto isIdentifier = []( char c ) noexcept { return std::isalnum( static_cast<unsigned char>( c ) ) || c == '_'; };
         const bool leftBoundary  = position == begin || !isIdentifier( source[ position - 1 ] );
         const bool rightBoundary = position + token.size() == end || !isIdentifier( source[ position + token.size() ] );
-        if( leftBoundary && rightBoundary )
+        if( leftBoundary && rightBoundary && !offsetInComment( source, begin, position ) )
         {
             return true;
         }
         position += token.size();
     }
     return false;
+}
+
+// The nearest non-blank, non-comment line above a Python def at `defByte` (or the def's own first byte) opens with '@'.
+inline bool pythonDefIsDecorated( std::string_view source, std::size_t defByte ) noexcept
+{
+    EXPECTS( defByte <= source.size() );
+    const std::size_t own = source.find_first_not_of( " \t", defByte );
+    if( own != std::string_view::npos && source[ own ] == '@' )
+    {
+        return true;
+    }
+    std::size_t lineEnd = defByte == 0 ? std::string_view::npos : source.rfind( '\n', defByte - 1 );   // the newline ending the line above
+    while( lineEnd != std::string_view::npos && lineEnd > 0 )
+    {
+        const std::size_t prevNewline = source.rfind( '\n', lineEnd - 1 );
+        const std::size_t lineBegin   = prevNewline == std::string_view::npos ? 0 : prevNewline + 1;
+        const std::size_t text        = source.find_first_not_of( " \t\r", lineBegin );
+        const bool        blankOrNote = text == std::string_view::npos || text >= lineEnd || source[ text ] == '#';
+        if( !blankOrNote )
+        {
+            return source[ text ] == '@';
+        }
+        lineEnd = prevNewline;
+    }
+    return false;
+}
+
+// The nearest `class <Name>(…):` header above `beforeByte` names a *TestCase among its OWN bases.
+inline bool pythonClassBasesNameTestCase( std::string_view source, std::string_view className, std::size_t beforeByte )
+{
+    const std::string header = "class " + std::string( className );
+    for( std::size_t at = source.rfind( header, beforeByte ); at != std::string_view::npos; at = at == 0 ? std::string_view::npos : source.rfind( header, at - 1 ) )
+    {
+        const std::size_t after = at + header.size();
+        if( after < source.size() && ( source[ after ] == '(' || source[ after ] == ':' || source[ after ] == ' ' ) )
+        {
+            const std::size_t colon = source.find( ':', after );
+            return source.substr( after, colon == std::string_view::npos ? 0 : colon - after ).find( "TestCase" ) != std::string_view::npos;
+        }
+    }
+    return false;
+}
+
+// 0.6.6 D4: a DECORATED Python def. It is not a --dead-code / dead_code_candidate= row, and it is counted apart from the
+// test-runner roots below (decorated-excluded=), because the reason differs: a decorator MAY register the def (`@app.route`,
+// `@pytest.fixture`, `@click.command` — the registry's call is invisible to the graph), but a plain wrapper
+// (`@staticmethod`, `@property`, `@functools.lru_cache`) registers nothing. Such a row's only Python "linkage" evidence is a
+// non-comment `static` token (a parameter named static), which is never real linkage, so dropping it removes a claim the
+// detector could not back; the count says how many were dropped for this reason alone. Python only.
+inline bool pythonDecoratedDef( const Symbol& s, std::string_view source ) noexcept
+{
+    return s.lang == Lang::Python && s.sigStartByte <= source.size() && pythonDefIsDecorated( source, s.sigStartByte );
+}
+
+// 0.6.6 D4: a Python def that a TEST RUNNER reaches with no call the index can see — so zero in-edges on it is not
+// evidence of anything, and --dead-code / --safe-delete's dead_code_candidate= must not name it (runner-root-excluded=):
+//   * pytest discovery in a test_*.py / *_test.py file: a `test*` function or method, and the xunit-style hooks
+//     (setup_module, setup_method, teardown_class …);
+//   * unittest: a `test*` method or a setUp/tearDown/setUpClass/tearDownClass/asyncSetUp/asyncTearDown hook of a class
+//     whose OWN base list names a *TestCase (unittest.TestCase, IsolatedAsyncioTestCase, a framework's TestCase).
+// Not covered, all on the "still reported" side: a TestCase subclass reached only through an intermediate base class,
+// and pytest's python_files/python_functions overrides from a config file. Python only; every other language is false.
+inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::string_view source ) noexcept
+{
+    if( s.lang != Lang::Python || s.sigStartByte > source.size() )
+    {
+        return false;
+    }
+    const std::size_t      slash      = path.rfind( '/' );
+    const std::string_view baseName   = slash == std::string_view::npos ? path : path.substr( slash + 1 );
+    const bool             pytestFile = ( baseName.starts_with( "test_" ) || baseName.ends_with( "_test.py" ) ) && baseName.ends_with( ".py" );
+    const std::string_view name       = s.name;
+    constexpr std::array<std::string_view, 8> kXunitHooks = { "setup_module", "teardown_module", "setup_function", "teardown_function",
+                                                              "setup_class",  "teardown_class",  "setup_method",   "teardown_method" };
+    constexpr std::array<std::string_view, 6> kUnittestHooks = { "setUp", "tearDown", "setUpClass", "tearDownClass", "asyncSetUp", "asyncTearDown" };
+    const auto listed = []( const auto& table, std::string_view n ) noexcept { return std::find( table.begin(), table.end(), n ) != table.end(); };
+    if( pytestFile && ( name.starts_with( "test" ) || listed( kXunitHooks, name ) ) )
+    {
+        return true;
+    }
+    if( s.scope.empty() || !( name.starts_with( "test" ) || listed( kUnittestHooks, name ) ) )
+    {
+        return false;
+    }
+    const std::size_t scopeSep = s.scope.rfind( "::" );
+    return pythonClassBasesNameTestCase( source, scopeSep == std::string::npos ? std::string_view( s.scope ) : std::string_view( s.scope ).substr( scopeSep + 2 ),
+                                         s.sigStartByte );
 }
 
 // lane/safe-delete: the --dead-code high-confidence PRECONDITIONS on symbol KIND/PLACEMENT alone — a

@@ -15,6 +15,8 @@
 #include "mcp.h"       // kMcpVerbTable / kMcpVerbCount — the single source of truth for the MCP verb list (A4-S2)
 #include "infra/os.h"  // rw::os::access — wrapCommandToken (2026-09-06); wrapScanSkillDir names a skills folder it cannot enter
 #include <algorithm>
+#include <cstdint>
+#include <utility>
 #include <cerrno>
 #include <cstring>    // std::strerror — the unreadable-folder WARN
 #include "skillscan.h"
@@ -36,12 +38,17 @@ namespace rw
 // the wrap recipe's "verbs the agent can then call mid-task" comment block. Derives from the
 // same table mcp.h's tools/list JSON is kept in sync with — see the A4-S2 comment on
 // kMcpVerbTable — so a verb can't ship without appearing here. Returns text ready to be printed
-// one line at a time by the caller (each line already has no trailing newline).
-inline std::vector<std::string> wrapVerbGroupLines()
+// one line at a time by the caller (each line already has no trailing newline). The first line is the
+// header with the count. `mask` (--mcp-tools) keeps only the listed verbs, and a group left empty drops its line.
+inline std::vector<std::string> wrapVerbGroupLines( McpToolMask mask = kMcpAllToolsMask )
 {
     std::string readLine, reflexLine, editLine;
     for( const McpVerbInfo& v : kMcpVerbTable )
     {
+        if( ( ( mask >> mcpToolIndex( v.name ) ) & 1u ) == 0 )
+        {
+            continue;
+        }
         std::string* line = ( v.group == McpVerbGroup::Read )           ? &readLine
                            : ( v.group == McpVerbGroup::FlagshipReflex ) ? &reflexLine
                                                                           : &editLine;
@@ -51,12 +58,26 @@ inline std::vector<std::string> wrapVerbGroupLines()
         }
         *line += v.name;
     }
-    return {
-        "#   read:             " + readLine,
-        "#   flagship reflex:  " + reflexLine,
-        "#   edit:             " + editLine,
-    };
+    std::vector<std::string> lines{ "# verbs the agent can then call mid-task (" + std::to_string( std::popcount( mask ) ) + " total):" };
+    for( const auto& [ label, names ] : { std::pair{ "#   read:             ", &readLine },
+                                          std::pair{ "#   flagship reflex:  ", &reflexLine },
+                                          std::pair{ "#   edit:             ", &editLine } } )
+    {
+        if( !names->empty() )
+        {
+            lines.push_back( label + *names );
+        }
+    }
+    return lines;
 }
+
+// What every recipe lists about the server: the grouped verb lines (header first) and the --mcp-tools argument to
+// write into its command ("" = none, the default server).
+struct WrapListing
+{
+    std::vector<std::string> verbLines;
+    std::string              toolsArg;
+};
 
 // ── THE AGENT REGISTRY ───────────────────────────────────────────────────────────────────────────
 // One row per agent. Adding an agent is a ROW, not a branch.
@@ -375,7 +396,14 @@ inline void wrapPrintPathNote( const std::string& token )
     }
 }
 
-inline void wrapMcpJson( const char* configPath, const std::string& token )
+// `toolsArg` (--mcp-tools=LIST, already validated to tool/profile names and commas) rides after --mcp as a second
+// JSON array element: ", \"--mcp-tools=LIST\"", or nothing at all.
+inline std::string wrapJsonToolsArg( std::string_view toolsArg )
+{
+    return toolsArg.empty() ? std::string{} : ", \"" + std::string( toolsArg ) + "\"";
+}
+
+inline void wrapMcpJson( const char* configPath, const std::string& token, std::string_view toolsArg = {} )
 {
     wrapPrintPathNote( token );
     const std::string escapedToken = rw::jsonesc::escapeMcp( token );
@@ -383,9 +411,9 @@ inline void wrapMcpJson( const char* configPath, const std::string& token )
         "# ripwire -> add to {}\n"
         "{{\n"
         "  \"mcpServers\": {{\n"
-        "    \"ripwire\": {{ \"command\": \"{}\", \"args\": [\"--mcp\"] }}\n"
+        "    \"ripwire\": {{ \"command\": \"{}\", \"args\": [\"--mcp\"{}] }}\n"
         "  }}\n"
-        "}}\n", configPath, escapedToken.c_str() );
+        "}}\n", configPath, escapedToken.c_str(), wrapJsonToolsArg( toolsArg ) );
 }
 
 // opencode's config is a DIFFERENT shape, not a different path: the top-level key is `mcp` (not
@@ -395,16 +423,59 @@ inline void wrapMcpJson( const char* configPath, const std::string& token )
 // happily and then ignores it. Callers print their own "add to <path>" guidance, so this emits the
 // object alone. Keys are held to McpLocalConfig's six (the published schema sets
 // additionalProperties:false); test/opencodewrapcheck.sh checks this against the pinned copy.
-inline void wrapMcpJsonOpencode( const std::string& token )
+inline void wrapMcpJsonOpencode( const std::string& token, std::string_view toolsArg = {} )
 {
     const std::string escapedToken = rw::jsonesc::escapeMcp( token );
     rw::emitTo( stdout,
         "{{\n"
         "  \"$schema\": \"https://opencode.ai/config.json\",\n"
         "  \"mcp\": {{\n"
-        "    \"ripwire\": {{ \"type\": \"local\", \"command\": [\"{}\", \"--mcp\"] }}\n"
+        "    \"ripwire\": {{ \"type\": \"local\", \"command\": [\"{}\", \"--mcp\"{}] }}\n"
         "  }}\n"
-        "}}\n", escapedToken.c_str() );
+        "}}\n", escapedToken.c_str(), wrapJsonToolsArg( toolsArg ) );
+}
+
+// --mcp-tools pass-through. Written into the server command only where its argument shape is known to be one more
+// plain argument: the JSON args arrays (cursor/windsurf/gemini), opencode's command array, and `claude mcp add`'s
+// trailing argv. codex (a TOML stanza whose enabled_tools list is its own client-side restriction), openclaw and
+// hermes (their `mcp add` spell each argument with a flag of their own) get a NOTE instead of a guessed command.
+inline bool wrapWritesToolsArg( const AgentTarget& row ) noexcept
+{
+    switch( row.mcpForm )
+    {
+        case McpForm::Json:
+        case McpForm::JsonMcpKey:
+            return true;
+        case McpForm::CliAdd:
+            return row.name == "claude";   // openclaw/hermes spell each argument with their own flag
+        case McpForm::Toml:
+        case McpForm::None:
+            return false;
+    }
+    return false;
+}
+
+// claude's `mcp add … -- ripwire --mcp`: the flag goes on the end of that command line, ahead of its newline.
+inline std::string wrapCliAddPost( const AgentTarget& row, std::string_view toolsArg )
+{
+    std::string post( row.mcpAddPost );
+    if( !toolsArg.empty() && wrapWritesToolsArg( row ) && post.ends_with( '\n' ) )
+    {
+        post.insert( post.size() - 1, " " + std::string( toolsArg ) );
+    }
+    return post;
+}
+
+// The recipe says so when --mcp-tools was given and this agent's form did not get it ("" otherwise).
+inline void wrapPrintToolsArgNote( const AgentTarget* row, std::string_view toolsArg )
+{
+    if( toolsArg.empty() || row == nullptr || wrapWritesToolsArg( *row ) )
+    {
+        return;
+    }
+    rw::emitTo( stdout, "# NOTE: {} is not written into this agent's {}; add it to the ripwire server's arguments by hand{}.\n", toolsArg,
+                row->mcpForm == McpForm::None ? "recipe (it registers no MCP server)" : "MCP stanza",
+                row->mcpForm == McpForm::Toml ? ", and list the same tools in enabled_tools" : "" );
 }
 
 // Agent configuration: name, config directory path (using ~ for home), and a lambda to
@@ -496,51 +567,77 @@ inline std::vector<AgentConfig> getAgentConfigs() noexcept
     return configs;
 }
 
-// Scan a local skills directory (best-effort). Returns worst severity found (0/1/2).
-// Prints WARN/CRITICAL findings to stderr. Silent on no findings / dir absent.
-inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
+// The directories a skill walk has entered, by (st_dev, st_ino). The walk follows directory SYMLINKS (review R2-M1:
+// `skills/evil/lib -> ../../outside/lib` hid a CRITICAL helper.sh from wrap while --scan-skills, which follows them, called the
+// tree CRITICAL; the agent resolves the link when it runs the script). Following links means cycles, so a directory already
+// entered is not re-entered: a `loop -> .` link is walked once and the walk always ends.
+struct WrapDirVisits
+{
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> seen;
+
+    // true the first time this directory is met; a directory that cannot be stat'ed is descended, and the walk's own error
+    // path reports what it cannot read
+    [[nodiscard]] bool firstVisit( const std::filesystem::path& d )
+    {
+        os::stat_t st{};
+        if( os::stat( os::path_arg( d ).c_str(), &st ) != 0 )
+        {
+            return true;
+        }
+        const std::pair<std::uint64_t, std::uint64_t> key{ std::uint64_t( st.st_dev ), std::uint64_t( st.st_ino ) };
+        if( std::find( seen.begin(), seen.end(), key ) != seen.end() )
+        {
+            return false;
+        }
+        seen.push_back( key );
+        return true;
+    }
+};
+
+// Every regular file under `dir`, sorted for determinism. The walk advances with increment(ec): the throwing range-for
+// operator++ made an undescendable tree std::terminate (exit 134) before that fix; a stopped walk is left in `ec` for the
+// caller to disclose (CRITICAL: F-B3). A directory the scan cannot ENTER (mode-000) is a WARN here, raising `maxSev` to 1.
+inline std::vector<std::string> wrapCollectSkillFiles( const std::string& dir, int& maxSev, std::error_code& ec )
 {
     namespace fs = std::filesystem;
-    std::error_code ec;
-    if( !fs::exists( dir, ec ) || ec )
-    {
-        return 0;
-    }
-
-    // Collect + sort .md paths for determinism. The walk advances with increment(ec): the throwing range-for
-    // operator++ made an undescendable tree std::terminate (exit 134) before this fix. A stopped walk is
-    // disclosed below (CRITICAL: F-B3); a directory the scan cannot ENTER (mode-000, WARN) is different.
-    std::vector<std::string> mdPaths;
-    int                      maxSev = 0;
-    fs::recursive_directory_iterator it( dir, fs::directory_options::none, ec ), end;
+    std::vector<std::string> skillPaths;
+    WrapDirVisits            visits;
+    (void)visits.firstVisit( fs::path( dir ) );   // the root itself, so a link back to it is a cycle
+    fs::recursive_directory_iterator it( dir, fs::directory_options::follow_directory_symlink, ec ), end;
     for( ; !ec && it != end; it.increment( ec ) )
     {
         std::error_code entryEc;
-        if( it->is_directory( entryEc ) && !entryEc && os::access( os::path_arg( it->path() ).c_str(), R_OK | X_OK ) != 0 )
+        const bool      isDir = it->is_directory( entryEc ) && !entryEc;
+        if( isDir && os::access( os::path_arg( it->path() ).c_str(), R_OK | X_OK ) != 0 )
         {
             rw::emitTo( stderr, "ripwire wrap: WARN — cannot read skills folder {} ({}); the skills inside it were not scanned\n",
                         it->path().string(), std::strerror( errno ) );
             maxSev = std::max( maxSev, 1 );
             it.disable_recursion_pending();
-            continue;
         }
-        if( it->is_regular_file( entryEc ) && !entryEc && it->path().extension() == ".md" )
+        else if( isDir && !visits.firstVisit( it->path() ) )
         {
-            mdPaths.push_back( it->path().string() );
+            it.disable_recursion_pending();   // a directory reached a second time through a link: already scanned
+        }
+        else if( !isDir && it->is_regular_file( entryEc ) && !entryEc )
+        {
+            skillPaths.push_back( it->path().string() );
         }
     }
-    std::sort( mdPaths.begin(), mdPaths.end() );
+    std::sort( skillPaths.begin(), skillPaths.end() );
+    return skillPaths;
+}
 
-    // F-B3: unlike the WARN above, files past a stopped walk are still COPYABLE — this fails CLOSED (ruling 3).
-    if( !ec && rw::faultSwitchOn( "RIPWIRE_FAULT_SKILL_WALK_STOP" ) ) { ec = std::make_error_code( std::errc::too_many_files_open ); }
-    if( ec )
-    {
-        rw::emitTo( stderr, "ripwire wrap: CRITICAL — the skill scan of {} stopped early ({}); skills past that point were not scanned and may still be installed\n", dir, ec.message() );
-        maxSev = std::max( maxSev, 2 );
-    }
-    for( const std::string& p : mdPaths )
+// Scan each collected file (kind-aware: a shell script gets the code pass), print WARN/CRITICAL findings to stderr, and
+// return the worst severity; one NOTE counts code files the scanner has no network-flow model for.
+inline int wrapScanSkillFiles( const std::vector<std::string>& skillPaths, const std::string& dir )
+{
+    int maxSev             = 0;
+    int codeNotFlowScanned = 0;
+    for( const std::string& p : skillPaths )
     {
         const SkillFileReadResult res = scanSkillFileChecked( p );
+        codeNotFlowScanned += ( res.readable && res.kind == SkillFileKind::OtherCode ) ? 1 : 0;
         if( !res.readable )   // the folder was enterable, so the file is copyable: CRITICAL by name, as --scan-skills scores it
         {
             rw::emitTo( stderr, "ripwire wrap: CRITICAL — cannot read skill file {}; it was not scanned and may still be installed\n", p );
@@ -555,7 +652,38 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
             }
         }
     }
+    if( codeNotFlowScanned > 0 )
+    {
+        rw::emitTo( stderr, "ripwire wrap: NOTE — {} code file(s) under {} are in a language this scanner has no network-flow model for "
+                            "(see --scan-skills code_not_flow_scanned=): an upload written there is not detected\n", codeNotFlowScanned, dir );
+    }
     return maxSev;
+}
+
+// Scan a local skills directory (best-effort). Returns worst severity found (0/1/2).
+// Prints WARN/CRITICAL findings to stderr. Silent on no findings / dir absent, except for one line counting code files the
+// scanner has no network-flow model for. Review M3 (0.6.6): this walked only `.md` files, so a skill whose bundled
+// scripts/helper.sh uploads a credential installed with rc 0 while --scan-skills called the same tree CRITICAL. It now
+// scans EVERY regular file through scanSkillFileChecked, as --scan-skills does, so a shell script gets the code pass.
+inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if( !fs::exists( dir, ec ) || ec )
+    {
+        return 0;
+    }
+    int                            maxSev     = 0;
+    const std::vector<std::string> skillPaths = wrapCollectSkillFiles( dir, maxSev, ec );
+
+    // F-B3: unlike the WARN above, files past a stopped walk are still COPYABLE — this fails CLOSED (ruling 3).
+    if( !ec && rw::faultSwitchOn( "RIPWIRE_FAULT_SKILL_WALK_STOP" ) ) { ec = std::make_error_code( std::errc::too_many_files_open ); }
+    if( ec )
+    {
+        rw::emitTo( stderr, "ripwire wrap: CRITICAL — the skill scan of {} stopped early ({}); skills past that point were not scanned and may still be installed\n", dir, ec.message() );
+        maxSev = std::max( maxSev, 2 );
+    }
+    return std::max( maxSev, wrapScanSkillFiles( skillPaths, dir ) );
 }
 
 // ONE recipe path for every agent that can shell out, and the point is that the RECOMMENDATION does
@@ -570,7 +698,7 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
 // it, because a warm index across calls is a real reason to want one.
 inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
                               const std::string_view executablePath,
-                              const std::vector<std::string>& verbLines ) noexcept
+                              const WrapListing& listing ) noexcept
 {
     rw::emitTo( stdout, "# ripwire -> {} (CLI-first)\n", std::string_view( row.displayName.data(), static_cast<int>( row.displayName.size() ) ) );
     wrapPrintPathNote( token );
@@ -606,7 +734,7 @@ inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
             // every row held exactly one %s. Splitting the command at its substitution point removes
             // the hazard rather than containing it: there is no format string left to get wrong.
             rw::emitTo( stdout, "{}{}{}", std::string_view( row.mcpAddPre.data(), static_cast<int>( row.mcpAddPre.size() ) ),
-                         token.c_str(), std::string_view( row.mcpAddPost.data(), static_cast<int>( row.mcpAddPost.size() ) ) );
+                         token.c_str(), wrapCliAddPost( row, listing.toolsArg ) );
             break;
         }
         case McpForm::Toml:
@@ -631,22 +759,20 @@ inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
                 "# opencode.json (project) or ~/.config/opencode/opencode.json (global; merged\n"
                 "# per-key, project wins). The key is \"mcp\" — the \"mcpServers\" shape other clients\n"
                 "# use parses fine here and is then silently ignored:\n" );
-            wrapMcpJsonOpencode( token );
+            wrapMcpJsonOpencode( token, listing.toolsArg );
             break;
         case McpForm::Json:
         case McpForm::None:
             break;
     }
-    rw::emitTo( stdout, "# verbs the agent can then call mid-task ({} total):\n", kMcpVerbCount );
-    for( const std::string& line : verbLines )
+    for( const std::string& line : listing.verbLines )
     {
         rw::emitTo( stdout, "{}\n", line.c_str() );
     }
 }
 
 // Emit the configuration recipe for a single agent (shared by runWrap and --all logic)
-inline void wrapEmitAgent( const std::string_view agent, const std::vector<std::string>& verbLines,
-                           const std::string_view executablePath ) noexcept
+inline void wrapEmitAgent( const std::string_view agent, const WrapListing& listing, const std::string_view executablePath ) noexcept
 {
     const std::string token = wrapCommandToken( executablePath );   // 2026-09-06: "ripwire", or this binary's absolute path when PATH has none
 
@@ -664,19 +790,19 @@ inline void wrapEmitAgent( const std::string_view agent, const std::vector<std::
 
     if( cliFirst )
     {
-        wrapEmitCliFirst( *cliRow, token, executablePath, verbLines );
+        wrapEmitCliFirst( *cliRow, token, executablePath, listing );
     }
     else if( agent == "cursor" )
     {
-        wrapMcpJson( ".cursor/mcp.json  (project)  or  ~/.cursor/mcp.json  (global)", token );
+        wrapMcpJson( ".cursor/mcp.json  (project)  or  ~/.cursor/mcp.json  (global)", token, listing.toolsArg );
     }
     else if( agent == "windsurf" )
     {
-        wrapMcpJson( "~/.codeium/windsurf/mcp_config.json", token );
+        wrapMcpJson( "~/.codeium/windsurf/mcp_config.json", token, listing.toolsArg );
     }
     else if( agent == "gemini" )
     {
-        wrapMcpJson( "~/.gemini/settings.json", token );
+        wrapMcpJson( "~/.gemini/settings.json", token, listing.toolsArg );
     }
     else if( agent == "aider" )
     {
@@ -692,12 +818,13 @@ inline void wrapEmitAgent( const std::string_view agent, const std::vector<std::
     // instead of duplicating the printf calls per-branch); aider has no MCP verbs to list.
     if( !cliFirst && ( agent == "cursor" || agent == "windsurf" || agent == "gemini" ) )
     {
-        rw::emitTo( stdout, "# verbs the agent can then call mid-task ({} total):\n", kMcpVerbCount );
-        for( const std::string& line : verbLines )
+        for( const std::string& line : listing.verbLines )
         {
             rw::emitTo( stdout, "{}\n", line.c_str() );
         }
     }
+
+    wrapPrintToolsArgNote( cliRow, listing.toolsArg );   // --mcp-tools given but not written into this agent's form
 
     // A4-S2: adoption recipes name a skill install step only for verified agent discovery paths.
     wrapPrintSkillsLine( stdout, agent, executablePath );
@@ -706,13 +833,42 @@ inline void wrapEmitAgent( const std::string_view agent, const std::vector<std::
     wrapPrintBlurb( stdout, agent );
 }
 
-inline int runWrap( int argc, char** argv, const std::string_view executablePath )
+// `ripwire wrap AGENT --mcp-tools=LIST`: the argument to write into the server command ("" when absent or `full`),
+// the listed mask, or the parser's refusal. argv is external input; mcpParseToolSpec VALIDATEs every name.
+struct WrapToolsArg
 {
-    if( argc < 3 ) { wrapList( stdout ); return 0; }
-    const std::string_view arg = argv[ 2 ];
+    std::string toolsArg;
+    McpToolMask mask = kMcpAllToolsMask;
+    std::string refusal;
+};
+inline WrapToolsArg wrapToolsArg( int argc, char** argv )
+{
+    static constexpr std::string_view kPrefix = "--mcp-tools=";
+    WrapToolsArg out;
+    bool         seen = false;
+    for( int argIndex = 3; argIndex < argc; ++argIndex )
+    {
+        const std::string_view arg = argv[ argIndex ];
+        if( !arg.starts_with( kPrefix ) )
+        {
+            continue;
+        }
+        const McpToolSpec spec = mcpParseToolSpec( arg.substr( kPrefix.size() ) );
+        if( !VALIDATE( spec.refusal.empty() && !seen, "argv: one valid --mcp-tools" ) )
+        {
+            return { .refusal = spec.refusal.empty() ? std::string( "--mcp-tools given twice; give one list" ) : spec.refusal };
+        }
+        seen         = true;
+        out.mask     = spec.mask;
+        out.toolsArg = spec.mask != kMcpAllToolsMask ? std::string( arg ) : std::string{};
+    }
+    return out;
+}
 
-    // ── P1-C: scan local skill directories before emitting the recipe ─────────────────────────
-    // Best-effort: missing dirs are silently skipped. CRITICAL → block unless --force.
+// ── P1-C: scan local skill directories before emitting the recipe ─────────────────────────
+// Best-effort: missing dirs are silently skipped. CRITICAL → true (the caller refuses) unless --force.
+inline bool wrapSkillScanRefuses( int argc, char** argv )
+{
     bool force = false;
     for( int i = 3; i < argc; ++i )
     {
@@ -731,11 +887,32 @@ inline int runWrap( int argc, char** argv, const std::string_view executablePath
         rw::emitRaw( stderr,
             "ripwire wrap: CRITICAL skill findings above — refusing to emit recipe.\n"
             "              Fix the skills or re-run with --force to proceed anyway.\n" );
+        return true;
+    }
+    return false;
+}
+
+inline int runWrap( int argc, char** argv, const std::string_view executablePath )
+{
+    if( argc < 3 ) { wrapList( stdout ); return 0; }
+    const std::string_view arg = argv[ 2 ];
+
+    if( wrapSkillScanRefuses( argc, argv ) )
+    {
         return 1;
     }
 
+    // --mcp-tools=LIST: validated by the server's own parser, then written into the server command (and the verb
+    // list narrowed to it). `full` is the default server, so it is the default recipe too.
+    const auto [ toolsArg, toolMask, toolsRefusal ] = wrapToolsArg( argc, argv );
+    if( !toolsRefusal.empty() )
+    {
+        rw::emitTo( stderr, "ripwire wrap: {}\n", toolsRefusal );
+        return 2;
+    }
+
     // All MCP verbs, grouped — derived from mcp.h's kMcpVerbTable so this cannot re-drift (A4-S2).
-    const std::vector<std::string> verbLines = wrapVerbGroupLines();
+    const WrapListing listing{ wrapVerbGroupLines( toolMask ), toolsArg };
 
     // ── Handle --all: detect + emit every installed agent ─────────────────────────────────────
     if( arg == "--all" )
@@ -755,7 +932,7 @@ inline int runWrap( int argc, char** argv, const std::string_view executablePath
                 rw::emitRaw( stdout, "\n" ); // blank line separator between agents
             }
             rw::emitTo( stdout, "# ──── {} ────\n", std::string_view( ac.name.data(), ac.name.size() ) );
-            wrapEmitAgent( ac.name, verbLines, executablePath );
+            wrapEmitAgent( ac.name, listing, executablePath );
             ++configuredCount;
         }
 
@@ -768,13 +945,13 @@ inline int runWrap( int argc, char** argv, const std::string_view executablePath
     const std::string_view agent = arg;
     if( agentTarget( agent ) != nullptr )   // the table IS the accept-list; a new row needs no edit here
     {
-        wrapEmitAgent( agent, verbLines, executablePath );
+        wrapEmitAgent( agent, listing, executablePath );
         return 0;
     }
 
     rw::emitTo( stderr, "ripwire wrap: unknown agent '{}'\n", std::string_view( agent.data(), agent.size() ) );
     wrapList( stderr );
-    wrapMcpJson( "your client's MCP config (generic stanza)", wrapCommandToken( executablePath ) );   // don't leave them stuck
+    wrapMcpJson( "your client's MCP config (generic stanza)", wrapCommandToken( executablePath ), toolsArg );   // don't leave them stuck
     return 2;
 }
 

@@ -163,7 +163,8 @@ SHOWN="$( attr shown "$OUT_W" )"
 { [ "$S_ROWS" = "$SHOWN" ] && [ "$S_ROWS" = 1 ]; } \
     && ok "--impact=Widget: shown=1 and exactly 1 <s> row — import rows are outside the paged listing" \
     || no "--impact=Widget: <s> rows=$S_ROWS vs shown=$SHOWN (expected 1 and 1)"
-printf '%s' "$OUT_W" | grep -qE '<s t="fn" n="build" p="lib/user\.js:7"/>' \
+# 0.6.5: the listing's first row states its hop depth (d="1": build calls Widget directly) — test/impactdepthcheck.sh.
+printf '%s' "$OUT_W" | grep -qE '<s t="fn" n="build" p="lib/user\.js:7" d="1"/>' \
     && ok "--impact=Widget: user.js appears as the SYMBOL build in the call tier" \
     || no "--impact=Widget: the call-reach row for build (lib/user.js:7) is gone"
 

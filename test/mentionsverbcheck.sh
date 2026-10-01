@@ -21,6 +21,12 @@
 #
 # Usage:  bash test/mentionsverbcheck.sh   |   RIPWIRE_BIN=asan/ripwire bash test/mentionsverbcheck.sh
 #         RIPWIRE_BIN=build_base/ripwire bash test/mentionsverbcheck.sh    # must FAIL (pre-fix binary)
+# 7) THE BACKTICK RULE'S RESIDUE (lane honesty-cuts-066): docs= counts only a clean one-line backtick span, so prose, a
+#    code block or a span broken across lines never counted, and nothing said so (--mentions=escapeXml read docs="2"
+#    while three more files named it). unbackticked_docs=N counts the markdown files that name it only that way,
+#    present only when non-zero, defined in the same document; the two fixture docs above name it only in backticks.
+#    The MCP `mentions` twin carries it as "unbackticked_docs" with "unbackticked_docs_ceiling":true beside it.
+#
 # Exits non-zero on any failure. Self-contained (own temp dir). Does NOT edit test/regression.sh.
 
 set -u
@@ -112,5 +118,68 @@ else
 fi
 OUT2="$( "$BIN" "$FIX" --mentions=widget_pipeline_process --no-cache --legend=full 2>/dev/null )"
 if [ "$OUT" = "$OUT2" ]; then ok "deterministic (byte-identical run-to-run)"; else no "non-deterministic output"; fi
+
+# -- 7) the markdown the backtick rule leaves out is counted ----------------------------------------------------
+if printf '%s' "$OUT" | grep -q 'unbackticked_docs'; then no "backtick-only docs carry unbackticked_docs (should be absent)"
+else ok "every fixture doc names it in backticks: no unbackticked_docs= (0 B)"; fi
+cat > "$FIX/prose.md" <<'MD'
+# Prose
+
+The widget_pipeline_process step runs first.
+MD
+cat > "$FIX/broken.md" <<'MD'
+# Broken span
+
+A span that opens `here and
+closes` before `widget_pipeline_process` on the next line.
+MD
+cat > "$FIX/namesake.md" <<'MD'
+# Not a mention
+
+widget_pipeline_process_v2 is a different name.
+MD
+OUT7="$( "$BIN" "$FIX" --mentions=widget_pipeline_process --no-cache 2>/dev/null )"
+ROOT7="$( printf '%s' "$OUT7" | grep -oE '<mentions [^>]*>' | head -1 )"
+printf '%s' "$ROOT7" | grep -q ' docs="2"' && printf '%s' "$ROOT7" | grep -q ' unbackticked_docs="2"' \
+    && ok "docs=\"2\" unchanged, unbackticked_docs=\"2\" (prose.md, broken.md; namesake.md is another word)" \
+    || no "want docs=\"2\" unbackticked_docs=\"2\": $ROOT7"
+printf '%s' "$OUT7" | grep -qE '<!-- unbackticked_docs=N: ' \
+    && ok "the same document defines unbackticked_docs=" || no "unbackticked_docs= rides with no reading"
+# the MCP twin carries the same count, marked a ceiling in JSON (the "_floor":true precedent, the other direction)
+MCP7="$( printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mentions","arguments":{"path":"'"$FIX"'","symbol":"widget_pipeline_process"}}}' \
+    | "$BIN" --mcp 2>/dev/null | tail -1 )"
+MCP7V="$( printf '%s' "$MCP7" | python3 -c '
+import sys, json
+try:
+    r = json.loads( sys.stdin.read() )
+    body = json.loads( r["result"]["content"][0]["text"] )
+    ok = body.get( "docs" ) == 2 and body.get( "unbackticked_docs" ) == 2 and body.get( "unbackticked_docs_ceiling" ) is True
+    print( "OK" if ok else "GOT:" + json.dumps( body )[ :300 ] )
+except Exception as e:
+    print( "GOT:unparseable %s" % e )
+' )"
+[ "$MCP7V" = OK ] && ok "MCP mentions: docs=2, unbackticked_docs=2 with unbackticked_docs_ceiling=true" \
+    || no "MCP mentions twin: $MCP7V"
+
+# 8) 0.6.6 review: an indexed markdown file that cannot be read back at answer time was silently counted as "no
+#    unbackticked mention". It is now counted and disclosed: unbackticked_unread=N (present only when non-zero, defined
+#    in the same document). The index comes from a cache (an isolated HOME), then one file loses its read permission.
+UR="$WORK/unread"; mkdir -p "$UR" "$WORK/urhome"
+printf 'int widget_pipeline_process( int x ) { return x; }\n' >"$UR/a.c"
+printf '# Prose\n\nThe widget_pipeline_process step runs first.\n' >"$UR/prose.md"
+printf '# Other\n\nnothing here\n' >"$UR/other.md"
+UR0="$( HOME="$WORK/urhome" "$BIN" "$UR" --mentions=widget_pipeline_process 2>/dev/null )"
+printf '%s' "$UR0" | grep -q 'unbackticked_unread' && no "every doc readable, yet unbackticked_unread= is present" || ok "every doc readable: no unbackticked_unread= (0 B)"
+chmod 000 "$UR/prose.md"
+if [ -r "$UR/prose.md" ]; then ok "unbackticked_unread: skipped (this user reads a mode-000 file, e.g. root)"
+else
+    UR1="$( HOME="$WORK/urhome" "$BIN" "$UR" --mentions=widget_pipeline_process 2>/dev/null )"
+    UR1ROOT="$( printf '%s' "$UR1" | grep -oE '<mentions [^>]*>' | head -1 )"
+    printf '%s' "$UR1ROOT" | grep -q ' unbackticked_unread="1"' && printf '%s' "$UR1" | grep -q '<!-- unbackticked_unread=N: ' \
+        && ok "an indexed doc unreadable at answer time is disclosed: unbackticked_unread=\"1\", defined" \
+        || no "an unreadable indexed doc is not disclosed: $UR1ROOT"
+fi
+chmod 644 "$UR/prose.md"
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

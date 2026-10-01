@@ -30,6 +30,12 @@
 # every declined check named in an <unchecked> row; and drift + dated == every anchor that failed, so a
 # record is re-bucketed, never dropped.
 #
+# 0.6.6 D3 (arm FD, a temp corpus): three false drifts a Python repo reported. (FD1) a doc's `= 15,000` was read as 15
+# against the code's 15_000 — a prose thousands separator now continues the literal (a `= 16,000` control still drifts,
+# want="16000"); (FD2) a Python builtin exception (`NameError`) named in a doc was "undefined" — it is now unchecked
+# r="language-builtin" when the corpus has Python; (FD3) a Keep-a-Changelog rename under `### Fixed` below
+# `## [1.8.2] - 2026-03-17` was live drift — a heading inherits the ISO date of the heading it sits under, so it is dated.
+#
 # Exit 0 = ALL PASS, non-zero = SOME FAILED.
 
 set -u
@@ -394,6 +400,45 @@ PY
         no "WALK control: the listable-root call did not read not-indexed cleanly: $( printf '%s\n' "$WALK_OUT" | grep '^CALL1' | head -c 300 )"
     fi
 fi
+
+# ── (FDB) 0.6.6 review: a thousands-grouped number past the digit cap is NO claim, not its prefix ─────────────────
+# `LARGE_LIMIT = 1,099,511,627,776` stopped at the 10-digit cap with a successful PREFIX (1099511627), and the prose
+# terminator accepted the comma after it: a false const-value drift against the code's equal 0x10000000000. A complete
+# group past the cap now rejects the whole claim; a 10-digit grouped number (`1,000,000,000`) still reads whole.
+FDB="$TMP/fdb"; mkdir -p "$FDB/docs" "$FDB/pkg"
+printf 'LARGE_LIMIT = 0x10000000000\nSMALL_LIMIT = 1_000_000_000\n' >"$FDB/pkg/limits.py"
+printf '# Limits\n\n- `LARGE_LIMIT = 1,099,511,627,776` bytes.\n- `SMALL_LIMIT = 1,000,000,000` bytes.\n- `SMALL_LIMIT = 2,000,000,000` in the old release.\n' >"$FDB/docs/LIMITS.md"
+"$BIN" "$FDB" --doc-drift --legend=full --no-cache >"$TMP/fdb.xml" 2>/dev/null; FDBRC=$?
+FDBROWS="$( sed 's/<!--[^>]*-->//g' "$TMP/fdb.xml" | grep -o '<a [^>]*>' )"
+if [ "$FDBRC" -gt 1 ]; then no "(FDB) --doc-drift exited $FDBRC"
+elif printf '%s\n' "$FDBROWS" | grep -q 'ref="LARGE_LIMIT '; then no "(FDB) \`LARGE_LIMIT = 1,099,511,627,776\` read as a prefix: $( printf '%s\n' "$FDBROWS" | grep 'LARGE_LIMIT' )"
+else ok "(FDB) a grouped number past the 10-digit cap is no claim (no const-value row on LARGE_LIMIT)"; fi
+printf '%s\n' "$FDBROWS" | grep 'ref="SMALL_LIMIT ' | grep -q 'want="2000000000"' && ! printf '%s\n' "$FDBROWS" | grep -q 'want="1000000000"' \
+    && ok "(FDB) control: a 10-digit grouped number still reads whole (1,000,000,000 agrees; 2,000,000,000 drifts)" \
+    || no "(FDB) control lost: $FDBROWS"
+
+# ── (FD) 0.6.6 D3: thousands separators, language builtins, a changelog's inherited release date ─────────────
+FD="$TMP/fd"; mkdir -p "$FD/docs" "$FD/pkg"
+printf '_MODULE_CACHE_MAX = 15_000\n\n\ndef helper_lookup(key):\n    return key\n' >"$FD/pkg/cache.py"
+printf '# Features\n\n- **Module cache bound**: `_MODULE_CACHE_MAX = 15,000` with automatic eviction.\n' >"$FD/docs/FEATURES.md"
+printf '# Stale\n\n- The bound was raised: `_MODULE_CACHE_MAX = 16,000` entries.\n' >"$FD/docs/STALE.md"
+printf '# Guide\n\nCalling `helper_lookup` with a missing module raises `NameError` at runtime.\n' >"$FD/docs/GUIDE.md"
+printf '# Changelog\n\n## [1.8.2] - 2026-03-17\n\n### Fixed\n\n- Renamed `c_sharp_parser` to `csharp_parser` so `helper_lookup` finds it.\n' >"$FD/CHANGELOG.md"
+"$BIN" "$FD" --doc-drift --legend=full --no-cache >"$TMP/fd.xml" 2>/dev/null
+FDROOT="$( grep -o '<doc-drift [^>]*>' "$TMP/fd.xml" | head -1 )"
+FDROWS="$( sed 's/<!--[^>]*-->//g' "$TMP/fd.xml" | grep -o '<a [^>]*>' )"
+if printf '%s\n' "$FDROWS" | grep -q 'want="15" got="15000"'; then no "(FD1) \`= 15,000\` still read as 15: $( printf '%s\n' "$FDROWS" | grep 'want="15"' )"
+else ok "(FD1) \`_MODULE_CACHE_MAX = 15,000\` agrees with 15_000 (no const-value row)"; fi
+printf '%s\n' "$FDROWS" | grep -q 'why="const-value" .*want="16000" got="15000"' \
+    && ok "(FD1) control: \`= 16,000\` still drifts, read whole (want=\"16000\" got=\"15000\")" || no "(FD1) control lost: $FDROWS"
+if printf '%s\n' "$FDROWS" | grep -q 'ref="NameError"'; then no "(FD2) the Python builtin NameError is reported as drift"
+else ok "(FD2) NameError is not drift"; fi
+grep -q '<unchecked r="language-builtin" n="1"' "$TMP/fd.xml" && ok "(FD2) it is counted as unchecked r=\"language-builtin\"" \
+    || no "(FD2) no <unchecked r=\"language-builtin\" n=\"1\"> row: $( grep -o '<unchecked [^>]*>' "$TMP/fd.xml" | tr '\n' ' ' | cut -c1-300 )"
+if printf '%s\n' "$FDROWS" | grep -E 'ref="c_?sharp_parser"' | grep -qv 'rec='; then no "(FD3) a dated changelog rename is live drift: $( printf '%s\n' "$FDROWS" | grep sharp_parser )"
+else ok "(FD3) the changelog rename under a dated release heading is not live drift"; fi
+[ "$( printf '%s' "$FDROOT" | grep -o 'drift="[0-9]*"' )" = 'drift="1"' ] && [ "$( printf '%s' "$FDROOT" | grep -o 'dated="[0-9]*"' )" = 'dated="2"' ] \
+    && ok "(FD) root: drift=\"1\" (the 16,000 control) and dated=\"2\" (the changelog rename)" || no "(FD) root counts wrong: $FDROOT"
 
 [ $fail -eq 0 ] && echo "docdriftcheck: ALL PASS" || echo "docdriftcheck: FAILURES"
 exit $fail

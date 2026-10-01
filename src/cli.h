@@ -47,6 +47,8 @@ struct Config
                                                  // transport. Required for a non-loopback bind and for --allow-remote-edits.
     bool             allowRemoteEdits = false;   // --allow-remote-edits: permit the 3 edit verbs over --listen (refused by
                                                  // default); forces the token requirement even on loopback.
+    std::string_view mcpTools;                   // --mcp-tools=SPEC: list (and answer) only these MCP tools — names and/or the
+                                                 // core/full profiles, validated against the tool table in main.cpp (mcp.h).
     std::vector<std::string> excludes;           // --exclude=SUBSTR (repeatable): drop matching paths
     RankBy           rankBy          = RankBy::PageRank;   // --rank-by=  (default keeps output unchanged)
     bool             columnar        = false;              // --format=columnar|rows (RESEARCH lever 1): re-serialize the FLAT
@@ -310,7 +312,7 @@ struct Config
     bool             qualityDelta    = false;              // --quality-delta: report only code-quality regressions vs that baseline (exit 2 if any MAJOR unacked one)
     std::string_view qualityDeltaRange;                    // --quality-delta=REV|A..B (R-I): compare two COMMITTED trees instead of the working
                                                             // tree vs a baseline — the WAVE-level measurement. Same grammar --dmm= takes
-                                                            // (quality::resolveRefSpec owns it), same 10 kinds/gating/ack contract out
+                                                            // (quality::resolveRefSpec owns it), same 11 kinds/gating/ack contract out
     bool             qualityAck      = false;              // --quality-ack[=REASON]: accept the current findings into .ripwire_quality_acks (per-finding ratchet); shares qualityDelta's baseline resolution
     std::string_view qualityAckReason;                     // the reason recorded next to each acked finding
     std::string_view qualityAckOnly;                       // --ack-only=SUBSTR[,SUBSTR]: ack only findings whose kind or canonical id contains one of these (default: all)
@@ -1158,6 +1160,8 @@ inline constexpr char kHelpHead[] =
         "                               call edges in TRUE direction (finds the shared-caller join a directed --path can't)   [--connect-radius=N (1..12, default 6)]\n"
         "    --impact=SYM               show everything that reaches SYM — the transitive blast radius before a change\n"
         "                               transitive blast radius — the indexed symbols that reach SYM (a floor, see counts_floor). file:name disambiguates like --callers\n"
+        "                               rows run nearest first: d= is the hop depth (1 = a direct caller; printed where it changes), PageRank\n"
+        "                               order within a depth; by_depth=k:n on the root counts reaches= per depth, so a cut drops the deepest first\n"
         "                               importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM,\n"
         "                               emitted as <f via=\"import\" lazy=\"0|1\"> rows (format=columnar carries the count only; --limit sizes it). NEVER added to reaches= —\n"
         "                               files and symbols are different units, and an importer may use a different symbol from that file, or none at all.\n"
@@ -1201,6 +1205,7 @@ inline constexpr char kHelpHead[] =
         "    --mentions=SYM             find the markdown docs that name SYM in backticks — the doc-to-code link\n"
         "                               markdown docs (plans/designs) that name SYM in a `backtick` (doc↔code). An @FILE:LINE\n"
         "                               seed rebinds to the innermost enclosing definition and answers, disclosing sym=\n"
+        "                               (its name). unbackticked_docs=N (absent at 0): files naming SYM only outside such a span, a ceiling.\n"
         "    the pre-PR family — plumbing (--affected) to mid-task report (--situ) to gate (--test-gate):\n"
         "    --affected=F1,F2|SYM       name the test files that reach these changed files, or this changed symbol\n"
         "                               test files that transitively reach the changed files -- or the changed SYMBOL. Each item may be\n"
@@ -1284,6 +1289,7 @@ inline constexpr char kHelpHead[] =
         "                               match a - b). Served: c cpp objc java csharp javascript typescript python go rust swift; ruby,\n"
         "                               bash and the data tiers are named in unsupported= instead of answered. A pattern no served\n"
         "                               grammar resolves, or that collapses to a bare token, is REFUSED -- never reported as hits=0.\n"
+        "                               A qualified call (ns::foo) is no hit for a bare foo; unmatched_qualified=N counts them.\n"
         "    --query=TERMS              raw BM25 ranking, for debugging the ranker — reach for --for instead\n"
         "                               raw BM25 ranking (debug); use --for\n"
         "\n"
@@ -1352,6 +1358,7 @@ inline constexpr char kHelpHead[] =
         "                               --exemplar. Disclosed per bundle as compress=\"1\" on the <bodies> element; without the\n"
         "                               flag, output is byte-identical. String literals survive; the ranked SET never changes.\n"
         "    --pack-top-n=N             pack the N top symbols' bodies  [--pack-budget-bytes=B]\n"
+        "                               A budget cut is stated: truncated=1 lines=1-K/T on the cut file, src_cut shown= total= capped=1.\n"
         "    --no-redact                emit source and doc text verbatim, redacting nothing\n"
         "                               emit source/doc text VERBATIM, redacting nothing. Modifies the BODY-serving verbs\n"
         "                               (--expand, --for, --pack-task, --recall, --slice, --connect, --from-trace, --batch,\n"
@@ -1682,13 +1689,18 @@ inline constexpr char kHelpHead[] =
         "                               (with --quality-baseline) pin anyway: the sidecar is stamped with the dirty pin and the absorbed count, and every\n"
         "                               later --quality-delta against it carries baseline_absorbed=\"N\" — so a green exit beside that attribute reads as\n"
         "                               \"clean SINCE THE PIN\", never \"clean\". Refused alone.\n"
-        "    --quality-delta            before a PR: report ONLY what your change made worse, across 10 kinds\n"
-        "                               agent self-check before a PR (pair with --test-gate): report ONLY what a change made worse vs the baseline (10 kinds: complexity/verbosity/nesting/params/dup/dead/api-surface + error-masking/short-horizon-churn/new-clone-of-reused-helper);\n"
+        "    --quality-delta            before a PR: report ONLY what your change made worse, across 11 kinds\n"
+        "                               agent self-check before a PR (pair with --test-gate): report ONLY what a change made worse vs the baseline (11 kinds: complexity/verbosity/nesting/params/dup/dead/api-surface + error-masking/short-horizon-churn/new-clone-of-reused-helper + placeholder);\n"
         "                               every finding is classified by ORIGIN: a symbol that EXISTED at the baseline and got worse (preexisting-worse=\"N\", no attribute on the row) vs one that exists only\n"
         "                               because the code is NEW (new-symbol=\"N\", origin=\"new-symbol\" on the row). A small numeric delta is additionally sev=\"minor\". EXIT 2 ONLY on preexisting-worse AND\n"
         "                               major AND unacked — the gating=\"N\" header count. New-symbol rows are still PRINTED (they are the debt you are adding — read them), they just never gate; exit 0 means\n"
         "                               \"nothing that already existed got worse\", not \"clean\". Clone kinds classify by member set (new-symbol only if EVERY member is new); short-horizon-churn is preexisting\n"
         "                               by construction. LIMIT: origin is canonId (path::scope::name) identity, so a RENAMED/MOVED symbol reads as new and a regression carried in with the move will not gate.\n"
+        "                               error-masking = a NEW empty/pass/comment-only handler, or log-only (a broad handler whose body only logs and never names the error) or rethrow-only (the sole\n"
+        "                               handler re-throws it unchanged); those two gate only where their precision was measured (Python) and are sev=\"minor\" in every other language.\n"
+        "                               placeholder = a stub the change ADDED (todo!()/unimplemented!(), Kotlin TODO(), NotImplementedException, a bare raise NotImplementedError as a free function's body,\n"
+        "                               a throw/raise/panic/assert saying \"not implemented\") or a comment line opening with TODO/FIXME that names no issue (#12, ABC-12, a URL); new-symbol by\n"
+        "                               construction, so it never gates. Counted per enclosing symbol, like error-masking: a file-level TODO outside every definition is not counted.\n"
         "                               Test-fixture dirs + doc sections are exempt from dead-code/churn; churn needs COMMITTED thrash evidence (rewritten across recent commits AND again by this diff), never the current edit alone\n"
         // §B7.2 (CA4): the strict-sha staleness rule and — the part that matters — the fact that this verb
         // can DELETE a file in the user's tree were disclosed nowhere a user reads before running it. The
@@ -1706,15 +1718,15 @@ inline constexpr char kHelpHead[] =
         // R-I: the WAVE-level form. Its own row rather than a bracket on the one above, because the floor it
         // compares against is a different KIND of thing (a commit, not a sidecar or the working tree) and the
         // row above spends eight lines on sidecar staleness that this form never touches.
-        "    --quality-delta=REV|A..B   the same 10-kind report between two committed trees — a whole branch at once\n"
-        "                               the same 10-kind report between two COMMITTED TREES instead of the working tree vs a baseline — the WAVE-level measurement (=A..B = tree B against tree A;\n"
+        "    --quality-delta=REV|A..B   the same 11-kind report between two committed trees — a whole branch at once\n"
+        "                               the same 11-kind report between two COMMITTED TREES instead of the working tree vs a baseline — the WAVE-level measurement (=A..B = tree B against tree A;\n"
         "                               =REV = that commit against its FIRST PARENT; an EMPTY side of the range means HEAD). Same grammar --dmm= takes, and A...B is REFUSED rather than read as A..B.\n"
         "                               Use it to measure a whole integration branch at once (--quality-delta=<merge-base>..<head>): per-lane checks each compare against their own baseline and cannot\n"
         "                               see a regression the WAVE introduced. Identical output contract to the bare form — same kinds, gating=\"N\", exit 2, and the same .ripwire_quality_acks ratchet\n"
         "                               (acks are keyed root-relative, so a ledger recorded from working-tree runs applies unchanged). base_ref= and target_ref= disclose the two RESOLVED shas.\n"
         "                               No sidecar is read, written or deleted by this form, and at= is omitted: the two refs ARE the anchor. A==B is a legal, empty, exit-0 comparison.\n"
         "                               ONE KIND CANNOT BE MEASURED HERE and says so as churn=\"unavailable\": short-horizon-churn needs git history at the tree being judged, and both trees are\n"
-        "                               materialized OUT of the repo into temp dirs. The other 9 kinds are computed exactly as the bare form computes them.\n"
+        "                               materialized OUT of the repo into temp dirs. The other 10 kinds are computed exactly as the bare form computes them.\n"
         "    --dmm[=REV|A..B]           score a change as ONE number in [0,1], so quality trends across commits\n"
         "                               the DELTA MAINTAINABILITY MODEL scalar: ONE comparable number in [0,1] for a change, so quality becomes TRENDABLE across commits instead of a per-kind list (di Biase, Rastogi, Bruntink and van Deursen, TechDebt 2019; thresholds and arithmetic from PyDriller's deltamaintainability reference implementation). Bare = the WORKING TREE vs git HEAD (what --quality-delta compares); =REV = that commit vs its FIRST PARENT (the per-commit scalar); =A..B = tree B vs tree A.\n"
         "                               A UNIT is a function/method definition with a body; its VOLUME is its line span. Per property a unit is LOW risk iff size: loc<=15, complexity: cyclomatic<=5, interfacing: params<=2. good = low-risk volume ADDED plus high-risk volume REMOVED; bad = low-risk REMOVED plus high-risk ADDED; dmm = good/(good+bad). So DELETING a god function scores 1.000 and GROWING one scores 0.000.\n"
@@ -2447,13 +2459,22 @@ inline constexpr char kHelpTail[] =
         "                               row per finding (never emitted on the exit-3 refusal path); stderr\n"
         "                               carries the human tally line\n"
         "    --scan-skill=FILE          scan a single skill file before installing (any file, not just .md)\n"
+        "                               EXFILTRATE:net-exfil (a network verb plus a $VAR or base64 on one fenced\n"
+        "                               line) needs a destination: a verb named but not run, as in command -v curl,\n"
+        "                               does not fire. It is CRITICAL only when a credential-shaped source is on that\n"
+        "                               line: a credential-named var, an Authorization: header with a var, an env dump\n"
+        "                               or a key file. Otherwise it is WARN and the row says why=\"no-cred-source\". A\n"
+        "                               sensitive file read fed into an upload (cat /etc/passwd | curl ... @-, curl -d\n"
+        "                               @.env ...) is CRITICAL with or without a var: why=\"sensitive-read-upload\".\n"
         "    --scan-skills[=DIR]        scan a skills directory before installing — every text file, .md and .sh alike\n"
         "                               scan DIR (or .agents/skills/ + ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/ + ${CODEX_HOME:-~/.codex}/skills/).\n"
         "                               EVERY text file, .md and .sh alike — a skill dir's executables are the\n"
         "                               files most worth scanning. skipped= counts what it could not scan\n"
         "                               (binary content, or unreadable); denylisted subtrees (.git, node_modules,\n"
-        "                               build, ...) are not descended and the stderr tally says how many\n"
-        "                               for vulnerabilities\n"
+        "                               build, ...) are not descended and the stderr tally says how many.\n"
+        "                               The bare form never reads a positional root: one that is not the current\n"
+        "                               directory is refused (exit 3, use --scan-skills=DIR), and its answer names\n"
+        "                               the directories it walked in dirs=\n"
         "    --force                    (wrap) proceed even if CRITICAL findings are found\n\n"
         "  knobs / modes\n"
         "    --rank-by=pagerank|authority|hub|rrf|churn|churn-decay   choose the ranking signal: structure, authority, hub, fusion or churn\n"
@@ -2670,6 +2691,15 @@ inline constexpr char kHelpTail[] =
         "                               and a run without <dir> prints usage, or that same line from such a directory. Each\n"
         "                               tool call over the --max-memory limit is refused by name; an answer from an index the\n"
         "                               memory guard cut carries _memory_stop in its envelope.\n"
+        "    --mcp-tools=LIST           list only these MCP tools (names and/or the core/full profiles, default full).\n"
+        "                               A comma list of tool names and/or profiles, unioned. core = explore, batch, from_trace,\n"
+        "                               impact, uses, fetch_body, edit_check, quality_delta (the loop the server's own\n"
+        "                               instructions teach); full = all tools, the default. A client that loads every schema\n"
+        "                               at session start pays only for the listed ones. initialize announces the subset;\n"
+        "                               calling an unlisted tool is refused with the flag that enables it. The list is not\n"
+        "                               access control: batch sub-queries still reach hidden verbs.\n"
+        "                               An unknown, repeated or empty name exits 1. `ripwire wrap AGENT --mcp-tools=LIST`\n"
+        "                               writes it into the server command (claude, cursor, windsurf, gemini, opencode).\n"
         "    --lsp                      read-only navigation LSP server over stdio (definition/references/symbols/hover)\n"
         "                               off the warm index; saved-state answers, UTF-8 positions, counts are floors.\n"
         "                               Refuses --mcp/--listen (one protocol per stdin).\n"
@@ -3132,6 +3162,7 @@ inline constexpr ViewFlag kViewFlags[] =
 {
     // server + self-eval inputs
     { "--mcp-token=",   &Config::mcpToken        , EmptyValue::Refuse, "a shared bearer token",                  "--mcp-token=$RIPWIRE_MCP_TOKEN" },
+    { "--mcp-tools=",   &Config::mcpTools        , EmptyValue::Refuse, "tool names and/or a profile (core, full)", "--mcp-tools=core" },
     { "--agent=",      &Config::agent           , EmptyValue::Refuse, "codex",                                 "--agent=codex" },   // also accepts claude — see validateAgent
     { "--eval-mined=",  &Config::evalMined       , EmptyValue::Refuse, "a minedpair.jsonl file path",            "--eval-mined=bench/minedpair.jsonl" },
     { "--eval-skills=", &Config::evalSkills      , EmptyValue::Refuse, "a labelled TSV file path",               "--eval-skills=bench/skillroute.tsv" },
@@ -3244,7 +3275,7 @@ inline constexpr ViewFlag kViewFlags[] =
     // the same ruling --dmm=/--quality-delta= below carry for their half-typed ranges. (The unparseable-
     // FILES refusal itself is per-item, in main's --test-gate arm; gate: testgaterefusecheck.sh.)
     { "--test-gate=",      &Config::testGateFiles   , EmptyValue::Refuse, "changed files, F1,F2", "--test-gate=src/cli.h", &Config::testGate },
-    { "--scan-skills=",    &Config::scanSkillsDir   , EmptyValue::Refuse, "a skills directory path (bare --scan-skills scans the tree it maps)", "--scan-skills=skills/", &Config::scanSkills },
+    { "--scan-skills=",    &Config::scanSkillsDir   , EmptyValue::Refuse, "a skills directory path (bare --scan-skills scans ./.agents/skills and the Claude and Codex skill homes, never the root)", "--scan-skills=skills/", &Config::scanSkills },
     { "--dead-code=",      &Config::deadCodeDir     , EmptyValue::Refuse, "a directory or path substring to scope the candidates (bare --dead-code scans the whole tree)", "--dead-code=src/", &Config::deadCode },
     { "--pr-context=",     &Config::prContextBase   , EmptyValue::Refuse, "a base ref (bare --pr-context reads the working tree)", "--pr-context=main", &Config::prContext },
     { "--stray-content=",  &Config::strayFilter     , EmptyValue::Refuse, "a ref-name substring filter (bare --stray-content sweeps every ref)", "--stray-content=lane/", &Config::strayContent },
@@ -3433,7 +3464,7 @@ inline constexpr IntFlag kIntFlags[] =
 //                              nowhere to keep)
 //   • a bare no-op / bare pair --route, --quality-ack (the =REASON form is a kViewFlags row)
 inline constexpr std::size_t kHandWrittenFlagArms = 24;   // +1 #350 (2026-09-28): --max-memory= (byte-size arm, same shape as --max-file-size=); +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=); +1 lane/flag-biggest-first (2026-09-23): --readability (deprecation-warning alias, same shape as --stable/--most-important-last/--no-auto-order) — its kBoolFlags row is renamed to --biggest-first (same Config::readability member), so the old spelling moves OUT of the table and becomes a hand-written arm, per the house rule that deprecation-warning aliases stay hand-written
-inline constexpr std::size_t kTotalFlagArms = 214;  // +1 #350 (2026-09-28): --max-memory= (hand-written byte-size arm, see kHandWrittenFlagArms); +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
+inline constexpr std::size_t kTotalFlagArms = 215;  // +1 lane/mcp-tool-profile-065 (2026-09-26): --mcp-tools= (kViewFlags row) — list only a subset of the MCP tools (names and/or the core/full profiles); +1 #350 (2026-09-28): --max-memory= (hand-written byte-size arm, see kHandWrittenFlagArms); +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
 static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kIntFlags ) + kHandWrittenFlagArms == kTotalFlagArms,
                "a --flag arm was added or removed without updating the ledger above — count the arms in parseArgs and fix the counter" );
 
@@ -4477,6 +4508,11 @@ inline void validateModifierGuards( Config& c ) noexcept
     if( !c.mcpToken.empty() && c.listen.empty() )
     {
         rw::emitRaw( stderr, "ripwire: --mcp-token is read by the --listen HTTP transport only — pass both (e.g. ripwire . --listen=127.0.0.1:8765 --mcp-token=SECRET)\n" );
+        c.ok = false;
+    }
+    if( !c.mcpTools.empty() && !c.mcp )   // --listen sets c.mcp, so this covers both transports
+    {
+        rw::emitRaw( stderr, "ripwire: --mcp-tools is read by the MCP server only — pass --mcp (or --listen) too, e.g. ripwire . --mcp --mcp-tools=core\n" );
         c.ok = false;
     }
     if( c.allowRemoteEdits && c.listen.empty() )

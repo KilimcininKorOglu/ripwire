@@ -271,6 +271,13 @@ pattern-defeating quicksort's pivot choices. The only consumer of the pdqsort wr
 (`src/infra/fastSort.h`) is a benchmark that no build target compiles. It stays vendored and stays
 disclosed; it is not a lesson this tool folded, so it does not get a row above.
 
+**Related work, not counted: [NVIDIA SkillSpector](https://github.com/NVIDIA/SkillSpector) (Apache-2.0).** The later
+hardening of `src/skillscan.h` — the `--scan-skill`/`--scan-skills` scanner and the `wrap` pre-install scan — was
+informed by ideas from SkillSpector, surveyed as related work: in 0.6.6, `EXFILTRATE:net-exfil` is graded by whether a
+credential-shaped source is on the line (issue #353). No SkillSpector code or pattern text is included today. A
+counted lineage row, with exact per-rule attribution, will be added once the planned port of its code-based checks
+lands; until then it is not in the table above, and the counts stay at 49 repositories.
+
 ### 3b. Surveyed — the labelled landscape
 
 **Surveyed is not borrowed-from.** Nothing in this table contributed a lesson to ripwire; the table

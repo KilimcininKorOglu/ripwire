@@ -1,3 +1,4 @@
+// Lineage: informed by ideas from NVIDIA SkillSpector (Apache-2.0), related work; no code or pattern text taken; see docs/LINEAGE.md.
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
@@ -8,13 +9,18 @@
 //
 //   INJECTION   — case-insensitive, word-boundary-anchored prompt-injection phrases (CRITICAL;
 //                 single generic words downgrade to WARN)
-//   EXFILTRATE  — shell snippets that exfiltrate env vars or credentials (CRITICAL)
+//   EXFILTRATE  — shell snippets that exfiltrate env vars or credentials (CRITICAL; net-exfil is WARN with
+//                 why="no-cred-source" unless a credential-shaped source is on the line; CRITICAL why="sensitive-read-upload"
+//                 when a sensitive read feeds an upload; silent with no destination — #353, gradeNetExfil)
 //   SCOPE-CREEP — body requests tools absent from the allowed-tools: frontmatter (WARN)
 //   FRONTMATTER — YAML keys attempting to set model/system/temperature (WARN)
 //
-// No tree-sitter — ripwire has no markdown grammar. Pure line-iteration, PLUS a second pass inside
-// `scanSkillText` over a whitespace-normalized join of the body (INJECTION only) to catch a phrase
-// split across a newline.
+// No tree-sitter parse here: tree_sitter_markdown is vendored (the index reads .md with it), but this scanner does not
+// call it. It reads a file line by line with its own fence tracker (``` / ~~~ open and close, and whether the opening
+// tag marks an EXAMPLE fence), PLUS a second pass inside `scanSkillText` over a whitespace-normalized join of the body
+// (INJECTION only) to catch a phrase split across a newline. A bundled SHELL script (SkillFileKind) is also read as
+// whole-file code, every line command context, and merged with that reading; code in other languages is read as
+// before and disclosed as code_not_flow_scanned.
 // Pattern matching: guarded regexes (src/regexguard.h — ECMAScript, icase where relevant); INJECTION patterns
 // are word-boundary-anchored phrases, not bare substrings (a bare substring like "disregard"
 // false-positives on "disregarding", and "new persona" on "new personal"). A skill file is UNTRUSTED input, so a
@@ -32,6 +38,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <sstream>
 #include <string>
@@ -57,6 +64,7 @@ struct SkillFinding
     int           line;       // 1-based line number in the scanned file
     const char*   rule;       // stable rule name — points into the static pattern table
     std::string   excerpt;    // the offending line, trimmed to ≤120 chars
+    const char*   why = nullptr;   // why a rule graded below its usual severity (the row's why=); null = not downgraded
 };
 
 inline const char* skillSeverityStr( SkillSeverity s ) noexcept
@@ -139,7 +147,10 @@ inline std::vector<InjectionPattern> buildInjectionPatterns()
 //   EXFIL-APIKEY : line contains $ANTHROPIC_API_KEY
 //   EXFIL-SSH    : line contains $HOME/.ssh or ~/.ssh or ~/.aws
 //   EXFIL-NETEXFIL : line contains (curl|wget|nc) AND ($env-var OR base64), in EITHER order,
-//                    fenced-code lines only (prose mentions are not flagged)
+//                    fenced-code lines only (prose mentions are not flagged), AND a network command that names a
+//                    destination; CRITICAL only with a credential-shaped source on the line, else WARN
+//                    why="no-cred-source". Also fires, CRITICAL why="sensitive-read-upload", on a sensitive read fed
+//                    to an upload with no var or base64 at all (#353, gradeNetExfil)
 //
 // "base64 + send" pattern — a line that contains base64 AND (curl|wget|nc), in either order
 // (`… | base64 | nc host port` included) — is covered by EXFIL-NETEXFIL.
@@ -247,6 +258,480 @@ inline bool hasNetExfilShape( std::string_view line ) noexcept
         }
         segBegin = segEnd + 1;
     }
+}
+
+// ── #353: what grades a net-exfil hit CRITICAL ───────────────────────────────────────────────────────────────────────
+// hasNetExfilShape says a network verb shares a line with SOME `$VAR` or base64. That shape is equally true of
+// `curl https://api.airtable.com/v0/$BASE_ID` and of a token on its way out, so on its own it is a WARN. The hit is
+// CRITICAL only when a CREDENTIAL-SHAPED source sits on the same line (gradeNetExfil). This is the quick
+// severity fix: it grades the lines the rule already matches (netFlow below adds the two follow-up rules). Following a source to its sink
+// across lines, and resolving where `$VAR` points, is the flow decision still to come.
+inline constexpr const char* kNetExfilNoCredWhy = "no-cred-source";
+
+// Lowercase needles for isCredentialName and isKeyFileToken: WORDS match anywhere in a name, PARTS only as a whole
+// `_ - .`-separated component, SHAPES anywhere in a non-URL token.
+inline constexpr std::string_view kCredentialWords[] = { "token", "secret", "passw", "credential", "apikey" };
+inline constexpr std::string_view kCredentialParts[] = { "key", "keys", "auth", "pat", "pass", "pw" };
+inline constexpr std::string_view kKeyFileShapes[]   = { ".ssh/", ".pem", ".netrc", ".aws/credentials", "/environ", "id_rsa", "id_ecdsa", "id_ed25519" };
+
+// A LOWERCASED name that reads as a credential: an env/var name (`github_token`, `aws_secret_access_key`,
+// `db_password`) or a file's base name (`secret`, `token.json`). Short words count only as a whole component between
+// `_ - .` separators, so `$AUTHOR`, `$MONKEY` and `$PWD` (the shell's working directory) are not credentials.
+inline bool isCredentialName( std::string_view lowered ) noexcept
+{
+    const auto has = [ & ]( std::string_view word ) noexcept { return lowered.find( word ) != std::string_view::npos; };
+    if( std::any_of( std::begin( kCredentialWords ), std::end( kCredentialWords ), has ) || ( lowered.size() > 4 && lowered.starts_with( "aws_" ) ) )
+    {
+        return true;
+    }
+    for( std::size_t begin = 0; begin < lowered.size(); )
+    {
+        const std::size_t end  = std::min( lowered.find_first_of( "_-.", begin ), lowered.size() );
+        const std::string_view part = lowered.substr( begin, end - begin );
+        if( std::find( std::begin( kCredentialParts ), std::end( kCredentialParts ), part ) != std::end( kCredentialParts ) )
+        {
+            return true;
+        }
+        begin = end + 1;
+    }
+    return false;
+}
+
+// A LOWERCASED token that names a key file or the process environment, wherever it sits (a URL is not a file read).
+inline bool isKeyFileToken( std::string_view lowered ) noexcept
+{
+    return lowered.find( "://" ) == std::string_view::npos
+        && std::any_of( std::begin( kKeyFileShapes ), std::end( kKeyFileShapes ), [ & ]( std::string_view shape ) noexcept { return lowered.find( shape ) != std::string_view::npos; } );
+}
+
+// The operand a token hands to a sender or a redirect, or empty: curl's `@file` (also `--data-binary=@file`, `f=@file`),
+// wget's `--post-file=file`, dd's `if=file`, and the token after `-T`/`--upload-file`, openssl's `-in`, or a `<` redirect.
+// A READER's arguments (cat, base64, …) are netFlow's to judge: every non-flag argument of one is a read. `token` is
+// lowercased; `prevToken` keeps its case (`-T` uploads a file; `-t` is a telnet option).
+inline std::string_view fileOperand( std::string_view token, std::string_view prevToken, bool afterRedirect ) noexcept
+{
+    if( afterRedirect || prevToken == "-T" || prevToken == "--upload-file" || prevToken == "-in" )
+    {
+        return token;
+    }
+    for( const std::string_view prefix : { std::string_view( "--post-file=" ), std::string_view( "if=" ), std::string_view( "@" ) } )
+    {
+        if( token.starts_with( prefix ) )
+        {
+            return token.substr( prefix.size() );
+        }
+    }
+    const std::size_t eqAt = token.find( "=@" );
+    return eqAt == std::string_view::npos ? std::string_view{} : token.substr( eqAt + 2 );
+}
+
+// A `$NAME` or `${NAME` on the LOWERCASED line whose name isCredentialName, or an `authorization:` header with a `$`
+// after it (a var or a command substitution).
+inline bool hasCredentialVar( std::string_view lowered ) noexcept
+{
+    for( std::size_t dollar = lowered.find( '$' ); dollar != std::string_view::npos; dollar = lowered.find( '$', dollar + 1 ) )
+    {
+        const std::size_t nameBegin = dollar + ( ( dollar + 1 < lowered.size() && lowered[ dollar + 1 ] == '{' ) ? 2 : 1 );
+        std::size_t       nameEnd   = nameBegin;
+        while( nameEnd < lowered.size() && namesplit::isIdentChar( lowered[nameEnd] ) )
+        {
+            ++nameEnd;
+        }
+        if( nameEnd > nameBegin && isCredentialName( lowered.substr( nameBegin, nameEnd - nameBegin ) ) )
+        {
+            return true;
+        }
+    }
+    const std::size_t header = lowered.find( "authorization:" );
+    return header != std::string_view::npos && lowered.find( '$', header ) != std::string_view::npos;
+}
+
+// A shell word on the LOWERCASED line that is a credential source by itself: `printenv`, a bare `env` (a whole-environment
+// dump — but `env LANG=C cmd`, env followed by an assignment, is the prefix idiom that runs cmd, not a dump), or a key file
+// (isKeyFileToken). A credential-NAMED file that is read (`cat secret`) is netFlow's credentialRead.
+inline bool hasCredentialToken( std::string_view lowered ) noexcept
+{
+    constexpr std::string_view kSeparators = " \t\"'`|;&()<>";
+    bool envPending = false;   // `env` seen: the next word decides whether it dumps or prefixes
+    for( std::size_t i = 0; i < lowered.size(); )
+    {
+        if( kSeparators.find( lowered[i] ) != std::string_view::npos )
+        {
+            ++i;
+            continue;
+        }
+        const std::size_t      end   = std::min( lowered.find_first_of( kSeparators, i ), lowered.size() );
+        const std::string_view token = lowered.substr( i, end - i );
+        if( envPending && ( token.starts_with( '-' ) || token.find( '=' ) == std::string_view::npos ) )
+        {
+            return true;
+        }
+        envPending = token == "env";
+        if( token == "printenv" || isKeyFileToken( token ) )
+        {
+            return true;
+        }
+        i = end;
+    }
+    return envPending;
+}
+
+
+// ── #353 follow-up: where a network command sends, and whether a sensitive read feeds it ─────────────────────────────
+// Two rules the reporter's corrected histogram asked for, both decided by netFlow in ONE pass over the line:
+//   R1  a network verb with NO destination is not a flow. `command -v curl`, `which curl` and `for t in jq curl git`
+//       name the tool without running it, so net-exfil does not fire on them at all.
+//   R2  a SENSITIVE read piped, redirected or passed into a network command is exfiltration with no variable in sight:
+//       `cat /etc/passwd | curl … --data-binary @-` scanned clean. It is CRITICAL, why="sensitive-read-upload", whether
+//       or not the destination could be read — a sensitive read reaching a network verb is exfiltration wherever it goes.
+// THE INVARIANT (gradeNetExfil): R1 and R2 only ever silence or downgrade a line that carries NO credential token and NO
+// sensitive read. A line main graded CRITICAL that carries either stays CRITICAL — pinned by test/skillscan.sh check 18's
+// block-2 (credential) and block-3 (sensitive-read) fixture rows.
+// Still line-local: a read on one line and an upload on the next is the flow fix still to come.
+inline constexpr const char* kNetExfilSensitiveWhy = "sensitive-read-upload";
+
+inline constexpr std::string_view kNetVerbs[]            = { "curl", "wget", "nc", "ncat", "netcat", "socat" };
+// The netcat family names its destination positionally: `nc [flags] HOST PORT`. A bare word followed by a number is that
+// pair; `nc -l 4444` (a number after a flag) listens and names none.
+inline constexpr std::string_view kNetcatVerbs[]         = { "nc", "ncat", "netcat" };
+// socat addresses that connect somewhere, and those that read a file (`FILE:/etc/shadow`).
+inline constexpr std::string_view kSocketAddressPrefixes[] = { "tcp:", "tcp4:", "tcp6:", "udp:", "udp4:", "udp6:", "openssl:", "ssl:",
+                                                               "tcp-connect:", "openssl-connect:" };
+inline constexpr std::string_view kSocatFilePrefixes[]   = { "file:", "open:", "gopen:" };
+// Commands whose every non-flag argument is a file they READ to stdout (or into an archive or encoding on stdout).
+inline constexpr std::string_view kReaders[]             = { "cat", "base64", "xxd", "od", "head", "tail", "gzip", "bzip2", "xz",
+                                                             "tar", "cp", "dd", "openssl" };
+// Words that leave the next one in command position — `sudo curl`, `do curl`, `stdbuf -oL curl` — with the options of
+// theirs that take the NEXT word as a value (`sudo -u deploy curl`, `stdbuf -o L curl`), matched case-sensitively.
+// `command` is a prefix only when not followed by -v/-V: `command -v curl` names the tool and runs nothing.
+struct CommandPrefix
+{
+    std::string_view word;
+    std::string_view valueOptions;   // space-separated
+};
+inline constexpr CommandPrefix kCommandPrefixes[] = {
+    { "sudo", "-u -g -C -D -h -p -r -t -U -T" }, { "doas", "-u -C" }, { "run0", "-u -g -D" }, { "exec", "-a" }, { "time", "-f -o" },
+    { "nohup", "" }, { "nice", "-n" }, { "timeout", "-s -k" }, { "xargs", "-I -n -P -L -s -d -E -a" }, { "env", "-u -C" },
+    { "stdbuf", "-o -e -i" }, { "setsid", "" }, { "eval", "" }, { "builtin", "" }, { "command", "" },
+    { "then", "" }, { "do", "" }, { "else", "" }, { "if", "" }, { "elif", "" }, { "while", "" }, { "until", "" }, { "!", "" } };
+inline constexpr std::string_view kSensitiveShapes[]     = { "/etc/passwd", "/etc/shadow", ".ssh/", ".netrc", ".aws/credentials", "/environ",
+                                                             "keychain", ".git-credentials" };
+inline constexpr std::string_view kSensitiveBaseStarts[] = { "id_rsa", "id_ecdsa", "id_ed25519", "id_dsa", "cookies", ".env." };
+inline constexpr std::string_view kKeychainDumps[]       = { "dump-keychain", "find-generic-password", "find-internet-password" };
+
+// A LOWERCASED file operand whose content is a secret: account databases, private keys (a `.pub` key is meant to be
+// shared), .netrc, cloud and git credential stores, a process environment, a keychain, a browser cookie store, `.env`.
+inline bool isSensitivePath( std::string_view lowered ) noexcept
+{
+    if( lowered.find( "://" ) != std::string_view::npos )
+    {
+        return false;
+    }
+    const std::size_t      slash = lowered.find_last_of( '/' );
+    const std::string_view base  = slash == std::string_view::npos ? lowered : lowered.substr( slash + 1 );
+    if( base.ends_with( ".pub" ) )
+    {
+        return false;
+    }
+    return base == ".env" || base == ".ssh" || base.ends_with( ".pem" ) || base.ends_with( ".key" )
+        || std::any_of( std::begin( kSensitiveShapes ), std::end( kSensitiveShapes ), [ & ]( std::string_view s ) noexcept { return lowered.find( s ) != std::string_view::npos; } )
+        || std::any_of( std::begin( kSensitiveBaseStarts ), std::end( kSensitiveBaseStarts ), [ & ]( std::string_view s ) noexcept { return base.starts_with( s ); } );
+}
+
+// A LOWERCASED argument of a network command that names where it sends: a URL, a socat socket address (`TCP:h:p`), a
+// `$VAR` (a host held in a variable), an IPv6 literal, localhost, user@host, or a dotted host. Flags, `@file` data and
+// paths are not destinations. netFlow adds the ones that need context: an `nc HOST PORT` pair, a `/dev/tcp/` redirect,
+// and any bare word after curl or wget (a single-label host such as `evilhost`).
+inline bool isDestinationToken( std::string_view lowered ) noexcept
+{
+    if( lowered.empty() )
+    {
+        return false;
+    }
+    if( lowered.find( "://" ) != std::string_view::npos
+        || std::any_of( std::begin( kSocketAddressPrefixes ), std::end( kSocketAddressPrefixes ), [ & ]( std::string_view p ) noexcept { return lowered.starts_with( p ); } ) )
+    {
+        return true;
+    }
+    const char c = lowered[0];
+    if( c == '$' )
+    {
+        return lowered.size() > 1 && ( lowered[1] == '{' || namesplit::isIdentStart( lowered[1] ) );
+    }
+    if( c == '[' )
+    {
+        return true;
+    }
+    if( !namesplit::isIdentChar( c ) )
+    {
+        return false;
+    }
+    if( lowered == "localhost" || lowered.starts_with( "localhost:" ) || lowered.find( '@' ) != std::string_view::npos )
+    {
+        return true;
+    }
+    return lowered.find( '.' ) != std::string_view::npos && lowered.back() != '.';
+}
+
+inline bool isAllDigits( std::string_view s ) noexcept
+{
+    return std::all_of( s.begin(), s.end(), []( char ch ) noexcept { return ch >= '0' && ch <= '9'; } );
+}
+
+// Whether `option` (as written) is one of a prefix's value-taking options.
+inline bool takesValue( std::string_view valueOptions, std::string_view option ) noexcept
+{
+    for( std::size_t begin = 0; begin < valueOptions.size(); )
+    {
+        const std::size_t end = std::min( valueOptions.find( ' ', begin ), valueOptions.size() );
+        if( valueOptions.substr( begin, end - begin ) == option )
+        {
+            return true;
+        }
+        begin = end + 1;
+    }
+    return false;
+}
+
+struct NetFlow
+{
+    bool hasDestination  = false;   // R1: some segment runs a network command that names a destination
+    bool sensitiveUpload = false;   // R2: a network segment reads, or is piped, a sensitive file
+    bool sensitiveRead   = false;   // some segment reads a sensitive file, fed to the network or not
+    bool credentialRead  = false;   // some segment reads a file NAMED like a credential (`cat secret`)
+};
+
+// The operand a token reads, for netFlow: fileOperand's, or the path of a socat file address (`FILE:/etc/shadow,ignoreeof`
+// reads /etc/shadow — the path runs to the first comma).
+inline std::string_view flowReadOperand( std::string_view low, std::string_view prevToken, bool redirectIn ) noexcept
+{
+    const std::string_view operand = fileOperand( low, prevToken, redirectIn );
+    if( !operand.empty() )
+    {
+        return operand;
+    }
+    for( const std::string_view prefix : kSocatFilePrefixes )
+    {
+        if( low.starts_with( prefix ) )
+        {
+            const std::string_view path = low.substr( prefix.size() );
+            return path.substr( 0, path.find( ',' ) );
+        }
+    }
+    return {};
+}
+
+// netFlow's state, one pipeline segment at a time. Split out so each step reads alone: punctuation() consumes the
+// separators and redirects, word() classifies one shell word (prefixWord() while the segment's command is still to come),
+// endSegment() settles a segment.
+struct NetFlowScan
+{
+    NetFlow              flow;
+    bool                 expectCommand = true, segNet = false, segDest = false, segSensitive = false, stdinSensitive = false;
+    bool                 redirectIn = false, redirectOut = false, segNetcat = false, segCurlWget = false, segReader = false;
+    bool                 prevBareWord = false, skipValue = false;
+    const CommandPrefix* activePrefix = nullptr;
+    std::string_view     prevToken;
+
+    void endSegment( bool piped ) noexcept
+    {
+        if( segNet )
+        {
+            flow.hasDestination  = flow.hasDestination || segDest;
+            flow.sensitiveUpload = flow.sensitiveUpload || segSensitive || stdinSensitive;
+        }
+        flow.sensitiveRead = flow.sensitiveRead || segSensitive;
+        stdinSensitive     = piped && ( stdinSensitive || segSensitive );
+        segNet = segDest = segSensitive = redirectIn = redirectOut = segNetcat = segCurlWget = segReader = prevBareWord = skipValue = false;
+        activePrefix  = nullptr;
+        expectCommand = true;
+        prevToken     = {};
+    }
+
+    // Bytes of punctuation consumed at line[i], or 0 when a shell word starts there.
+    std::size_t punctuation( std::string_view line, std::size_t i ) noexcept
+    {
+        constexpr std::string_view kOtherSeparators = " \t\"')";
+        const char c    = line[i];
+        const char next = i + 1 < line.size() ? line[ i + 1 ] : '\0';
+        if( c == '|' )
+        {
+            endSegment( next != '|' );
+            return next == '|' ? 2 : 1;
+        }
+        if( c == ';' || c == '\r' || c == '\n' || ( c == '&' && next != '>' ) )
+        {
+            endSegment( false );
+            return ( c == '&' && next == '&' ) ? 2 : 1;
+        }
+        if( ( c == '<' || c == '>' ) && next == '(' )
+        {   // `<( … )` / `>( … )` process substitution: a NESTED command, not a redirect — open a command context
+            expectCommand = true;
+            activePrefix  = nullptr;
+            skipValue     = false;
+            return 2;
+        }
+        if( c == '>' || c == '&' )   // `>`, `>>`, `>&2`, `&>`: an output target follows — neither a read nor a destination
+        {
+            redirectOut = true;
+            return ( next == '&' || next == '>' ) ? 2 : 1;
+        }
+        const bool rearm = c == '(' || c == '`' || ( ( c == '"' || c == '\'' ) && ( i == 0 || line[ i - 1 ] == ' ' || line[ i - 1 ] == '\t' ) );
+        if( rearm && !expectCommand )   // a new command may start inside `$(`, a backtick or an opening quote
+        {
+            expectCommand = true;
+            activePrefix  = nullptr;
+            skipValue     = false;
+        }
+        redirectIn = redirectIn || c == '<';
+        return ( c == '<' || c == '(' || c == '`' || kOtherSeparators.find( c ) != std::string_view::npos ) ? 1 : 0;
+    }
+
+    // In command position: is this word still the prefix — a runner word, one of its options, an option's value, an
+    // assignment, a number? False means it is the command itself.
+    bool prefixWord( std::string_view token, std::string_view low ) noexcept
+    {
+        if( skipValue )
+        {
+            skipValue = false;
+            return true;
+        }
+        for( const CommandPrefix& prefix : kCommandPrefixes )
+        {
+            if( low == prefix.word )
+            {
+                activePrefix = &prefix;
+                return true;
+            }
+        }
+        if( low.starts_with( '-' ) )
+        {
+            if( activePrefix != nullptr && activePrefix->word == "command" && ( token == "-v" || token == "-V" ) )
+            {
+                expectCommand = false;   // `command -v curl` names the tool; nothing runs
+                return true;
+            }
+            skipValue = activePrefix != nullptr && takesValue( activePrefix->valueOptions, token );
+            return true;
+        }
+        return low.find( '=' ) != std::string_view::npos || isAllDigits( low );
+    }
+
+    // The segment's command: a network verb opens a network segment (netcat's also arms the HOST PORT pair, curl's and
+    // wget's a bare-word host); a reader makes every later non-flag word a read.
+    void noteCommand( std::string_view low ) noexcept
+    {
+        expectCommand = false;
+        activePrefix  = nullptr;
+        const std::size_t      slash    = low.find_last_of( '/' );
+        const std::string_view verb     = slash == std::string_view::npos ? low : low.substr( slash + 1 );
+        const auto             in       = [ & ]( const auto& table ) noexcept { return std::find( std::begin( table ), std::end( table ), verb ) != std::end( table ); };
+        const bool             isNetcat = in( kNetcatVerbs );
+        segNet      = segNet || isNetcat || in( kNetVerbs );
+        segNetcat   = segNetcat || isNetcat;
+        segCurlWget = segCurlWget || verb == "curl" || verb == "wget";
+        segReader   = segReader || in( kReaders );
+    }
+
+    // A read operand: note whether it is sensitive, and whether it is named like a credential.
+    void noteRead( std::string_view operand ) noexcept
+    {
+        segSensitive        = segSensitive || isSensitivePath( operand );
+        flow.credentialRead = flow.credentialRead || isCredentialName( namesplit::afterLast( operand, "/" ) );
+    }
+
+    void word( std::string_view token, std::string_view low ) noexcept
+    {
+        if( low.find( "/dev/tcp/" ) != std::string_view::npos || low.find( "/dev/udp/" ) != std::string_view::npos )
+        {   // bash's raw-socket redirect, `/dev/tcp/HOST/PORT`: a network sink with its destination in the path
+            segNet = segDest = true;
+        }
+        if( redirectOut )
+        {
+            redirectOut = prevBareWord = false;
+            prevToken   = token;
+            return;
+        }
+        const bool       commandPosition = expectCommand && !redirectIn;
+        const bool       wasCommand      = commandPosition && !prefixWord( token, low );
+        std::string_view operand         = flowReadOperand( low, prevToken, redirectIn );
+        if( operand.empty() && segReader && !wasCommand && !low.starts_with( '-' ) )
+        {
+            operand = low;   // a reader's argument: `base64 -w0 FILE`, `cat -- FILE`, `tar cz FILE`
+        }
+        if( !operand.empty() )
+        {
+            noteRead( operand );
+        }
+        segSensitive = segSensitive || std::find( std::begin( kKeychainDumps ), std::end( kKeychainDumps ), low ) != std::end( kKeychainDumps );
+        const bool digits    = isAllDigits( low );
+        const bool netcatHop = segNetcat && prevBareWord && digits && low.size() <= 5;                        // netcat's `HOST PORT`
+        const bool bareHost  = segCurlWget && !wasCommand && !low.empty() && namesplit::isIdentChar( low[0] );   // `curl … evilhost`
+        segDest = segDest || ( segNet && !redirectIn && ( isDestinationToken( low ) || netcatHop || bareHost ) );
+        if( wasCommand )
+        {
+            noteCommand( low );
+        }
+        prevBareWord = !wasCommand && !redirectIn && !digits && !low.starts_with( '-' );
+        redirectIn   = false;
+        prevToken    = token;
+    }
+};
+
+inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexcept
+{
+    constexpr std::string_view kFlowSeparators = " \t\"'`|;&()<>\r\n";
+    NetFlowScan scan;
+    for( std::size_t i = 0; i < line.size(); )
+    {
+        if( const std::size_t consumed = scan.punctuation( line, i ); consumed > 0 )
+        {
+            i += consumed;
+            continue;
+        }
+        const std::size_t end = std::min( line.find_first_of( kFlowSeparators, i ), line.size() );
+        scan.word( line.substr( i, end - i ), lowered.substr( i, end - i ) );
+        i = end;
+    }
+    scan.endSegment( false );
+    return scan.flow;
+}
+
+// The net-exfil decision for one line: whether the rule fires, and at which severity and why. A credential-shaped
+// source is hasCredentialVar (a credential-named var, an Authorization: header with a var), hasCredentialToken (an env
+// dump, a key file), or a read of a sensitive or credential-named file (netFlow). One case fold, then each test is linear
+// in the line. Line-local like the rule it grades: a token assigned to `$HOST` three lines up is invisible, and `env -i
+// cmd` still counts as a dump — both err toward CRITICAL. The order is the invariant: a credential or a sensitive read is
+// judged BEFORE R1 may silence the line for want of a destination.
+struct NetExfilGrade
+{
+    bool          fires;
+    SkillSeverity sev;
+    const char*   why;   // null = CRITICAL by a credential-shaped source, the rule's plain reading
+};
+
+inline NetExfilGrade gradeNetExfil( std::string_view line )
+{
+    std::string lowered( line );
+    std::transform( lowered.begin(), lowered.end(), lowered.begin(), []( char c ) noexcept { return char( std::tolower( static_cast<unsigned char>( c ) ) ); } );
+    const NetFlow flow = netFlow( line, lowered );
+    if( flow.sensitiveUpload )
+    {
+        return { true, SkillSeverity::Critical, kNetExfilSensitiveWhy };
+    }
+    if( !hasNetExfilShape( line ) )
+    {
+        return { false, SkillSeverity::Info, nullptr };
+    }
+    if( hasCredentialVar( lowered ) || hasCredentialToken( lowered ) || flow.credentialRead || flow.sensitiveRead )
+    {
+        return { true, SkillSeverity::Critical, nullptr };
+    }
+    if( !flow.hasDestination )
+    {
+        return { false, SkillSeverity::Info, nullptr };
+    }
+    return { true, SkillSeverity::Warn, kNetExfilNoCredWhy };
 }
 
 inline std::vector<ExfilPattern> buildExfilPatterns()
@@ -539,7 +1024,11 @@ inline constexpr std::size_t kSkillScanStackBytes     = 256 * 1024 * 1024;   // 
 
 // Scan the raw text of a skill markdown file line by line, on a thread settled at `stackBytes`. Findings are sorted
 // (line, rule).
-inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::size_t stackBytes )
+// `wholeFileIsCode` (a shell script, see SkillFileKind): there is no frontmatter, every line is command context and no
+// ``` / ~~~ line toggles anything. It only ever sets lineInFence, which relaxes the two exfil context gates (fenceOnly, requiresCmdContext);
+// lineInExampleFence, the one flag that SUPPRESSES (injection in an example fence), stays false. scanSkillText merges
+// this pass with the markdown pass, so a script's findings are a superset of what the markdown reading alone reports.
+inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::size_t stackBytes, bool wholeFileIsCode = false )
 {
     using namespace detail;
 
@@ -569,7 +1058,10 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
     }
 
     // ── frontmatter state: find the YAML block (first `---` to second `---`) ────────────────────
+    // The code pass (a shell script) has NO frontmatter: bash runs a leading `---` line as a command and then every line
+    // after it, so a YAML-shaped block there is code the pass must read (review M1: `---` / upload / `---` hid line 2).
     int frontmatterEnd = 0;   // index of the line AFTER the closing `---` (or 0 if none)
+    if( !wholeFileIsCode )
     {
         bool inFront = false;
         for( int i = 0; i < int( lines.size() ); ++i )
@@ -585,11 +1077,11 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
     const bool                      bashAllowed  = toolAllowed( allowedTools, "Bash" );
 
     // helper: add a finding with a clipped excerpt
-    const auto addFinding = [ & ]( SkillSeverity sev, int lineNum, const char* rule, std::string_view lineText )
+    const auto addFinding = [ & ]( SkillSeverity sev, int lineNum, const char* rule, std::string_view lineText, const char* why = nullptr )
     {
         std::string excerpt( trimRight( lineText ) );
         if( excerpt.size() > 120 ) { excerpt.resize( 117 ); excerpt += "..."; }
-        findings.push_back( { sev, lineNum, rule, std::move( excerpt ) } );
+        findings.push_back( { sev, lineNum, rule, std::move( excerpt ), why } );
     };
     // helper: the regex boundary's answer as a plain hit, failing CLOSED on an undecided match — the line gets a
     // CRITICAL scan-incomplete finding (deduped per line below), so an unscannable skill can never read "clean".
@@ -672,7 +1164,11 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
         // BETWEEN the ``` markers read lineInFence==true while the markers themselves read false.
         bool lineInFence        = false;
         bool lineInExampleFence = false;
-        if( inBody )
+        if( inBody && wholeFileIsCode )
+        {
+            lineInFence = true;   // a shell script is code on every line: a ``` in a heredoc toggles nothing
+        }
+        else if( inBody )
         {
             lineInFence        = inFence;
             lineInExampleFence = inExampleFence;
@@ -800,7 +1296,10 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
             // fenceOnly patterns (net-exfil) fire only inside a fenced code block — see buildExfilPatterns().
             for( const ExfilPattern& p : exfilPats )
             {
-                const bool matched = p.isNetExfilShape ? hasNetExfilShape( ln ) : isHit( skillSearch( p.re, ln, stackBytes ), lineNum, ln );
+                // net-exfil: gradeNetExfil decides firing (a destination required, R1; a sensitive read into an upload
+                // fires with or without the var-or-base64 shape, R2) and grade together — see there.
+                const NetExfilGrade netGrade = p.isNetExfilShape ? gradeNetExfil( ln ) : NetExfilGrade{ false, SkillSeverity::Info, nullptr };
+                const bool matched = p.isNetExfilShape ? netGrade.fires : isHit( skillSearch( p.re, ln, stackBytes ), lineNum, ln );
                 if( !matched )
                 {
                     continue;
@@ -813,7 +1312,9 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
                 {
                     continue;
                 }
-                addFinding( SkillSeverity::Critical, lineNum, p.rule, ln );
+                // #353: net-exfil's shape is a verb plus ANY var; only a credential-shaped source or a sensitive read into the
+                // upload makes it CRITICAL (gradeNetExfil). Every other pattern here is CRITICAL as matched.
+                addFinding( p.isNetExfilShape ? netGrade.sev : SkillSeverity::Critical, lineNum, p.rule, ln, p.isNetExfilShape ? netGrade.why : nullptr );
                 break;   // one EXFILTRATE finding per line
             }
 
@@ -940,12 +1441,144 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
     return findings;
 }
 
+// What a file under a skill IS, for the fence gate (0.6.6). --scan-skills reads every regular file under a skill, and
+// the markdown fence tracker used to run over a bundled script's bytes too: net-exfil, the one fence-only rule, never
+// fired in scripts/helper.sh (no ``` line, so never "in a fence"), and a ``` pair in a heredoc could close a fence.
+//   ShellScript — .sh .bash .zsh .ksh, or a first line `#!` (after a UTF-8 BOM) whose interpreter (through `env` or
+//                 `busybox`) is sh, bash, zsh, dash, ksh, ash or mksh, or a shell startup file (.bashrc .bash_profile
+//                 .bash_login .bash_logout .bash_aliases .zshrc .zshenv .zprofile .zlogin .profile .kshrc .envrc): also scanned as whole-file code (scanSkillTextOn's wholeFileIsCode), merged with the markdown pass.
+//   OtherCode   — .py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or any other `#!`: read exactly as before, but the scanner has no
+//                 network-flow vocabulary for these languages (Python `requests.post` of `os.environ` is missed even in
+//                 a ```python fence), so the answer DISCLOSES them: <skillscan code_not_flow_scanned="N">.
+//   Markdown    — .md / .markdown whatever their first line says, and everything else: unchanged.
+enum class SkillFileKind : std::uint8_t
+{
+    Markdown,
+    ShellScript,
+    OtherCode,
+};
+
+// A leading UTF-8 byte-order mark is not part of the file's first line for this probe: bash still runs such a file
+// (review S2: `\xEF\xBB\xBF#!/bin/sh` executed, and read as markdown).
+inline std::string_view skillTextAfterBom( std::string_view text ) noexcept
+{
+    return text.starts_with( "\xEF\xBB\xBF" ) ? text.substr( 3 ) : text;
+}
+
+// The interpreter a `#!` first line names, as a base name: `#!/bin/sh` -> sh, `#!/usr/bin/env -S bash -e` -> bash (through
+// `env`, options and VAR=value operands are skipped, and `-u NAME` / `-C DIR` skip their argument too), `#!/bin/busybox sh`
+// -> sh (the applet). Empty when the text has no `#!` line or it names nothing.
+inline std::string_view skillShebangInterpreter( std::string_view text ) noexcept
+{
+    text = skillTextAfterBom( text );
+    if( !text.starts_with( "#!" ) )
+    {
+        return {};
+    }
+    const std::size_t eol = text.find( '\n' );
+    ASSUME( eol == std::string_view::npos || eol >= 2, "the text starts with \"#!\", so a newline is at index 2 or later" );
+    std::string_view line     = text.substr( 2, eol == std::string_view::npos ? std::string_view::npos : eol - 2 );
+    bool             afterEnv     = false;   // `env` (or `busybox`) seen: the interpreter is a later token
+    bool             skipArgument = false;   // the previous token was an env option that takes an argument
+    for( std::size_t start = line.find_first_not_of( " \t\r" ); start != std::string_view::npos; start = line.find_first_not_of( " \t\r" ) )
+    {
+        line.remove_prefix( start );
+        const std::size_t      end   = line.find_first_of( " \t\r" );
+        const std::string_view token = line.substr( 0, end );
+        line.remove_prefix( token.size() );
+        const std::string_view name = namesplit::afterLast( token, "/" );
+        if( skipArgument )
+        {
+            skipArgument = false;
+        }
+        else if( !afterEnv && ( name == "env" || name == "busybox" ) )
+        {
+            afterEnv = true;
+        }
+        else if( afterEnv && ( token == "-u" || token == "-C" || token == "--unset" || token == "--chdir" ) )
+        {
+            skipArgument = true;
+        }
+        else if( !afterEnv || !( token.starts_with( "-" ) || token.find( '=' ) != std::string_view::npos ) )
+        {
+            return name;
+        }
+    }
+    return {};
+}
+
+inline SkillFileKind skillFileKindOf( std::string_view path, std::string_view text ) noexcept
+{
+    // the extension: the base name's text after its last '.', lowercased (a dotfile `.bashrc` has none)
+    const std::string_view base = namesplit::afterLast( path, "/" );
+    const std::size_t      dot  = base.rfind( '.' );
+    std::string            ext( ( dot == std::string_view::npos || dot == 0 ) ? std::string_view() : base.substr( dot + 1 ) );
+    for( char& c : ext )
+    {
+        c = char( std::tolower( static_cast<unsigned char>( c ) ) );
+    }
+    const auto extIs = [ & ]( std::initializer_list<std::string_view> names ) noexcept
+    {
+        return std::find( names.begin(), names.end(), std::string_view( ext ) ) != names.end();
+    };
+    if( extIs( { "md", "markdown" } ) )
+    {
+        return SkillFileKind::Markdown;   // a markdown file is read as markdown whatever its first line says: .md is byte-identical
+    }
+    const std::string_view interpreter = skillShebangInterpreter( text );
+    // shell startup files are shell code with no extension and usually no #! (review S3); direnv executes .envrc once allowed
+    constexpr std::string_view kShellDotfiles[] = { ".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases", ".zshrc",
+                                                    ".zshenv", ".zprofile", ".zlogin", ".profile", ".kshrc", ".envrc" };
+    if( std::find( std::begin( kShellDotfiles ), std::end( kShellDotfiles ), base ) != std::end( kShellDotfiles ) )
+    {
+        return SkillFileKind::ShellScript;
+    }
+    constexpr std::string_view kShells[] = { "sh", "bash", "zsh", "dash", "ksh", "ash", "mksh" };
+    if( extIs( { "sh", "bash", "zsh", "ksh" } ) || std::find( std::begin( kShells ), std::end( kShells ), interpreter ) != std::end( kShells ) )
+    {
+        return SkillFileKind::ShellScript;
+    }
+    if( skillTextAfterBom( text ).starts_with( "#!" ) || extIs( { "py", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "rb", "pl", "pm", "lua", "php", "ps1", "psm1", "psd1", "bat", "cmd" } ) )
+    {
+        return SkillFileKind::OtherCode;
+    }
+    return SkillFileKind::Markdown;
+}
+
 // scanSkillTextOn on one thread with a kSkillScanStackBytes stack (a reservation: pages commit only as deep as a match
 // recurses), so a long skill line gets the bound that stack affords instead of the caller's. A thread the system refuses
 // runs the scan on the caller at kCallerStackBytesFloor, disclosed by stackthreads.h. A throw out of the scan (an
 // allocation failure) cannot leave the thread, so it becomes one CRITICAL scan-aborted finding: a skill whose scan did
 // not finish never reads clean.
-inline std::vector<SkillFinding> scanSkillText( std::string_view text )
+// A ShellScript gets BOTH passes, merged by mergeScriptPasses (below): a (line, rule) both passes report keeps the WORSE
+// severity, the markdown row on a tie, so every markdown finding survives byte for byte unless the code pass graded the
+// same (line, rule) higher — script mode can only ADD rows or RAISE one, never quiet one. (Taking the code pass alone would not be
+// monotone: the joined-body injection pass reports only the FIRST hit per pattern, and code mode feeds it lines an
+// example fence withheld, which could move that first hit off the line the markdown pass reported.)
+// Merge a shell script's whole-file-code pass into its markdown pass: stable-sorted on (line, rule, severity WORST first),
+// then deduped keeping the first — so a (line, rule) both passes report keeps the higher severity, and the markdown row
+// (inserted first) on a tie. Keeping the first row per (line, rule) without the severity key would let a WARN from the
+// markdown pass hide a CRITICAL the code pass graded on the same line, and quiet the exit from 2 to 1 (a wrap that
+// stops refusing). Today every rule's severity is a function of the line alone, so the key only ever breaks ties; it
+// is the invariant, not a behaviour change, and the skillscan gate's merge arm holds it.
+inline void mergeScriptPasses( std::vector<SkillFinding>& findings, std::vector<SkillFinding> code )
+{
+    findings.insert( findings.end(), std::make_move_iterator( code.begin() ), std::make_move_iterator( code.end() ) );
+    std::stable_sort( findings.begin(), findings.end(), []( const SkillFinding& a, const SkillFinding& b ) noexcept
+                      {
+                          if( a.line != b.line )
+                          {
+                              return a.line < b.line;
+                          }
+                          const int byRule = std::string_view( a.rule ).compare( b.rule );
+                          return byRule != 0 ? byRule < 0 : a.sev > b.sev;
+                      } );
+    findings.erase( std::unique( findings.begin(), findings.end(), []( const SkillFinding& a, const SkillFinding& b ) noexcept
+                                 { return a.line == b.line && std::string_view( a.rule ) == std::string_view( b.rule ); } ),
+                    findings.end() );
+}
+
+inline std::vector<SkillFinding> scanSkillText( std::string_view text, SkillFileKind kind = SkillFileKind::Markdown )
 {
     std::vector<SkillFinding> findings;
     const auto scan = [ & ]( std::size_t settledBytes )
@@ -953,6 +1586,10 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
         try
         {
             findings = scanSkillTextOn( text, settledBytes );
+            if( kind == SkillFileKind::ShellScript )
+            {
+                mergeScriptPasses( findings, scanSkillTextOn( text, settledBytes, /*wholeFileIsCode=*/true ) );
+            }
         }
         catch( ... )
         {
@@ -978,6 +1615,7 @@ struct SkillFileReadResult
 {
     bool                        readable = false;   // false = path could not be scanned at all
     std::vector<SkillFinding>   findings;            // valid only when readable == true
+    SkillFileKind               kind     = SkillFileKind::Markdown;   // OtherCode: counted as code_not_flow_scanned
 };
 
 // NO DISCLOSE on the unreadable paths here, deliberately, and it is not an omission (M7/F20,
@@ -1002,7 +1640,9 @@ inline SkillFileReadResult scanSkillFileChecked( const std::string& path )
     {
         return {};
     }
-    return { true, scanSkillText( buf.str() ) };   // empty file → empty findings → a legitimate clean scan
+    const std::string   text = buf.str();
+    const SkillFileKind kind = skillFileKindOf( path, text );
+    return { true, scanSkillText( text, kind ), kind };   // empty file → empty findings → a legitimate clean scan
 }
 
 // NOTE: directory scanning (recursive .md discovery + per-file scan + exit-code aggregation) is
@@ -1114,15 +1754,83 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // verdict= were undefined debt on every --legend=full run (legendcoverage_baseline.txt's four
 // `scan-skills | skillscan@*` lines). `fullLegend=true` (only when cfg.legend=="full") writes the missing
 // comment; false (every existing caller) is byte-identical.
-inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, int filesScanned, int filesSkipped = 0, bool fullLegend = false ) noexcept
+//
+// #353: an EXFILTRATE:net-exfil row graded by more than its match carries why= — why="no-cred-source" on a WARN,
+// why="sensitive-read-upload" on a CRITICAL fed by a sensitive read. The full legend defines it only when a row carries
+// it, so every scan without one stays byte-identical.
+// The <skillscan> root's counts. codeNotFlowScanned (readable SkillFileKind::OtherCode files) and dirs (a bare --scan-skills
+// only: the directories it walked, ';'-separated) are present-only, so an answer without them is byte-identical to before.
+struct SkillScanTally
 {
+    int         filesScanned       = 0;
+    int         filesSkipped       = 0;
+    int         codeNotFlowScanned = 0;
+    std::string dirs;
+};
+
+// The --legend=full prose for <skillscan>: its present-only clauses (f rows, capped=, code_not_flow_scanned=, why=) ride only when
+// the answer carries the attribute, so a scan without them prints the legend it always printed.
+inline void printSkillScanFullLegend( std::FILE* out, const std::vector<SkillScanRow>& rows, const SkillScanTally& tally ) noexcept
+{
+    const bool anyWhy = std::any_of( rows.begin(), rows.end(), []( const SkillScanRow& r ) noexcept { return r.finding.why != nullptr; } );
+    rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
+                      "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
+                      "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
+                      "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
+                      "worst finding's severity, the same read as the exit code (0/1/2).{}{}{}{}{} -->", kSkillScanFindingCap,
+                      tally.dirs.empty() ? "" : " dirs= (a bare scan only) lists the directories it walked, separated by ';': .agents/skills under "
+                                                "the current directory, then the Claude and Codex skill homes (a missing one holds nothing); "
+                                                "the positional root is never read.",
+                      rows.empty() ? "" : " An f row is one finding: p= is path:line (line 0 = the file or walk as a whole), rule= is "
+                                          "CATEGORY:name (INJECTION, EXFILTRATE, SCOPE-CREEP, FRONTMATTER, SCAN-INCOMPLETE), sev= is "
+                                          "critical|warn|info.",
+                      rows.size() > kSkillScanFindingCap ? " capped=1 (present only then): the rows shown are the worst severity first (every "
+                                                           "CRITICAL row, then WARN), each severity in scan order, so the cap never hides a "
+                                                           "CRITICAL row behind WARN rows." : "",
+                      tally.codeNotFlowScanned > 0 ? " code_not_flow_scanned=N (present only then): N scanned files are code in a language this "
+                                               "scanner has no network-flow model for (.py .js .mjs .cjs .jsx .ts .mts .cts .tsx .rb .pl .pm .lua .php .ps1 .psm1 .psd1 .bat .cmd, or a non-shell #!); "
+                                               "they were read line by line like markdown, so an upload of a secret written in that language "
+                                               "is not detected: clean does not cover them. Shell scripts are scanned as code." : "",
+                      anyWhy ? " An f row's why= says why EXFILTRATE:net-exfil graded as it did: why=no-cred-source, a network "
+                               "verb plus a $VAR or base64 but no credential-shaped source on the line, so WARN, not CRITICAL; "
+                               "why=sensitive-read-upload, a sensitive file read (a key, /etc/passwd, .netrc, .env, a credential "
+                               "or cookie store) piped, redirected or passed into an upload, CRITICAL." : "" );
+}
+
+// The <f> rows an answer shows, in order: every row in scan order, except past the row cap, where the worst severity comes
+// first — one pass per severity, CRITICAL down to INFO, each in scan order — so a WARN flood cannot push the CRITICAL
+// evidence row past the cap (review S1). Uncapped answers keep scan order, byte-identical to before.
+template<class Fn>
+inline void forEachShownSkillRow( const std::vector<SkillScanRow>& rows, std::size_t shown, bool capped, Fn&& fn )
+{
+    if( !capped )
+    {
+        for( const SkillScanRow& r : rows )
+        {
+            fn( r );
+        }
+        return;
+    }
+    std::size_t printed = 0;
+    for( const SkillSeverity sev : { SkillSeverity::Critical, SkillSeverity::Warn, SkillSeverity::Info } )
+    {
+        for( std::size_t i = 0; i < rows.size() && printed < shown; ++i )
+        {
+            if( rows[i].finding.sev == sev )
+            {
+                fn( rows[i] );
+                ++printed;
+            }
+        }
+    }
+}
+
+inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanRow>& rows, const SkillScanTally& tally, bool fullLegend ) noexcept
+{
+    const int filesScanned = tally.filesScanned, filesSkipped = tally.filesSkipped, codeNotFlowScanned = tally.codeNotFlowScanned;
     if( fullLegend )
     {
-        rw::emitTo( out, "<!-- ripwire scan-skills: injection/exfiltration/path-traversal scan of skill files. "
-                          "files=N files scanned; skipped=N of them unreadable (absent = none, each also carries "
-                          "its own CRITICAL SCAN-INCOMPLETE:file-unreadable finding row). findings=N pattern hits; "
-                          "rows print up to {} (shown=/capped=\"1\" past that). verdict=clean|warn|critical is the "
-                          "worst finding's severity, the same read as the exit code (0/1/2). -->", kSkillScanFindingCap );
+        printSkillScanFullLegend( out, rows, tally );
     }
     int maxSev = 0;
     for( const SkillScanRow& r : rows )
@@ -1147,13 +1855,25 @@ inline void printSkillScanArtifact( std::FILE* out, const std::vector<SkillScanR
     {
         rw::emitTo( out, " shown=\"{}\" capped=\"1\"", shown );
     }
-    rw::emitTo( out, " verdict=\"{}\">", verdict );
-    for( std::size_t i = 0; i < shown; ++i )
+    if( codeNotFlowScanned > 0 )
     {
-        const SkillScanRow& r = rows[i];
-        rw::emitTo( out, "<f p=\"{}:{}\" rule=\"{}\" sev=\"{}\"/>",
-                     escapeXmlAttr( r.path ).c_str(), r.finding.line, r.finding.rule, skillSeverityAttr( r.finding.sev ).c_str() );
+        rw::emitTo( out, " code_not_flow_scanned=\"{}\"", codeNotFlowScanned );
     }
+    if( !tally.dirs.empty() )
+    {
+        rw::emitTo( out, " dirs=\"{}\"", escapeXmlAttr( tally.dirs ) );
+    }
+    rw::emitTo( out, " verdict=\"{}\">", verdict );
+    forEachShownSkillRow( rows, shown, capped, [ & ]( const SkillScanRow& r )
+    {
+        rw::emitTo( out, "<f p=\"{}:{}\" rule=\"{}\" sev=\"{}\"",
+                     escapeXmlAttr( r.path ).c_str(), r.finding.line, r.finding.rule, skillSeverityAttr( r.finding.sev ).c_str() );
+        if( r.finding.why != nullptr )
+        {
+            rw::emitTo( out, " why=\"{}\"", r.finding.why );
+        }
+        rw::emitRaw( out, "/>" );
+    } );
     rw::emitRaw( out, "</skillscan>\n" );
 }
 

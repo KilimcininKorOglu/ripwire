@@ -1770,6 +1770,218 @@ inline std::pair<std::uint32_t, std::uint32_t> resolveRubyConstant( const RubyCo
     return result;
 }
 
+// ─── Ruby base SCOPING (test/rubyinheritcheck.sh floor (c)) ────────────────────────────────────────────────
+// A Ruby inherit reference is found by NAME — its final segment, the byName key every language's bases use —
+// and that name alone cannot tell `class Rec < ActiveRecord::Base` from the tree's own `Space::Base`: before
+// this, the out-of-tree base landed on every in-tree `Base` as an implementor AND fed the resolver's base walk.
+// This table scopes each one with Ruby's own lookup. The superclass AS WRITTEN is already on record — the
+// symbolic Include every `class X < Y` emits (ingest_relations.h, parser version 82), at the class's own start
+// byte — so no new extraction is needed: the inherit ref is joined to it through the derived class's open
+// (the innermost open containing the ref), and the written name is looked up innermost-first along the
+// ENCLOSING nesting, then at the top level, `::X` absolute — resolveRubyConstant's order. Against what: every
+// open the tree holds, WRAPPERS INCLUDED — `class Outer; class Nested; end; end` defines nothing of Outer and
+// is no definer in the #57 index, but it is a class a base can name, so the definer table is the wrong oracle
+// here. The bases are then the class symbols whose OWN open carries the resolved constant — read from
+// `classesByFqn`, NOT from buildGraph's byName: byName has been through the C-family decl/def collapse, which
+// takes a body-less `class Base < StandardError; end` for a forward declaration and drops it whenever a
+// same-named class with a body exists (activerecord's Encryption::Errors::Base lost all six of its subclasses
+// to rails/generators' Base that way). Ruby has no forward declarations; every open is the class. A written
+// base the tree never opens resolves to nothing, and the reference then mints no implementor row and no CHA edge.
+// Any reference the join cannot place (no open around it, no superclass directive at that open) stays on the
+// byName rule — the pre-scoping answer, never a guess in either direction — and is COUNTED by `disclosure` below
+// (RubyBaseScopeDisclosure), which buildGraph copies to Graph::rubyBasesUnscoped: the gauge attribute
+// ruby_bases_unscoped=N, absent at zero (graphlegend.h graphGaugeAttrXml/Json, test/rubyinheritcheck.sh).
+// Built only when the corpus holds a Ruby inherit reference; empty otherwise.
+//
+// The sink models Diagnostics::DisclosureSink: one reason, one count, read by the emitter as the gauge attribute.
+struct RubyBaseScopeDisclosure
+{
+    enum class DisclosureWhy : std::uint8_t
+    {
+        NoSuperclassDirective   // an inherit reference with no superclass directive at its class open
+    };
+    std::uint32_t unscoped = 0;   // ruby_bases_unscoped=
+    void disclose( DisclosureWhy ) noexcept { ++unscoped; }
+};
+
+struct RubyBaseScope
+{
+    RubyBaseScopeDisclosure                       disclosure;    // the references left on the byName rule
+    RubyConstantIndex                             ix;
+    HashMap<std::string, char>                    opened;        // the constant of EVERY open, wrapper or not
+    HashMap<std::uint32_t, std::string>           baseFqn;       // reference index → resolved base constant (EMPTY
+                                                                 // when the tree opens no such constant); find-only
+    HashMap<std::string, rw::SmallVec<NodeId, 2>> classesByFqn;  // constant → the Ruby symbols whose own open it is
+
+    // nullptr: not a scoped Ruby base — the byName rule stands. Otherwise the resolved constant (empty = none).
+    const std::string* resolvedBase( std::size_t refIdx ) const noexcept
+    {
+        const auto it = baseFqn.find( std::uint32_t( refIdx ) );
+        return it != baseFqn.end() ? &it->second : nullptr;
+    }
+
+    // The constant of a Ruby class symbol's own open; nullptr when no open of that name starts the symbol.
+    const std::string* fqnOfSymbol( const Symbol& s ) const noexcept
+    {
+        if( s.fileId >= ix.opensByFile.size() )
+        {
+            return nullptr;
+        }
+        const std::vector<RubyOpenRec>& opens = ix.opensByFile[ s.fileId ];
+        const std::uint32_t             o     = rubyInnermostOpen( opens, s.sigStartByte + 1u );   // strict at the start
+        if( o == kNoFile )
+        {
+            return nullptr;
+        }
+        const std::string_view w   = opens[ o ].written;
+        const std::size_t      cut = w.rfind( "::" );
+        if( ( cut == std::string_view::npos ? w : w.substr( cut + 2 ) ) != s.name )
+        {
+            return nullptr;
+        }
+        return &opens[ o ].fqn;
+    }
+
+    // The implementor a Ruby class stands as: the lowest-id symbol of its constant with its own kind. A class REOPENED
+    // with its superclass repeated (`class Reop < Parent … end`, twice) is two symbols and one constant, so both opens
+    // collapse onto one row instead of listing the class twice. `id` itself when its open is not indexed.
+    NodeId canonicalClass( const IngestResult& ing, NodeId id ) const noexcept
+    {
+        const std::string* fqn = fqnOfSymbol( ing.symbols[ id ] );
+        if( fqn == nullptr )
+        {
+            return id;
+        }
+        const auto it = classesByFqn.find( *fqn );
+        if( it == classesByFqn.end() )
+        {
+            return id;
+        }
+        for( NodeId cand : it->second )   // id order → the first match is the lowest id
+        {
+            if( ing.symbols[ cand ].kind == ing.symbols[ id ].kind )
+            {
+                return cand;
+            }
+        }
+        return id;
+    }
+};
+
+// Every `class X < Y`'s written superclass, keyed by (fileId, the class's own start byte) — the symbolic directive
+// #57 records at that byte. Find-only, so its bucket order never reaches output.
+inline HashMap<std::uint64_t, const std::string*> rubySuperclassSites( const IngestResult& ing, const RubyConstantIndex& ix )
+{
+    HashMap<std::uint64_t, const std::string*> sites;
+    for( const Include& inc : ing.includes )
+    {
+        if( inc.isSymbolic && inc.fileId < ix.opensByFile.size() && !ix.opensByFile[ inc.fileId ].empty() )
+        {
+            sites.try_emplace( ( std::uint64_t( inc.fileId ) << 32 ) | inc.byte, &inc.target );   // first directive at a byte wins
+        }
+    }
+    return sites;
+}
+
+// Ruby's lookup of a written base from the derived class open `derived`: `::X` absolute, else innermost-first
+// along the ENCLOSING nesting (the superclass is evaluated before the class opens), then the top level. Returns
+// the constant the tree opens, or empty when it opens none.
+// Stated floor — a QUALIFIED name is looked up whole: `class X < Mod::B` tries `<nesting>::Mod::B` innermost-first,
+// then `Mod::B`. Ruby resolves only the FIRST segment lexically and the rest strictly inside it, so where an
+// enclosing `Outer::Mod` exists without a `B`, Ruby raises NameError while this falls through to a top-level
+// `Mod::B`. That code cannot load, so the difference only shows in a tree that is already broken.
+inline std::string rubyResolveBaseConstant( const HashMap<std::string, char>& opened, const std::vector<RubyOpenRec>& opens,
+                                            std::uint32_t derived, std::string_view written )
+{
+    const auto isOpened = [ &opened ]( const std::string& c ) { return opened.find( c ) != opened.end(); };
+    if( rubyConstIsAbsolute( written ) )
+    {
+        std::string abs( written.substr( 2 ) );
+        return isOpened( abs ) ? abs : std::string{};
+    }
+    for( std::uint32_t k = opens[ derived ].parent; k != kNoFile; k = opens[ k ].parent )
+    {
+        std::string cand = opens[ k ].fqn;
+        cand += "::";
+        cand += written;
+        if( isOpened( cand ) )
+        {
+            return cand;
+        }
+    }
+    std::string top( written );
+    return isOpened( top ) ? top : std::string{};
+}
+
+// THE TEST SEAM (#325). RIPWIRE_TEST_RUBY_BASE_UNSCOPED=1 makes the join below find NO superclass directive for any
+// Ruby inherit reference, so every one takes the byName fallback and is counted. No well-formed input is known to
+// reach that fallback (a class open with a superclass records its directive at that open), so this is the one way
+// test/rubyinheritcheck.sh can pin the count and the ruby_bases_unscoped= attribute it feeds. Any other value, or
+// unset, is no seam; test/lib/clean-env.sh clears it. Read once.
+inline bool rubyBaseUnscopedTestSeam() noexcept
+{
+    static const bool on = []() noexcept
+    {
+        const char* const env = std::getenv( "RIPWIRE_TEST_RUBY_BASE_UNSCOPED" );
+        return env != nullptr && std::string_view( env ) == "1";
+    }();
+    return on;
+}
+
+// Joins each Ruby inherit reference to the superclass directive at its derived class's open and records the
+// resolved base constant in `sc.baseFqn`. A reference the join cannot place is left out — the byName rule stands.
+inline void rubyScopeBaseReferences( RubyBaseScope& sc, const IngestResult& ing )
+{
+    const HashMap<std::uint64_t, const std::string*> sites = rubySuperclassSites( ing, sc.ix );
+    for( std::size_t i = 0; i < ing.references.size(); ++i )
+    {
+        const Reference& r = ing.references[ i ];
+        if( !r.isInherit || r.lang != Lang::Ruby || r.fileId >= sc.ix.opensByFile.size() )
+        {
+            continue;
+        }
+        const std::vector<RubyOpenRec>& opens   = sc.ix.opensByFile[ r.fileId ];
+        const std::uint32_t             derived = rubyInnermostOpen( opens, r.startByte );
+        const auto                      site    = ( derived == kNoFile || rubyBaseUnscopedTestSeam() ) ? sites.end() : sites.find( ( std::uint64_t( r.fileId ) << 32 ) | opens[ derived ].startByte );
+        if( site == sites.end() )
+        {
+            DISCLOSE( sc.disclosure, RubyBaseScopeDisclosure::DisclosureWhy::NoSuperclassDirective,
+                      "Ruby inherit reference with no superclass directive at its class open: base left on the byName rule" );
+            continue;
+        }
+        sc.baseFqn.emplace( std::uint32_t( i ), rubyResolveBaseConstant( sc.opened, opens, derived, *site->second ) );
+    }
+}
+
+inline RubyBaseScope buildRubyBaseScope( const IngestResult& ing )
+{
+    RubyBaseScope sc;
+    const auto isRubyBase = []( const Reference& r ) noexcept { return r.isInherit && r.lang == Lang::Ruby; };
+    if( std::none_of( ing.references.begin(), ing.references.end(), isRubyBase ) )
+    {
+        return sc;
+    }
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/ruby: base scoping" );
+    sc.ix = buildRubyConstantIndex( ing );
+    for( const std::vector<RubyOpenRec>& opens : sc.ix.opensByFile )
+    {
+        for( const RubyOpenRec& o : opens )
+        {
+            sc.opened.try_emplace( o.fqn, 1 );
+        }
+    }
+    for( const Symbol& s : ing.symbols )
+    {
+        const std::string* fqn = ( s.lang == Lang::Ruby ) ? sc.fqnOfSymbol( s ) : nullptr;
+        if( fqn != nullptr )
+        {
+            sc.classesByFqn[ *fqn ].push_back( s.id );   // ids ascending → each list is in id order
+        }
+    }
+    rubyScopeBaseReferences( sc, ing );
+    return sc;
+}
+
 // Resolve ONE #include / import target to a concrete repo fileId by LEXICAL path semantics, dispatched on
 // the INCLUDER's language (its file extension). `fileIndex` maps each canonical `ing.files` path → its
 // fileId. `crateRootDir`/`hasCrateRoot` carry the Rust crate root (empty/false for non-Rust);
@@ -6640,8 +6852,12 @@ struct Narrower
     //
     // Deterministic: `cands` is in symbol-id order (byName insertion order) and `fileIncludes[callerFileId]` is a
     // sorted id set, so the "which single file" decision and the emitted `out` are a pure function of the inputs.
+    //
+    // `minCands` (default 2): the smallest set this rule reads. graph.h passes 1 for the set a call can reach BY NAME
+    // after function-local defs were set aside (reachableByName) — there a lone survivor is not "already
+    // unambiguous": the name is shared with the set-aside defs, and only import evidence may pick it.
     bool rule3IncludeFile( const rw::SmallVec<NodeId, 2>& cands, std::uint32_t callerFileId,
-                           std::vector<NodeId>& out ) const
+                           std::vector<NodeId>& out, std::size_t minCands = 2 ) const
     {
         if( callerFileId >= fileIncludes.size() )
         {
@@ -6652,7 +6868,7 @@ struct Narrower
         {
             return false; // caller includes nothing → no narrow
         }
-        if( cands.size() < 2 )
+        if( cands.size() < minCands || cands.empty() )
         {
             return false; // already unambiguous → nothing for Rule 3 to do
         }

@@ -50,7 +50,7 @@ Two limits apply to nearly everything here and are not repeated in every section
 
 **security — scan skill files for injection / exfiltration patterns (exit 2 = CRITICAL, 1 = WARN,** — [`--scan-skill`](#--scan-skillfile) · [`--scan-skills`](#--scan-skillsdir) · [`--force`](#--force)
 
-**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--legend-dict`](#--legend-dictroster) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--max-memory`](#--max-memorynkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--lsp`](#--lsp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
+**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--legend-dict`](#--legend-dictroster) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--max-memory`](#--max-memorynkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--mcp-tools`](#--mcp-toolslist) · [`--lsp`](#--lsp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
 
 ---
 
@@ -952,7 +952,7 @@ $ ./build/ripwire . --connect=rankGraphTeleport,runEval,getIndex
 
 **Answers:** show everything that reaches SYM — the transitive blast radius before a change transitive blast radius — the indexed symbols that reach SYM (a floor, see counts_floor).
 
-file:name disambiguates like --callers importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM, emitted as <f via="import" lazy="0|1"> rows (format=columnar carries the count only; --limit sizes it). NEVER added to reaches= — files and symbols are different units, and an importer may use a different symbol from that file, or none at all. lazy="1": every one of that importer's edges is written inside a closure — a TS/JS require()/import() inside a function body, a Ruby constant receiver or argument inside a method/lambda/block, a Ruby autoload or rescue class — not at load time: still a real dependency, weaker than a top-level one counts_floor="1"           every count on the graph verbs is a FLOOR, never a total; a 0 means none found on --callers/--callees/--uses/--impact/--edit-check every count is a FLOOR, never a total: the call graph is extracted from source text by name, so dynamic dispatch and declarations that parse without a call expression (C++ most-vexing-parse) contribute no edge; a call through a function pointer/callback is an edge only when ONE function is bound to that variable in scope (reassigned/table-indexed/lambda-bound/escaped — address-taken or reference-bound — pointers stay edge-less, C-family); a macro-generated call site contributes a role="macro" edge when its name uniquely names an indexed function-like #define (t="macro"); a shared name stays a plain call, an unindexed macro's site is no edge. Read a 0 as "none found", never as "none exists". Those five verbs also count DISTINCT (caller,callee) pairs, while --uses counts call SITES — see each verb's own legend pr_iters="N"               how many PageRank iterations produced this ordering on every PageRank-ordered document (the map, and the tree, seams, communities, zoom, impact, graph-query and exercises verbs, plus their MCP twins): how many power iterations produced that ordering. The iteration stops when the L1 residual between successive rank vectors falls below tolerance, or at a fixed iteration ceiling, whichever comes first. pr_converged="0" is emitted ONLY on that second exit and means the ranking is a rank vector that stopped SHORT of tolerance, not the fixed point it approximates. ABSENCE MEANS IT CONVERGED (there is no pr_converged="1": the converged path is the normal one and must cost zero bytes), and absence of pr_iters= itself means the document was not ordered by a power iteration at all (a lexical query score, or a hub or authority HITS vector), never that the count is unknown
+file:name disambiguates like --callers rows run nearest first: d= is the hop depth (1 = a direct caller; printed where it changes), PageRank order within a depth; by_depth=k:n on the root counts reaches= per depth, so a cut drops the deepest first importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM, emitted as <f via="import" lazy="0|1"> rows (format=columnar carries the count only; --limit sizes it). NEVER added to reaches= — files and symbols are different units, and an importer may use a different symbol from that file, or none at all. lazy="1": every one of that importer's edges is written inside a closure — a TS/JS require()/import() inside a function body, a Ruby constant receiver or argument inside a method/lambda/block, a Ruby autoload or rescue class — not at load time: still a real dependency, weaker than a top-level one counts_floor="1"           every count on the graph verbs is a FLOOR, never a total; a 0 means none found on --callers/--callees/--uses/--impact/--edit-check every count is a FLOOR, never a total: the call graph is extracted from source text by name, so dynamic dispatch and declarations that parse without a call expression (C++ most-vexing-parse) contribute no edge; a call through a function pointer/callback is an edge only when ONE function is bound to that variable in scope (reassigned/table-indexed/lambda-bound/escaped — address-taken or reference-bound — pointers stay edge-less, C-family); a macro-generated call site contributes a role="macro" edge when its name uniquely names an indexed function-like #define (t="macro"); a shared name stays a plain call, an unindexed macro's site is no edge. Read a 0 as "none found", never as "none exists". Those five verbs also count DISTINCT (caller,callee) pairs, while --uses counts call SITES — see each verb's own legend pr_iters="N"               how many PageRank iterations produced this ordering on every PageRank-ordered document (the map, and the tree, seams, communities, zoom, impact, graph-query and exercises verbs, plus their MCP twins): how many power iterations produced that ordering. The iteration stops when the L1 residual between successive rank vectors falls below tolerance, or at a fixed iteration ceiling, whichever comes first. pr_converged="0" is emitted ONLY on that second exit and means the ranking is a rank vector that stopped SHORT of tolerance, not the fixed point it approximates. ABSENCE MEANS IT CONVERGED (there is no pr_converged="1": the converged path is the normal one and must cost zero bytes), and absence of pr_iters= itself means the document was not ordered by a power iteration at all (a lexical query score, or a hub or authority HITS vector), never that the count is unknown
 
 **Try it**
 
@@ -982,7 +982,7 @@ $ ./build/ripwire . --impact=rankGraphTeleport
 **Caveats (stated by the binary):**
 
 - show everything that reaches SYM — the transitive blast radius before a change transitive blast radius — the indexed symbols that reach SYM (a floor, see counts_floor).
-- file:name disambiguates like --callers importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM, emitted as <f via="import" lazy="0|1"> rows (format=columnar carries the count only;
+- file:name disambiguates like --callers rows run nearest first: d= is the hop depth (1 = a direct caller;
 - NEVER added to reaches= — files and symbols are different units, and an importer may use a different symbol from that file, or none at all.
 
 ### `--verify="CLAIM"`
@@ -1010,7 +1010,7 @@ $ ./build/ripwire . --verify="frobnicate(x)"
 
 **Answers:** find the markdown docs that name SYM in backticks — the doc-to-code link markdown docs (plans/designs) that name SYM in a `backtick` (doc↔code).
 
-An @FILE:LINE seed rebinds to the innermost enclosing definition and answers, disclosing sym= the pre-PR family — plumbing (--affected) to mid-task report (--situ) to gate (--test-gate):
+An @FILE:LINE seed rebinds to the innermost enclosing definition and answers, disclosing sym= (its name). unbackticked_docs=N (absent at 0): files naming SYM only outside such a span, a ceiling. the pre-PR family — plumbing (--affected) to mid-task report (--situ) to gate (--test-gate):
 
 **Try it**
 
@@ -1424,7 +1424,7 @@ $ ./build/ripwire . --match='(if_statement)'
 
 **Answers:** structural search written in CODE, not in node kinds: --pattern='foo($X, ...)' structural search written in CODE, not in node kinds: --pattern='foo($X, ...)'.
 
-$NAME binds one node (repeat it and both sites must match structurally); $_ binds nothing; ... (or $$$) is an ellipsis over siblings, matched by ONE first-match-wins probe under a hard cap -- both facts on the element. Comments are transparent, everything else is kind- and text-exact ($A + $B does not match a - b). Served: c cpp objc java csharp javascript typescript python go rust swift; ruby, bash and the data tiers are named in unsupported= instead of answered. A pattern no served grammar resolves, or that collapses to a bare token, is REFUSED -- never reported as hits=0.
+$NAME binds one node (repeat it and both sites must match structurally); $_ binds nothing; ... (or $$$) is an ellipsis over siblings, matched by ONE first-match-wins probe under a hard cap -- both facts on the element. Comments are transparent, everything else is kind- and text-exact ($A + $B does not match a - b). Served: c cpp objc java csharp javascript typescript python go rust swift; ruby, bash and the data tiers are named in unsupported= instead of answered. A pattern no served grammar resolves, or that collapses to a bare token, is REFUSED -- never reported as hits=0. A qualified call (ns::foo) is no hit for a bare foo; unmatched_qualified=N counts them.
 
 **Try it**
 
@@ -1645,7 +1645,7 @@ $ ./build/ripwire . --expand=compressBody --top-k=0 --compress
 
 ### `--pack-top-n=N`
 
-**Answers:** pack the N top symbols' bodies  [--pack-budget-bytes=B]
+**Answers:** pack the N top symbols' bodies  [--pack-budget-bytes=B] A budget cut is stated: truncated=1 lines=1-K/T on the cut file, src_cut shown= total= capped=1.
 
 **Try it**
 
@@ -1671,6 +1671,10 @@ $ ./build/ripwire . --pack-top-n=3 --top-k=0
 ```
 
 **Shaped by:** `--top-k`, `--token-budget`, `--for`
+
+**Caveats (stated by the binary):**
+
+- pack the N top symbols' bodies  [--pack-budget-bytes=B] A budget cut is stated: truncated=1 lines=1-K/T on the cut file, src_cut shown= total= capped=1.
 
 ### `--no-redact`
 
@@ -1717,20 +1721,20 @@ _Fan-in/out + complexity annotations on the map._
 
 ```
 $ ./build/ripwire . --metrics --top-k=10
-<!-- ripwire v1 t=fn|method|cls|struct|iface|var|sec|macro(#define;degraded:body-is-replacement-text,edges-cross-expansion) p=path layer=arch-layer(opt) n=name sc=enclosing-scope(absent-if-unscoped;the-full-id-is-p::sc::n-with-p=-from-the-enclosing-f,and-expand/callers/impact/uses-accept-it) k=rank c=call amb=ambiguous-calls(read-source) lpin=calls-pinned-by-locality-prior-alone(a-disclosed-guess;read-source;absent-if-0) overloads=N-same-name-defs-merged-into-this-row(absent-if-1;shown=counts-them-individually,so-rows+sum(overloads-1)=shown) prov=per-EDGE-confidence(orthogonal-to-k):scip(index-pinned;precise)|binding(cross-lang-FFI)|import(ES-named-import;module+export-named)|split(one-arm-of-a-k-way-pick;read-source;these-are-the-edges-amb=-counts)(absent=uniquely-resolved-name-based) hdr:unresolved=call-name-defined-only-in-a-lang-incompatible-file (edges heuristic) hdr:locality_pinned=sum-of-lpin(absent-if-0) hdr:external=calls-refused-as-bound-outside-the-tree(builtin/stdlib-name-without-in-repo-evidence,external-import,super-past-the-tree;no-edge;absent-if-0) r:est_tokens=hdr-copy(none-if-stable) -->
-<!-- extent_suspect=containment-checks-this-definition-FAILED(its-span,id=-scope-and-t=-kind-may-be-parse-recovery-artifacts;loc/cx/ccx/nest-summed-over-that-span-too;read-source;the-row-stays):name(its-own-name-lies-outside-its-own-signature)|head(a-definition-sits-in-another's-return-type-position,before-its-name;C-family;marks-the-whole-top-level-definition-tree)|scope(filed-under-C::-while-inside-a-different-class;C++)|error(the-parse-recovered-its-class-or-kind;and-every-definition-inside-that-class)(comma-joined-in-this-order;absent=every-check-held,not-a-proof-the-extent-is-right) -->
-<!-- hdr:extent_suspect_syms=definitions-carrying-extent_suspect-corpus-wide(not-only-the-shown-rows;absent-if-0) -->
-<!-- hdr:macro_blanked_files=files-whose-symbols-come-from-a-RE-PARSE(their-first-parse-held-error-bytes;semicolon-less-ALL-CAPS-member-macro-invocations-blanked-to-spaces,offsets-unchanged;adopted-only-with-strictly-fewer-error-bytes;the-skipped-verb-rows-each-with-macro_blanked=N;absent-if-0) -->
-<!-- r:root=crawl-root-every-p=-is-relative-to(single-root-only;absent=>p=is-the-raw-ingest-path) -->
-<!-- metrics: in=fan-in out=fan-out cx=cyclomatic ccx=cognitive loc=lines params=count nest=MAX-depth humps=regions-reaching-the-nesting-bar deep=lines-inside-them(floor,see deep_floor) (humps/deep are the PROFILE nest= cannot give: nest= is a max, so one deep line and a body that is deep throughout report the same number; deep/loc is the fraction. Both absent exactly when nest<bar — not-deep, never a hidden 0. deep counts LINES and humps counts REGIONS, and two regions can share a line, so deep BELOW humps is legal: a one-line if/else at the bar is 2 regions on 1 line) locals=local-var-decl-count(floor,C/C++-only,see locals_floor) ppalt=preproc-alternative-branches-in-body(#else/#elif; metrics sum ALL branches, no single build compiles them all) ev=essential-cx(McCabe: 1=fully structured, 2+=jumps block extract-method; absent on a cx row means exactly 1; floor per ev_floor — noreturn calls/macro-hidden exits unseen; not counted: &&/||, Rust ? and yield/await/defer, hence Bash carries no ev) ev_why=which-jumps-raised-it tag:count cbo=coupling lcom4=cohesion amp=change-amplification tested=1 role=hub(fan-in 8+; uses spells role call|macro|read|write|import|extends). Absence is PER-KEY: N/A for params/nest/locals/cbo/lcom4/amp (wrong kind, or a language the metric is not counted for); a MEASURED value for loc/tested/ppalt/humps/deep (0), ev (1) and role (fan-in below 8). -->
-<!-- pr_iters=pagerank-power-iterations(stop:L1-residual-below-tol,else-ceiling) pr_converged=0-only-when-ceiling-hit-first(absent=converged;no-such-attr=not-pagerank-ordered) -->
-<!-- hdr:declined=calls-tier-3-declined(two-or-more-same-language-defs,none-in-the-callers-file-or-dir,none-pinned-by-a-qualifier/receiver/include;no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->
-<!-- files=2039 symbols=18699 edges=22330 shown=10 est_tokens=2640 ambiguous=7928 unresolved=4925 locality_pinned=10 external=2607 declined=6236 extent_suspect_syms=10 macro_blanked_files=7 skipped_oversize=15 unindexed="txt:73,tsv:49,jsonl:26,scm:21,expected:15,lock:7" unindexed_exts=20 order=important-first -->
-<r root="." est_tokens="2640" pr_iters="29">
+<!-- ripwire metrics schema=ripwire.metrics/v1: the ranked map with per-symbol metrics: in/out, cx/ccx, loc, params, nest, humps/deep, locals, cbo, amp, tested, ev. est_tokens=: price as emitted (an upper bound under compact). root=: p= relative to it. pr_iters=N: PageRank iterations. declined=K: K calls left unbound (no evidence chose one def). external=K: K calls taken as outside the tree, no edge. locality_pinned=K: K calls pinned by locality alone (a guess). extent_suspect_syms=K: K defs failed containment, corpus-wide. macro_blanked_files=K: K files indexed from a macro-blanked re-parse. prov=scip|binding|import|split|final-segment: how that <c> edge bound (absent: one unique name); split = one arm of an amb= pick; final-segment = a qualified type matched by last name only. files=/symbols=: files and symbols indexed; edges= distinct call edges; shown= symbols printed, a merged row counting each def; ambiguous= calls split over several defs, corpus-wide; unresolved= calls with in-tree evidence and no edge (defs all language-filtered, or import/pointer binding refused); order= rows by rank (important-first, important-last; (auto:fill) = flipped past a size threshold) or by path (stable). skipped_oversize=K: K files over a size ceiling, not indexed. unindexed=ext:N: N text files of that extension no grammar reads (6 extensions at most). unindexed_exts=E: E such extensions in all, the list cut. <s tested=1>: a non-test row an indexed test transitively reaches (absent otherwise, never 0). sc=: enclosing scope; the full id is p::sc::n (p= of the row or its <f>) and selectors take it. amb=K: K calls split over several defs. locals_floor=1: locals= is a floor. role=hub: in= is 8 or more. s in= out= cx= ccx= loc= params= nest= cbo= amp=: callers, callees, cyclomatic/cognitive complexity, lines, parameters, nesting depth, coupled types, callers + co-changed files. ev=/ev_why=: essential complexity (2+: jumps block extract-method; absent: 1) / the jumps behind it, tag:count. ev_floor=1: ev= is a FLOOR; noreturn calls, macro-hidden exits and unresolved gotos are unseen. layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none. l=N: start line; only on a same-name overload's row, one row per body (bodyless decls fold into overloads=). -->
+<!-- t=modscope=a-file's-MODULE-SCOPE(n=<file-scope>):the-statements-outside-every-named-definition,where-a-top-level-call-and-an-anonymous-callback-body's-calls-live;a-CALLER-never-a-callee(nothing-in-the-source-can-name-it)-with-no-body-to-expand;a-file-with-no-such-call-has-no-such-row -->
+<!-- files=2376 symbols=23152 edges=32741 shown=10 est_tokens=2157 ambiguous=9808 unresolved=13142 locality_pinned=11 external=5432 declined=9462 extent_suspect_syms=10 macro_blanked_files=7 skipped_oversize=15 unindexed="txt:73,tsv:49,jsonl:26,scm:23,expected:15,xml:13" unindexed_exts=20 order=important-first -->
+<r schema="ripwire.metrics/v1" root="." est_tokens="2157" pr_iters="28">
 <f p="src/infra/svector.h" layer="infra">
-<s t="method" n="size" sc="svector" in="764" out="0" cx="1" ccx="0" role="hub" loc="1" params="0" nest="0" locals="0" locals_floor="1" cbo="0" amp="787" tested="1" k="0.0155">
+<s t="method" n="buf" sc="svector" l="125" in="29" out="0" cx="2" ccx="1" role="hub" loc="1" params="0" nest="1" locals="0" locals_floor="1" cbo="0" amp="52" tested="1" k="0.0071">
 </s>
-<s t="method" n="buf" sc="svector" overloads="2" in="29" out="0" cx="2" ccx="1" role="hub" loc="1" params="0" nest="1" locals="0" locals_floor="1" cbo="0" amp="52" tested="1" k="0.0063">
+<s t="method" n="buf" sc="svector" l="126" in="29" out="0" cx="2" ccx="1" role="hub" loc="1" params="0" nest="1" locals="0" locals_floor="1" cbo="0" amp="52" tested="1" k="0.0071">
+</s>
+<s t="method" n="push_back" sc="svector" in="655" out="3" cx="2" ccx="1" role="hub" loc="5" params="1" nest="1" locals="1" locals_floor="1" cbo="3" amp="678" tested="1" amb="2" k="0.0053" ev="2" ev_floor="1" ev_why="guard-return:1">
+<c n="buf" prov="split"/>
+<c n="buf" prov="split"/>
+<c n="grow"/>
+</s>
 ... [17 more line(s); run it to see the whole thing]
 ```
 
@@ -2834,9 +2838,9 @@ $ ./build/ripwire . --quality-baseline --allow-dirty
 
 ### `--quality-delta`
 
-**Answers:** before a PR: report ONLY what your change made worse, across 10 kinds agent self-check before a PR (pair with --test-gate): report ONLY what a change made worse vs the baseline (10 kinds: complexity/verbosity/nesting/params/dup/dead/api-surface + error-masking/short-horizon-churn/new-clone-of-reused-helper);
+**Answers:** before a PR: report ONLY what your change made worse, across 11 kinds agent self-check before a PR (pair with --test-gate): report ONLY what a change made worse vs the baseline (11 kinds: complexity/verbosity/nesting/params/dup/dead/api-surface + error-masking/short-horizon-churn/new-clone-of-reused-helper + placeholder);
 
-every finding is classified by ORIGIN: a symbol that EXISTED at the baseline and got worse (preexisting-worse="N", no attribute on the row) vs one that exists only because the code is NEW (new-symbol="N", origin="new-symbol" on the row). A small numeric delta is additionally sev="minor". EXIT 2 ONLY on preexisting-worse AND major AND unacked — the gating="N" header count. New-symbol rows are still PRINTED (they are the debt you are adding — read them), they just never gate; exit 0 means "nothing that already existed got worse", not "clean". Clone kinds classify by member set (new-symbol only if EVERY member is new); short-horizon-churn is preexisting by construction. LIMIT: origin is canonId (path::scope::name) identity, so a RENAMED/MOVED symbol reads as new and a regression carried in with the move will not gate. Test-fixture dirs + doc sections are exempt from dead-code/churn; churn needs COMMITTED thrash evidence (rewritten across recent commits AND again by this diff), never the current edit alone WHICH FLOOR IT COMPARES AGAINST, and a side effect: the sidecar is honored only when the sha it was pinned at EQUALS the current git HEAD (strict equality — an ancestor commit describes a DIFFERENT tree, so everything committed since would read as your regression). A sidecar pinned anywhere else is STALE: this verb then DELETES it from your working tree (self-heal, so the next run does not rediscover the dead pin) and auto-compares the working tree vs git HEAD instead. Re-pin with --quality-baseline. The read-only MCP quality_delta verb applies the SAME staleness test but never deletes. A sidecar at the current HEAD that ANOTHER ripwire build pinned (its producer stamp names other sources — a dead set depends on how calls were resolved) is FOREIGN: both arms ignore it, never delete it, and auto-compare vs git HEAD. Which floor was actually used is on every report as baseline=: sidecar | git-HEAD | git-HEAD (stale sidecar removed) | git-HEAD (stale sidecar ignored) | git-HEAD (foreign sidecar ignored) — the stale two say a stale sidecar existed, and 'removed' means the file is gone. A non-git root has no HEAD to fall back to, so its sidecar is honored whenever this build pinned it; without one there, or with another build's, the verb exits 1.
+every finding is classified by ORIGIN: a symbol that EXISTED at the baseline and got worse (preexisting-worse="N", no attribute on the row) vs one that exists only because the code is NEW (new-symbol="N", origin="new-symbol" on the row). A small numeric delta is additionally sev="minor". EXIT 2 ONLY on preexisting-worse AND major AND unacked — the gating="N" header count. New-symbol rows are still PRINTED (they are the debt you are adding — read them), they just never gate; exit 0 means "nothing that already existed got worse", not "clean". Clone kinds classify by member set (new-symbol only if EVERY member is new); short-horizon-churn is preexisting by construction. LIMIT: origin is canonId (path::scope::name) identity, so a RENAMED/MOVED symbol reads as new and a regression carried in with the move will not gate. error-masking = a NEW empty/pass/comment-only handler, or log-only (a broad handler whose body only logs and never names the error) or rethrow-only (the sole handler re-throws it unchanged); those two gate only where their precision was measured (Python) and are sev="minor" in every other language. placeholder = a stub the change ADDED (todo!()/unimplemented!(), Kotlin TODO(), NotImplementedException, a bare raise NotImplementedError as a free function's body, a throw/raise/panic/assert saying "not implemented") or a comment line opening with TODO/FIXME that names no issue (#12, ABC-12, a URL); new-symbol by construction, so it never gates. Counted per enclosing symbol, like error-masking: a file-level TODO outside every definition is not counted. Test-fixture dirs + doc sections are exempt from dead-code/churn; churn needs COMMITTED thrash evidence (rewritten across recent commits AND again by this diff), never the current edit alone WHICH FLOOR IT COMPARES AGAINST, and a side effect: the sidecar is honored only when the sha it was pinned at EQUALS the current git HEAD (strict equality — an ancestor commit describes a DIFFERENT tree, so everything committed since would read as your regression). A sidecar pinned anywhere else is STALE: this verb then DELETES it from your working tree (self-heal, so the next run does not rediscover the dead pin) and auto-compares the working tree vs git HEAD instead. Re-pin with --quality-baseline. The read-only MCP quality_delta verb applies the SAME staleness test but never deletes. A sidecar at the current HEAD that ANOTHER ripwire build pinned (its producer stamp names other sources — a dead set depends on how calls were resolved) is FOREIGN: both arms ignore it, never delete it, and auto-compare vs git HEAD. Which floor was actually used is on every report as baseline=: sidecar | git-HEAD | git-HEAD (stale sidecar removed) | git-HEAD (stale sidecar ignored) | git-HEAD (foreign sidecar ignored) — the stale two say a stale sidecar existed, and 'removed' means the file is gone. A non-git root has no HEAD to fall back to, so its sidecar is honored whenever this build pinned it; without one there, or with another build's, the verb exits 1.
 
 **Try it**
 
@@ -2867,13 +2871,13 @@ $ ./build/ripwire . --quality-delta
 
 - New-symbol rows are still PRINTED (they are the debt you are adding — read them), they just never gate;
 - LIMIT: origin is canonId (path::scope::name) identity, so a RENAMED/MOVED symbol reads as new and a regression carried in with the move will not gate.
-- The read-only MCP quality_delta verb applies the SAME staleness test but never deletes.
+- error-masking = a NEW empty/pass/comment-only handler, or log-only (a broad handler whose body only logs and never names the error) or rethrow-only (the sole handler re-throws it unchanged);
 
 ### `--quality-delta=REV|A..B`
 
-**Answers:** the same 10-kind report between two committed trees — a whole branch at once the same 10-kind report between two COMMITTED TREES instead of the working tree vs a baseline — the WAVE-level measurement (=A..B = tree B against tree A;
+**Answers:** the same 11-kind report between two committed trees — a whole branch at once the same 11-kind report between two COMMITTED TREES instead of the working tree vs a baseline — the WAVE-level measurement (=A..B = tree B against tree A;
 
-=REV = that commit against its FIRST PARENT; an EMPTY side of the range means HEAD). Same grammar --dmm= takes, and A...B is REFUSED rather than read as A..B. Use it to measure a whole integration branch at once (--quality-delta=<merge-base>..<head>): per-lane checks each compare against their own baseline and cannot see a regression the WAVE introduced. Identical output contract to the bare form — same kinds, gating="N", exit 2, and the same .ripwire_quality_acks ratchet (acks are keyed root-relative, so a ledger recorded from working-tree runs applies unchanged). base_ref= and target_ref= disclose the two RESOLVED shas. No sidecar is read, written or deleted by this form, and at= is omitted: the two refs ARE the anchor. A==B is a legal, empty, exit-0 comparison. ONE KIND CANNOT BE MEASURED HERE and says so as churn="unavailable": short-horizon-churn needs git history at the tree being judged, and both trees are materialized OUT of the repo into temp dirs. The other 9 kinds are computed exactly as the bare form computes them.
+=REV = that commit against its FIRST PARENT; an EMPTY side of the range means HEAD). Same grammar --dmm= takes, and A...B is REFUSED rather than read as A..B. Use it to measure a whole integration branch at once (--quality-delta=<merge-base>..<head>): per-lane checks each compare against their own baseline and cannot see a regression the WAVE introduced. Identical output contract to the bare form — same kinds, gating="N", exit 2, and the same .ripwire_quality_acks ratchet (acks are keyed root-relative, so a ledger recorded from working-tree runs applies unchanged). base_ref= and target_ref= disclose the two RESOLVED shas. No sidecar is read, written or deleted by this form, and at= is omitted: the two refs ARE the anchor. A==B is a legal, empty, exit-0 comparison. ONE KIND CANNOT BE MEASURED HERE and says so as churn="unavailable": short-horizon-churn needs git history at the tree being judged, and both trees are materialized OUT of the repo into temp dirs. The other 10 kinds are computed exactly as the bare form computes them.
 
 **Try it**
 
@@ -3346,11 +3350,11 @@ $ ./build/ripwire . --slice-depth=3
 _Hold a LOCATION, not a name: the enclosing-definition chain at FILE:LINE (a compiler error, a diff hunk, a stack frame), outermost -> innermost._
 
 ```
-$ ./build/ripwire . --at=src/graph.h:4432
+$ ./build/ripwire . --at=src/graph.h:4645
 <!-- ripwire at: the ENCLOSING-DEFINITION CHAIN at one FILE:LINE seed. p= the resolved file, l= the 1-based seed line, sym= the innermost enclosing definition's name (what the same seed resolves to in a selector position), chain= the row count. Rows are INDEXED definitions only, outermost first, innermost last: n= the definition's name, t= its kind tag, l= its own start line, el= its end line (1-based, inclusive). A namespace or any construct the index does not carry is NOT a row, so an outer scope can be absent rather than misnamed; a seed line inside no indexed definition is refused, never served as an empty chain. The same seed composes into any SYM selector as @FILE:LINE (callers, callees, impact, around, expand, uses, edit-check, slice, safe-delete, path, connect) and resolves to the innermost row. -->
 <!-- root= on this element is the crawl root every p= below is RELATIVE to (single-root runs only; absent => p= is the path ingest itself used, unchanged). -->
-<at p="src/graph.h" l="4432" sym="rankGraphTeleport" chain="1" root=".">
-<s n="rankGraphTeleport" t="fn" l="4432" el="4460"/>
+<at p="src/graph.h" l="4645" sym="rankGraphTeleport" chain="1" root=".">
+<s n="rankGraphTeleport" t="fn" l="4645" el="4673"/>
 </at>
 ```
 
@@ -4199,7 +4203,9 @@ $ ./build/ripwire . --skipped
 
 ### `--scan-skill=FILE`
 
-**Answers:** scan a single skill file before installing (any file, not just .md)
+**Answers:** scan a single skill file before installing (any file, not just .md) EXFILTRATE:net-exfil (a network verb plus a $VAR or base64 on one fenced line) needs a destination: a verb named but not run, as in command -v curl, does not fire.
+
+It is CRITICAL only when a credential-shaped source is on that line: a credential-named var, an Authorization: header with a var, an env dump or a key file. Otherwise it is WARN and the row says why="no-cred-source". A sensitive file read fed into an upload (cat /etc/passwd | curl ... @-, curl -d @.env ...) is CRITICAL with or without a var: why="sensitive-read-upload".
 
 **Try it**
 
@@ -4210,11 +4216,13 @@ $ ./build/ripwire --scan-skill=skills/ripwire-orient/SKILL.md
 <skillscan files="1" findings="0" verdict="clean"></skillscan>
 ```
 
+**Shaped by:** `--scan-skills`
+
 ### `--scan-skills[=DIR]`
 
 **Answers:** scan a skills directory before installing — every text file, .md and .sh alike scan DIR (or .agents/skills/ + ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/ + ${CODEX_HOME:-~/.codex}/skills/).
 
-EVERY text file, .md and .sh alike — a skill dir's executables are the files most worth scanning. skipped= counts what it could not scan (binary content, or unreadable); denylisted subtrees (.git, node_modules, build, ...) are not descended and the stderr tally says how many for vulnerabilities
+EVERY text file, .md and .sh alike — a skill dir's executables are the files most worth scanning. skipped= counts what it could not scan (binary content, or unreadable); denylisted subtrees (.git, node_modules, build, ...) are not descended and the stderr tally says how many. The bare form never reads a positional root: one that is not the current directory is refused (exit 3, use --scan-skills=DIR), and its answer names the directories it walked in dirs=
 
 **Try it**
 
@@ -4228,6 +4236,7 @@ $ ./build/ripwire --scan-skills=skills
 **Caveats (stated by the binary):**
 
 - skipped= counts what it could not scan (binary content, or unreadable);
+- The bare form never reads a positional root: one that is not the current directory is refused (exit 3, use --scan-skills=DIR), and its answer names the directories it walked in dirs=
 
 ### `--force`
 
@@ -4389,7 +4398,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=0ee982e27b1d8ad7 entries=730
+ripwire legend dictionary ripwire.dict/v1 dictv=0e543e1e6a3fe37d entries=750
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)
@@ -4771,12 +4780,23 @@ $ ./build/ripwire '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jso
 ... [28 more line(s); run it to see the whole thing]
 ```
 
-**Shaped by:** `--no-stable`, `--no-redact`, `--agent`, `--lsp`, `--listen`
+**Shaped by:** `--no-stable`, `--no-redact`, `--agent`, `--mcp-tools`, `--lsp`, `--listen`
 
 **Caveats (stated by the binary):**
 
 - A root that is $HOME itself (a git repository or not), a filesystem or drive root, or a system tree (/usr, /etc, /System, %WINDIR% ...) is refused with "no project root: <dir> is a home/system directory;
 - Each tool call over the --max-memory limit is refused by name;
+
+### `--mcp-tools=LIST`
+
+**Answers:** list only these MCP tools (names and/or the core/full profiles, default full).
+
+A comma list of tool names and/or profiles, unioned. core = explore, batch, from_trace, impact, uses, fetch_body, edit_check, quality_delta (the loop the server's own instructions teach); full = all tools, the default. A client that loads every schema at session start pays only for the listed ones. initialize announces the subset; calling an unlisted tool is refused with the flag that enables it. The list is not access control: batch sub-queries still reach hidden verbs. An unknown, repeated or empty name exits 1. `ripwire wrap AGENT --mcp-tools=LIST` writes it into the server command (claude, cursor, windsurf, gemini, opencode).
+
+**Caveats (stated by the binary):**
+
+- calling an unlisted tool is refused with the flag that enables it.
+- The list is not access control: batch sub-queries still reach hidden verbs.
 
 ### `--lsp`
 

@@ -1396,8 +1396,12 @@ inline ChurnRanking churnDecayRanking( const MainDispatch& d, const rw::SinceSco
     {
         ranked.rank.assign( d.ing.symbols.size(), 0.0f );
     }
-    std::string window = churnWindowStamp( churnDecayWindowLabel( isScoped ? std::string_view( d.cfg.since ) : std::string_view( "all-history" ) ),
-                                           mined.anyHistory );
+    // 0.6.6 command sweep: "all-history" over a depth-1 clone's single commit was false — the decay mined only what
+    // was fetched. A shallow clone's unscoped span is named for what it is, and the stamp says why.
+    const bool  shallow = gitstamp::isShallow( d.root );
+    std::string window  = churnWindowStamp( churnDecayWindowLabel( isScoped ? std::string_view( d.cfg.since )
+                                                                            : std::string_view( shallow ? "fetched-history" : "all-history" ) ),
+                                            mined.anyHistory, shallow );
     discloseUniformChurnFallback( mined.anyHistory, stubbed, verbLabel, window );
     ChurnRanking cr{ std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, !stubbed } };
     // ONE build + ONE sort of the decayed rows, shared by both blocks (gitmine.h decayedRecentRowsSorted).
@@ -1445,7 +1449,8 @@ inline ChurnRanking churnRankedGraph( const MainDispatch& d )
     // F1: the DEFAULT window's stamp names the anchor that produced it ("18mo@HEAD"); an ACTIVE --since is
     // the user's own value and is stamped verbatim, exactly as before.
     const std::string  defaultWindow = rw::defaultWindowLabel( d.root, "18mo" );
-    std::string        window = churnWindowStamp( isScoped ? std::string_view( d.cfg.since ) : std::string_view( defaultWindow ), hasChurnEvidence );
+    std::string        window = churnWindowStamp( isScoped ? std::string_view( d.cfg.since ) : std::string_view( defaultWindow ), hasChurnEvidence,
+                                                  gitstamp::isShallow( d.root ) );   // 0.6.6: the window mined only the fetched commits
     // stubbed=false: this is the undecayed --rank-by=churn arm, which --in=DIR does not ride (it is refused
     // outside churn-decay), so a ranking really did run and the uniform sentence is the true one.
     discloseUniformChurnFallback( hasChurnEvidence, false, verbLabel, window );
@@ -4267,6 +4272,19 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
 
     if( cfg.mcp )
     {
+        // --mcp-tools: validated here, against mcp.h's tool table (cli.h does not include it) — before either
+        // transport starts, so a bad name is an exit 1 with the valid names, never a server with a surprise catalog.
+        McpToolSpec tools{ .mask = kMcpAllToolsMask };
+        if( !cfg.mcpTools.empty() )
+        {
+            tools = mcpParseToolSpec( cfg.mcpTools );
+        }
+        if( !tools.refusal.empty() )
+        {
+            DISCLOSE( Diagnostics::answerRefused, "a bad --mcp-tools list exits 1 with the reason and the valid names on stderr; no server starts" );
+            rw::emitTo( stderr, "ripwire: {}\n", tools.refusal );
+            return 1;
+        }
         // --listen picks the remote Streamable-HTTP transport; otherwise stdio. Both
         // route every request through the SAME shared handler (mcp.h dispatchMcpLine) — byte-identical payloads.
         if( !cfg.listen.empty() )
@@ -4290,6 +4308,8 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             hc.stable           = cfg.stable;
             hc.noRedact         = cfg.noRedact;
             hc.allowRemoteEdits = cfg.allowRemoteEdits;
+            hc.toolMask         = tools.mask;
+            hc.toolSpec         = std::string( cfg.mcpTools );
             return runMcpHttp( hc );
         }
         // X7 (D3/D4): thread the SAME positional-root plumbing the HTTP branch above uses into the stdio
@@ -4300,7 +4320,8 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         {
             mcpRoots.emplace_back( r );
         }
-        return runMcp( cfg.topK, cfg.stable, cfg.noRedact, std::string( cfg.rootPath ), mcpRoots );   // P2-C: --mcp turns --stable on by default (set in parseArgs); A3-F3: the server redacts by default like the CLI
+        return runMcp( { .topK = cfg.topK, .stable = cfg.stable, .noRedact = cfg.noRedact, .root = std::string( cfg.rootPath ),
+                         .roots = mcpRoots, .toolMask = tools.mask, .toolSpec = std::string( cfg.mcpTools ) } );   // P2-C: --mcp turns --stable on by default (set in parseArgs); A3-F3: the server redacts by default like the CLI
     }
 
     // ── multi-root workspace refusals: each cut verb refuses with ONE clear stderr
@@ -4430,8 +4451,10 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         {
             rows.push_back( { path, f } );
         }
-        printSkillScanArtifact( stdout, rows, /*filesScanned=*/1, /*filesSkipped=*/0, cfg.legend == "full" );
-        rw::emitTo( stderr, "ripwire scan: {} finding(s) in {}\n", int( result.findings.size() ), path.c_str() );
+        const bool notFlowScanned = result.kind == SkillFileKind::OtherCode;
+        printSkillScanArtifact( stdout, rows, SkillScanTally{ 1, 0, notFlowScanned ? 1 : 0, {} }, cfg.legend == "full" );
+        rw::emitTo( stderr, "ripwire scan: {} finding(s) in {}{}\n", int( result.findings.size() ), path.c_str(),
+                    notFlowScanned ? " (a code file this scanner has no network-flow model for: not flow-scanned)" : "" );
         return skillScanExitCode( result.findings );
     }
 
@@ -4457,6 +4480,29 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
 
         // Determine directories to scan: explicit dir, or defaults. De-duplicate because CODEX_HOME may
         // intentionally name one of the other roots in an isolated/managed environment.
+        // Review M5: the bare form walks fixed skill homes and never the positional root, so `ripwire <dir> --scan-skills` used
+        // to answer files="0" verdict="clean" for a <dir> holding a CRITICAL script. A root other than the current directory is
+        // refused by name (exit 3, this verb's "never scanned it" code — 0/1/2 are verdicts) instead of answering for it.
+        if( cfg.scanSkillsDir.empty() )
+        {
+            namespace fs = std::filesystem;
+            std::error_code cwdEc;
+            const fs::path  cwd = fs::weakly_canonical( fs::current_path( cwdEc ), cwdEc );
+            for( const std::string_view root : cfg.roots )
+            {
+                std::error_code rootEc;
+                const fs::path  canon = fs::weakly_canonical( fs::path( std::string( root ) ), rootEc );
+                if( !VALIDATE( !cwdEc && !rootEc && canon == cwd, "a bare --scan-skills root must be the current directory" ) )
+                {
+                    DISCLOSE( Diagnostics::answerRefused, "main: bare --scan-skills with a positional root other than the cwd — exit 3 and one ripwire: refusal line on stderr (a dev build also prints its diagnostic trace)" );
+                    rw::emitTo( stderr, "ripwire: --scan-skills: the bare form scans ./.agents/skills and the Claude and Codex skill homes, "
+                                        "never the root '{}' — pass --scan-skills={} (or cd there) to scan that directory; no scan performed\n",
+                                root, root );
+                    return 3;
+                }
+            }
+        }
+
         std::vector<std::string> dirs;
         const auto addDir = [&]( std::string dir )
         {
@@ -4522,6 +4568,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         int      filesScanned  = 0;
         int      filesSkipped  = 0;          // seen but not scannable: binary, or unreadable
         int      prunedDirs    = 0;          // denylisted subtrees not descended
+        int      codeNotFlowScanned = 0;     // readable SkillFileKind::OtherCode files (a language with no network-flow model)
         int      maxSev        = 0;          // 0=clean, 1=warn, 2=critical
 
         for( const std::string& dir : dirs )
@@ -4614,6 +4661,10 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                 }
 
                 ++filesScanned;
+                if( res.kind == SkillFileKind::OtherCode )
+                {
+                    ++codeNotFlowScanned;
+                }
                 for( const SkillFinding& f : res.findings )
                 {
                     allRows.push_back( { p, f } );
@@ -4627,15 +4678,24 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             }
         }
 
-        printSkillScanArtifact( stdout, allRows, filesScanned, filesSkipped, cfg.legend == "full" );
+        std::string dirsWalked;   // bare form only: the answer names what it walked (review M5); a DIR form names its DIR itself
+        if( cfg.scanSkillsDir.empty() )
+        {
+            for( const std::string& d : dirs )
+            {
+                dirsWalked += ( dirsWalked.empty() ? "" : ";" ) + d;
+            }
+        }
+        printSkillScanArtifact( stdout, allRows, SkillScanTally{ filesScanned, filesSkipped, codeNotFlowScanned, dirsWalked }, cfg.legend == "full" );
 
         // Honest zero: "0 finding(s)" alone doesn't say whether that's because nothing was WARN/CRITICAL
         // or because there was nothing readable to scan. Naming the file count keeps a genuine "scanned
         // 0 skill files" (an empty/unpopulated dir — a real measurement) legible on its own, distinct from
         // this same verb's exit-3 refusal above (which never gets here). §B13.3 adds the other half of the
         // population to the same line: what the walk saw and could not scan, and what it did not descend.
-        rw::emitTo( stderr, "ripwire scan: {} finding(s) total ({} skill file(s) scanned, {} unscannable file(s) skipped, {} denylisted subtree(s) not descended)\n",
-                      totalFindings, filesScanned, filesSkipped, prunedDirs );
+        rw::emitTo( stderr, "ripwire scan: {} finding(s) total ({} skill file(s) scanned, {} unscannable file(s) skipped, {} denylisted subtree(s) not descended{})\n",
+                      totalFindings, filesScanned, filesSkipped, prunedDirs,
+                      codeNotFlowScanned > 0 ? ", " + std::to_string( codeNotFlowScanned ) + " code file(s) not flow-scanned" : std::string() );
         return maxSev;
     }
 

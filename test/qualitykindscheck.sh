@@ -4,6 +4,9 @@
 #   short-horizon-churn      — a symbol whose FILE had ≥2 commits in the last 14 days (from git commit
 #                              TIMESTAMPS vs HEAD's epoch, NOT wall-clock) that this diff rewrites again
 #   new-clone-of-reused-helper — a NEW clone of an existing helper with fan-in ≥ 3 (reuse-connectivity decline)
+# plus (§5) error-masking's two widened shapes, log-only and rethrow-only, per language — gating in Python,
+# report-only (sev="minor") elsewhere — and (§6) the eleventh kind, placeholder (an added stub or TODO),
+# which is new-symbol by construction and never gates.
 #
 # Each kind must fire ONLY on a regression vs baseline (never on pre-existing debt) and preserve the
 # quality-delta exit-2 contract. Uses git-init fixtures + the auto-vs-HEAD baseline path (same idiom as
@@ -359,6 +362,566 @@ if command -v xmllint >/dev/null 2>&1; then
     printf '%s' "$OSF" | xmllint --noout - 2>/dev/null && printf '%s' "$OAF" | xmllint --noout - 2>/dev/null && printf '%s' "$OCF" | xmllint --noout - 2>/dev/null \
         && ok "self/ambient churn: xml well-formed (self + both ambient outputs)" || no "self/ambient churn: xml malformed"
 fi
+
+
+# ── 5) ERROR-MASKING, WIDENED: log-only and rethrow-only (the 0.6.5 masking round) ───────────────────────
+#   One fixture per language, the same shape as §1: every function exists at the baseline with a handler
+#   that USES the error, and the working tree rewrites some of them into the two widened shapes while the
+#   rest become the near-misses the shapes must refuse (the error named in the log, a narrow except, a
+#   logger.exception, a wrapped re-throw, a re-throw that is not the only handler). A row fires only on the
+#   positive functions. Python is the one language whose two shapes GATE (kHandlerShapeGates, measured
+#   precision in docs/EVALS.md); everywhere else the same row is sev="minor" and the exit stays 0.
+qd_pair(){   # DIR FILE BASELINE EDIT → QD_OUT (the delta document) and QD_RC (its exit code)
+    local d="$WORK/$1"
+    mkdir -p "$d"
+    ( cd "$d" && git init -q && git config user.email t@t && git config user.name t )
+    printf '%s' "$3" > "$d/$2"
+    ( cd "$d" && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+    printf '%s' "$4" > "$d/$2"
+    cmp -s <( printf '%s' "$3" ) "$d/$2" && no "$1: the edit did not take (fixture identical to its baseline)"
+    QD_OUT="$( cd "$d" && "$BIN" . --quality-delta --no-cache 2>/dev/null )"
+    QD_RC=$?
+}
+qd_row(){ printf '%s' "$QD_OUT" | tr '>' '\n' | grep "<r kind=\"$1\" sym=\"$2\""; }   # KIND SYM → the row, or nothing
+qd_has(){   # LABEL KIND SYM WANT(gating|minor|new-symbol)
+    local row; row="$( qd_row "$2" "$3" )"
+    if [ -z "$row" ]; then no "$1: no $2 row on $3"; printf '%s\n' "$QD_OUT" | tr '>' '\n' | grep '<r '; return; fi
+    case "$4" in
+        gating)     printf '%s' "$row" | grep -q 'gating="1"' && ! printf '%s' "$row" | grep -q 'sev="minor"' \
+                        && ok "$1: $2 row on $3, gating" || no "$1: $2 row on $3 should gate: $row" ;;
+        minor)      printf '%s' "$row" | grep -q 'sev="minor"' && ! printf '%s' "$row" | grep -q 'gating=' \
+                        && ok "$1: $2 row on $3, sev=minor (report-only)" || no "$1: $2 row on $3 should be report-only: $row" ;;
+        new-symbol) printf '%s' "$row" | grep -q 'origin="new-symbol"' && ! printf '%s' "$row" | grep -q 'gating=' \
+                        && ok "$1: $2 row on $3, origin=new-symbol, never gating" || no "$1: $2 row on $3 should be new-symbol: $row" ;;
+    esac
+}
+qd_none(){  # LABEL KIND SYM WHY
+    if [ -z "$( qd_row "$2" "$3" )" ]; then ok "$1: no $2 row on $3 ($4)"; else no "$1: $2 row on $3 is a false positive ($4): $( qd_row "$2" "$3" )"; fi
+}
+
+# 5a) Python — both shapes gate.
+PYB='import logging
+log = logging.getLogger(__name__)
+
+def swallow():
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def rethrow():
+    try:
+        risky()
+    except ValueError as e:
+        recover(e)
+
+def named():
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def narrow():
+    try:
+        risky()
+    except ValueError as e:
+        recover(e)
+
+def tb():
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def wrapped():
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def routed():
+    try:
+        risky()
+    except KeyError as e:
+        recover(e)
+    except Exception as e:
+        recover(e)
+
+def risky():
+    return 1
+
+def recover(e):
+    return e
+'
+PYE='import logging
+log = logging.getLogger(__name__)
+
+def swallow():
+    try:
+        risky()
+    except Exception:
+        log.warning("failed")
+
+def rethrow():
+    try:
+        risky()
+    except ValueError:
+        raise
+
+def named():
+    try:
+        risky()
+    except Exception as e:
+        log.warning(f"failed: {e}")
+
+def narrow():
+    try:
+        risky()
+    except ValueError:
+        print("bad value, using the default")
+
+def tb():
+    try:
+        risky()
+    except Exception:
+        log.exception("failed")
+
+def wrapped():
+    try:
+        risky()
+    except Exception as e:
+        raise RuntimeError("wrapped") from e
+
+def routed():
+    try:
+        risky()
+    except KeyError:
+        raise
+    except Exception as e:
+        recover(e)
+
+def risky():
+    return 1
+
+def recover(e):
+    return e
+'
+qd_pair mask_py a.py "$PYB" "$PYE"
+qd_has  "masking (python)" error-masking swallow gating
+qd_has  "masking (python)" error-masking rethrow gating
+qd_none "masking (python)" error-masking named   "the log names the error"
+qd_none "masking (python)" error-masking narrow  "a narrow except states its cause in its type"
+qd_none "masking (python)" error-masking tb      "logger.exception writes the traceback"
+qd_none "masking (python)" error-masking wrapped "a wrapped re-raise is not unchanged"
+qd_none "masking (python)" error-masking routed  "a re-raise ahead of a broader sibling routes, it is not redundant"
+[ "$QD_RC" = 2 ] && ok "masking (python): a new log-only / rethrow-only construct in an existing symbol exits 2" \
+                 || no "masking (python): should exit 2 (got $QD_RC)"
+
+# 5b) TypeScript — the same two shapes, report-only.
+TSB='export function swallow(): void { try { risky(); } catch (e) { recover(e); } }
+export function rethrow(): number { try { return risky(); } catch (e) { return recover(e); } }
+export function named(): number { const n = 2; try { return risky() * n; } catch (e) { recover(e); } return n; }
+export function wrapped(): void { try { risky(); } catch (e) { recover(e); } }
+function risky(): number { return 1; }
+function recover(e: unknown): number { return 0; }
+export function keepAlive(): number { return recover(0); }
+'
+TSE='export function swallow(): void { try { risky(); } catch (e) { console.error("failed"); } }
+export function rethrow(): number { try { return risky(); } catch (e) { throw e; } }
+export function named(): number { const n = 2; try { return risky() * n; } catch (e) { console.error(`failed ${e}`); } return n; }
+export function wrapped(): void { try { risky(); } catch (e) { throw new Error("wrapped", { cause: e }); } }
+function risky(): number { return 1; }
+function recover(e: unknown): number { return 0; }
+export function keepAlive(): number { return recover(0); }
+'
+qd_pair mask_ts a.ts "$TSB" "$TSE"
+qd_has  "masking (ts)" error-masking swallow minor
+qd_has  "masking (ts)" error-masking rethrow minor
+qd_none "masking (ts)" error-masking named   "the template names the error"
+qd_none "masking (ts)" error-masking wrapped "a wrapped throw is not unchanged"
+if [ "$QD_RC" = 0 ]; then ok "masking (ts): report-only rows never fire exit 2"; else no "masking (ts): should exit 0 (got $QD_RC)"; fi
+if [ "$QD_OUT" = "$( cd "$WORK/mask_ts" && "$BIN" . --quality-delta --no-cache 2>/dev/null )" ]; then ok "masking (ts): byte-identical run-to-run"; else no "masking (ts): non-deterministic"; fi
+if command -v xmllint >/dev/null 2>&1; then
+    if printf '%s' "$QD_OUT" | xmllint --noout - 2>/dev/null; then ok "masking (ts): xml well-formed"; else no "masking (ts): xml malformed"; fi
+fi
+# The full legend defines the report-only sev="minor" exactly when such a row is present.
+( cd "$WORK/mask_ts" && "$BIN" . --quality-delta --no-cache --legend=full 2>/dev/null ) | grep -q 'widened shape that does not gate' \
+    && ok "masking (ts): the full legend explains a report-only error-masking row" \
+    || no "masking (ts): the full legend does not define the report-only error-masking row"
+
+# 5c) Java / C# / Kotlin / Ruby / Go / C++ — one positive and one near-miss each, all report-only.
+qd_pair mask_java A.java \
+'class A { void swallow() { try { risky(); } catch (Exception e) { recover(e); } }
+ void named() { try { risky(); } catch (Exception e) { recover(e); } }
+ void risky() {} }
+' \
+'class A { void swallow() { try { risky(); } catch (Exception e) { LOG.warn("failed"); } }
+ void named() { try { risky(); } catch (Exception e) { LOG.warn("failed " + e.getMessage()); } }
+ void risky() {} }
+'
+qd_has  "masking (java)" error-masking swallow minor
+qd_none "masking (java)" error-masking named "the log reads the error"
+
+qd_pair mask_cs A.cs \
+'class A { void Swallow() { try { Risky(); } catch (Exception ex) { Recover(ex); } }
+ void Filtered() { try { Risky(); } catch (Exception ex) { Recover(ex); } }
+ void Risky() {} }
+' \
+'class A { void Swallow() { try { Risky(); } catch (Exception) { Console.WriteLine("failed"); } }
+ void Filtered() { try { Risky(); } catch (Exception ex) when (ex.HResult == 1) { Console.WriteLine("failed"); } }
+ void Risky() {} }
+'
+qd_has  "masking (c#)" error-masking Swallow minor
+qd_none "masking (c#)" error-masking Filtered "a when-filtered handler is conditional"
+
+qd_pair mask_kt a.kt \
+'fun swallow() { try { risky() } catch (e: Exception) { recover(e) } }
+fun rethrow() { try { risky() } catch (e: IOException) { recover(e) } }
+fun risky() {}
+' \
+'fun swallow() { try { risky() } catch (e: Exception) { log.warn("failed") } }
+fun rethrow() { try { risky() } catch (e: IOException) { throw e } }
+fun risky() {}
+'
+qd_has  "masking (kotlin)" error-masking swallow minor
+qd_has  "masking (kotlin)" error-masking rethrow minor
+
+qd_pair mask_rb a.rb \
+'def swallow
+  risky
+rescue => e
+  recover(e)
+end
+
+def narrow
+  risky
+rescue IOError => e
+  recover(e)
+end
+
+def risky; end
+' \
+'def swallow
+  risky
+rescue => e
+  logger.warn("failed")
+end
+
+def narrow
+  risky
+rescue IOError
+  puts "no file"
+end
+
+def risky; end
+'
+qd_has  "masking (ruby)" error-masking swallow minor
+qd_none "masking (ruby)" error-masking narrow "a narrow rescue states its cause in its class"
+
+qd_pair mask_go a.go \
+'package p
+
+import "log"
+
+func swallow() {
+	err := risky()
+	if err != nil {
+		handle(err)
+	}
+}
+
+func fatal() {
+	err := risky()
+	if err != nil {
+		handle(err)
+	}
+}
+
+func risky() error { return nil }
+' \
+'package p
+
+import "log"
+
+func swallow() {
+	err := risky()
+	if err != nil {
+		log.Printf("failed")
+	}
+}
+
+func fatal() {
+	err := risky()
+	if err != nil {
+		log.Fatal("failed")
+	}
+}
+
+func risky() error { return nil }
+'
+qd_has  "masking (go)" error-masking swallow minor
+qd_none "masking (go)" error-masking fatal "log.Fatal ends the program, it does not continue"
+
+qd_pair mask_cpp a.cpp \
+'void risky();
+void rethrow() { try { risky(); } catch( ... ) { recover(); } }
+void routed() { try { risky(); } catch( const Oops& ) { recover(); } catch( ... ) { recover(); } }
+' \
+'void risky();
+void rethrow() { try { risky(); } catch( ... ) { throw; } }
+void routed() { try { risky(); } catch( const Oops& ) { throw; } catch( ... ) { recover(); } }
+'
+qd_has  "masking (c++)" error-masking rethrow minor
+qd_none "masking (c++)" error-masking routed "a re-throw ahead of a catch-all sibling routes, it is not redundant"
+
+# ── 6) PLACEHOLDER — the eleventh kind: a stub or TODO the change ADDED ───────────────────────────────────
+#   Never gates: every row is origin="new-symbol" by construction, including one that lands in a symbol that
+#   existed at the baseline (other() below). The near-misses are the ones the kind must not count: a TODO
+#   naming an issue, an @abstractmethod raise, a bare NotImplementedError as a METHOD body (the abstract-by-
+#   convention interface), a guard `raise NotImplementedError( "... not supported" )`, a TODO-ARM label, and a
+#   pre-existing TODO in an untouched function.
+PHB='import abc
+
+def other():
+    return 1
+
+def untouched():
+    # TODO: already here before the change
+    return 2
+
+class Base(abc.ABC):
+    def keep(self):
+        return 0
+'
+PHE='import abc
+
+def other():
+    # TODO: wire this up
+    return 1
+
+def untouched():
+    # TODO: already here before the change
+    return 2
+
+def later():
+    raise NotImplementedError
+
+def tracked():
+    # TODO(#123): tracked upstream
+    return 3
+
+def guard(x):
+    if x:
+        raise NotImplementedError("sharding is not supported")
+    return x
+
+def labelled():
+    # TODO-ARM: a label, not a todo
+    return 4
+
+class Base(abc.ABC):
+    def keep(self):
+        return 0
+
+    @abc.abstractmethod
+    def area(self):
+        raise NotImplementedError
+
+    def perimeter(self):
+        raise NotImplementedError
+'
+qd_pair stub_py a.py "$PHB" "$PHE"
+qd_has  "placeholder (python)" placeholder other new-symbol
+qd_has  "placeholder (python)" placeholder later new-symbol
+qd_none "placeholder (python)" placeholder untouched "a TODO the change did not add"
+qd_none "placeholder (python)" placeholder tracked   "the TODO names an issue"
+qd_none "placeholder (python)" placeholder guard     "a guard for an unsupported case is not a stub"
+qd_none "placeholder (python)" placeholder labelled  "TODO-ARM names something, it leaves nothing undone"
+qd_none "placeholder (python)" placeholder area      "an @abstractmethod raise is a contract"
+qd_none "placeholder (python)" placeholder perimeter "a bare NotImplementedError METHOD body is the abstract-by-convention interface"
+if [ "$QD_RC" = 0 ]; then ok "placeholder (python): placeholder rows never gate (exit 0)"; else no "placeholder (python): should exit 0 (got $QD_RC)"; fi
+if printf '%s' "$QD_OUT" | grep -q 'gating="0"'; then ok "placeholder (python): gating=0 on the header"; else no "placeholder (python): gating should be 0"; fi
+( cd "$WORK/stub_py" && "$BIN" . --quality-delta --no-cache --legend=full 2>/dev/null ) | grep -q 'placeholder is new-symbol by construction' \
+    && ok "placeholder (python): the full legend says why every placeholder row is new-symbol" \
+    || no "placeholder (python): the full legend does not define the placeholder origin rule"
+
+# 6b) the other spellings, one fixture each: every row new-symbol, exit 0.
+qd_pair stub_rs a.rs 'fn keep() -> i32 { 1 }
+' 'fn keep() -> i32 { 1 }
+fn later() -> i32 { todo!() }
+fn never() { unimplemented!("soon") }
+'
+qd_has "placeholder (rust)" placeholder later new-symbol
+qd_has "placeholder (rust)" placeholder never new-symbol
+
+qd_pair stub_ts a.ts 'export function keep(): number { return 1; }
+' 'export function keep(): number { return 1; }
+export function later(): number { throw new Error("Method not implemented."); }
+export function guard(x: number): number { if (x) { throw new Error("negative input"); } return x; }
+'
+qd_has  "placeholder (ts)" placeholder later new-symbol
+qd_none "placeholder (ts)" placeholder guard "a throw that says nothing about implementation"
+
+qd_pair stub_cs A.cs 'class A { int Keep() { return 1; } }
+' 'class A { int Keep() { return 1; }
+ int Later() { throw new NotImplementedException(); }
+ int Guard() { throw new NotSupportedException(); } }
+'
+qd_has  "placeholder (c#)" placeholder Later new-symbol
+qd_none "placeholder (c#)" placeholder Guard "NotSupportedException is the deliberate refusal, not the stub"
+
+qd_pair stub_kt a.kt 'fun keep(): Int = 1
+' 'fun keep(): Int = 1
+fun later(): Int { return TODO("wire it") }
+'
+qd_has "placeholder (kotlin)" placeholder later new-symbol
+
+qd_pair stub_go a.go 'package p
+
+func keep() int { return 1 }
+' 'package p
+
+func keep() int { return 1 }
+
+func later() int { panic("not implemented") }
+
+func guard(x int) int {
+	if x < 0 {
+		panic("negative")
+	}
+	return x
+}
+'
+qd_has  "placeholder (go)" placeholder later new-symbol
+qd_none "placeholder (go)" placeholder guard "a panic that says nothing about implementation"
+
+qd_pair stub_java A.java 'class A { int keep() { return 1; } }
+' 'class A { int keep() { return 1; }
+ int later() { throw new UnsupportedOperationException("not implemented yet"); }
+ java.util.List<Integer> frozen() { throw new UnsupportedOperationException(); } }
+'
+qd_has  "placeholder (java)" placeholder later new-symbol
+qd_none "placeholder (java)" placeholder frozen "a bare UnsupportedOperationException is the immutable-collection refusal"
+
+qd_pair stub_cpp a.cpp 'int keep() { return 1; }
+' 'int keep() { return 1; }
+int later() { throw std::logic_error( "not implemented" ); }
+int never() { assert( false && "not implemented" ); return 0; }
+int unreachable() { assert( false && "unreachable" ); return 0; }
+'
+qd_has  "placeholder (c++)" placeholder later new-symbol
+qd_has  "placeholder (c++)" placeholder never new-symbol
+qd_none "placeholder (c++)" placeholder unreachable "assert(false) for an unreachable path is not a stub"
+
+# 6c) the kind costs no bytes where it has nothing to say: a diff that adds no stub and no TODO carries no
+#     placeholder row and no placeholder attribute anywhere in the document.
+qd_pair stub_none a.py 'def keep():
+    return 1
+' 'def keep():
+    return 2
+'
+printf '%s' "$QD_OUT" | grep -q 'placeholder' && no "placeholder: a stub-free diff mentions placeholder: $QD_OUT" \
+    || ok "placeholder: a stub-free diff carries no placeholder row or attribute"
+
+# 5l) 0.6.6 review: a log RECEIVER is a whole word, not a substring. isLogReceiver matched "log" anywhere in the last
+#     segment, so catalog / backlog / dialog read as loggers, and a Python handler that STORES the record
+#     (`except Exception: store.catalog.write(x)`) became a gating log-only row. The words log / logger / logging (first
+#     or last word of the segment, split on _ and camelCase) still qualify: logger.error and app_log.warning stay rows.
+LRB='def save_catalog(store, x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def save_backlog(x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def save_logged(x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+
+def save_app_log(x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+'
+LRE='def save_catalog(store, x):
+    try:
+        risky()
+    except Exception:
+        store.catalog.write(x)
+
+def save_backlog(x):
+    try:
+        risky()
+    except Exception:
+        backlog.info(x)
+
+def save_logged(x):
+    try:
+        risky()
+    except Exception:
+        logger.error("save failed")
+
+def save_app_log(x):
+    try:
+        risky()
+    except Exception:
+        app_log.warning("save failed")
+'
+qd_pair logrecv m.py "$LRB" "$LRE"
+qd_none "5l python" error-masking save_catalog "store.catalog.write stores the record: catalog is not a logger"
+qd_none "5l python" error-masking save_backlog "backlog.info: backlog is not a logger"
+qd_has  "5l python" error-masking save_logged gating
+qd_has  "5l python" error-masking save_app_log gating
+
+# 5m) 0.6.6 review: the error-masking QUERY group had a 5000-per-tag budget over a PATH-sorted list, and
+#     empty-catch-java captures EVERY catch body. At the baseline A.java holds 6000 catches, so the cut fell inside it
+#     and Z.java's untouched empty catch was never counted; the working tree trims A.java to 100 catches, the cut moved
+#     past Z.java, and victim() read as a PRE-EXISTING error-masking regression that gated exit 2 on code nobody touched.
+#     Both groups are unbounded now: no victim row, exit 0.
+CAPD="$WORK/maskcap"; mkdir -p "$CAPD"
+( cd "$CAPD" && git init -q && git config user.email t@t && git config user.name t )
+mkjava(){   # N methods of 100 catches each → A.java
+    python3 - "$1" <<'PY' >"$CAPD/A.java"
+import sys
+n = int( sys.argv[1] )
+print( "class A {" )
+for m in range( n ):
+    print( "  void m%d() {" % m )
+    for c in range( 100 ):
+        print( "    try { f(); } catch (Exception e) { use(e); }" )
+    print( "  }" )
+print( "  void f() {}\n  void use(Exception e) {}\n}" )
+PY
+}
+mkjava 60
+printf 'class Z {\n  void victim() {\n    try { g(); } catch (Exception e) { }\n  }\n  void g() {}\n}\n' >"$CAPD/Z.java"
+( cd "$CAPD" && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+mkjava 1
+CAPOUT="$( cd "$CAPD" && "$BIN" . --quality-delta --no-cache 2>/dev/null )"; CAPRC=$?
+if printf '%s' "$CAPOUT" | tr '>' '\n' | grep -q '<r kind="error-masking" sym="[^"]*victim"'; then
+    no "5m cap: untouched Z.victim reads as an error-masking regression (the per-tag cut moved): $( printf '%s' "$CAPOUT" | tr '>' '\n' | grep 'victim' | head -2 )"
+else ok "5m cap: 6000 -> 100 catches in A.java leaves untouched Z.victim with no error-masking row"; fi
+if [ "$CAPRC" = 0 ]; then ok "5m cap: the delta exits 0 (removing catches is not a regression)"; else no "5m cap: the delta exits $CAPRC, want 0"; fi
+
+# 5n) 0.6.6 review: mentionsName (does a log call's argument name the caught error?) recursed with no depth bound, and
+#     no nesting refusal covers Python: a 20000-deep argument overflowed the worker stack (SIGBUS, exit 138). It now
+#     reads at most kMentionsNameMaxDepth levels and answers "mentions it" past that — a miss, never a finding.
+DEEPD="$WORK/deepnest"; mkdir -p "$DEEPD"
+( cd "$DEEPD" && git init -q && git config user.email t@t && git config user.name t && printf 'def ok():\n    return 1\n' >m.py && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+python3 -c 'N = 20000; print( "def deep(x):\n    try:\n        risky()\n    except Exception as e:\n        log.error(" + "f(" * N + "x" + ")" * N + ")" )' >"$DEEPD/m.py"
+DEEPOUT="$( cd "$DEEPD" && "$BIN" . --quality-delta --no-cache 2>/dev/null )"; DEEPRC=$?
+if [ "$DEEPRC" -lt 128 ]; then ok "5n deep: a 20000-deep log argument does not overflow the stack (rc=$DEEPRC)"; else no "5n deep: --quality-delta died on a 20000-deep log argument (rc=$DEEPRC)"; fi
+printf '%s' "$DEEPOUT" | tr '>' '\n' | grep -q '<r kind="error-masking" sym="deep"' \
+    && no "5n deep: a handler too deep to read is reported log-only (the bound must answer 'mentions it')" \
+    || ok "5n deep: past the depth bound the handler is not called log-only"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

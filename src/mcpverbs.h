@@ -524,16 +524,20 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
 // no forked logic. Unlike `merge_scout` (CLI-only: it takes a hand-authored ref LIST), these three take no
 // multi-ref UX — a symbol, an optional substring filter, nothing else — so they carry over cleanly.
 //
-// `stray_content` and `whereis` read OTHER refs' blobs, which the MCP index never ingested; they use `root`
-// only, and deliberately do NOT touch getIndex() (no rebuild, no staleness coupling). `flags` DOES need the
-// crawled file list, so it goes through getIndex() like every other index-backed verb.
+// `stray_content` and `whereis` read OTHER refs' blobs, which the MCP index never ingested. `stray_content`
+// uses `root` only and does NOT touch getIndex(); `whereis` reads the index for one thing, the HEAD rows'
+// def labels (§A7 below), exactly as its CLI twin does. `flags` needs the crawled file list, so it goes
+// through getIndex() like every other index-backed verb.
 
 // `whereis` verb: which ref's tree defines or mentions SYM. "" ⇒ not a git repo (the caller reports it).
 //
-// §A7: this surface passes NO WhereisEvidence, so its HEAD rows keep the lexical shape heuristic and the root
-// says so (head_labels="lexical"). That is deliberate and is the paragraph above's rule, not an oversight:
-// supplying the index's def sites means calling getIndex(), which would couple this verb to index staleness
-// for the sake of a LABEL. The CLI, which has already built an index for the run, supplies them.
+// §A7 (0.6.6 command sweep, reversing the earlier "no index for a label" rule): this surface used to pass NO
+// WhereisEvidence, so its HEAD rows kept the lexical shape heuristic — and that heuristic called a wrapped call
+// site kind="def" (`const auto ep = rw::escapeXml( …` read as a definition) where the CLI, holding the index,
+// said "ref". A false label is not a cheap label. The def sites now come from the same getIndex() every other
+// index-backed verb uses and the same crossref::whereisIndexDefSites the CLI calls, so HEAD rows and
+// head_labels= are identical on both surfaces (test/mcptwinclaimscheck.sh (A)). The lexical fallback is the
+// CLI's own: no indexed def of the name, or a working tree drifted from HEAD, and head_labels="lexical" says so.
 //
 // §B6 M4: `page` is the request's limit/offset (mcpPageArgs, above). writeWhereisPage is the SAME entry
 // point the CLI --whereis calls with cfg.pageLimit/cfg.pageOffset, so the legend's "raise the default cap
@@ -547,11 +551,7 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
 //     true and useless hits="0" shaped exactly like a name this repo never had. An agent holding a diff
 //     hunk or a stack frame — the caller this spelling exists for — got the wrong answer, confidently.
 //   * the near-miss on a zero — "is this a name this repo never had, or a keystroke away from one it has?"
-// The header above says this verb deliberately avoids getIndex(), and that reasoning is intact and kept:
-// it was about supplying def sites for a LABEL (head_labels= stays "lexical" here, which the root still
-// discloses), not about resolving the caller's own selector or explaining a zero. Both calls below are
-// LAZY — the seed one only when the selector starts with '@', the near-miss one only on an empty hit list
-// — so the ordinary request still touches no index and pays nothing. On an unresolvable seed the function
+// Both of those index reads, and the §A7 def sites above, share the one getIndex() build. On an unresolvable seed the function
 // returns "" with `seedFault` set, and the dispatcher speaks the shared refusal triple over -32602 rather
 // than answering a question the caller did not ask.
 inline std::string whereisText( const std::string& root, const std::string& symbol, const std::string& filter,
@@ -570,7 +570,8 @@ inline std::string whereisText( const std::string& root, const std::string& symb
         seedSpec = sel;
         sel      = getIndex( root ).ing.symbols[ seeded.front() ].name;
     }
-    crossref::WhereResult res = crossref::computeWhereis( root, sel, filter );
+    const std::vector<crossref::IndexDefSite> indexDefs = crossref::whereisIndexDefSites( getIndex( root ).ing, sel, root );
+    crossref::WhereResult res = crossref::computeWhereis( root, sel, filter, crossref::WhereisEvidence{ nullptr, indexDefs } );
     if( !res.ok )
     {
         return {};
@@ -755,8 +756,13 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // the UNION of all of their neighbours), count= = the un-windowed row total, hop_tested/hop_untested =
     // the partition over that full set.
     const auto [ chNextSelector, chNextIsBare ] = callHierarchyNextSelector( ing, chRows, name, referencingOnly );
+    // 0.6.6 command sweep: find_symbol carries TWO arrays, and count/hop_tested/hop_untested describe `calls`
+    // only — "count":0 sat beside "calledBy_total":67 on a leaf and read as a contradiction. The CLI key names
+    // stay (mcpattrparitycheck), and count_of names the array they total, right beside them
+    // (test/mcptwinclaimscheck.sh (C)). find_referencing_symbols has one array, so it needs no label.
     out += ",\"defs\":" + std::to_string( chRows.matches.size() )
          + ",\"count\":" + std::to_string( rowTotal )
+         + ( referencingOnly ? "" : ",\"count_of\":\"calls\"" )
          + ",\"hop_tested\":" + std::to_string( chTested.tested )
          + ",\"hop_untested\":" + std::to_string( chTested.untested )
          + declinedCallsKeyJson( chRows.declinedCalls )   // the CLI root's declined_calls=, for the direction count= describes
@@ -1214,6 +1220,7 @@ inline std::string cochangePartnersJson( const std::string& root, const std::str
          + ",\"partners\":" + std::to_string( ps.size() )
          + pageDisclosure( ccPab, sizeof( ccPab ), ccPw.end - ccPw.begin, ps.size(), ccPw.end,
                            page.limit, page.offset, /*discloseCap=*/true, kJsonPageSyntax )
+         + ( gitstamp::isShallow( root ) ? ",\"shallow\":true" : "" )   // 0.6.6: the CLI root's shallow="1", present-only
          + ",\"at\":" + atJson + ",\"rows\":[";
     bool first = true;
     for( std::size_t partnerIndex = ccPw.begin; partnerIndex < ccPw.end; ++partnerIndex )
@@ -1617,8 +1624,11 @@ inline std::string mentionsJson( const std::string& root, const std::string& sym
     // offset= pages the CLI's own stream.
     const PageWindow mnPw = pageWindow( fileRows.size(), effectiveRowCap( page.limit, kUseSiteRowCap ), page.offset );
     char             mnPab[ kPageDisclosureCap ];
+    const UnbacktickedDocs ub = unbacktickedDocsFor( ing, defs, fileRows, mnSingleRoot );   // the CLI twin's unbackticked_docs= / _unread=
     out += "\"docs\":" + std::to_string( fileRows.size() )
          + ",\"sections\":" + std::to_string( docs.size() )
+         + ( ub.count > 0 ? ",\"unbackticked_docs\":" + std::to_string( ub.count ) + ",\"unbackticked_docs_ceiling\":true" : std::string() )
+         + ( ub.unread > 0 ? ",\"unbackticked_unread\":" + std::to_string( ub.unread ) : std::string() )
          + pageDisclosure( mnPab, sizeof( mnPab ), mnPw.end - mnPw.begin, fileRows.size(), mnPw.end,
                            page.limit, page.offset, /*discloseCap=*/mnPw.end - mnPw.begin < fileRows.size(), kJsonPageSyntax )
          + ",\"files\":[";
@@ -2367,7 +2377,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
         // H5: the same legend the CLI --lego prints, and (issue #66) the same adjacent clause defining the
         // graph_unindexed= the root below carries — CLI and MCP are one wording by construction. H1: the unproven_defs=
         // clause rides as its own comment beside the closed literal, exactly as on the CLI.
-        rw::emitTo( mem, "<ctx>{}{}{}", kLegoLegend, graphUnindexedLegendComment( ix.g.unindexedFiles > 0 ).c_str(),
+        rw::emitTo( mem, "<ctx>{}{}{}", kLegoLegend, graphUnindexedLegendComment( rw::graphGaugeClauses( ix.g ) ).c_str(),
                     unprovenDefsVerbComment( UnprovenDefsVerb::Lego, unprovenDefs > 0, "<!-- ripwire lego: " ).c_str() );
         packLego( mem, ing, ix.g.implementors, flat, 1, redact, &impure, focus, /*withPaths=*/true,
                   ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),    // R-R: root-relative <iface p=>
@@ -2451,6 +2461,9 @@ inline std::optional<std::string> ownersText( const std::string& root, const std
                        "file holding the FIRST of them (lowest node id), so defs= above 1 means the other definitions' files "
                        "were NOT analysed. An @FILE:LINE seed rebinds to the innermost definition enclosing that line "
                        "(sym= names it) and covers exactly that definition's file -->" );
+    // 0.6.6: the CLI --owners qualification, on the same element in the same slot (before at=).
+    const bool owShallow = gitstamp::isShallow( root );
+    rw::emitRaw( mem, gitstamp::shallowLegend( owShallow ) );
     // §P8: the SAME <owners> element the CLI emits, so it takes the same at=. Stamping only the CLI half
     // would re-create, inside one element name, the two-shapes-one-spelling problem this round removes.
     // §B11.3-class: and the same of=/defs= fold disclosure, for the same reason.
@@ -2478,10 +2491,10 @@ inline std::optional<std::string> ownersText( const std::string& root, const std
     // Path order is kept, not ranked: it is the CLI's paging stream, and offset= must name the same rows there.
     const PageWindow owPw = pageWindow( printRows.size(), effectiveRowCap( page.limit, kCallHierarchyRowCap ), page.offset );
     char             owPab[ kPageDisclosureCap ];
-    rw::emitTo( mem, "<owners files=\"{}\"{}{}{}{}>", ownerships.size(), owSymAttr.c_str(),
+    rw::emitTo( mem, "<owners files=\"{}\"{}{}{}{}{}>", ownerships.size(), owSymAttr.c_str(),
                   pageDisclosure( owPab, sizeof( owPab ), owPw.end - owPw.begin, printRows.size(), owPw.end,
                                   page.limit, page.offset, /*discloseCap=*/owPw.end - owPw.begin < printRows.size() ),
-                  owRootAttr.c_str(), gitstamp::atAttr( root ).c_str() );
+                  owRootAttr.c_str(), gitstamp::shallowAttr( owShallow ), gitstamp::atAttr( root ).c_str() );
     if( uniformCount > 0 )
     {
         rw::emitTo( mem, "<uniform authors=\"1\" bf=\"1\" share=\"1.00\" files=\"{}\"/>", uniformCount );
@@ -2623,11 +2636,14 @@ inline std::optional<std::string> impactText( const std::string& root, const std
         return std::string{}; // symbol not found → caller reports not-found
     }
 
-    const std::vector<NodeId> reach = transitiveCallers( g, seeds );
+    // 0.6.5: the CLI --impact's walk, keeping each node's hop depth, and its order (graph.h orderByDepthThenRank).
+    std::vector<std::uint32_t>       depth;
+    const std::vector<NodeId>        reach = transitiveCallersDepth( g, seeds, &depth );
     const auto [ rank, prIters, prConverged ] = rankGraph( g );
-    const RankDisclosure      prD{ prIters, prConverged, true };   // W2-F: CLI --impact discloses this; so does its twin
-    std::vector<NodeId>       show  = reach;
-    std::sort( show.begin(), show.end(), [ & ]( NodeId a, NodeId b ) { return rank[a] != rank[b] ? rank[a] > rank[b] : a < b; } );
+    const RankDisclosure             prD{ prIters, prConverged, true };   // W2-F: CLI --impact discloses this; so does its twin
+    std::vector<NodeId>              show  = reach;
+    orderByDepthThenRank( show, depth, rank );   // ranked before the page window cuts, exactly as on the CLI
+    const std::vector<std::uint32_t> byDepth = depthCounts( reach, depth );
 
     // A6: the identical isTestSymbol-seeded lens the CLI --impact now runs (graph.h::testSymbolForwardReach)
     // — mcpclidiffcheck compares root-attribute SETS between the two surfaces, so radius_tested=/
@@ -2660,13 +2676,15 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // Measured before the legend (#220 part 1): its imports_unresolved= decides whether that clause rides.
     ImportTier imports = impactImportTier( ing, seeds );
     sizeImportTier( imports, page.limit, symbol );   // cut-fix C: limit sizes the tier, as on the CLI
-    rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause, kImpactImportTierLegend,
+    rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause,
+                  reach.empty() ? "" : kImpactDepthLegend,           // 0.6.5: exactly when d=/by_depth= ride, as on the CLI
+                  kImpactImportTierLegend,
                   impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread ).c_str(),   // #220: exactly when the root carries them, as on the CLI
                   kTestedRowLegend, kImpactTestedPartitionLegend,   // A6
                   kTestedLensBlindSpotLegend,                       // F-02: rides with the partition, byte-identical to the CLI twin
                   unprovenDefsVerbLegend( UnprovenDefsVerb::Impact, unprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=, as on the CLI
                   declinedCallsLegendWithGate( declinedCalls > 0, g.gateDeclinedCalls > 0 ),         // exactly when the root carries declined_calls=, as on the CLI
-                  graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
+                  graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
     // "is it safe to change X?" reads as the WHOLE blast radius when it can be 3% of it. Same attributes,
     // same meaning as the CLI --impact — the two surfaces must not diverge on an honesty marker.
@@ -2681,8 +2699,9 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const bool         imSingleRoot = ing.realPaths.empty();
     const std::string  imRootPrefix = imSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
     const std::string  imRootAttr   = imSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
-    rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
+    rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
                   ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: where the CLI root carries it
+                  byDepthAttrXml( byDepth ),                                                                        // 0.6.5: the CLI root's by_depth=
                   imports.xmlAttrs.c_str(), radiusTested, radiusUntested, declinedCallsAttrXml( declinedCalls ).c_str(), imRootAttr.c_str(),
                   pageDisclosure( ipab, sizeof( ipab ), shownRows, show.size(), ipw.end, page.limit, page.offset, true ),
                   graphCountFloorAttrXml( g ).c_str(), renderDisclosure( prD, DiscloseAs::XmlAttrs ).c_str(),   // M15: gauge + marker
@@ -2690,9 +2709,9 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     for( std::size_t i = ipw.begin; i < ipw.end; ++i )
     { const Symbol& s = ing.symbols[ show[i] ];
       const std::string_view rp = imSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], imRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-      // A6: tested="1" only (never a literal 0) — see kTestedRowLegend.
-      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                    isTestedByReach( ing, impTestReach, show[i] ) ? " tested=\"1\"" : ""  ); }
+      // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= as on the CLI row.
+      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+                    depthRunAttrXml( show, depth, i, ipw.begin ), isTestedByReach( ing, impTestReach, show[i] ) ? " tested=\"1\"" : ""  ); }
     // the import tier's rows, after the symbol rows and under their own tag — a different unit, so a
     // different element (see the CLI arm and kImpactImportTierLegend for why they are never one number).
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
@@ -2873,9 +2892,14 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
         }
         return {};                                   // external="1" with real sites: a valid answer, not a typo
     }
+    // 0.6.6 command sweep: this used to say "no use-site under that spelling", which the loop above cannot
+    // know — it reads INDEXED reference edges only. A member access on a field the index does not hold (a
+    // TypeScript interface property: `row.valueToken`) is a real use-site this scan never sees. The refusal
+    // names exactly what was checked and where a textual answer lives (test/mcptwinclaimscheck.sh (B)).
     return mcprefuse::notFound( ing, "symbol", symbol,
-                                "no indexed definition and no use-site under that spelling — external names with "
-                                "real use-sites are answered with external=\"1\", this one has neither" );
+                                "no indexed definition and no indexed reference under that spelling (unindexed member "
+                                "accesses are not scanned; the grep verb finds text uses) — external names with indexed "
+                                "references are answered with external=\"1\"" );
 }
 
 // The @FILE:LINE rebind the name-matching scan verbs serve through: a resolvable line-seed becomes the
@@ -2982,7 +3006,7 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
                        "{}{}-->{}", kUsesLegendOpen,
                   capLegendClause( computePageDisclosure( upageRows, sites.size(), upw.end,
                                                           page.limit, page.offset, usDiscloseCap ).active ),
-                  graphCountDisclosure( ix.g.unindexedFiles > 0 ).c_str(),
+                  graphCountDisclosure( rw::graphGaugeClauses( ix.g ) ).c_str(),
                   rootRelPathsLegend( ing.realPaths.empty() )  );   // R-E fix: the CLI --uses legend carries the
                                                                    // identical clause — floormarkcheck (4) pins
                                                                    // the two disclosure tails byte-identical.
@@ -3096,7 +3120,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // H5: the same brief floor legend + marker the CLI --path prints (verbs_navigate.h) — one wording, two transports.
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}-->{}", unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ).c_str(),
-                  graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
+                  graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
     rw::emitTo( mem, "<path from=\"{}\" to=\"{}\" from_p=\"{}\" to_p=\"{}\" from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                   ex( from ).c_str(), ex( to ).c_str(), loc( srcUsed ).c_str(), loc( dstUsed ).c_str(),
                   srcDefs.size(), dstDefs.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: as the CLI root carries it
@@ -3290,9 +3314,10 @@ inline constexpr char kConnectHeader[] =
     " edges=, groups=) is a FLOOR, never a total; read a zero as \"none found\", never as \"none exists\"."
     " graph_ambiguous=/graph_unresolved= are the whole graph's resolver gauge (calls split over several defs / calls"
     " whose in-repo defs were all language-filtered), the map header's ambiguous=/unresolved=."
-    " defs= on a terminal row = that NAME has N definitions and the lowest-id one was used (a C/C++ declaration without"
-    " a body yields to the lowest-id definition of its scope that has one); qualify with file:name"
-    " to pick another. Steiner rows never carry it."
+    " defs= on a terminal row = that NAME has N definitions; every one is scored and the one reaching the most other"
+    " terminals within radius= (fewest hops) is used, else the lowest id (a C/C++ declaration without a body yields to the"
+    " definition of its scope); ambiguous_terminal= on the root names terminals whose pick tied with another equally-joining"
+    " definition. Qualify with file:name to pick another. Steiner rows never carry it."
     " connects= on a Steiner row = how many DISTINCT symbols that intermediary joins (its callers plus its"
     " callees, the undirected view this search walks), so you can see how much the join actually explains;"
     " hub=\"1\" says connects= is at or above hub_floor= on the root, and hub_floor= is DERIVED from this graph,"
@@ -3338,7 +3363,8 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
                          std::string_view rootArg = {},    // R-E (2026-08-17): same single-root-only root
                                                            // argument serialize() takes — see its comment.
                                                            // Shared by CLI --connect and the MCP connect verb.
-                         std::size_t unprovenDefs = 0 )    // H1: the terminals' decl→def residue, SUMMED by the caller
+                         std::size_t unprovenDefs = 0,     // H1: the terminals' decl→def residue, SUMMED by the caller
+                         std::string_view ambiguousTerminals = {} )   // 0.6.6 D1: joinTerminalPicks' tied names, "" when none
 {
     std::vector<char> escBuf;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, escBuf ) ); };
@@ -3360,14 +3386,17 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     // may never take. Held in a NAMED string rather than charged from one call and emitted from another: the
     // bytes counted here and the bytes written below are now the same object, so the two cannot drift again
     // (same reason connectExtraBytes itself is built once). Gate: estchargecheck #17.
-    const std::string  connectUnindexedLegend = graphUnindexedLegendComment( g.unindexedFiles > 0 );
+    const std::string  connectUnindexedLegend = graphUnindexedLegendComment( rw::graphGaugeClauses( g ) );
     // H1: the residue attribute and its clause are two more things this document carries ahead of its payload, charged
     // the way the unindexed clause above is — named once, counted from the same objects that are written. Both are empty
     // at zero, so an answer that dropped nothing prices and emits byte-identically.
     const std::string  connectUnprovenAttr   = unprovenDefsAttrXml( unprovenDefs );
     const std::string  connectUnprovenLegend = unprovenDefsVerbComment( UnprovenDefsVerb::Connect, unprovenDefs > 0, "<!-- ripwire connect: " );
+    // 0.6.6 D1: the tied-terminal names, charged like the residue attribute above; absent (0 bytes) when no pick tied
+    const std::string  connectAmbiguousAttr = ambiguousTerminals.empty() ? std::string() : ( " ambiguous_terminal=\"" + ex( ambiguousTerminals ) + "\"" );
     const std::size_t  connectExtraBytes = connectRootAttr.size() + std::strlen( rootRelPathsLegend( !rootArg.empty() ) )
-                                         + connectUnindexedLegend.size() + connectUnprovenAttr.size() + connectUnprovenLegend.size();
+                                         + connectUnindexedLegend.size() + connectUnprovenAttr.size() + connectUnprovenLegend.size()
+                                         + connectAmbiguousAttr.size();
 
     // §2.4a: the derived hub threshold every Steiner row's connects= is read against, computed ONCE (it is a
     // property of the graph, not of a row) and named on the root so the label is never a bare assertion.
@@ -3580,9 +3609,10 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     }
     rw::emitTo( out, "{}{}{}{}", rw::cstr( kConnectHeader ), connectUnindexedLegend.c_str(), connectUnprovenLegend.c_str(),
                 rootRelPathsLegend( !rootArg.empty() ) );
-    rw::emitTo( out, "<connect terminals=\"{}\" nodes=\"{}\" edges=\"{}\" radius=\"{}\" groups=\"{}\"{} est_tokens=\"{}\" hub_floor=\"{}\"{}{}{}{}{}>",
+    rw::emitTo( out, "<connect terminals=\"{}\" nodes=\"{}\" edges=\"{}\" radius=\"{}\" groups=\"{}\"{}{} est_tokens=\"{}\" hub_floor=\"{}\"{}{}{}{}{}>",
                   res.terminals.size(), nodeTotal, edgeTotal, res.radius, connectedGroups,
                   connectUnprovenAttr.c_str(),   // H1: beside the counts it qualifies; absent at zero
+                  connectAmbiguousAttr,          // 0.6.6 D1: absent when no many-definition pick tied
                   estTokens, hubFloor,
                   rw::cstr( connectCeiling ), connectOverAttr,
                   truncated ? " truncated=\"paths\"" : "", connectRootAttr.c_str(),
@@ -3615,13 +3645,14 @@ inline std::string connectText( const std::string& root, const std::vector<std::
         unprovenDefs += termUnprovenDefs;
     }
 
+    const std::string   ambiguous = joinTerminalPicks( ing, g, symbolSpecs, terminals, radius );   // 0.6.6 D1: the CLI's pick, same call
     const ConnectResult res = connectSubgraph( g, terminals, radius );
     rw::MemoryStream stream;
     std::FILE* const mem = stream.open();
     if( !mem ) { err = "internal error"; return {}; }
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h).
     packConnect( mem, ing, g, res, redact, /*maxTokens=*/0, ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),
-                 unprovenDefs );
+                 unprovenDefs, ambiguous );
     std::optional<std::string> answer = mcpAnswerText( stream );
     if( !answer )
     {
@@ -3635,7 +3666,7 @@ inline std::string connectText( const std::string& root, const std::vector<std::
 //
 // quality_baseline WRITES the `.ripwire_quality_baseline` sidecar (a side-effect verb, like the edit verbs),
 // stamping the current HEAD sha. quality_delta is READ-ONLY: it reports ONLY what the working tree made WORSE
-// vs the baseline (10 kinds), honoring the exact precedence the CLI --quality-delta uses:
+// vs the baseline (11 kinds), honoring the exact precedence the CLI --quality-delta uses:
 //   (1) an explicit sidecar (from quality_baseline) wins — UNLESS it is STALE (pinned at a different HEAD),
 //   (2) else auto-compare vs git HEAD (computeHeadSnapshot), (3) else degrade with a clear message.
 // Both reuse quality::computeSnapshot / writeBaseline / selectBaseline / computeHeadSnapshot / gitHeadSha /

@@ -28,6 +28,9 @@
 --build	cmake's own flag ("cmake --build build -j") quoted in every build recipe (AGENTS.md, CLAUDE.md, CONTRIBUTING.md, docs/EVALS.md), not a ripwire flag
 --no-merges	git's own flag ("git log --no-merges -p -U0 --no-renames") quoted in the CHANGELOG's description of the churn-probe walk, not a ripwire flag
 --no-renames	git's own flag, same `git log` invocation as --no-merges above, not a ripwire flag
+--is-shallow-repository	git's own flag ("git rev-parse --is-shallow-repository") quoted in the CHANGELOG's shallow-history entry as the probe the history verbs share, not a ripwire flag
+--deepen	git's own flag ("git fetch --deepen=N") quoted in the CHANGELOG's shallow-history entry as the advice those verbs print, not a ripwire flag
+--unshallow	git's own flag ("git fetch --unshallow"), same advice as --deepen above, not a ripwire flag
 --name-only	git's own flag ("git diff --name-only HEAD") quoted in skills/ripwire-mcp/mcp-reference.md where the map-diff teleport source is described, not a ripwire flag
 --prefix	Homebrew's own flag ("brew --prefix") quoted in the CHANGELOG entry for install.sh's Homebrew detection, not a ripwire flag
 --gate	bench/locbench/compare_runs.py's own flag ("compare_runs.py --gate=two-tier") quoted in docs/EVALS.md §3, not a ripwire flag

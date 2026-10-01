@@ -1045,13 +1045,33 @@ inline const char* coMinRecurAttr( char* buf, std::size_t cap, int minRecur )
     return buf;
 }
 
+// multi-root §5: churn, co-change and ownership are mined from EVERY workspace root, so ONE depth-limited root qualifies
+// the merged answer (shallow="1") — probing the primary root alone left a full primary + shallow secondary unqualified.
+// `onlyRoot` narrows the probe to the one root a symbol-scoped run mines (--owners=SYM: the symbol's file's root).
+inline bool anyMinedRootShallow( const std::string& root, bool multiRoot, const std::vector<rw::WorkspaceRoot>& ws,
+                                 std::uint32_t onlyRoot = UINT32_MAX )
+{
+    if( !multiRoot )
+    {
+        return rw::gitstamp::isShallow( root );
+    }
+    for( std::uint32_t r = 0; r < ws.size(); ++r )
+    {
+        if( ( onlyRoot == UINT32_MAX || onlyRoot == r ) && rw::gitstamp::isShallow( ws[r].arg ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // §CLIO — one repo-wide co-change pair, and the document that renders them. `PR` used to be a struct local
 // to the --cochange branch; it moved out with the loop for the same reason the legends and the group form did.
 struct CoPairRow { std::uint32_t a, b, n; double deg, confAb, confBa; std::uint32_t recur; bool surprising; bool depCapable; };
 
 inline void emitCochangePairs( const rw::IngestResult& ing, const rw::Config& cfg, const std::vector<CoPairRow>& prs,
                                const std::string& windowLabel, std::uint32_t subWindows, const char* minRecAttr,
-                               int cap, const std::string& root )
+                               int cap, const std::string& root, bool coShallow )
 {
     std::vector<char> esc;
     const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( rw::escapeXml( s, esc ) ); };
@@ -1065,8 +1085,8 @@ inline void emitCochangePairs( const rw::IngestResult& ing, const rw::Config& cf
     // capped= reconcile pairs= against the rows that follow even with no --limit at all.
     const rw::PageWindow prpw = rw::pageWindow( prs.size(), rw::effectiveRowCap( cfg.pageLimit, cap ), cfg.pageOffset );
     char                 prab[ 192 ];
-    rw::emitTo( stdout, "{}{}{}", kCochangeRepoLegend, rw::kAtStampLegend, rw::rootRelPathsLegend( coSingleRoot ) );   // sweep: ditto
-    rw::emitTo( stdout, "<cochange pairs=\"{}\" window=\"{}\" sub_windows=\"{}\"{}{}{}{}>", prs.size(), windowLabel.c_str(), subWindows, minRecAttr,
+    rw::emitTo( stdout, "{}{}{}{}", kCochangeRepoLegend, rw::kAtStampLegend, rw::rootRelPathsLegend( coSingleRoot ), rw::gitstamp::shallowLegend( coShallow ) );   // sweep: ditto
+    rw::emitTo( stdout, "<cochange pairs=\"{}\" window=\"{}\" sub_windows=\"{}\"{}{}{}{}{}>", prs.size(), windowLabel.c_str(), subWindows, minRecAttr,
                  rw::pageDisclosure( prab, sizeof( prab ), prpw.end - prpw.begin, prs.size(), prpw.end,
                                      cfg.pageLimit, cfg.pageOffset, true ),
                  // R-E fix (2026-08-19): root= sits BEFORE at=, never after. at= stays the LAST attribute on
@@ -1075,6 +1095,7 @@ inline void emitCochangePairs( const rw::IngestResult& ing, const rw::Config& cf
                  // is a path-interpretation attribute and belongs with the identifying ones, which is also the
                  // slot --grep already puts it in. The first R-E landing appended it and displaced the stamp.
                  coRootAttr.c_str(),
+                 rw::gitstamp::shallowAttr( coShallow ),
                  rw::gitstamp::atAttr( root ).c_str()  );   // §P8: same anchor as the per-file path above
     for( std::size_t pairIndex = prpw.begin; pairIndex < prpw.end; ++pairIndex )
     {
@@ -1102,7 +1123,7 @@ inline void emitCochangePairs( const rw::IngestResult& ing, const rw::Config& cf
 inline void emitCochangeGroups( const rw::IngestResult& ing, const rw::Config& cfg,
                                 const std::vector<rw::CoViolation>& viol, const std::vector<rw::CoGroup>& groups,
                                 const std::string& windowLabel, std::uint32_t subWindows, const char* minRecAttr,
-                                int cap, const std::string& root )
+                                int cap, const std::string& root, bool cgShallow )
 {
     std::vector<char> esc;
     const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( rw::escapeXml( s, esc ) ); };
@@ -1118,12 +1139,13 @@ inline void emitCochangeGroups( const rw::IngestResult& ing, const rw::Config& c
     {
         coveredTotal += g.members.size();
     }
-    rw::emitTo( stdout, "{}{}{}", kCochangeGroupLegend, rw::kAtStampLegend, rw::rootRelPathsLegend( cgSingleRoot ) );
-    rw::emitTo( stdout, "<cochange groups=\"{}\" pairs_covered=\"{}\" cover=\"greedy\" window=\"{}\" sub_windows=\"{}\"{}{}{}{}>",
+    rw::emitTo( stdout, "{}{}{}{}", kCochangeGroupLegend, rw::kAtStampLegend, rw::rootRelPathsLegend( cgSingleRoot ), rw::gitstamp::shallowLegend( cgShallow ) );
+    rw::emitTo( stdout, "<cochange groups=\"{}\" pairs_covered=\"{}\" cover=\"greedy\" window=\"{}\" sub_windows=\"{}\"{}{}{}{}{}>",
                  groups.size(), coveredTotal, windowLabel.c_str(), subWindows, minRecAttr,
                  rw::pageDisclosure( gab, sizeof( gab ), gpw.end - gpw.begin, groups.size(), gpw.end,
                                      cfg.pageLimit, cfg.pageOffset, true ),
                  cgRootAttr.c_str(),                        // R-E fix: root= before at= — at= stays LAST (r26)
+                 rw::gitstamp::shallowAttr( cgShallow ),
                  rw::gitstamp::atAttr( root ).c_str() );
     for( std::size_t gi = gpw.begin; gi < gpw.end; ++gi )
     {
@@ -1234,7 +1256,14 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                              windowLabel.c_str(), ing.files.size(), ing.files.size(), gitstamp::atAttr( root ).c_str() );
                 return 0;
             }
-            rw::emitTo( stderr, "ripwire --hotspots: git unavailable / no history (need a git repo)\n" );
+            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            {
+                rw::emitTo( stderr, "ripwire --hotspots: {}\n", shallowWhy );
+            }
+            else
+            {
+                rw::emitTo( stderr, "ripwire --hotspots: git unavailable / no history (need a git repo)\n" );
+            }
             return 1;
         }
 
@@ -1329,6 +1358,11 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                      "upper bound on quietness, not a measure of it. "
                      "raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it) -->{}{}",
                      windowLabelInComment.c_str(), extentSuspectTerm, rw::kAtStampLegend, rw::rootRelPathsLegend( mvSingleRoot )  );   // sweep: at= was undefined on this screen
+        // 0.6.6 command sweep: on a depth-1 clone every churn= is 1 and score= is complexity alone, under a window label
+        // that names twelve months. The rows are what the fetched history says, so the root QUALIFIES them (shallow="1",
+        // defined here when present) rather than refusing. One probe for both.
+        const bool hsShallow = anyMinedRootShallow( root, multiRoot, ws );   // every mined root, not the primary alone
+        rw::emitRaw( stdout, gitstamp::shallowLegend( hsShallow ) );
         if( multiRoot )
         { // §5 comparability caveat: churn scales (commit-count conventions) differ per repo
             rw::emitTo( stdout, "<!-- multi-root workspace: churn is mined PER root — hotspot scores are comparable within a root, not across roots -->" );
@@ -1363,11 +1397,12 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
         const std::string unrankedSuspectAttr = unrankedExtentSuspect > 0
                                               ? " unranked_extent_suspect=\"" + std::to_string( unrankedExtentSuspect ) + "\""
                                               : std::string();
-        rw::emitTo( stdout, "<hotspots window=\"{}\" files=\"{}\" ranked=\"{}\" unranked_no_churn=\"{}\" unranked_no_complexity=\"{}\"{}{}{}{}>",
+        rw::emitTo( stdout, "<hotspots window=\"{}\" files=\"{}\" ranked=\"{}\" unranked_no_churn=\"{}\" unranked_no_complexity=\"{}\"{}{}{}{}{}>",
                      windowLabel.c_str(), ing.files.size(), order.size(), unrankedNoChurn, unrankedNoComplexity, unrankedSuspectAttr,
                      pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, order.size(), pw.end,
                                      cfg.pageLimit, cfg.pageOffset, true ),
                      mvRootAttr.c_str(),                    // R-E fix: root= before at= — at= stays LAST (r26)
+                     gitstamp::shallowAttr( hsShallow ),    // 0.6.6: churn from a depth-limited history, qualified on the root
                      gitstamp::atAttr( root ).c_str() );
         std::vector<char> esc;
         const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
@@ -1456,17 +1491,19 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
             char              pab[ 192 ];
             char              pminrec[ 40 ];
             coMinRecurAttr( pminrec, sizeof( pminrec ), cfg.cochangeRecur );
-            rw::emitTo( stdout, "{}{}{}", kCochangeFileLegend, rw::kAtStampLegend, rw::rootRelPathsLegend( mvSingleRoot ) );   // sweep: at= was undefined on this screen
+            const bool cfShallow = gitstamp::isShallow( fidRepo );   // 0.6.6: this file's repo is depth-limited — qualified on the root
+            rw::emitTo( stdout, "{}{}{}{}", kCochangeFileLegend, rw::kAtStampLegend, rw::rootRelPathsLegend( mvSingleRoot ), gitstamp::shallowLegend( cfShallow ) );   // sweep: at= was undefined on this screen
             // §P8 vocabulary: at="<sha>[+dirty]" — cochange is a PURE git-history product (every number in
             // it is mined from `git log`), and it was one of the last two verbs of that kind emitting numbers
             // with no anchor to the HEAD that produced them. Same gitstamp::atAttr every other repo-reading
             // verb already calls, placed LAST on the element to match --hotspots' existing attribute order.
-            rw::emitTo( stdout, "<cochange of=\"{}\" commits=\"{}\" window=\"{}\" sub_windows=\"{}\"{} partners=\"{}\"{}{}{}>",
+            rw::emitTo( stdout, "<cochange of=\"{}\" commits=\"{}\" window=\"{}\" sub_windows=\"{}\"{} partners=\"{}\"{}{}{}{}>",
                          ex( mvSingleRoot ? rw::sarif::rootRelativeUri( ing.files[fid], mvRootPrefix ) : std::string_view( ing.files[fid] ) ).c_str(),
                          commits, coWindowLabel.c_str(), subWindows, rw::cstr( pminrec ), ps.size(),
                          pageDisclosure( pab, sizeof( pab ), ppw.end - ppw.begin, ps.size(), ppw.end,
                                          cfg.pageLimit, cfg.pageOffset, true ),
                          mvRootAttr.c_str(),                // R-E fix: root= before at= — at= stays LAST (r26)
+                         gitstamp::shallowAttr( cfShallow ),
                          gitstamp::atAttr( root ).c_str() );
             for( std::size_t partnerIndex = ppw.begin; partnerIndex < ppw.end; ++partnerIndex )
             {
@@ -1517,7 +1554,14 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                 rw::emitTo( stdout, "<cochange pairs=\"0\" commits=\"0\" window=\"{}\" sub_windows=\"0\" shown=\"0\" capped=\"0\"{}></cochange>", coWindowLabel.c_str(), gitstamp::atAttr( root ).c_str() );
                 return 0;
             }
-            rw::emitTo( stderr, "ripwire --cochange: git unavailable / no history (need a git repo)\n" );
+            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            {
+                rw::emitTo( stderr, "ripwire --cochange: {}\n", shallowWhy );
+            }
+            else
+            {
+                rw::emitTo( stderr, "ripwire --cochange: git unavailable / no history (need a git repo)\n" );
+            }
             return 1;
         }
         // §CLIO: one cell per pair carrying BOTH the support count and the sub-window bitmask, rather than a
@@ -1605,11 +1649,11 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                 }
             }
             const std::vector<CoGroup> groups = cochangeViolationGroups( viol, ing.files.size() );
-            emitCochangeGroups( ing, cfg, viol, groups, coWindowLabel, subWindows, coMinRec, cap, root );
+            emitCochangeGroups( ing, cfg, viol, groups, coWindowLabel, subWindows, coMinRec, cap, root, anyMinedRootShallow( root, multiRoot, ws ) );
             return 0;
         }
 
-        emitCochangePairs( ing, cfg, prs, coWindowLabel, subWindows, coMinRec, cap, root );
+        emitCochangePairs( ing, cfg, prs, coWindowLabel, subWindows, coMinRec, cap, root, anyMinedRootShallow( root, multiRoot, ws ) );
         return 0;
     }
 
@@ -1682,7 +1726,14 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
         }
         if( ownerships.empty() )
         {
-            rw::emitTo( stderr, "ripwire --owners: git unavailable / no history (need a git repo with commits)\n" );
+            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            {
+                rw::emitTo( stderr, "ripwire --owners: {}\n", shallowWhy );
+            }
+            else
+            {
+                rw::emitTo( stderr, "ripwire --owners: git unavailable / no history (need a git repo with commits)\n" );
+            }
             return 1;
         }
 
@@ -1695,6 +1746,10 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
         const std::size_t              uniformCount  = countUniformOwnership( ownerships, cap );
         const std::vector<std::size_t> printRows     = ownershipRowsToPrint( ownerships, cap, detail );
 
+        // 0.6.6 command sweep: on a depth-1 clone every file came back bf="1" share="1.00" from ONE squashed commit,
+        // with at='s +shallow suffix the only hint. The shares are still what the fetched history says, so the answer
+        // is QUALIFIED rather than refused: shallow="1" on the root, and its clause in the legend. One probe.
+        const bool owShallow = anyMinedRootShallow( root, multiRoot, ws, ( multiRoot && onlyFileId != UINT32_MAX ) ? ing.fileRoot[ onlyFileId ] : UINT32_MAX );   // fileRoot is filled on a multi-root run only
         // XML comments forbid a literal "--" (G4): the flag is spelled "detail=1" below, not "--detail=1".
         rw::emitTo( stdout, "<!-- ripwire owners: recency-weighted author ownership (half-life=6mo). "
                      "bf=1 = one person holds >80% of weighted commits (bus-factor risk); "
@@ -1705,10 +1760,11 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                      "holding the FIRST of them (lowest node id), so defs= above 1 means "
                      "the other definitions' files were NOT analysed. Qualify with file:name to choose one. An @FILE:LINE "
                      "seed rebinds to the innermost definition enclosing that line (sym= names it) and covers exactly that "
-                     "definition's file -->{}{}{}",
+                     "definition's file -->{}{}{}{}",
                      // H1: the residue clause as its own comment, exactly when the root carries unproven_defs=
                      rw::unprovenDefsVerbComment( rw::UnprovenDefsVerb::Owners, owUnprovenDefs > 0, "<!-- ripwire owners: " ).c_str(),
-                     rw::kAtStampLegend, rw::rootRelPathsLegend( mvSingleRoot )  );   // sweep: ditto
+                     rw::kAtStampLegend, rw::rootRelPathsLegend( mvSingleRoot ),   // sweep: ditto
+                     gitstamp::shallowLegend( owShallow ) );   // 0.6.6: defined exactly when the root carries shallow="1"
         // §P8: --limit/--offset used to be accepted and ignored here (757 rows whatever you asked for). They
         // window `printRows`, which is already deterministic (files sorted by path). files= keeps meaning the
         // number of files ANALYSED — a different quantity from the <f/> row count, which is why the paging
@@ -1731,11 +1787,12 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                                      : " of=\"" + std::string( escapeXml( cfg.ownersSym, owSymEsc ) ) + "\"" + owSeedAttr
                                      + " defs=\"" + std::to_string( symDefCount ) + "\""
                                      + rw::unprovenDefsAttrXml( owUnprovenDefs );   // H1: beside the defs= it qualifies; absent at zero
-        rw::emitTo( stdout, "<owners files=\"{}\"{}{}{}{}>", ownerships.size(),
+        rw::emitTo( stdout, "<owners files=\"{}\"{}{}{}{}{}>", ownerships.size(),
                      pageDisclosure( owab, sizeof( owab ), owpw.end - owpw.begin, printRows.size(), owpw.end,
                                      cfg.pageLimit, cfg.pageOffset, false ),
                      owSymAttr.c_str(),
                      mvRootAttr.c_str(),                    // R-E fix: root= before at= — at= stays LAST (r26)
+                     gitstamp::shallowAttr( owShallow ),    // 0.6.6: bf=/share= from a depth-limited history, qualified on the root
                      gitstamp::atAttr( root ).c_str() );
         if( !detail && uniformCount > 0 )
         {
@@ -2521,7 +2578,7 @@ int emitCommunitiesReport( const rw::Config& cfg, const rw::IngestResult& ing, c
                  "shown=/capped= describe the member list printed here: this listing is fixed at the 5 top-ranked members and is NOT "
                  "widened by limit=/offset= (those page the MODULE rows). capped=1 means members were dropped; drill= names the verb "
                  "that pages the full member list of one module. raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it). "
-                 "{}{}-->{}", rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( cmSingleRoot ) );
+                 "{}{}-->{}", rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( cmSingleRoot ) );
     // §P11.6 drill=: the id= values below were the only identifiers this tool emitted that no verb took
     // back. The follow-up verb is named ON THE ROOT ELEMENT rather than in the doc comment, because an XML
     // comment may not contain a double hyphen (G4) and its entity escapes are NOT expanded — a caller would
@@ -2681,7 +2738,7 @@ int emitCommunityDrill( const rw::Config& cfg, const rw::IngestResult& ing, cons
                  "the NON-isolated communities (size>=2), the SAME predicate the communities-listing verb's modules= uses, so parent "
                  "and child agree. This verb PAGES its member list, so a cut page carries the standard quartet: total= is the full member "
                  "count the page was taken from, has_more=\"1\" says rows remain past this page, next_offset= is the value to paste back as "
-                 "offset= to get them, and limit=/offset= are the window you asked for (limit=0 means the default cap). {}{}-->{}", rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( cdSingleRoot ) );
+                 "offset= to get them, and limit=/offset= are the window you asked for (limit=0 means the default cap). {}{}-->{}", rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( cdSingleRoot ) );
     rw::emitTo( stdout, "<community id=\"{}\" size=\"{}\" dir=\"{}\" label=\"{}\" bridges=\"{}\" shown_bridges=\"{}\" bridges_capped=\"{}\" partition=\"{}\" modules=\"{}\"{}{}{}>",
                  want, std::size_t( mem.size() ), ex( presentation.directory[ want ] ).c_str(), ex( presentation.label[ want ] ).c_str(),
                  peers.size(), shownBridges, unsigned( shownBridges < peers.size() ), K, modulesNonIsolated,
@@ -2926,7 +2983,7 @@ std::optional<int> runZoom( const MainDispatch& d )
                      "carries children= (its child modules, none printed) instead of nesting. The top-level module rows are a WINDOW (shown=/capped=/total=/next_offset=, "
                      "default 40 by rank mass; limit=/offset= page it) and next= pastes the next page. {}{}-->",
                      bridge.size() > kZoomBridgeCap ? ", the 12 heaviest (shown_bridges=/bridges_capped=/bridges= of all pairs)" : "",
-                     rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+                     rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         // §P15/§P16: top_modules= is a real, deterministically-ordered row list (size desc, id asc — the same
         // rule --communities' module listing uses) that used to print EVERY top module unconditionally, so a
         // repo with hundreds of top modules had no way to page it. --limit/--offset now window it like --uses
@@ -3145,7 +3202,7 @@ std::optional<int> runStructureText( const MainDispatch& d )
         // which is precisely why a reader comparing two of the numbers is misled.
         rw::emitTo( stdout, "<!-- ripwire seams: cross-directory call edges NO test reaches (untested integration seams; a fact, not a mandate). module = parent dir; seam = caller-dir -> callee-dir, spelled from= and to=. Each seam pages its own edge rows with shown=/capped=; an edge names caller= at site p= calling callee= at site cp=. UNIT: untested= here counts cross-directory call EDGES. The test gate verb spells untested= over impacted SYMBOLS and the flip verb over the defs a gate lights, so the three numbers count three different things and must never be compared or summed across verbs. raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it). {}{}{}-->{}",
                      rw::modScopeLegend( stHasModScope ),   // #60: exactly when a <edge caller="<file-scope>"> row is
-                     rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( stSingleRoot ) );
+                     rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( stSingleRoot ) );
         // P2.1: two nested caps, neither previously marked — at most 20 seam PAIRS, and at most 5 example
         // EDGES inside each. Each <seam> gains shown= alongside its true untested= count.
         //

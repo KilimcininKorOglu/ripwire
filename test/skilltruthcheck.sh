@@ -108,9 +108,19 @@ mcpCount="$( "$BIN" wrap codex --force 2>/dev/null | sed -n 's/.*(\([0-9][0-9]*\
 grep -q "$mcpCount MCP verbs" "$MCPSKILL" \
     && ok "MCP skill matches the binary's $mcpCount MCP verbs" \
     || no "MCP skill does not match the binary's $mcpCount MCP verbs"
-grep -q '10 kinds' "$QUAL" \
-    && ok "quality skill documents the current 10 quality kinds" \
-    || no "quality skill still has a stale quality-kind count"
+# The kind count is read from the binary's own --help line, like the MCP count above, so adding a kind
+# moves this arm with the binary instead of leaving a literal behind to go stale.
+kindCount="$( "$BIN" --help=all 2>/dev/null | sed -n 's/.*--quality-delta .*across \([0-9][0-9]*\) kinds.*/\1/p' | head -1 )"
+[ -n "$kindCount" ] || kindCount=0
+[ "$kindCount" -gt 0 ] && grep -q "$kindCount kinds" "$QUAL" \
+    && ok "quality skill documents the binary's $kindCount quality kinds" \
+    || no "quality skill does not match the binary's quality-kind count ($kindCount)"
+# EVERY "N kinds" / "N quality kinds" in the skill, not just the first match: one stale count left in a routing bullet
+# gave an agent two answers on the same page.
+staleKinds="$( grep -noE '\b[0-9]+ (quality )?kinds\b' "$QUAL" | grep -vE ":$kindCount (quality )?kinds$" )"
+[ "$kindCount" -gt 0 ] && [ -z "$staleKinds" ] \
+    && ok "every 'N kinds' count in the quality skill says $kindCount" \
+    || no "quality skill has a stale kind count (binary: $kindCount): $( printf '%s' "$staleKinds" | tr '\n' ' ' )"
 grep -q 'all 21 MCP verbs' "$ROOT/src/wrap.h" \
     && no "wrap source retains the stale 21-verb comment" \
     || ok "wrap source does not hardcode a stale MCP verb count"
@@ -130,7 +140,9 @@ grep -q -- '--lint .*cache-\* data-layout' <<<"$helpOut" \
     && ok "--help's --lint line names the cache-* data-layout pack" \
     || no "--help's --lint line does not name the cache-* pack"
 
-pushBackRow="$( "$BIN" "$ROOT" --metrics --no-cache --top-k=5000 2>/dev/null | grep -o '<s[^>]*n="push_back" sc="svector"[^>]*>' | head -1 )"
+# --metrics prints one row per definition (P11, 2026-09-27): svector's two push_back overloads are two rows told apart by
+# l=, and only the guard-return body (the const T& one) carries ev=; the other has none. Pick that row, not the first.
+pushBackRow="$( "$BIN" "$ROOT" --metrics --no-cache --top-k=5000 2>/dev/null | grep -o '<s[^>]*n="push_back" sc="svector"[^>]*>' | grep 'ev_why=' | head -1 )"
 { [ -n "$pushBackRow" ] && grep -q 'ev="2"' <<<"$pushBackRow" && grep -q 'ev_why="guard-return:1"' <<<"$pushBackRow"; } \
     && ok "--metrics actually emits ev=/ev_why= on a known guard-return function (svector::push_back)" \
     || no "--metrics did not emit the expected ev=/ev_why= on svector::push_back"

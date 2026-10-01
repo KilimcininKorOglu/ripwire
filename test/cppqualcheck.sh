@@ -249,9 +249,14 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # 26 -> 27 2026-09-26 (lane/train20-cr-followups, C9): jsrunner::tsModuleGraphLoadable reads each local TypeScript
 # module a node:test file reaches through the same canonical helper, to check its specifiers and syntax — one new
 # call site, same helper, no new fopen/fread.
-[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 27 ] \
-    && ok "repo: --uses=readWholeFile count=27 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 27"
+# 27 -> 29 2026-09-28 (lane/honesty-cuts-066): --pack-top-n's packSource now reads each served file through the canonical
+# helper instead of its own fopen/fread loop (crashsweepcheck's registry row for it is gone), and --mentions' residue
+# count (mention.h countUnbacktickedDocFiles) reads the markdown files through it — two new call sites, same helper.
+# 29 -> 30 (same lane, review round): BuiltinMethodGate::namedBeyondDefinition reads a Python file that defines a class
+# to find an annotation naming it — one new call site, same helper.
+[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 30 ] \
+    && ok "repo: --uses=readWholeFile count=30 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 30"
 [ "$( cnt "$( run . --callers=writeTally --no-cache )" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
     || no "repo: --callers=writeTally expected 1"

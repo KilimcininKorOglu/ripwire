@@ -21,7 +21,7 @@ section, and it is not an afterthought.
 | **Co-change / known-item evals** | `--eval`, `--eval-retrieval` (see `bench/ANSWERQUALITY.md`) | Whether the tool surfaces the other files a real historical commit touched; and known-item retrieval across four rankers. |
 | **Ensemble calibration harness** | `bench/ensemblecal/` | Whether `--ensemble`'s four evidence families are actually orthogonal, how often each fires, how stable each is across commits — and the preset ladder derived from that (§9). |
 | **Differential argv harness** | `test/argvdiffcheck.sh` | That a refactor changed *nothing observable*: two binaries, every argv vector, stdout + stderr + exit code byte-identical. |
-| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 651 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
+| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 658 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
 | **`--quality-delta`** | `src/quality.h` | Ten measured code-quality failure modes, reported only where a change made them worse. |
 
 ### The labeling protocol (why the held-out eval is allowed to disagree with the ranker)
@@ -5839,7 +5839,7 @@ four `--quality-delta` shapes, against 2–6 before: this lane closed `sa@key`, 
 shapes by absolute legend size and reports the fraction as INFO. A `legend<=payload` arm is
 unsatisfiable on the case these verbs exist to handle well — a clean tree's payload is near-zero by
 construction — so at 40% of a 572 B payload the whole legend would have to fit in 381 B, shorter than
-the list of the ten measured kinds. **A ≤40% relative ceiling for `--quality-delta` and ≤50% for
+the list of the ten measured kinds (eleven since 0.6.5). **A ≤40% relative ceiling for `--quality-delta` and ≤50% for
 `--safe-delete`/`--test-gate` were considered and are recorded as UNREACHABLE rather than as missed
 work**: post-fix fractions are 87.0% / 91.4% / 78.8% on the clean cases and 81.4–86.7% wherever
 the payload is real. The same reasoning `test/testgatelegendbudgetcheck.sh` recorded in 2026-08-28.
@@ -5866,7 +5866,7 @@ copy here would be exactly the dialect divergence that gate exists to catch. Com
 tags, wrap, stable-order defaults), seven individually invoked standalone gates (`g1freshcheck`,
 `skillscan`, `htmlexport`, `compresscheck`, `handoffcheck`, `releaseinstallcheck`,
 `taskroutecheck`), and a single loop
-naming **651 gate scripts**, all of which exist on disk. <!-- gatecount -->
+naming **658 gate scripts**, all of which exist on disk. <!-- gatecount -->
 
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same scripts in parallel so a full
 verification fits in one sitting. It does not modify `regression.sh`.
@@ -6167,12 +6167,15 @@ regenerated file. It skips (exit 0) when no reference binary is given, self-test
 and asserts it left the tree unmodified — an assertion that is itself **controlled**: a stray file is
 created on purpose, must be detected, and must then be gone.
 
-### `--quality-delta`'s ten measured failure modes
+### `--quality-delta`'s eleven kinds: ten measured failure modes and placeholder
 
 These are the exact `kind=` strings the binary emits, from `src/quality.h`:
 
 `complexity` · `verbosity` · `nesting` · `params` · `duplication` · `dead-code` · `api-surface` ·
-`error-masking` · `short-horizon-churn` · `new-clone-of-reused-helper`
+`error-masking` · `short-horizon-churn` · `new-clone-of-reused-helper` · `placeholder`
+
+The first ten each target a failure mode measured in the literature; `placeholder` (added 0.6.5) is an
+honesty check on "done" — a stub or TODO the change added — and never gates.
 
 Note that some user-facing summaries abbreviate four of these (`dup`, `dead`, `churn`,
 `clone-of-reused-helper` / `reuse-decline`). **Match against the strings above** when grepping real
@@ -6180,6 +6183,87 @@ output.
 
 The verb reports only what a change made *worse*, against git HEAD. `--quality-ack` records a
 reviewed exception; `--ack-only=KIND` scopes it.
+
+### error-masking widened: log-only and rethrow-only (0.6.5) — hand-labelled precision, and which shapes gate
+
+`error-masking` counted only an EMPTY handler (empty braces, `pass`, `...`, a comment-only body). 0.6.5 adds
+two shapes from `src/handlershape.h`, walked over the same parse the query rows use:
+
+- **log-only** — a BROAD handler (catches everything, or the root error type: `Exception`, `Throwable`,
+  `StandardError`, a bare `except:`/`rescue`, any JS/TS `catch`) whose body is only logging/print calls and
+  never names the caught error. `logger.exception`, `exc_info=`, `traceback.format_exc()` and Ruby's `$!`
+  count as naming it; a narrow handler never counts (its type states the cause). Go: `if err != nil { … }`
+  with no `else` and a body of non-fatal log calls that never read `err`.
+- **rethrow-only** — the ONLY handler of its try re-raises the error it caught, unchanged (bare `raise` /
+  `throw;`, or `raise e` / `throw e` of the caught name; `raise … from …` and a wrapped throw are not
+  unchanged). Sole handler, because `catch( Specific e ) { throw e; }` ahead of a broader sibling routes one
+  type past it and is not redundant.
+
+**Labelling rule, fixed before labelling.** A hit is TRUE when the shape as specified is really there: for
+log-only, an error is caught, its identity (type, message, traceback) is not carried by anything the handler
+does, and execution continues past the handler; for rethrow-only, deleting the handler (keeping any `else`
+/ `finally`) changes nothing observable. A deliberate best-effort fallback is TRUE — it is the shape, the
+same way an intentional empty `catch {}` is an empty catch; whether to keep it is the reviewer's call. FALSE
+is anything else: the error is carried or checked some other way, or the code does not continue.
+
+**Corpus.** Every hit, de-duplicated by its text, from source already on the measuring machine and read
+in place: the three peer checkouts the idea came from (shallow, one commit each — they cannot be replayed),
+the CPython 3.13 standard library, the Python packages in a local package-manager cache, the Go 1.24
+standard library and module cache, the npm CLI with its bundled dependencies, and Homebrew's Ruby. No
+repository was fetched for this.
+
+| shape | language | hits labelled | TRUE | FALSE | precision | gates? |
+| --- | --- | --- | --- | --- | --- | --- |
+| log-only | Python | 41 | 40 | 1 | **0.976** | **yes** |
+| log-only | JS / TS | 7 | 7 | 0 | 1.000 | no — n < 20 |
+| log-only | Go | 3 | 2 | 1 | 0.667 | no — n < 20 |
+| rethrow-only | Python | 33 | 33 | 0 | **1.000** | **yes** |
+| rethrow-only | JS | 1 | 1 | 0 | — | no — n < 20 |
+
+The two FALSE rows: a Go `if err != nil { fmt.Printf( … ) }` whose `err` is passed to `check( err )` on the
+next line (the error is handled after all — the Go walk cannot see past its own block), and a Python
+`except BaseException: print( previous_tb )` that prints the traceback of the error being reported and exits
+right after. Two of the TRUE rethrow-only rows carry the ecosystem's own linter suppression for this exact
+shape (`# noqa: TRY203`, `// eslint-disable-next-line no-useless-catch`).
+
+**The gate rule** (`kHandlerShapeGates`, `src/lintrules.h`): a (shape, language) pair gates only at precision
+≥ 0.8 on ≥ 20 labelled hits. That admits Python for both shapes and nothing else. Every other language
+still gets the row, as `sev="minor"`, which never fires exit 2 — Java, C#, Kotlin, Ruby and C++ had no
+sample at all on this machine, and JS/TS and Go too few. The full legend says so on the row's report.
+
+**Replay on this repo's history.** `--quality-delta=C` for the last 40 first-parent commits of `main`
+(each one a merged train or lane, `3ddbfe85`..`b343b988`), with the 0.6.4 binary and with this one:
+**+0 rows** in either kind, and all 40 `--json` documents byte-identical between the two binaries (626 rows
+each, 24 gating across the 40). This repository has no Python/JS handler of either shape and no TODO comment
+added in that window, so on upgrade its own reports are unchanged; the replay shows the widening costs no
+noise here, not that it finds anything here. The rows the shapes produce were measured on the corpus above.
+
+### placeholder (0.6.5) — what the eleventh kind counts, and a labelled sample
+
+A stub or TODO the change ADDED, counted per enclosing symbol and compared with the baseline like
+error-masking. Every row is `origin="new-symbol"` by construction and never gates. It counts: Rust
+`todo!()`/`unimplemented!()` (and a `panic!` saying "not implemented"), Kotlin `TODO()`, C#
+`NotImplementedException`, Python's bare `raise NotImplementedError` as the whole body of a FREE function,
+any throw/raise/panic/`fatalError`/`assert` whose string says "not implemented", "not yet implemented",
+"unimplemented", "implement me" or a whole-word `TODO`, and a comment line that opens with `TODO`/`FIXME`
+and names no issue (`#12`, `ABC-12`, `gh-12`, a URL). A raise whose text declares a subclass contract
+("must be implemented by subclasses", "override", "abstract") never counts, nor does an `@abstractmethod`.
+
+Two rules were narrowed by measurement before shipping, on 25-hit seeded samples of the corpus above:
+a bare "any `raise NotImplementedError`" rule was dominated by guards for unsupported cases in library
+code, and a whole-METHOD-body rule by abstract-by-convention interfaces (asyncio's event-loop ABC is dozens
+of them, undecorated). Hence free functions only for the bare form — a stated recall floor for an
+undecorated placeholder method, which still counts when its message says "not implemented".
+
+| sample (seed 20260926, 25 each, de-duplicated) | criterion | TRUE |
+| --- | --- | --- |
+| stub (653 unique hits: 616 Python, 22 Go, 13 JS, 2 Ruby) | the code declares a case or a function not implemented | 25 / 25 |
+| stub | stricter: a placeholder standing in for a whole unfinished function | 1 / 25 |
+| todo (10,855 unique hits) | a TODO/FIXME comment line naming no issue | 25 / 25 |
+
+The stricter reading is what "a stub" means in conversation, and on library code it is rare: most hits
+are declared-unimplemented BRANCHES ("… is not implemented for directed graphs"). That is still what the
+kind is for — a change that adds one has a stated gap — and it is why the kind is report-only.
 
 ### Co-change: the finding that contradicted the obvious design
 
@@ -6885,7 +6969,7 @@ Listed because the reason is more useful than the silence.
   shipped**. See `bench/locbench/anchorhop_calib.json`. The mention anchor's reproducible numbers are
   the ablations in §4.
 - **A single round gate-count.** Two in-tree numbers disagree (`test/pargates.py`'s docstring says
-  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 651. The <!-- gatecount -->
+  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 658. The <!-- gatecount -->
   loop is the authority; the stale docstrings are a known drift. Since 2026-09-10 the number is not
   written by hand anywhere: `docs/gatecount_build.py` derives it from the loop and rewrites every
   published site, `test/gatecountcheck.sh` fails if any of them drifts, and `test/manifestcheck.sh`

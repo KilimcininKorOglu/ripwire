@@ -224,7 +224,7 @@ NUMERIC_ONLY = {
     ( "src/editcheck.h", "callersOpen" ): 1,
     ( "src/editcheck.h", "cc" ): 1,
     ( "src/editcheck.h", "defsAttr" ): 1,
-    ( "src/graphlegend.h", "buf" ): 5,
+    ( "src/graphlegend.h", "buf" ): 7,
     ( "src/handoff.h", "degBuf" ): 1,
     ( "src/handoff.h", "sBuf" ): 1,
     ( "src/htmlexport.h", "rankBuf" ): 1,
@@ -594,7 +594,8 @@ if not bad:
 #            238 -> 239 calls/sites, 104 -> 105 rows). noteCacheReject's new `char detail[192]` names both version
 #            numbers on a refused cache blob; one formatTo of a literal and two std::uint32_t, rowed 'not-markup'
 #            (a stderr notice). Re-derived on the train 20 merged tree; no other train lane moves the population.
-EXPECTED = { "mentions": 349, "calls": 239, "sites": 239, "rows": 105, "widthforms": 0 }
+EXPECTED = { "mentions": 351, "calls": 241, "sites": 241, "rows": 105, "widthforms": 0 }
+#            2026-09-30 (#325 ruby_bases_unscoped=): +2 calls/+2 mentions/+2 sites, rows unchanged — graphGaugeAttrXml/Json (graphlegend.h) each format the absent-at-zero Ruby gauge into the SAME local buf[160]: one size_t, no string argument (21 + 20 digits worst case).
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

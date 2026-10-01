@@ -51,6 +51,8 @@ struct RawDef
                                    //   C++ method inside one); 0 ⇒ no recovery claim. Feeds the `error` reason at load.
     std::uint8_t  internalLinkage = 0;   // C/C++: anonymous-namespace or namespace-scope `static` def (model.h Symbol::internalLinkage)
     std::uint8_t  scopeRootsStd = 0;     // #150: 1 ⇒ this def's full enclosing-namespace chain roots at std (model.h Symbol::scopeRootsStd)
+    std::uint32_t fnScopeStart = 0;      // a FUNCTION-LOCAL def (ingest_names.h enclosingFunctionScope): the byte span of the
+    std::uint32_t fnScopeEnd   = 0;      //   function whose body binds its name; End 0 ⇒ not function-local (model.h fnLocalScopes)
     SymKind       kind      = SymKind::Other;
     Lang          lang      = Lang::Unknown;
     std::string   name;
@@ -130,7 +132,22 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 25;           // 25: #150 AND #157 (train 18 carries both bumps as ONE 24 -> 25:
+constexpr std::uint32_t kCacheVersion = 27;           // 27: same record layout as 26, new VALUES — the lane's second
+                                                      //    round changed which defs record fnScopeStart/End (the
+                                                      //    scope search descends to the OUTER def node, and
+                                                      //    kEscapingNestedBindings keeps globally-binding nested
+                                                      //    functions out). A 26 blob would serve the old spans
+                                                      //    (every top-level C/C++ function "nested in itself",
+                                                      //    PHP/Lua globals yielding) until its files changed.
+                                                      // 26: a FUNCTION-LOCAL def records the span of the function
+                                                      //    whose body binds its name — RawDef gains `fnScopeStart`
+                                                      //    and `fnScopeEnd` (two u32 after `scopeRootsStd`, def
+                                                      //    record 80 -> 88 bytes lean), read by graph.h's
+                                                      //    reachableByName (test/fnliteralcheck.sh §6). A FORMAT
+                                                      //    change: a v25 blob lacks the bytes, so the version
+                                                      //    guard rejects it (self-healing full reparse).
+                                                      //    kParserVer stays 128 (unreleased, same lane).
+                                                      // 25: #150 AND #157 (train 18 carries both bumps as ONE 24 -> 25:
                                                       //    neither lane's 25 reached main or a release).
                                                       //    #150 — nested std::-namespace resolution. RawDef gains
                                                       //    `scopeRootsStd` (a u8 after `internalLinkage`, def record
@@ -279,7 +296,38 @@ constexpr std::uint32_t kCacheVersion = 25;           // 25: #150 AND #157 (trai
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 124;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 129;          // bump on any grammar/.scm/extraction change
+                                                      // 129 = 2026-09-30 (train 22): ONE bump past fn-literal's 128 for the two community
+                                                      //   PRs that merge after it — #338 (RSpec described_class, its 125 note below) and #325
+                                                      //   (Ruby inheritance edges, its note below). Each note keeps the number its PR carried.
+                                                      //   Record values change for Ruby only; kCacheVersion stays 27.
+                                                      // 129 (#325, train 22) = 2026-09-30 (Ruby inheritance edges, test/rubyinheritcheck.sh; carried as
+                                                      //   98 and 99 on the PR): isBaseTypeNodeIn gains a Ruby arm ((constant)/(scope_resolution)), so
+                                                      //   `class Child < Parent` emits an inherit RawRef (role Extends) where it emitted none, and
+                                                      //   captureBases does not descend into a computed superclass (`Struct.new( :a )` mints no ref to
+                                                      //   its receiver). New records, same layout: kCacheVersion unchanged (27; NOT the PR's 22/24);
+                                                      //   kQSnapCacheScheme unchanged. A Ruby cache written before this holds no inheritance refs.
+                                                      // 128 = 2026-09-29 (test/fnliteralcheck.sh): a name bound
+                                                      //   to a function literal (JS/TS `const f = (x) => …`, Lua
+                                                      //   `M.f = function … end`, a Python class-body lambda) owns
+                                                      //   the LITERAL's body (ingest_relations.h kFnLiteralBinding):
+                                                      //   bodyByte/sigEnd, params/cx/nest from the literal, and a
+                                                      //   multi-name binding's span narrows to its own binding.
+                                                      //   123/125/126/127 stay reserved for community PRs.
+                                                      //   Same lane, still 128: a function-local def's scope
+                                                      //   span (ingest_names.h enclosingFunctionScope) — a record
+                                                      //   layout change, so kCacheVersion 25 -> 26 rejects every
+                                                      //   older blob, including one this lane's first build wrote.
+                                                      // 125 = 2026-09-27 (#338, test/rubydescribedclasscheck.sh): RSpec's
+                                                      //   `described_class` receiver is classified as the constant
+                                                      //   the innermost constant-described example group names
+                                                      //   (ingest_binds.h::rspecDescribedClass), so RawRef::recv /
+                                                      //   recvVar change VALUE for those call sites — NamedVar
+                                                      //   "Calc" where they were NamedVar "described_class". Carried
+                                                      //   as 121 on the PR; renumbered 125 after #310 (121), #320
+                                                      //   (122) and #220 (124), with 123 reserved for #325. No record
+                                                      //   layout change: kCacheVersion stays 25 (NOT 24); a Ruby cache
+                                                      //   written at 124 holds the old receiver and must re-parse.
                                                       // 124 = 2026-09-26 (#220 part 2, test/depsprecisecheck.sh
                                                       //   P2-O): a TS/JS RE-EXPORT (`export … from './y'`) is an
                                                       //   Include like an import (ingest_relations.h
@@ -1955,7 +2003,7 @@ inline unsigned lexDictIndexWidth( std::size_t dictCount ) noexcept
 }
 inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileDictCount, const std::uint32_t* rowDictIndex )
 {
-    w.u32( d.line ); w.u32( d.startByte ); w.u32( d.endByte ); w.u32( d.nameByte ); w.u32( d.bodyByte ); w.u32( d.cx ); w.u32( d.ccx ); w.u32( d.loc ); w.u32( d.locals ); w.u32( d.ppAlt ); w.u32( d.humps ); w.u32( d.deepLoc ); w.u32( d.ev ); w.u32( d.params ); w.u8( d.maxNest ); w.u8( d.arityExact ); w.u8( d.testScope ); w.u8( d.recovered ); w.u8( d.internalLinkage ); w.u8( d.scopeRootsStd ); w.u8( std::uint8_t( d.kind ) ); w.u8( std::uint8_t( d.lang ) ); w.str( d.name ); w.str( d.scope );
+    w.u32( d.line ); w.u32( d.startByte ); w.u32( d.endByte ); w.u32( d.nameByte ); w.u32( d.bodyByte ); w.u32( d.cx ); w.u32( d.ccx ); w.u32( d.loc ); w.u32( d.locals ); w.u32( d.ppAlt ); w.u32( d.humps ); w.u32( d.deepLoc ); w.u32( d.ev ); w.u32( d.params ); w.u8( d.maxNest ); w.u8( d.arityExact ); w.u8( d.testScope ); w.u8( d.recovered ); w.u8( d.internalLinkage ); w.u8( d.scopeRootsStd ); w.u32( d.fnScopeStart ); w.u32( d.fnScopeEnd ); w.u8( std::uint8_t( d.kind ) ); w.u8( std::uint8_t( d.lang ) ); w.str( d.name ); w.str( d.scope );
     for( const std::uint8_t tagCount : d.evWhy ) { w.u8( tagCount ); }   // 8×u8, fixed order (model.h kEvWhyTagTable)
     if( withLex )
     {
@@ -2054,14 +2102,15 @@ inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8
 // added one u8 in the run — 12 -> 13 u8, so 56 + 13 + 8 = 77; the extent-honesty `recovered` bit then added
 // one more u8 in the run — 13 -> 14 u8, so 56 + 14 + 8 = 78; the internal-linkage bit then added one more u8 in
 // the run — 14 -> 15 u8, so 56 + 15 + 8 = 79; #150's `scopeRootsStd` bit then added one more u8 in the run —
-// 15 -> 16 u8, so 56 + 16 + 8 = 80); the RICH (withLex) extra is
+// 15 -> 16 u8, so 56 + 16 + 8 = 80; the function-local scope span then added two u32 after the u8 run — 14 -> 16
+// u32, so 64 + 16 + 8 = 88); the RICH (withLex) extra is
 // dlWeighted u32 + tokenCount u32 + tfWidth u8 = 9 bytes. A ref record is 3 u32 + 8 u8 + 5 empty
 // str(len u32) fields = 3*4 + 8*1 + 5*4 = 40 bytes (39 until the `viaArrow` u8, kCacheVersion 23; #150's
 // `qualifierRootsStd` u8 then added a 9th u8 — 40 -> 41, kCacheVersion 25).
 // verifyCacheRecordMinimaTripwire() below derives these
 // same numbers from the REAL writer functions at runtime so the next field added to writeDef/writeRef
 // can't silently stale them.
-inline constexpr std::size_t kMinDefRecordBytesLean      = 80;   // 14×u32 + 16×u8 + 2×str(len u32, empty)
+inline constexpr std::size_t kMinDefRecordBytesLean      = 88;   // 16×u32 + 16×u8 + 2×str(len u32, empty)
 inline constexpr std::size_t kMinDefRecordBytesRichExtra =  9;   // v10 rich withLex extra: dlWeighted u32 + tokenCount u32 + tfWidth u8
 inline constexpr std::size_t kMinRefRecordBytes          = 41;   // 3×u32 + 9×u8 + 5×str(len u32, empty)
 
@@ -2091,7 +2140,7 @@ inline void verifyCacheRecordMinimaTripwire() noexcept
 
 inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>& fileDict )
 {
-    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = r.u16Of32(); d.humps = r.u16Of32(); d.deepLoc = r.u16Of32(); d.ev = r.u16Of32(); d.params = r.u16Of32(); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.scopeRootsStd = r.u8(); d.kind = r.enumU8<SymKind>( kSymKindCount ); d.lang = r.enumU8<Lang>( kLangCount ); d.name = r.str(); d.scope = r.str();
+    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = r.u16Of32(); d.humps = r.u16Of32(); d.deepLoc = r.u16Of32(); d.ev = r.u16Of32(); d.params = r.u16Of32(); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.scopeRootsStd = r.u8(); d.fnScopeStart = r.u32(); d.fnScopeEnd = r.u32(); d.kind = r.enumU8<SymKind>( kSymKindCount ); d.lang = r.enumU8<Lang>( kLangCount ); d.name = r.str(); d.scope = r.str();
     for( std::uint8_t& tagCount : d.evWhy ) { tagCount = r.u8(); }   // mirrors writeDef's fixed 8×u8 order
     if( withLex && r.ok )
     {

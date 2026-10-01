@@ -39,6 +39,7 @@
 #include <utility>
 #include <cstdio>
 #include <string>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -72,7 +73,7 @@ inline std::pair<std::size_t, std::size_t> graphGaugeTotals( const std::vector<s
 
 // an agent correctly learns to skip. Gate: test/blindspotcheck.sh arms (A) value-equality and (B) absence.
 inline std::string graphGaugeAttrXml( const std::vector<std::uint32_t>& ambOut, const std::vector<std::uint32_t>& unresolvedOut,
-                                      std::size_t unindexedFiles = 0 )
+                                      std::size_t unindexedFiles = 0, std::size_t rubyBasesUnscoped = 0 )
 {
     const auto [amb, unresolved] = graphGaugeTotals( ambOut, unresolvedOut );
     char buf[160];
@@ -84,10 +85,16 @@ inline std::string graphGaugeAttrXml( const std::vector<std::uint32_t>& ambOut, 
     {
         rw::formatTo( buf, sizeof( buf ), " graph_ambiguous=\"{}\" graph_unresolved=\"{}\"", amb, unresolved );
     }
-    return buf;
+    std::string out( buf );
+    if( rubyBasesUnscoped > 0 ) // #325, absent at zero like graph_unindexed=
+    {
+        rw::formatTo( buf, sizeof( buf ), " ruby_bases_unscoped=\"{}\"", rubyBasesUnscoped );
+        out += buf;
+    }
+    return out;
 }
 inline std::string graphGaugeAttrJson( const std::vector<std::uint32_t>& ambOut, const std::vector<std::uint32_t>& unresolvedOut,
-                                       std::size_t unindexedFiles = 0 )
+                                       std::size_t unindexedFiles = 0, std::size_t rubyBasesUnscoped = 0 )
 {
     const auto [amb, unresolved] = graphGaugeTotals( ambOut, unresolvedOut );
     char buf[160];
@@ -99,7 +106,13 @@ inline std::string graphGaugeAttrJson( const std::vector<std::uint32_t>& ambOut,
     {
         rw::formatTo( buf, sizeof( buf ), ",\"graph_ambiguous\":{},\"graph_unresolved\":{}", amb, unresolved );
     }
-    return buf;
+    std::string out( buf );
+    if( rubyBasesUnscoped > 0 ) // #325, absent at zero like graph_unindexed=
+    {
+        rw::formatTo( buf, sizeof( buf ), ",\"ruby_bases_unscoped\":{}", rubyBasesUnscoped );
+        out += buf;
+    }
+    return out;
 }
 
 // The gauge's one-sentence definition, spliced into every floor legend below (and the verify / nonlocal-state /
@@ -125,7 +138,26 @@ inline constexpr const char* kGraphCountFloorLegend =
 inline constexpr const char* kGraphUnindexedLegend =
     "graph_unindexed=N is a third gauge: files no grammar could read (the map header's unindexed=), whose calls "
     "raise neither gauge above; absent when zero, and so is this sentence. ";
-inline const char* graphUnindexedLegend( bool on ) noexcept { return on ? kGraphUnindexedLegend : ""; }
+// #325's gauge: Ruby superclass references whose base stayed on the final-segment name rule. Rides every clause
+// graph_unindexed='s does, on the emitter's own condition (graph.h graphGaugeClauses), absent at zero with its attribute.
+inline constexpr const char* kRubyBasesUnscopedLegend =
+    "ruby_bases_unscoped=N (absent when zero, and so is this sentence): N Ruby superclass references had no superclass "
+    "directive at their class open, so each base was matched by its final name segment instead of Ruby's constant "
+    "lookup; an implementor or base-walk edge through one may name a same-named class elsewhere. ";
+
+// Which absent-at-zero gauge clauses a root calls for. Built from a bool so a caller that knows only the #66
+// gauge still reads the way it did; graph.h graphGaugeClauses( g ) fills both.
+struct GaugeClauses
+{
+    bool unindexed = false; // graph_unindexed= is on the root
+    bool rubyUnscoped = false; // ruby_bases_unscoped= is on the root
+    constexpr GaugeClauses( bool u = false, bool r = false ) noexcept : unindexed( u ), rubyUnscoped( r ) {}
+    constexpr bool any() const noexcept { return unindexed || rubyUnscoped; }
+};
+inline std::string graphUnindexedLegend( GaugeClauses on )
+{
+    return std::string( on.unindexed ? kGraphUnindexedLegend : "" ) + ( on.rubyUnscoped ? kRubyBasesUnscopedLegend : "" );
+}
 
 // The same sentence as its OWN XML comment, for the legends that are one closed <!-- ... --> literal rather
 // than a %s inside one. Wrapped, never re-spelled: a second copy of this sentence is the drift
@@ -144,9 +176,9 @@ inline const char* graphUnindexedLegend( bool on ) noexcept { return on ? kGraph
 // what it was written for. `on` is always the emitter's own g.unindexedFiles > 0, never a re-derivation.
 // Gate: test/blindspotcheck.sh arm (F) (attribute => clause, every surface, both dialects) and (G) (the
 // mirror: neither, on a corpus with nothing unindexed).
-inline std::string graphUnindexedLegendComment( bool on )
+inline std::string graphUnindexedLegendComment( GaugeClauses on )
 {
-    return on ? std::string( "<!-- " ) + kGraphUnindexedLegend + "-->" : std::string();
+    return on.any() ? std::string( "<!-- " ) + graphUnindexedLegend( on ) + "-->" : std::string();
 }
 
 // H5 (capture-audit 2026-09-04, lens 7 F-FLOOR-1) — the BRIEF floor clause for the graph-count verbs that
@@ -163,7 +195,7 @@ inline constexpr const char* kGraphCountFloorBriefLegend =
 // second printf argument so the nine emitters that splice the brief legend keep their format strings exactly
 // as they were - a new %s at nine call sites is nine chances to land the B4 partial fix, and
 // test/printffmtparitycheck.sh would only catch the ones that change bytes.
-inline std::string graphCountFloorBrief( bool hasUnindexed )
+inline std::string graphCountFloorBrief( GaugeClauses hasUnindexed )
 {
     return std::string( kGraphCountFloorBriefLegend ) + graphUnindexedLegend( hasUnindexed );
 }
@@ -233,7 +265,7 @@ inline constexpr const char* kCallCountUnitLegend =
 // The two clauses in the order every legend prints them, so a caller that just wants "the shared tail" cannot
 // get the order wrong. Returned by value (std::string) because the two constants cannot be concatenated at
 // compile time through `const char*`; every call site splices it once, into a legend built at most once per run.
-inline std::string graphCountDisclosure( bool hasUnindexed )
+inline std::string graphCountDisclosure( GaugeClauses hasUnindexed )
 {
     return std::string( kGraphCountFloorLegend ) + graphUnindexedLegend( hasUnindexed ) + kCallCountUnitLegend;
 }
@@ -601,6 +633,51 @@ inline std::string declinedCallsAttrXml( std::size_t declinedCalls )
 inline std::string declinedCallsKeyJson( std::size_t declinedCalls )
 {
     return declinedCalls > 0 ? ",\"declined_calls\":" + std::to_string( declinedCalls ) : std::string();
+}
+
+// ── Depth-labelled --impact (0.6.5): by_depth= on the root, d= on the rows ──────────────────────────────────────────
+// `counts` is graph.h depthCounts over the FULL reach set: element k counts the rows first reached at hop k+1. One
+// spelling per dialect, shared by the CLI --impact and its MCP twin so the two cannot drift. Absent when the reach set
+// is empty (reaches="0" has no depth to partition). The XML form spells each depth (`1:9,2:20`) rather than relying on
+// position: a reader never has to count commas to learn which depth a number belongs to.
+inline std::string byDepthField( std::span<const std::uint32_t> counts, bool json )
+{
+    if( counts.empty() )
+    {
+        return {};
+    }
+    std::string out = json ? ",\"by_depth\":[" : " by_depth=\"";
+    for( std::size_t k = 0; k < counts.size(); ++k )
+    {
+        out += json ? std::string( k ? "," : "" ) : ( k ? "," : "" ) + std::to_string( k + 1 ) + ":";
+        out += std::to_string( counts[k] );
+    }
+    out += json ? ']' : '"';
+    return out;
+}
+inline std::string byDepthAttrXml( std::span<const std::uint32_t> counts )
+{
+    return byDepthField( counts, false );
+}
+// The JSON twin is an array: element i is depth i+1 (a JSON consumer indexes it; the XML reader reads it).
+inline std::string byDepthKeyJson( std::span<const std::uint32_t> counts )
+{
+    return byDepthField( counts, true );
+}
+
+// The legend clause, one per dialect (the columnar form carries the depth as a dense column, not a row attribute).
+// Emitted INSIDE an XML comment: no double hyphen.
+inline constexpr const char* kImpactDepthLegend =
+    "d=N on <s>: hop depth (1 = calls SYM directly; the shortest call chain), printed on the first row and where it changes "
+    "(a row without d= has the depth above it). Rows run d=1 first, PageRank order within a depth, so a cut drops the deepest "
+    "rows first; by_depth=k:n,… counts reaches= per depth and sums to it, so a capped answer states the depth it stopped in. ";
+inline constexpr const char* kImpactDepthColumnarLegend =
+    "the depth column: each row's hop depth (1 = calls SYM directly; the shortest call chain). Rows run depth 1 first, "
+    "PageRank order within a depth, so a cut drops the deepest rows first; by_depth=k:n,… counts reaches= per depth and sums "
+    "to it, so a capped answer states the depth it stopped in. ";
+inline const char* impactDepthLegend( bool columnar ) noexcept
+{
+    return columnar ? kImpactDepthColumnarLegend : kImpactDepthLegend;
 }
 
 // ── #220 part 1 — imports_unresolved=, the FILE graph's own gauge (test/depsprecisecheck.sh, the #220 arms) ─────────

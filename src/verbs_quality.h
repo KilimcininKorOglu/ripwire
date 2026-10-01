@@ -517,7 +517,7 @@ std::optional<int> refuseForeignAckSelection( const rw::Config& cfg, const rw::q
 // this prose either: several gates grep the header counters (regressions=, gating=, stale=) and a
 // quoted example here would be matched ahead of the real one.
 
-// Always. The verb, the ten kinds, the three axes, the exit predicate, and the two counters that are
+// Always. The verb, the eleven kinds, the three axes, the exit predicate, and the two counters that are
 // printed even at zero. Every row in the document — finding rows and stale-ack rows alike — carries
 // kind=, so it is defined here rather than in either conditional row dictionary.
 // P8 (L7): the bar= literals in emitRow mirror quality.h's constants — pinned here so a moved bar cannot drift the row
@@ -527,9 +527,10 @@ static_assert( rw::quality::kCcxBar == 15 && rw::quality::kLocBar == 60 && rw::q
 inline constexpr const char* kQdLegendCore =
     "<!-- ripwire quality-delta: only what a change made WORSE against the floor baseline= names below. "
     "Descriptive: weigh and fix the real ones, do not game the number (a wrong abstraction beats a low "
-    "score). TEN KINDS, and kind= on every row names which one: complexity over the ccx bar, verbosity "
+    "score). ELEVEN KINDS, and kind= on every row names which one: complexity over the ccx bar, verbosity "
     "(LOC), nesting, params, duplication, dead-code, api-surface (new public contract drift), "
-    "error-masking, short-horizon-churn, new-clone-of-reused-helper. THREE independent axes, in this "
+    "error-masking, short-horizon-churn, new-clone-of-reused-helper, placeholder (added stub/TODO). "
+    "THREE independent axes, in this "
     "order: (1) acked findings are suppressed entirely (acked= counts them); (2) ORIGIN — a finding on a "
     "symbol that EXISTED at the baseline is preexisting-worse (no origin attribute), one that exists only "
     "because the code is NEW carries origin=\"new-symbol\"; (3) MATERIALITY — a small numeric delta is "
@@ -621,7 +622,7 @@ inline constexpr const char* kQdBaseRefPair =
     "compared two COMMITTED trees and no sidecar was read, written or deleted. base_ref= and target_ref= "
     "are the two RESOLVED shas, at full length because a wave number gets quoted into handoffs, and they "
     "are the anchor, so at= is omitted. churn= is reported unavailable there, which is the honest statement "
-    "that one of the ten kinds, short-horizon-churn, cannot be measured at all in that form: it needs git "
+    "that one kind, short-horizon-churn, cannot be measured at all in that form: it needs git "
     "history at the tree being judged, and both trees are materialized OUT of the repo into temp dirs. Its "
     "silence in such a report is not evidence that nothing churned. ";
 // #228 — emitted only when head_basis= is on the root, i.e. only when the identity basis produced the floor.
@@ -711,6 +712,19 @@ inline constexpr const char* kQdRowLegend =
     "Every row the header's gating= counter counts also carries a gating attribute "
     "set to 1 — marked positively, never by the ABSENCE of sev or origin. ";
 
+// Emitted only when a placeholder row is in the document: why every one of them carries origin="new-symbol",
+// including one that landed in a symbol that existed at the baseline.
+inline constexpr const char* kQdPlaceholderLegend =
+    "placeholder is new-symbol by construction: the finding is the stub or TODO the change added, never "
+    "something that existed getting worse, so it never gates. ";
+
+// Emitted only when an error-masking row is sev="minor" — the one way that kind is ever minor, so the
+// sentence explains a state the reader is looking at and costs nothing on any other report.
+inline constexpr const char* kQdMaskReportOnlyLegend =
+    "An error-masking row is sev=\"minor\" when every construct it added is a widened shape that does not "
+    "gate in that language yet: log-only (a broad handler whose body only logs and never names the error) "
+    "or rethrow-only (the sole handler re-throws the error unchanged). ";
+
 // Emitted only when a clone-family row (duplication / new-clone-of-reused-helper) is in the document,
 // which is what puts members=, tokens= and idiom= on a first screen. A clean tree has none.
 inline constexpr const char* kQdCloneLegend =
@@ -798,6 +812,14 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
         }
         return false;
     };
+    const auto anyMinorMaskRow = [] ( const std::vector<rw::quality::Regression>& v )
+    {
+        return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "error-masking" && r.isMinor; } );
+    };
+    const auto anyPlaceholderRow = [] ( const std::vector<rw::quality::Regression>& v )
+    {
+        return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "placeholder"; } );
+    };
 
     std::fputs( kQdLegendCore, stdout );
 
@@ -872,6 +894,14 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
         if( anyCloneRow( p.rows ) || anyCloneRow( p.disclosedRows ) )
         {
             std::fputs( kQdCloneLegend, stdout );
+        }
+        if( anyMinorMaskRow( p.rows ) || anyMinorMaskRow( p.disclosedRows ) )
+        {
+            rw::emitRaw( stdout, kQdMaskReportOnlyLegend );
+        }
+        if( anyPlaceholderRow( p.rows ) || anyPlaceholderRow( p.disclosedRows ) )
+        {
+            rw::emitRaw( stdout, kQdPlaceholderLegend );
         }
     }
 
@@ -1973,6 +2003,8 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             return quality::startsWithRegisteredMacro( std::string_view( src ).substr( symbol.sigStartByte ), registerMacroNames );
         };
         std::size_t registerMacroExcluded = 0;   // P2.2: disclosed count — see the header comment below
+        std::size_t runnerRootExcluded    = 0;   // 0.6.6 D4: disclosed count (runner-root-excluded=, absent at 0)
+        std::size_t decoratedExcluded     = 0;   // 0.6.6 D4 review: decorated Python defs, counted apart (decorated-excluded=)
 
         // Optional path filter (--dead-code=DIR). §P0.3: this was a bare SUFFIX test, so it could only ever
         // match a FILENAME — every directory argument produced count="0" with confidence="high", and a typo'd
@@ -2054,6 +2086,16 @@ std::optional<int> runQualityViews( const MainDispatch& d )
                 ++registerMacroExcluded;   // P2.2: self-registers via a static initializer — never dead-code
                 continue;
             }
+            if( quality::pythonDecoratedDef( s, sourceFor( s.fileId ) ) )
+            {
+                ++decoratedExcluded;   // 0.6.6 D4: decorated — a decorator may register it; its only "linkage" was a token
+                continue;
+            }
+            if( quality::pythonRunnerRoot( ing.files[ s.fileId ], s, sourceFor( s.fileId ) ) )
+            {
+                ++runnerRootExcluded;   // 0.6.6 D4: a test runner reaches it — never dead-code
+                continue;
+            }
             candidates.push_back( s.id );
         }
 
@@ -2085,7 +2127,13 @@ std::optional<int> runQualityViews( const MainDispatch& d )
                      "config-warnings= counts two DISCLOSED .ripwire_config problems, each also written to stderr — an "
                      "unrecognized key, and a register_macros= name matching no indexed symbol — never gating, present "
                      "only when non-zero. "
-                     "Graph evidence is local to the indexed tree; verify before deleting. {}-->", rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str() );
+                     "runner-root-excluded= counts Python defs excluded because a test runner reaches them (pytest "
+                     "test*/xunit hooks in test_*.py or *_test.py; test*/setUp-family methods of a class whose own bases name a "
+                     "TestCase); decorated-excluded= counts decorated Python defs, excluded because a decorator MAY register "
+                     "them (wrappers such as @staticmethod/@property/@lru_cache are included, and register nothing): Python has "
+                     "no internal linkage, so such a row rested on a `static` token alone. Both are FLOORS, never findings, "
+                     "absent at 0. A `static` inside a comment is not linkage evidence. "
+                     "Graph evidence is local to the indexed tree; verify before deleting. {}-->", rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str() );
         // §P15/§P16: candidates is already deterministically sorted (path asc, line asc, name asc) and used to
         // print every candidate unconditionally — completeness was the whole contract, matching --uses' shape,
         // so it pages the same way: no historic display cap, discloseCap=false (un-paginated tag byte-identical).
@@ -2100,8 +2148,11 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             std::vector<char> dcFiltEsc;
             dcFilterAttr = " filter=\"" + std::string( escapeXml( cfg.deadCodeDir, dcFiltEsc ) ) + "\"";
         }
-        rw::emitTo( stdout, "<dead-code count=\"{}\" evidence=\"internal-linkage+zero-callers\" register-macro-excluded=\"{}\"{}{}{}{}{}>",
-                     candidates.size(), registerMacroExcluded,
+        // 0.6.6 D4: runner-root-excluded= is absent at 0, so a tree with no Python test/decorated root is byte-identical
+        const std::string runnerRootAttr = ( runnerRootExcluded == 0 ? std::string() : std::format( " runner-root-excluded=\"{}\"", runnerRootExcluded ) )
+                                         + ( decoratedExcluded == 0 ? std::string() : std::format( " decorated-excluded=\"{}\"", decoratedExcluded ) );
+        rw::emitTo( stdout, "<dead-code count=\"{}\" evidence=\"internal-linkage+zero-callers\" register-macro-excluded=\"{}\"{}{}{}{}{}{}>",
+                     candidates.size(), registerMacroExcluded, runnerRootAttr,
                      dcFilterAttr.c_str(),
                      pageDisclosure( dcAb, sizeof( dcAb ), dcPw.end - dcPw.begin, candidates.size(), dcPw.end,
                                      cfg.pageLimit, cfg.pageOffset, false ),

@@ -55,7 +55,7 @@ inline void emitGraphQueryLegend( const rw::IngestResult& ing, const rw::Graph& 
                  "name/all; filters kind/cx/fanin/file/layer; bounded closure callers/callees; joins and/or/not), "
                  "ranked by importance + capped at the top-k limit (default 200); narrow the query or raise top-k for more. NOT Datalog. "
                  "{}{}{}-->", modScopeRowsLegend( ing, shownRows ),
-                 rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+                 rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
 }
 
 // L2: the `[{"t":..,"n":..,"p":"file:line"},...]` JSON row array shared by --callers/--callees/--impact's
@@ -69,16 +69,20 @@ inline void emitGraphQueryLegend( const rw::IngestResult& ing, const rw::Graph& 
 // gains `"tested":true`; the key is OMITTED otherwise, matching the tested= "absence-meaningful, never
 // false" convention every other tested= site in this tree already follows (serialize.h/verbs_for.h) — zero
 // extra bytes on the untested row, the common case.
+// 0.6.5: `depth` is optional too (--impact passes transitiveCallersDepth's hop per node) — when given, every row
+// carries "d":N, the XML row's d=; a JSON row is read on its own, so the key rides every row, never only on a change.
 inline void printJsonSymbolRows( const rw::IngestResult& ing, const std::vector<rw::NodeId>& ids, std::size_t begin, std::size_t end,
-                                 std::string_view rootPrefix = {}, const std::vector<char>* testReach = nullptr )
+                                 std::string_view rootPrefix = {}, const std::vector<char>* testReach = nullptr,
+                                 const std::vector<std::uint32_t>* depth = nullptr )
 {
     for( std::size_t i = begin; i < end; ++i )
     {
         const rw::Symbol&      s = ing.symbols[ ids[i] ];
         const std::string_view p = rootPrefix.empty() ? std::string_view( ing.files[ s.fileId ] )
                                                        : rw::sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix );
-        rw::emitTo( stdout, "{}{{\"t\":\"{}\",\"n\":\"{}\",\"p\":\"{}:{}\"{}}}", i == begin ? "" : ",",
+        rw::emitTo( stdout, "{}{{\"t\":\"{}\",\"n\":\"{}\",\"p\":\"{}:{}\"{}{}}}", i == begin ? "" : ",",
                      rw::symTag( s.kind ), rw::jsonStr( s.name ).c_str(), rw::jsonStr( p ).c_str(), s.line,
+                     depth ? ",\"d\":" + std::to_string( ( *depth )[ ids[i] ] ) : std::string(),
                      ( testReach && rw::isTestedByReach( ing, *testReach, ids[i] ) ) ? ",\"tested\":true" : "" );
     }
 }
@@ -204,7 +208,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          rw::declinedCallsLegendWithGate( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0 ),   // exactly when the root carries declined_calls=
                          rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ),     // H1: likewise, exactly when unproven_defs= is there
                          rw::modScopeLegend( chHasModScope ),                   // #60: likewise, exactly when a t="modscope" row is
-                         rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( chSingleRoot ),
+                         rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         }
 
@@ -708,7 +712,7 @@ std::optional<int> runUses( const MainDispatch& d )
                        + rw::declinedCallsLegendWithGate( usDeclinedCalls > 0, g.gateDeclinedCalls > 0 ) ).c_str(),                              // exactly when it carries declined_calls=
                      rw::capLegendClause( rw::computePageDisclosure( pageRows, sites.size(), upw.end,
                                                                     cfg.pageLimit, cfg.pageOffset, usDiscloseCap ).active ),
-                     rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( usSingleRoot ),
+                     rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( usSingleRoot ),
                      // M12: same multi-root roots-table disclosure --callers/--callees gained.
                      rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         char              upab[ kPageDisclosureCap ];
@@ -798,7 +802,7 @@ std::optional<int> runUses( const MainDispatch& d )
 struct SafeDeleteLegendFlags
 {
     bool        singleRoot    = false;   // root= is on the root: p= is root-relative
-    bool        hasUnindexed  = false;   // graph_unindexed= rides the floor tail
+    rw::GaugeClauses hasUnindexed{};      // graph_unindexed= / ruby_bases_unscoped= ride the floor tail
     bool        hasModScope   = false;   // a <c n="<file-scope>"> row is on this page
     std::size_t declinedCalls = 0;       // declined_calls= on the root (graph.h declinedCallsNaming)
     bool        gateDeclined  = false;   // the builtin-method gate declined a call in this graph
@@ -808,7 +812,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                                   const SafeDeleteLegendFlags& flags )
 {
     const bool        singleRoot    = flags.singleRoot;
-    const bool        hasUnindexed  = flags.hasUnindexed;
+    const rw::GaugeClauses hasUnindexed = flags.hasUnindexed;
     const bool        hasModScope   = flags.hasModScope;
     const std::size_t declinedCalls = flags.declinedCalls;
     // declined_calls=: its definition, and — beside risk=none-found — the sentence that keeps none-found from reading as
@@ -988,7 +992,9 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                     source.resize( bytesRead );
                 }
                 std::fclose( file );
-                deadCodeCandidate = sourceHasStaticToken( source, only.sigStartByte, only.sigEndByte );
+                // 0.6.6 D4: the dead-code verb's own shape — a Python test-runner or decorator root is never a candidate
+                deadCodeCandidate = sourceHasStaticToken( source, only.sigStartByte, only.sigEndByte )
+                                    && !quality::pythonDecoratedDef( only, source ) && !quality::pythonRunnerRoot( ing.files[ only.fileId ], only, source );
             }
         }
     }
@@ -1029,7 +1035,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     const PageWindow sdLw = pageWindow( callerIds.size(), effectiveRowCap( cfg.pageLimit, 40 ), cfg.pageOffset );
     const std::size_t sdDeclinedCalls = declinedCallsNaming( g, defs );   // declined calls that could have meant a def (as --callers counts them)
     emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk,
-                          SafeDeleteLegendFlags{ sdSingleRoot, g.unindexedFiles > 0,
+                          SafeDeleteLegendFlags{ sdSingleRoot, rw::graphGaugeClauses( g ),
                                                  anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
                                                  sdDeclinedCalls, g.gateDeclinedCalls > 0 } );
 
@@ -1587,7 +1593,7 @@ std::optional<int> runVerify( const MainDispatch& d )
         const std::string vfUnprovenClause  = rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Verify, vfUnprovenDefs > 0 );
         const std::string vfUnprovenComment = vfUnprovenClause.empty() ? std::string() : "<!-- ripwire verify: " + vfUnprovenClause + "-->";
         rw::emitTo( stdout, "{}{}{}{}<verify claim=\"{}\" shape=\"{}\" verdict=\"{}\"{}{}", verify::kVerifyLegend,
-                     rw::graphUnindexedLegendComment( g.unindexedFiles > 0 ).c_str(),
+                     rw::graphUnindexedLegendComment( rw::graphGaugeClauses( g ) ).c_str(),
                      vfUnprovenComment.c_str(),
                      rw::rootRelPathsLegend( verSingleRoot ),
                      ex( cfg.verifyClaim ).c_str(), verify::kShapeTags[ std::size_t( claim.shape ) ], verdict, facts.c_str(),
@@ -2099,7 +2105,7 @@ std::optional<int> runPath( const MainDispatch& d )
         // same brief sentence, on both transports (mcpverbs.h path_between mirrors this line).
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                      "graph holds none. {}{}-->{}", rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ).c_str(),
-                     rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
+                     rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
         rw::emitTo( stdout, "<path from=\"{}\" to=\"{}\" from_p=\"{}\" to_p=\"{}\" from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                      ex( srcN ).c_str(), ex( dstN ).c_str(), loc( srcUsed ).c_str(), loc( dstUsed ).c_str(),
                      srcDefs.size(), dstDefs.size(), rw::unprovenDefsAttrXml( pthUnprovenDefs ).c_str(),   // H1: beside the defs counts it is not in
@@ -2199,8 +2205,9 @@ std::optional<int> runConnect( const MainDispatch& d )
         // crash, not a guard).
         static_assert( rw::kConnectRadiusMax == int( rw::connectcfg::kMaxRadius ),
                        "--connect-radius' refusal band drifted from the core's clamp band — the refusal would name a range the core does not honor" );
-        const rw::ConnectResult res = rw::connectSubgraph( g, terminals, std::uint32_t( cfg.connectRadius ) );
-        rw::packConnect( stdout, ing, g, res, d.redactPtr, cfg.maxTokens, cnRootArg, cnUnprovenDefs );
+        // 0.6.6 D1: a many-definition name is searched from the definition that JOINS (graph.h joinTerminalPicks)
+        const std::string cnAmbiguous = rw::joinTerminalPicks( ing, g, specs, terminals, std::uint32_t( cfg.connectRadius ) );
+        rw::packConnect( stdout, ing, g, rw::connectSubgraph( g, terminals, std::uint32_t( cfg.connectRadius ) ), d.redactPtr, cfg.maxTokens, cnRootArg, cnUnprovenDefs, cnAmbiguous );
         return 0;
     }
     return std::nullopt;
@@ -2241,6 +2248,8 @@ struct ImpactView
     std::size_t                    radiusUntested;  // A6: reaches - radiusTested
     std::size_t                    declinedCalls;   // tier-3 declines naming SYM or a radius symbol (graph.h declinedCallsNaming)
     const rw::Graph&               g;               // M15: the gauge pair (graphCountFloorAttrXml) reads ambOut/unresolvedOut
+    const std::vector<std::uint32_t>& depth;        // 0.6.5: transitiveCallersDepth's hop per node — the row's d=
+    std::span<const std::uint32_t> byDepth;         // 0.6.5: graph.h depthCounts over the FULL reach set — the root's by_depth=
 };
 
 // --format=columnar (RESEARCH lever 1): same page window, path-table + parallel arrays.
@@ -2261,6 +2270,7 @@ int emitImpactColumnar( const ImpactView& v )
     const std::string       attr = "of=\"" + std::string( escapeXml( v.sym, esc ) ) + "\" defs=\"" + std::to_string( v.defs )
                                  + "\" reaches=\"" + std::to_string( v.reaches ) + "\""
                                  + rw::unprovenDefsAttrXml( v.unprovenDefs )                      // H1: where the XML root carries it
+                                 + rw::byDepthAttrXml( v.byDepth )                                // 0.6.5: the XML root's, same place
                                  + " importers=\"" + std::to_string( v.imports.files.size() ) + "\""
                                  + rw::importsUnresolvedAttrXml( v.imports.importsUnresolved )   // #220: the XML root's, absent at 0
                                  + rw::countAttrXmlOrEmpty( "tsconfig_unread", std::size_t( v.imports.tsconfigUnread ) )
@@ -2284,7 +2294,7 @@ int emitImpactColumnar( const ImpactView& v )
                                                             : " lens=\"shown_importers,importers_capped,importers_next\"" )
                                  + rw::renderDisclosure( v.prD, rw::DiscloseAs::XmlAttrs )   // W2-F
                                  + rw::nextAttrXml( rw::nextFlag( "--safe-delete=", v.sym ) );   // P3 (L7): the XML root's next=, same set
-    emitColumnarSymbolRows( stdout, v.ing, "impact", attr.c_str(), rows, v.rootPrefix, v.testReach );
+    emitColumnarSymbolRows( stdout, v.ing, "impact", attr.c_str(), rows, v.rootPrefix, v.testReach, &v.depth );
     return 0;
 }
 
@@ -2300,8 +2310,9 @@ int emitImpactJson( const ImpactView& v )
     using namespace rw;
     char ipab[ kPageDisclosureCap ];
     const std::size_t shownRows = v.page.end - v.page.begin;
-    rw::emitTo( stdout, "{{\"of\":\"{}\",\"defs\":{},\"reaches\":{}{}", jsonStr( v.sym ).c_str(), v.defs, v.reaches,
-                 rw::unprovenDefsKeyJson( v.unprovenDefs ).c_str() );   // H1: absent at zero, like its XML twin
+    rw::emitTo( stdout, "{{\"of\":\"{}\",\"defs\":{},\"reaches\":{}{}{}", jsonStr( v.sym ).c_str(), v.defs, v.reaches,
+                 rw::unprovenDefsKeyJson( v.unprovenDefs ).c_str(),   // H1: absent at zero, like its XML twin
+                 rw::byDepthKeyJson( v.byDepth ) );                   // 0.6.5: the XML root's by_depth=, as an array
     rw::emitTo( stdout, ",\"importers\":{},\"shown_importers\":{},\"importers_capped\":{}",
                  v.imports.files.size(), v.imports.shown, v.imports.capped ? "true" : "false" );
     if( !v.imports.next.empty() )   // cut-fix E: the XML root's importers_next=, present on a cut only
@@ -2318,7 +2329,7 @@ int emitImpactJson( const ImpactView& v )
                                  v.pageLimit, v.pageOffset, true, kJsonPageSyntax ),
                  rw::graphCountFloorAttrJson( v.g ).c_str(),                                                // §H4 §3.4
                  rw::renderDisclosure( v.prD, rw::DiscloseAs::JsonKeys ).c_str() );           // W2-F: ONE keyset
-    printJsonSymbolRows( v.ing, v.show, v.page.begin, v.page.end, v.rootPrefix, v.testReach );
+    printJsonSymbolRows( v.ing, v.show, v.page.begin, v.page.end, v.rootPrefix, v.testReach, &v.depth );
     rw::emitTo( stdout, "],\"import_reach\":[" );
     rw::emitImportRowsJson( stdout, v.ing, v.importPage, v.rootPrefix, v.importLazyPage );
     rw::emitTo( stdout, "]}}" );
@@ -2336,8 +2347,9 @@ int emitImpactXml( const ImpactView& v )
     const auto        ex        = [ & ]( std::string_view t ) -> std::string { return std::string( escapeXml( t, esc ) ); };
     char              ipab[ kPageDisclosureCap ];
     const std::size_t shownRows = v.page.end - v.page.begin;
-    rw::emitTo( stdout, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
+    rw::emitTo( stdout, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}>",
                  ex( v.sym ).c_str(), v.defs, v.reaches, rw::unprovenDefsAttrXml( v.unprovenDefs ).c_str(),   // H1: beside the reaches= it qualifies
+                 rw::byDepthAttrXml( v.byDepth ),                                                              // 0.6.5: partitions reaches= by hop depth
                  v.imports.xmlAttrs.c_str(), v.radiusTested, v.radiusUntested,
                  rw::declinedCallsAttrXml( v.declinedCalls ).c_str(),   // tier-3 declines into the radius
                  std::string( v.rootAttr ).c_str(),
@@ -2350,8 +2362,9 @@ int emitImpactXml( const ImpactView& v )
         const Symbol&          s  = v.ing.symbols[ v.show[i] ];
         const std::string_view rp = v.singleRoot ? rw::sarif::rootRelativeUri( v.ing.files[ s.fileId ], v.rootPrefix )
                                                  : std::string_view( v.ing.files[ s.fileId ] );
-        // A6: tested="1" only (never a literal 0) — see kTestedRowLegend.
-        rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+        // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= the row's hop depth, run-length (graph.h depthRunAttrXml).
+        rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+                     rw::depthRunAttrXml( v.show, v.depth, i, v.page.begin ),
                      rw::isTestedByReach( v.ing, *v.testReach, v.show[i] ) ? " tested=\"1\"" : "" );
     }
     rw::emitImportRowsXml( stdout, v.ing, v.importPage, v.rootPrefix, v.importLazyPage );
@@ -2385,11 +2398,14 @@ std::optional<int> runImpact( const MainDispatch& d )
                                                                    cfg.impactSym, "--impact=" ).c_str() );   // §B4.2
             return 1;
         }
-        const std::vector<NodeId> reach = rw::transitiveCallers( g, seeds );
+        // 0.6.5: the SAME walk, keeping each node's hop depth — the rows' d= and the root's by_depth=.
+        std::vector<std::uint32_t>       imDepth;
+        const std::vector<NodeId>        reach = rw::transitiveCallersDepth( g, seeds, &imDepth );
         const auto [ rank, prIters, prConverged ] = rankGraph( g );
-        const rw::RankDisclosure  prD{ prIters, prConverged, true };   // W2-F: the listing is PageRank-ordered
-        std::vector<NodeId>       show  = reach;
-        std::sort( show.begin(), show.end(), [ & ]( NodeId a, NodeId b ) { return rank[a] != rank[b] ? rank[a] > rank[b] : a < b; } );
+        const rw::RankDisclosure         prD{ prIters, prConverged, true };   // W2-F: the listing is PageRank-ordered within a depth
+        std::vector<NodeId>              show  = reach;
+        rw::orderByDepthThenRank( show, imDepth, rank );   // ranked BEFORE the page window below cuts: the deepest rows go first
+        const std::vector<std::uint32_t> imByDepth = rw::depthCounts( reach, imDepth );
 
         // A6 (survey card A6, agent-lsp): tested/untested partition of the blast radius, over the FULL
         // un-windowed reach set (not just the shown page) — the same isTestSymbol-seeded lens --safe-delete's
@@ -2428,7 +2444,8 @@ std::optional<int> runImpact( const MainDispatch& d )
             // #60: exactly when a module-scope owner is one of the rows this answer prints — the PAGE, which
             // is what `anyModuleScopeRow`'s own contract asks for ("a page of rows, never the corpus").
             const bool imHasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) );
-            rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
+            rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
+                         reach.empty() ? "" : rw::impactDepthLegend( cfg.columnar ),   // 0.6.5: exactly when rows (d=) and by_depth= exist
                          cfg.columnar ? rw::kImpactImportTierColumnarLegend : rw::kImpactImportTierLegend,
                          rw::impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread ).c_str(),   // #220: exactly when the root carries them
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
@@ -2436,7 +2453,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                          rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
                          rw::declinedCallsLegendWithGate( imDeclinedCalls > 0, g.gateDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
                          rw::modScopeLegend( imHasModScope ),                      // #60: likewise, exactly when a t="modscope" row is
-                         rw::graphCountDisclosure( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
+                         rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         }
         // P2.1 + §P8 G1: the rank-ordered listing's 40 is a DEFAULT now, not a ceiling — see the §P10.3 note
         // above runImpact; pageDisclosure emits the ` shown= capped=` bytes this verb used to hand-roll
@@ -2446,7 +2463,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                                imPage,   // the same window the legend predicate above reads — one expression, not two
                                imports, importPage, importLazyPage, prD, imSingleRoot, imRootPrefix, imRootAttr,
                                imSingleRoot ? cfg.roots[0] : std::string_view(), cfg.pageLimit, cfg.pageOffset,
-                               &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, g };
+                               &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, g, imDepth, imByDepth };
 
         if( cfg.columnar ) { return emitImpactColumnar( view ); }
         if( cfg.json     ) { return emitImpactJson( view ); }
@@ -2504,6 +2521,7 @@ std::optional<int> runMentions( const MainDispatch& d )
         std::sort( docs.begin(), docs.end() );  docs.erase( std::unique( docs.begin(), docs.end() ), docs.end() );
         const std::size_t           sectionCount = docs.size();
         std::vector<MentionFileRow> fileRows     = collapseMentionsToFileRows( ing, docs );
+        const UnbacktickedDocs      unbackticked = unbacktickedDocsFor( ing, defs, fileRows, mnSingleRoot );
 
         std::vector<char> esc;
         const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
@@ -2514,6 +2532,7 @@ std::optional<int> runMentions( const MainDispatch& d )
                      "No line locator: the doc edge is stored at file granularity — a fabricated always-1 l= was removed; absent beats fake -->{}",
                      rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Mentions, mnUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
                      rw::rootRelPathsLegend( mnSingleRoot ) );
+        rw::emitRaw( stdout, unbackticked.legend.c_str() );
         // §P15/§P16: fileRows is deterministic (file path order) and printed unconditionally, no historic
         // display cap — pageWindow directly on cfg.pageLimit/cfg.pageOffset, discloseCap=false so the
         // un-paginated tag stays byte-identical.
@@ -2525,8 +2544,8 @@ std::optional<int> runMentions( const MainDispatch& d )
         const std::string mnSymAttr  = ( !cfg.mentionsSym.empty() && cfg.mentionsSym.front() == '@' )
                                      ? " sym=\"" + ex( ing.symbols[ defs[0] ].name ) + "\""
                                      : std::string();
-        rw::emitTo( stdout, "<mentions of=\"{}\"{} defs=\"{}\" docs=\"{}\" sections=\"{}\"{}{}{}>", ex( cfg.mentionsSym ).c_str(), mnSymAttr.c_str(), defs.size(),
-                     fileRows.size(), sectionCount,
+        rw::emitTo( stdout, "<mentions of=\"{}\"{} defs=\"{}\" docs=\"{}\" sections=\"{}\"{}{}{}{}>", ex( cfg.mentionsSym ).c_str(), mnSymAttr.c_str(), defs.size(),
+                     fileRows.size(), sectionCount, unbackticked.attr.c_str(),
                      rw::unprovenDefsAttrXml( mnUnprovenDefs ).c_str(),   // H1: beside the zero counts it qualifies; absent at zero
                      pageDisclosure( mentionsAb, sizeof( mentionsAb ), mentionsPw.end - mentionsPw.begin, fileRows.size(), mentionsPw.end,
                                      cfg.pageLimit, cfg.pageOffset, false ),

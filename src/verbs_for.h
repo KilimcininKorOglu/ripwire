@@ -3590,7 +3590,7 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         // conditional on g.unindexedFiles, so its definition has to be too.
         // H1: the unproven_defs= clause takes the same route for the same reason (graphlegend.h unprovenDefsVerbComment).
         rw::emitTo( stdout, "{}{}{}{}", rw::ctxRootOpen( {}, {}, tvRootArg ).c_str(), rw::kLegoLegend,
-                     rw::graphUnindexedLegendComment( g.unindexedFiles > 0 ).c_str(),
+                     rw::graphUnindexedLegendComment( rw::graphGaugeClauses( g ) ).c_str(),
                      rw::unprovenDefsVerbComment( rw::UnprovenDefsVerb::Lego, legoUnprovenDefs > 0, "<!-- ripwire lego: " ).c_str() );
         packLego( stdout, ing, g.implementors, flat, 1, d.redactPtr, &legoImpure, focus, /*withPaths=*/true, tvRootArg,
                   rw::unprovenDefsAttrXml( legoUnprovenDefs ) + rw::graphCountFloorAttrXml( g ) );   // H1 + M15: residue, gauge, marker on the targeted root

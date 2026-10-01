@@ -962,7 +962,7 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     // splices. It is load-bearing HERE more than anywhere: callers="1" on a symbol with an unmodelled second
     // caller is the exact shape §H4 measured, and this legend's own "the tree as it stands" paragraph reads
     // as if the caller SET were complete.
-    out += graphCountDisclosure( g.unindexedFiles > 0 );
+    out += graphCountDisclosure( rw::graphGaugeClauses( g ) );
     out += modScopeLegend( editCheckShowsModuleScope( ing, callerIds, callerIncompatible, rowWindow ) );   // #60
     // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker, spelled identically on every notes-surfacing
     // emitter — absent on a clean read (no sidecar, every line parsed, or `ni` itself null, as the MCP verb

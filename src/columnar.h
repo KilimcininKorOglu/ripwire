@@ -141,6 +141,44 @@ inline void emitColumnarTestedColumn( std::FILE* out, const IngestResult& ing, c
     std::fputs( "</tested>", out );
 }
 
+// 0.6.5: the optional dense `<depth>` column — --impact's hop depth per row (graph.h transitiveCallersDepth), one value
+// per row in row order. Built as one string and written once: a depth is a multi-digit number, not the tested column's
+// single character.
+inline void emitColumnarDepthColumn( std::FILE* out, const std::vector<NodeId>& rows, const std::vector<std::uint32_t>& depth )
+{
+    std::string column = "<depth>";
+    for( NodeId n : rows )
+    {
+        column += std::to_string( depth[n] );
+        column += ',';
+    }
+    if( !rows.empty() )
+    {
+        column.pop_back();   // the separator after the last value
+    }
+    column += "</depth>";
+    rw::emitTo( out, "{}", column );
+}
+
+// The optional columns a caller asked for, and the fields= suffix naming them, in ONE place: emitColumnarSymbolRows
+// reads each through these, so its own branch count does not grow per optional column.
+inline std::string_view columnarOptionalFields( bool hasTested, bool hasDepth ) noexcept
+{
+    return hasTested ? ( hasDepth ? ",tested,depth" : ",tested" ) : ( hasDepth ? ",depth" : "" );
+}
+inline void emitColumnarOptionalColumns( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& rows,
+                                         const std::vector<char>* testReach, const std::vector<std::uint32_t>* depth )
+{
+    if( testReach )
+    {
+        emitColumnarTestedColumn( out, ing, rows, *testReach );
+    }
+    if( depth )
+    {
+        emitColumnarDepthColumn( out, rows, *depth );
+    }
+}
+
 // COLUMNAR form of a symbol-row verb (--callers/--callees/--impact/--pr-context symbols). `wrapperTag` is the
 // element name ("callers"), `wrapperAttrs` the already-formatted attribute string ("of=\"X\" count=\"17\"").
 // `rows` are the symbol node ids in the caller's already-sorted order. Emits:
@@ -149,10 +187,13 @@ inline void emitColumnarTestedColumn( std::FILE* out, const IngestResult& ing, c
 // A6: `testReach` is optional — when given, "tested" joins fields= and a fifth dense `<tested>0,1,..</tested>`
 // column rides alongside (a parallel array cannot omit a false entry the way an XML attribute can; the
 // column itself is present only when a caller passed the lens, so a caller with no test data pays 0 bytes).
+// 0.6.5: `depth` (optional, --impact only) adds a dense `<depth>` column — transitiveCallersDepth's hop per row — and
+// names it in fields=; a caller that passes none pays 0 bytes, like the tested column.
 inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
                                     const char* wrapperTag, const std::string& wrapperAttrs,
                                     const std::vector<NodeId>& rows, std::string_view rootPrefix = {},
-                                    const std::vector<char>* testReach = nullptr )
+                                    const std::vector<char>* testReach = nullptr,
+                                    const std::vector<std::uint32_t>* depth = nullptr )
 {
     std::vector<char> esc;
 
@@ -167,7 +208,7 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
     std::fputs( kColumnarLegend, out );   // §B1.5: once per output, before the element it describes
     rw::emitTo( out, "<{} {} format=\"columnar\">", wrapperTag, wrapperAttrs.c_str() );
     emitPathTable( out, ing, uniqueFiles, esc, rootPrefix );
-    rw::emitTo( out, "<cols n=\"{}\" fields=\"path,name,line,kind{}\">", rows.size(), testReach ? ",tested" : "" );
+    rw::emitTo( out, "<cols n=\"{}\" fields=\"path,name,line,kind{}\">", rows.size(), columnarOptionalFields( testReach != nullptr, depth != nullptr ) );
 
     // path index array
     std::fputs( "<path>", out );
@@ -215,11 +256,8 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
         std::fputs( symTag( ing.symbols[rows[i]].kind ), out );
     }
     std::fputs( "</kind>", out );
-    // A6: present only when the caller passed the lens — see the wrapper banner and emitColumnarTestedColumn.
-    if( testReach )
-    {
-        emitColumnarTestedColumn( out, ing, rows, *testReach );
-    }
+    // A6 / 0.6.5: each present only when the caller passed it — see the wrapper banner and emitColumnarOptionalColumns.
+    emitColumnarOptionalColumns( out, ing, rows, testReach, depth );
 
     rw::emitTo( out, "</cols></{}>", wrapperTag );
 }

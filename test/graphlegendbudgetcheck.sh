@@ -112,8 +112,14 @@ budgetFor(){
         # Measured on the base binary 3894 / 4052 B, on this lane 3926 / 4089 B; each keeps the headroom its #66 re-pin
         # left (impact 48 B, uses 25 B). callers' own sentence (+28 B) fits its 3429 unchanged. uses 4114 still sits below
         # the 4303 B pre-fix number at the top, so the gate stays RED on the 1dc7b01 binary.
+        # RE-PINNED impact +362 (2026-09-27, lane impact-depth-065, depth-labelled --impact): the full legend gains
+        # graphlegend.h kImpactDepthLegend, the one definition of the rows' d= (run-length hop depth), the root's
+        # by_depth= and the new depth-first row order a cut relies on — attributes the answer now emits, present only
+        # when reaches>0. Measured on this probe: 3926 B on main (3fcd515f), 4288 B on this lane (+362 B, exactly the
+        # clause); 4336 keeps impact's 48 B headroom. The gate's RED-on-1dc7b01 property rests on the uses pin (4114 <
+        # 4303), which does not move.
         callers) echo 3429 ;;
-        impact)  echo 3974 ;;
+        impact)  echo 4336 ;;
         uses)    echo 4114 ;;
     esac
 }

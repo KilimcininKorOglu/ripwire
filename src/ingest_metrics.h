@@ -569,6 +569,25 @@ inline void ev_countWhy( EvCtx& ctx, EvWhyTag tag ) noexcept
     ++ctx.why[ std::size_t( tag ) ];
 }
 
+// Is `t` a FUNCTION node — named or anonymous, in any grammar — whose body is a scope of its own? The ev arena's jump
+// barrier and the function-local def scope (ingest_names.h enclosingFunctionScope) read the SAME list, so the two can
+// never disagree about where a function starts. A miss here is the ONE table error that would OVER-count ev (a
+// return inside an unrecognised closure shape would mark the outer function's constructs), which is why this list
+// errs wide and every entry was probe-verified. Only ever handed NAMED node kinds by its callers where a spelling
+// doubles as an anonymous keyword token (`lambda`, `method`): an ancestor is never a leaf token.
+inline bool isFunctionBoundaryKind( const char* t ) noexcept
+{
+    return kindIs( t, "lambda_expression" )   || kindIs( t, "lambda" )
+        || kindIs( t, "closure_expression" )  || kindIs( t, "function_definition" )
+        || kindIs( t, "function_declaration" ) || kindIs( t, "function_expression" )
+        || kindIs( t, "arrow_function" )      || kindIs( t, "generator_function" )
+        || kindIs( t, "generator_function_declaration" ) || kindIs( t, "method_definition" )
+        || kindIs( t, "method_declaration" )  || kindIs( t, "func_literal" )
+        || kindIs( t, "function_item" )       || kindIs( t, "lambda_literal" )
+        || kindIs( t, "local_function_statement" ) || kindIs( t, "anonymous_method_expression" )
+        || kindIs( t, "method" )              || kindIs( t, "singleton_method" );
+}
+
 // is `t` a control construct the arena tracks, and of what kind? Lang-gated where node-type spellings
 // collide across grammars (Swift's `do_statement` is a try, the C family's a loop; Ruby's bare-word kinds
 // double as anonymous keyword tokens elsewhere — the caller's isNamed gate recovers them, exactly as
@@ -637,18 +656,8 @@ inline bool ev_ctrlKindFor( const char* t, Lang lang, CtrlKind& kindOut ) noexce
         kindOut = CtrlKind::Catch;
         return true;
     }
-    // function boundaries — the jump barrier. A miss here is the ONE table error that would OVER-count
-    // (a return inside an unrecognised closure shape would mark the outer function's constructs), which
-    // is why this list errs wide and every entry was probe-verified.
-    if(    kindIs( t, "lambda_expression" )   || kindIs( t, "lambda" )
-        || kindIs( t, "closure_expression" )  || kindIs( t, "function_definition" )
-        || kindIs( t, "function_declaration" ) || kindIs( t, "function_expression" )
-        || kindIs( t, "arrow_function" )      || kindIs( t, "generator_function" )
-        || kindIs( t, "generator_function_declaration" ) || kindIs( t, "method_definition" )
-        || kindIs( t, "method_declaration" )  || kindIs( t, "func_literal" )
-        || kindIs( t, "function_item" )       || kindIs( t, "lambda_literal" )
-        || kindIs( t, "local_function_statement" ) || kindIs( t, "anonymous_method_expression" )
-        || kindIs( t, "method" )              || kindIs( t, "singleton_method" ) )
+    // function boundaries — the jump barrier (isFunctionBoundaryKind, above).
+    if( isFunctionBoundaryKind( t ) )
     {
         kindOut = CtrlKind::Fn;
         return true;
