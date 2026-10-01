@@ -1910,10 +1910,14 @@ struct WorktreeScan
         CopyUnread,      // a changed path could not be read: its HEAD rows stand
         OverPathCap,     // more changed paths than kMaxWorktreePaths: the rest keep their HEAD rows
     };
-    void disclose( DisclosureWhy why ) noexcept
-    {
-        state = ( why == DisclosureWhy::ListingFailed ) ? WorktreeOverlay::Unlisted : WorktreeOverlay::Partial;
-    }
+    // What each disclosure leaves the overlay able to vouch for, indexed by DisclosureWhy.
+    static constexpr WorktreeOverlay kStateAfter[] = { WorktreeOverlay::Unlisted, WorktreeOverlay::Partial, WorktreeOverlay::Partial };
+    void disclose( DisclosureWhy why ) noexcept { state = kStateAfter[ std::size_t( why ) ]; }
+
+    // Whether HEAD's blob for `path` was superseded by its working copy (read here, or gone from disk).
+    bool replaces( std::string_view path ) const { return std::binary_search( replaced.begin(), replaced.end(), path ); }
+    // Whether every HEAD row the answer keeps is also the checkout's content — the overlay's half of complete=.
+    bool vouchesForHead() const noexcept { return state == WorktreeOverlay::Clean || state == WorktreeOverlay::Read; }
 };
 
 // Read the working copy of every path under the root that differs from HEAD and scan it for SYM. A row found
@@ -1965,6 +1969,41 @@ inline WorktreeScan scanWorktree( const std::string& root, std::string_view sym,
     // computeWhereis binary-searches `replaced`: a subsequence of the sorted, de-duplicated listing, so sorted too.
     ENSURES( std::is_sorted( scan.replaced.begin(), scan.replaced.end() ), "whereis: the overlay's replaced paths must stay sorted for the HEAD-site filter" );
     return scan;
+}
+
+// The emitted ORDER of --whereis rows (see computeWhereis' header): the checkout (HEAD plus its worktree rows) first
+// as ONE group — a definition the edit just added sorts among HEAD's definitions, not after them; the two never
+// share a path, so the group needs no ref order inside it — then the other refs by name; within a group SOURCE
+// before test before docs (§P11.5), then definitions before references, then path and line.
+inline bool whereHitBefore( const WhereHit& a, const WhereHit& b )
+{
+    const bool ah = a.inCheckout(), bh = b.inCheckout();
+    if( ah != bh )
+    {
+        return ah;
+    }
+    if( !ah && a.ref != b.ref )
+    {
+        return a.ref < b.ref;
+    }
+    const PathTier at = pathTierOf( a.path ), bt = pathTierOf( b.path );
+    if( at != bt )
+    {
+        return at < bt;
+    }
+    if( a.isDef != b.isDef )
+    {
+        return a.isDef;
+    }
+    if( a.path != b.path )
+    {
+        return a.path < b.path;
+    }
+    if( a.line != b.line )
+    {
+        return a.line < b.line;
+    }
+    return a.fromWorktree < b.fromWorktree;
 }
 
 // The whole --whereis computation. Every ref's FULL tree is enumerated, but each distinct blob is READ once:
@@ -2023,7 +2062,7 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
         }
         for( const RawRow& r : rows )
         {
-            if( i == 0 && std::binary_search( worktree.replaced.begin(), worktree.replaced.end(), r.path ) )
+            if( i == 0 && worktree.replaces( r.path ) )
             {
                 continue;   // HEAD's blob for a path the working tree changed: the overlay's rows answer for it
             }
@@ -2055,48 +2094,16 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
 
     // T1: exhaustive-over-text iff every sha streamed clean AND no ref's tree listing was suspect. An empty
     // sha list (every scanned tree empty, or none) trivially streamed clean — anyEmptyTree covers that shape.
-    result.scanExhaustive = blobStats.exhaustiveOverText() && !anyEmptyTree && enumeration.refsDropped == 0
-                         && ( worktree.state == WorktreeOverlay::Clean || worktree.state == WorktreeOverlay::Read );
+    result.scanExhaustive = blobStats.exhaustiveOverText() && !anyEmptyTree && enumeration.refsDropped == 0 && worktree.vouchesForHead();
     result.hits.insert( result.hits.end(), std::make_move_iterator( worktree.hits.begin() ), std::make_move_iterator( worktree.hits.end() ) );
 
     // §A7: HEAD's rows are the INDEX's answer, not the shape test's — before the sort, because "definitions
     // before references" is a sort key and a wrong label re-orders the first screen.
     result.headLabelsFromIndex = relabelHeadHitsFromIndex( result.hits, evidence.indexDefs );
 
-    // HEAD first, then refs by name; within a ref, SOURCE before test before docs (§P11.5, see this
-    // function's header), then definitions before references, then path/line.
-    // The checkout (HEAD plus its worktree rows) is ONE group: a definition the edit just added sorts among
-    // HEAD's definitions, not after them. The two never share a path, so the group needs no ref order inside it.
-    std::sort( result.hits.begin(), result.hits.end(), []( const WhereHit& a, const WhereHit& b )
-    {
-        const bool ah = a.inCheckout(), bh = b.inCheckout();
-        if( ah != bh )
-        {
-            return ah;
-        }
-        if( !ah && a.ref != b.ref )
-        {
-            return a.ref < b.ref;
-        }
-        const PathTier at = pathTierOf( a.path ), bt = pathTierOf( b.path );
-        if( at != bt )
-        {
-            return at < bt;
-        }
-        if( a.isDef != b.isDef )
-        {
-            return a.isDef;
-        }
-        if( a.path != b.path )
-        {
-            return a.path < b.path;
-        }
-        if( a.line != b.line )
-        {
-            return a.line < b.line;
-        }
-        return a.fromWorktree < b.fromWorktree;
-    } );
+    // The checkout first, then refs by name; within a group, SOURCE before test before docs (§P11.5, see this
+    // function's header), then definitions before references, then path/line — whereHitBefore states it.
+    std::sort( result.hits.begin(), result.hits.end(), whereHitBefore );
     return result;
 }
 
