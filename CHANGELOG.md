@@ -279,6 +279,11 @@ entry (751). The full legend's sentence "at= is sha-only here (never +dirty)" is
 file, the no-stale-row invariant, MCP twin, an unreadable changed path) and `test/gitstampcheck.sh` (the documented
 whereis exception is closed).
 
+`--whereis=Class.method` and `--whereis=Class#method` searched that spelling as a literal, and no tree spells a
+method's definition that way, so they answered `hits="0" on-head="0" complete="1"` with no note. Such an answer now
+carries `<selector-note r="dotted-selector" spec= retry=>`, whose `retry=` is the bare method name, and claims no
+`complete=`. The full legend names the fourth reason. Gate: `test/completecheck.sh` §18k.
+
 A symbol that is not in the index is still a refusal (exit 1) on `--callers`, `--callees`, `--impact`, `--uses` and
 the other symbol verbs, as README §6.2 and the `--callers` example in docs/COMMANDS.md document. `--whereis` already
 answers a zero as a document (exit 0, `hits="0"`). completecheck §18j pins both.

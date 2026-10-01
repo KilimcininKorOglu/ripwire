@@ -492,6 +492,26 @@ chmod 644 "$WT/src/main.c"
 { [ $rc -eq 1 ] && [ ! -s "$TMP/wt0c.xml" ] && grep -q 'not found' "$TMP/wt0c.err"; } \
     && ok 'callers (18j): the same name is the documented refusal (exit 1, stderr names it, stdout empty)' \
     || no "callers (18j): the unknown-symbol contract moved (rc=$rc)"
+# 18k) a Class.method / Class#method selector is searched as a LITERAL, and no tree spells a method's definition
+# that way. It used to answer hits="0" on-head="0" complete="1" with no note — a zero shaped exactly like a name this
+# repo never had (the edit-check lane's finding). The zero now carries a selector-note r="dotted-selector" whose
+# retry= is the bare method name, and complete= is withheld: the scan did not answer the question the selector asked.
+mkdir -p "$TMP/dotted" && printf 'class Shape:\n    def area( self ):\n        return 1\n' >"$TMP/dotted/shape.py"
+( cd "$TMP/dotted" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+for sel in 'Shape.area' 'Shape#area'; do
+    D="$( "$BIN" "$TMP/dotted" --whereis="$sel" --no-cache 2>/dev/null )"; DR="$( printf '%s' "$D" | wroot )"
+    { printf '%s' "$D" | grep -q "<selector-note r=\"dotted-selector\" spec=\"$sel\" retry=\"area\"/>" \
+      && ! printf '%s' "$DR" | grep -q 'complete='; } \
+        && ok "whereis (18k): $sel says the dotted selector was searched literally (retry=\"area\") and claims no complete=" \
+        || { no "whereis (18k): $sel claims a measured zero for a selector it never resolved"; printf '%s\n' "$DR"; }
+done
+"$BIN" "$TMP/dotted" --whereis=area --no-cache 2>/dev/null | grep -q '<hit ref="HEAD" [^>]*p="shape.py" l="2" kind="def"' \
+    && ok 'whereis (18k): the offered retry (the bare name) finds the method definition' \
+    || no 'whereis (18k): the offered retry does not find the definition'
+"$BIN" "$TMP/dotted" --whereis=area --no-cache 2>/dev/null | grep -q 'dotted-selector' \
+    && no 'whereis (18k): a bare name grew a dotted-selector note' || ok 'whereis (18k): a bare name carries no dotted-selector note'
+
 command -v xmllint >/dev/null 2>&1 && { printf '%s' "$W1" | xmllint --noout - 2>/dev/null \
     && ok 'whereis (18): the dirty-checkout document is well-formed' || no 'whereis (18): the dirty-checkout document fails xmllint'; }
 

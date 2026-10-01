@@ -2429,6 +2429,41 @@ inline std::string_view whereisBareNameOf( std::string_view spec )
     return spec.substr( lastColon + 1 );
 }
 
+// A `Class.method` / `Class#method` spelling (2026-10-01, found by the edit-check lane): the way docs, Python, JS,
+// Java and Ruby name a method. This verb searches its selector as a LITERAL, and no tree spells a method's
+// definition that way (it is `def area` inside `class Shape`), so the scan answered hits="0" on-head="0"
+// complete="1" with no note — a zero shaped exactly like a name this repo never had. The test is the shared
+// resolver's dotted-scope tier condition (graph.h resolveAllByDottedScope on lane/editcheck-067: a '.' or '#', and
+// no ':' or '/'), narrowed to identifier segments so a quoted literal with other punctuation is left alone.
+inline bool whereisSpecIsDotted( std::string_view spec )
+{
+    if( spec.find_first_of( ".#" ) == std::string_view::npos || spec.find_first_of( ":/" ) != std::string_view::npos )
+    {
+        return false;
+    }
+    std::size_t segmentLen = 0;
+    for( const char c : spec )
+    {
+        const bool separator = c == '.' || c == '#';
+        if( separator && segmentLen == 0 )
+        {
+            return false;   // an empty segment: ".x", "a..b", "a#"
+        }
+        if( !separator && !isIdentByte( static_cast<unsigned char>( c ) ) )
+        {
+            return false;
+        }
+        segmentLen = separator ? 0 : segmentLen + 1;
+    }
+    return segmentLen > 0;
+}
+
+// The bare method name a caller should retype: the last segment. Only meaningful when whereisSpecIsDotted( spec ).
+inline std::string_view whereisDottedNameOf( std::string_view spec )
+{
+    return spec.substr( spec.find_last_of( ".#" ) + 1 );
+}
+
 // Contract-level defect: this verb said hits="2560" and printed 60, and
 // --limit/--offset were accepted and ignored, so a paging loop over it never advanced and never ended.
 // `pageLimit`/`pageOffset` (0 = un-paginated) window the hit list, which is already deterministically
@@ -2475,8 +2510,10 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
                        "impact, around, lego and edit_check accept. A file:name spelling is searched as a LITERAL "
                        "string, no tree contains it, and the result is a true but useless hits=\"0\" shaped exactly "
                        "like a name this repo never had. When that is what happened, a selector-note element says so "
-                       "and its retry= is the bare name to re-run with. That element has three reasons, and r= names which: "
-                       "qualified-selector (a file:name spelling was searched literally), line-seed (an @FILE:LINE selector "
+                       "and its retry= is the bare name to re-run with. That element has four reasons, and r= names which: "
+                       "qualified-selector (a file:name spelling was searched literally), dotted-selector (a Class.method or "
+                       "Class#method spelling was searched literally, and no tree spells a method's definition that way, so "
+                       "complete= is withheld and retry= is the bare method name, which lists that name in every class), line-seed (an @FILE:LINE selector "
                        "was RESOLVED to the definition enclosing that line before the scan, so sym= is that definition's "
                        "name and spec= is what you typed), and near-miss (the scan found nothing and the INDEX holds a name "
                        "one or two edits away — the tree zero is still a measurement, the note only says which zero it is). "
@@ -2535,7 +2572,10 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
     // LAST (after at=) so no existing attribute-adjacency assertion can break on it, the same placement rule
     // the graph verbs' floor marker follows. When either half fails, NOTHING is added: the truncation
     // vocabulary above already covers every partial shape, and complete-equals-zero would be noise.
-    const bool completeClaim = res.scanExhaustive && hitPage.begin == 0 && hitPage.end == res.hits.size();
+    // A dotted selector was searched as a literal the question did not mean: exhaustive over that literal, but not
+    // an answer to "where is Class.method", so it never claims (its selector-note below says why).
+    const bool dottedSel     = whereisSpecIsDotted( res.sym );
+    const bool completeClaim = res.scanExhaustive && hitPage.begin == 0 && hitPage.end == res.hits.size() && !dottedSel;
     // H14/M6: refs_scanned="80" under a ref-name filter is a total for the FILTER, not for the repo (the
     // audit measured 80 filtered vs 189 unfiltered) — so the filter is named beside the number it bounds.
     const std::string whFilterAttr = res.filter.empty() ? std::string() : ( " filter=\"" + ex( res.filter ) + "\"" );
@@ -2559,6 +2599,13 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
     {
         rw::emitTo( out, "<selector-note r=\"qualified-selector\" spec=\"{}\" retry=\"{}\"/>",
                       ex( res.sym ).c_str(), ex( whereisBareNameOf( res.sym ) ).c_str() );
+    }
+    // The dotted spelling, on EVERY answer that carries one: a nonzero list is the literal's occurrences (call sites
+    // like `Shape.area(…)`), never the definition, so the note rides beside it too.
+    if( dottedSel )
+    {
+        rw::emitTo( out, "<selector-note r=\"dotted-selector\" spec=\"{}\" retry=\"{}\"/>",
+                      ex( res.sym ).c_str(), ex( whereisDottedNameOf( res.sym ) ).c_str() );
     }
     // H7: the same element, two more reasons — the line seed that was RESOLVED before the scan (so sym= is a
     // name and not the raw @spec), and the near-miss beside a zero the index can explain.
