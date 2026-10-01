@@ -28,6 +28,7 @@
 #include "gitmine.h"    // F3 (H2H-Graft): RecentFile — the map's <recent> rows are the churn-decay miner's own product
 
 #include <algorithm>
+#include <numeric>     // std::iota — codeFirstKeep
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>    // §H7 degrade seam: std::getenv for the non-release fault switch
@@ -1985,23 +1986,12 @@ inline DataSectionsCut codeFirstKeep( const IngestResult& ing, std::vector<NodeI
         isKept[ keptSections[ keptSections.size() - 1 - s ] ] = 0;   // the lowest-ranked kept Sections leave
         isKept[ excludedCode[ s ] ]                         = 1;   // the highest-ranked excluded code rows come in
     }
-    std::vector<NodeId> picked;
-    picked.reserve( order.size() );
-    for( std::size_t pos = 0; pos < order.size(); ++pos )
-    {
-        if( isKept[ pos ] )
-        {
-            picked.push_back( order[ pos ] );
-        }
-    }
-    for( std::size_t pos = 0; pos < order.size(); ++pos )
-    {
-        if( !isKept[ pos ] )
-        {
-            picked.push_back( order[ pos ] );
-        }
-    }
-    ENSURES( picked.size() == order.size(), "the pick is a permutation of the order" );
+    // the kept positions first, then the rest, each group in rank order (a stable partition of the positions)
+    std::vector<std::size_t> positions( order.size() );
+    std::iota( positions.begin(), positions.end(), std::size_t( 0 ) );
+    std::stable_partition( positions.begin(), positions.end(), [ & ]( std::size_t pos ) { return isKept[ pos ] != 0; } );
+    std::vector<NodeId> picked( order.size() );
+    std::transform( positions.begin(), positions.end(), picked.begin(), [ & ]( std::size_t pos ) { return order[ pos ]; } );
     order = std::move( picked );
     return c;
 }
