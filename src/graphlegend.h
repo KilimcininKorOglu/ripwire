@@ -635,6 +635,23 @@ inline std::string declinedCallsKeyJson( std::size_t declinedCalls )
     return declinedCalls > 0 ? ",\"declined_calls\":" + std::to_string( declinedCalls ) : std::string();
 }
 
+// ── declined_iface= on the callers and impact answers and their MCP twins (callhierarchy.h declinedIfaceCallsNaming) ──
+// The declines a TypeScript interface-typed receiver explains: the resolver does not narrow on a type annotation, so
+// `r.match()` with `r: Router` is declined once `match` has several definitions, and the interface's own answer had no
+// count for it at all. Absent at zero, like declined_calls=; its clause rides exactly when the attribute does. No double
+// hyphen anywhere, because it lands inside an XML comment.
+inline constexpr const char* kDeclinedIfaceLegend =
+    "declined_iface=K (absent when 0) counts declined TypeScript call SITES whose called name is also a method signature with no body in this tree (an interface or abstract member; an overload signature beside its implementation is not one): the resolver does not narrow a call on a TypeScript type annotation, so a call through an interface-typed receiver is declined when the name has two or more definitions, and it is in no count or row here. It counts the declined calls that could have meant these definitions (or, for impact, a symbol in the radius) and those sharing the name of a signature among them, each once; the uses verb on the called name lists the sites. ";
+inline const char* declinedIfaceLegend( bool on ) noexcept { return on ? kDeclinedIfaceLegend : ""; }
+inline std::string declinedIfaceAttrXml( std::size_t declinedIface )
+{
+    return countAttrXmlOrEmpty( "declined_iface", declinedIface );
+}
+inline std::string declinedIfaceKeyJson( std::size_t declinedIface )
+{
+    return countFieldOrEmpty( "declined_iface", declinedIface, /*json=*/true );
+}
+
 // ── Depth-labelled --impact (0.6.5): by_depth= on the root, d= on the rows ──────────────────────────────────────────
 // `counts` is graph.h depthCounts over the FULL reach set: element k counts the rows first reached at hop k+1. One
 // spelling per dialect, shared by the CLI --impact and its MCP twin so the two cannot drift. Absent when the reach set

@@ -24,6 +24,8 @@
 #include "graph.h"     // resolveAllByNameQualified, the CSR, testSymbolForwardReach / countTestedIn / isTestedByReach
 #include "model.h"
 
+#include <algorithm>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -79,7 +81,111 @@ struct CallHierarchyRows
     std::size_t         bodylessDefs  = 0;
     std::size_t         unprovenDefs  = 0;
     std::size_t         declinedCalls = 0;
+    std::size_t         declinedIface = 0;   // callers only: declinedIfaceCallsNaming below, the root's declined_iface=
 };
+
+// A TypeScript method with no body: an interface member (method_signature), an abstract member, an ambient (.d.ts)
+// member or an overload signature. declinedIfaceCallsNaming drops the overloads (a bodied same-named method in the
+// same file implements them, so the receiver is that class, not an interface).
+inline bool isTsBodylessMethod( const Symbol& s ) noexcept
+{
+    return s.lang == Lang::TypeScript && s.kind == SymKind::Method && s.sigEndByte == s.endByte;
+}
+
+// declined_iface= on the callers and impact answers (graphlegend.h kDeclinedIfaceLegend). The resolver does not narrow a
+// TS call on a type annotation (graph.h Rule 2 reads no `x: Router` or `router!: Router`), so a call through an
+// interface-typed receiver whose method name has several definitions is declined, and the interface's own answer did
+// not even count it: the decl/def collapse keeps the bodyless signature out of the candidate list, so declined_calls=
+// on `--callers=router.ts:match` was absent. This counts, once per CALL, the TS declines whose called name is also the
+// name of a TS bodyless method somewhere in the tree, and that either named one of `targets` among their candidates
+// (the subset of declined_calls= the gap explains) or share the name of a signature in `targets` (the interface's own
+// selector). A disclosure, never a bind: the real fix narrows on annotations and is out of this count's scope.
+// Zero, at no cost past one scan of `targets`, when no target is TypeScript, so every other language keeps its bytes.
+inline std::size_t declinedIfaceCallsNaming( const IngestResult& ing, const Graph& g, std::span<const NodeId> targets )
+{
+    if( g.declinedListCallCount.empty() || targets.empty() )
+    {
+        return 0;
+    }
+    EXPECTS( g.declinedListOff.size() == g.declinedListCallCount.size() + 1, "one offset past every declined list" );
+    const bool anyTsTarget = std::any_of( targets.begin(), targets.end(), [ & ]( NodeId t ) { return t < ing.symbols.size() && ing.symbols[t].lang == Lang::TypeScript; } );
+    if( !anyTsTarget )
+    {
+        return 0;
+    }
+    // An overload signature is no interface: its same file holds the bodied implementation under the same name.
+    std::vector<std::pair<std::uint32_t, std::string_view>> bodiedInFile;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.lang == Lang::TypeScript && s.kind == SymKind::Method && s.sigEndByte != s.endByte )
+        {
+            bodiedInFile.emplace_back( s.fileId, s.name );
+        }
+    }
+    std::sort( bodiedInFile.begin(), bodiedInFile.end() );
+    const auto isOverloadSignature = [ & ]( const Symbol& s )
+    {
+        return std::binary_search( bodiedInFile.begin(), bodiedInFile.end(), std::pair<std::uint32_t, std::string_view>( s.fileId, s.name ) );
+    };
+    std::vector<std::string_view> sigNames;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( isTsBodylessMethod( s ) && !isOverloadSignature( s ) )
+        {
+            sigNames.push_back( s.name );
+        }
+    }
+    if( sigNames.empty() )
+    {
+        return 0;
+    }
+    std::sort( sigNames.begin(), sigNames.end() );
+    sigNames.erase( std::unique( sigNames.begin(), sigNames.end() ), sigNames.end() );
+    std::vector<std::string_view> targetSigNames;   // the interface's own selector: its signatures' names
+    for( const NodeId t : targets )
+    {
+        if( t < ing.symbols.size() && isTsBodylessMethod( ing.symbols[t] ) && !isOverloadSignature( ing.symbols[t] ) )
+        {
+            targetSigNames.push_back( ing.symbols[t].name );
+        }
+    }
+    std::sort( targetSigNames.begin(), targetSigNames.end() );
+    std::vector<char> isTarget( ing.symbols.size(), 0 );
+    for( const NodeId t : targets )
+    {
+        if( t < isTarget.size() )
+        {
+            isTarget[t] = 1;
+        }
+    }
+    std::size_t callCount = 0;
+    for( std::size_t listIndex = 0; listIndex < g.declinedListCallCount.size(); ++listIndex )
+    {
+        const std::uint32_t first = g.declinedListOff[ listIndex ];
+        const std::uint32_t last  = g.declinedListOff[ listIndex + 1 ];
+        if( first == last || g.declinedListCand[ first ] >= ing.symbols.size() )
+        {
+            continue;
+        }
+        // A declined list is one called name's same-language definitions, so its first candidate names the call.
+        const Symbol& head = ing.symbols[ g.declinedListCand[ first ] ];
+        if( head.lang != Lang::TypeScript || !std::binary_search( sigNames.begin(), sigNames.end(), head.name ) )
+        {
+            continue;
+        }
+        bool counted = std::binary_search( targetSigNames.begin(), targetSigNames.end(), head.name );
+        for( std::uint32_t slot = first; !counted && slot < last; ++slot )
+        {
+            const NodeId c = g.declinedListCand[ slot ];
+            counted = c < isTarget.size() && isTarget[c];
+        }
+        if( counted )
+        {
+            callCount += g.declinedListCallCount[ listIndex ];
+        }
+    }
+    return callCount;
+}
 
 // The ONE selector derivation for both callers emitters and their legend condition.
 // A declined call names no single definition: widen only a narrowed callers selector to
@@ -148,6 +254,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
     }
 
     out.declinedCalls = wantCallers ? declinedCallsNaming( g, out.matches ) : declinedCallsMadeBy( g, out.matches );
+    out.declinedIface = wantCallers ? declinedIfaceCallsNaming( ing, g, out.matches ) : 0;
 
     // LB-G (r10 §5): TIER before path — filter.h states the key once and --uses shares it. Plain path order
     // put 171 `tests/` rows ahead of anything useful on django's `--callers=bulk_create`.
