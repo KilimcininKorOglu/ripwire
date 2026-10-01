@@ -258,6 +258,16 @@ if printf '%s' "$EN_CALLERS" | grep -q '<s t="fn" n="menu_display"' && ! printf 
 else
     no "(c) --callers=helper names a struct as a caller: $( printf '%s' "$EN_CALLERS" | grep -o '<s [^>]*>' | tr '\n' ' ' )"
 fi
+# (c2) the CALLEE direction of the same defect (tmux `cmd_find_target(…, enum cmd_find_type type, …)`: the 23 call
+# edges of the function hung off `cmd_find_type`, so --callees=cmd_find_target read count="0"). The function owns its
+# callees; the body-less parameter specifier owns none.
+EN_CE="$( "$BIN" "$EN" --no-cache --callees=menu_display 2>/dev/null )"
+EN_CE_ENUM="$( "$BIN" "$EN" --no-cache --callees=box_lines 2>/dev/null | grep -o '<callees [^>]*>' )"
+if printf '%s' "$EN_CE" | grep -q '<s t="fn" n="helper"' && printf '%s' "$EN_CE_ENUM" | grep -q 'count="0"'; then
+    ok "(c2) --callees=menu_display lists helper; the 'enum box_lines' specifier owns no callee"
+else
+    no "(c2) the parameter specifier still owns the function's calls: menu_display=$( printf '%s' "$EN_CE" | grep -o '<callees [^>]*>' ) box_lines=$EN_CE_ENUM"
+fi
 EN_CPP="$( "$BIN" "$EN/cpp" --no-cache --at=b.cpp:13 2>/dev/null )"
 printf '%s' "$EN_CPP" | grep -q 'sym="cmd_split_exec" chain="1"' \
     && ok "(d) the C++ grammar (.cpp, and .h which C++ owns) gets the same span" \
