@@ -24,6 +24,8 @@
 #include "gitstamp.h"       // r26-stamp Task A: gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
 #include "graphlegend.h"    // §H4 §3.4: the shared counts_floor= marker + floor/counting-unit legend tail
 #include "pageview.h"       // LB-G: pageWindow / effectiveRowCap / pagingDisclosure — the ONE paging vocabulary
+#include "infra/ownedfile.h" // the signature-span read behind the C/C++ declaration/definition identity
+#include "infra/namesplit.h" // namesplit::isIdentChar — the ONE ASCII identifier-byte test
 
 #include <algorithm>
 #include <cstdint>
@@ -107,13 +109,294 @@ inline std::vector<NodeId> editCheckOverloadSet( const IngestResult& ing, const 
     return overloadNodes;
 }
 
+// ── C/C++: A DECLARATION AND THE DEFINITION IT DECLARES ARE ONE CONTRACT (2026-10-01) ────────────────────
+// The field report: `int scale( int x, int factor = 2 );` in lib.h, its definition in lib.cpp, three callers passing 1,
+// 1 and 2 arguments, and a trailing `int bias = 0` added to both. Every call still compiles. The verb (1) refused the
+// bare name as "2 distinct contracts" — the prototype and its definition sit in two files, and a contract was keyed
+// per (file, scope) — (2) answered the definition's handle with incompatible="3", because the arity test below read
+// the DEFINITION's parameter list, which carries no defaults (C++ puts them on the declaration a caller sees), and
+// (3) refused the header handle the refusal itself had suggested.
+//
+// THE IDENTITY RULE. A bodyless C-family declaration D stands for a bodied definition F when ALL of these hold:
+//   * same name and same `scope` — the (scope, name) gather declToDefCandidates already uses;
+//   * F's file is D's file, or F's file #includes D's file directly — includeProofOfDeclFiles, the SAME positive proof
+//     the file:name selector widening keeps a candidate by (an unproven pair is never joined: test (I));
+//   * F has external linkage, unless D sits in F's own file (keepProvenCandidates' clause 3);
+//   * the PARAMETER-TYPE LISTS are equal — the declared types, names and default values stripped. This is what keeps
+//     real overloads apart: `scale( int, int = 2 )` never lends its default to `scale( double, int )`.
+// The types are read off the SOURCE TEXT of each signature span (no parameter-type fact is indexed). A list the reader
+// cannot parse into exactly `params` entries — a function-pointer parameter, a macro-built list, a stale span — matches
+// nothing, which is the pre-existing answer: the pair stays two contracts and no default is borrowed.
+//
+// A false "compatible" is worse than a false "incompatible" here (the flag is the verb's one call-site signal), so every
+// rule above fails CLOSED: anything unproven keeps today's stricter reading.
+//
+// `EditCheckSpliced` is the pre-apply preview's one in-memory file: the merged tree's spans for that file index the
+// spliced bytes, not the disk.
+struct EditCheckSpliced
+{
+    std::string_view bytes;
+    std::uint32_t    fileId;
+    bool             engaged;
+};
+
+// The signature text of `s`: [sigStartByte, sigEndByte) for a definition (up to its body), the whole span for a
+// declaration. Capped — a signature is never this long, and the parse below refuses a list it cannot close.
+inline std::string editCheckSignatureText( const IngestResult& ing, const Symbol& s, const EditCheckSpliced& spliced )
+{
+    constexpr std::uint32_t kSigCap = 16384;
+    const std::uint32_t     end     = isDefinitionNotDeclaration( s ) ? s.sigEndByte : s.endByte;
+    if( end <= s.sigStartByte )
+    {
+        return {};
+    }
+    const std::uint32_t len = std::min( end - s.sigStartByte, kSigCap );
+    if( spliced.engaged && spliced.fileId == s.fileId )
+    {
+        return s.sigStartByte < spliced.bytes.size() ? std::string( spliced.bytes.substr( s.sigStartByte, len ) ) : std::string();
+    }
+    OwnedFile in = openOwnedFile( diskPath( ing, s.fileId ).c_str(), "rb" );
+    if( !in || s.sigStartByte > 0x7fffffffu || std::fseek( in.file, long( s.sigStartByte ), SEEK_SET ) != 0 )
+    {
+        return {};
+    }
+    std::string text( len, '\0' );
+    text.resize( std::fread( text.data(), 1, len, in.file ) );
+    return text;
+}
+
+// One parameter's text as tokens: identifiers (with `::` kept inside them) and single punctuation bytes, so whitespace
+// never decides equality. An attribute (`[[maybe_unused]]`) is not part of the type and is skipped.
+inline std::vector<std::string> editCheckTokens( std::string_view param )
+{
+    const auto identAt = [ & ]( std::size_t i )
+    {
+        return namesplit::isIdentChar( param[i] ) || ( param[i] == ':' && i + 1 < param.size() && param[ i + 1 ] == ':' );
+    };
+    std::vector<std::string> toks;
+    std::size_t              i = 0;
+    while( i < param.size() )
+    {
+        if( param.substr( i, 2 ) == "[[" )
+        {
+            const std::size_t close = param.find( "]]", i + 2 );
+            i = ( close == std::string_view::npos ) ? param.size() : close + 2;
+            continue;
+        }
+        if( !identAt( i ) )
+        {
+            if( param[i] != ' ' && param[i] != '\t' && param[i] != '\n' && param[i] != '\r' )
+            {
+                toks.emplace_back( 1, param[i] );
+            }
+            ++i;
+            continue;
+        }
+        std::string tok;
+        while( i < param.size() && identAt( i ) )
+        {
+            const std::size_t step = ( param[i] == ':' ) ? 2u : 1u;
+            tok.append( param.substr( i, step ) );
+            i += step;
+        }
+        toks.push_back( std::move( tok ) );
+    }
+    return toks;
+}
+
+// One parameter's TYPE: its tokens minus the declarator name, which is dropped when it is the last identifier (before
+// an array suffix, if any) and a type token precedes it — `int x` -> `int`, `const Foo& f` -> `const Foo &`,
+// `int a[3]` -> `int [ 3 ]`. A keyword type is never mistaken for a name (`unsigned long` keeps both), and a lone
+// qualifier is not a type (`const Foo` keeps `Foo`).
+inline std::vector<std::string> editCheckTypeTokens( std::string_view param )
+{
+    static constexpr std::string_view kTypeWords[] = { "int", "long", "short", "char", "unsigned", "signed", "double", "float", "bool",
+                                                       "void", "auto", "wchar_t", "char8_t", "char16_t", "char32_t" };
+    static constexpr std::string_view kQualWords[] = { "const", "volatile", "struct", "class", "enum", "union", "typename", "register",
+                                                       "restrict", "__restrict" };
+    const auto in = []( const std::string& t, std::span<const std::string_view> set ) { return std::find( set.begin(), set.end(), t ) != set.end(); };
+
+    std::vector<std::string> toks   = editCheckTokens( param );
+    const auto               suffix = std::find( toks.begin(), toks.end(), std::string( "[" ) );
+    const std::size_t        nameAt = ( !toks.empty() && toks.back() == "]" ) ? std::size_t( suffix - toks.begin() ) : toks.size();
+    if( nameAt < 2 )
+    {
+        return toks;
+    }
+    const std::string& name       = toks[ nameAt - 1 ];
+    const bool         typeBefore = std::any_of( toks.begin(), toks.begin() + std::ptrdiff_t( nameAt - 1 ),
+                                                 [ & ]( const std::string& t ) { return !in( t, kQualWords ); } );
+    if( namesplit::isIdentChar( name[0] ) && !in( name, kTypeWords ) && !in( name, kQualWords ) && typeBefore )
+    {
+        toks.erase( toks.begin() + std::ptrdiff_t( nameAt - 1 ) );
+    }
+    return toks;
+}
+
+// Where the parameter list of `name` opens in a signature's text: the first '(' after a whole-word occurrence of the
+// name (whitespace between allowed), or npos.
+inline std::size_t editCheckParamOpen( std::string_view text, std::string_view name )
+{
+    for( std::size_t at = name.empty() ? std::string_view::npos : text.find( name ); at != std::string_view::npos; at = text.find( name, at + 1 ) )
+    {
+        const std::size_t after = text.find_first_not_of( " \t\r\n", at + name.size() );
+        if( ( at == 0 || !namesplit::isIdentChar( text[ at - 1 ] ) ) && after != std::string_view::npos && text[after] == '(' )
+        {
+            return after;
+        }
+    }
+    return std::string_view::npos;
+}
+
+// The raw parameters between the '(' at `open` and its matching ')', each with whether it carries a default. Split at
+// depth-0 commas; '<'/'>' nest only in a TYPE, never after its '=' (a default value may compare). Empty, with
+// `closed` false, when the list never closes.
+struct EditCheckRawParams
+{
+    std::vector<std::string_view> text;
+    std::vector<char>             defaulted;
+    bool                          closed;
+};
+
+inline EditCheckRawParams editCheckSplitParams( std::string_view text, std::size_t open )
+{
+    EditCheckRawParams raw{};
+    int                depth = 0, angle = 0;
+    bool               inDefault = false;
+    std::size_t        start     = open + 1;
+    for( std::size_t i = open + 1; i < text.size() && !raw.closed; ++i )
+    {
+        const char c        = text[i];
+        const bool atTop    = depth == 0 && ( angle == 0 || inDefault );
+        const bool assigns  = c == '=' && depth == 0 && angle == 0 && text.substr( i - 1, 3 ).find( "==" ) == std::string_view::npos
+                           && std::string_view( "!<>" ).find( text[ i - 1 ] ) == std::string_view::npos;
+        if( atTop && ( c == ')' || c == ',' ) )
+        {
+            raw.text.push_back( text.substr( start, i - start ) );
+            raw.defaulted.push_back( char( inDefault ? 1 : 0 ) );
+            start      = i + 1;
+            inDefault  = false;
+            angle      = 0;
+            raw.closed = ( c == ')' );
+            continue;
+        }
+        depth     += ( c == '(' || c == '[' || c == '{' ) ? 1 : ( c == ')' || c == ']' || c == '}' ) ? -1 : 0;
+        angle     += ( inDefault || depth != 0 ) ? 0 : ( c == '<' ) ? 1 : ( c == '>' && angle > 0 ) ? -1 : 0;
+        inDefault  = inDefault || assigns;
+    }
+    return raw;
+}
+
+// The parsed parameter list of one signature: each parameter's type and how many carry a default. `ok` is false when
+// the text does not hold `name( … )`, the list does not close, it is variadic, or it does not split into exactly
+// `params` entries — and a list that is not ok matches nothing.
+struct EditCheckParamList
+{
+    std::vector<std::vector<std::string>> types;
+    std::uint16_t                         defaulted;
+    bool                                  ok;
+};
+
+inline EditCheckParamList editCheckParamList( std::string_view text, const Symbol& s )
+{
+    EditCheckParamList       res{};
+    const std::size_t        open = editCheckParamOpen( text, s.name );
+    const EditCheckRawParams raw  = ( open == std::string_view::npos ) ? EditCheckRawParams{} : editCheckSplitParams( text, open );
+    if( !raw.closed )
+    {
+        return res;
+    }
+    for( std::size_t k = 0; k < raw.text.size(); ++k )
+    {
+        const std::string_view param = raw.defaulted[k] ? raw.text[k].substr( 0, raw.text[k].find( '=' ) ) : raw.text[k];
+        if( param.find( "..." ) != std::string_view::npos )
+        {
+            return res;   // variadic: never a fixed list
+        }
+        res.defaulted += raw.defaulted[k] ? 1u : 0u;
+        res.types.push_back( editCheckTypeTokens( param ) );
+    }
+    if( res.types.size() == 1 && ( res.types[0].empty() || res.types[0] == std::vector<std::string>{ "void" } ) )
+    {
+        res.types.clear();   // `()` and `(void)`: no parameter
+    }
+    res.ok = res.types.size() == s.params;
+    return res;
+}
+
+// THE IDENTITY RULE above, for one (declaration, definition) pair: the declaration's default count when `decl` declares
+// `def`, else nullopt. `defList` is the definition's own parsed list, read once by the caller.
+inline std::optional<std::uint16_t> editCheckDeclDeclares( const IngestResult& ing, NodeId decl, NodeId def, const EditCheckParamList& defList,
+                                                           const EditCheckSpliced& spliced )
+{
+    const Symbol& d = ing.symbols[ decl ];
+    const Symbol& f = ing.symbols[ def ];
+    const bool shapeFits = defList.ok && d.name == f.name && d.scope == f.scope && langCompatible( d.lang, Lang::C ) && langCompatible( f.lang, Lang::C )
+                        && !isDefinitionNotDeclaration( d ) && isDefinitionNotDeclaration( f ) && d.params == f.params
+                        && ( f.internalLinkage == 0 || d.fileId == f.fileId );
+    if( !shapeFits || ( d.fileId != f.fileId && includeProofOfDeclFiles( ing, { decl }, { def } )[ f.fileId ] == 0 ) )
+    {
+        return std::nullopt;
+    }
+    const EditCheckParamList declList = editCheckParamList( editCheckSignatureText( ing, d, spliced ), d );
+    if( !declList.ok || declList.types != defList.types )
+    {
+        return std::nullopt;
+    }
+    return declList.defaulted;
+}
+
+// Per member of the overload set, the FEWEST arguments a call may pass: `params` minus the defaults of the matching
+// declaration that carries the most of them (C++ lets a redeclaration add defaults; the widest reading is the one-sided
+// one). `fromDecl` is true when any member's range was widened that way — the root's defaults_from="decl".
+struct EditCheckDeclDefaults
+{
+    std::vector<std::uint16_t> minArity;   // parallel to the overload set
+    bool                       fromDecl;
+};
+
+// One definition's minimum: only a fixed-arity C-family DEFINITION can be widened — anything else is already a
+// wildcard (arityExact 0) or has no declaration to read.
+inline std::uint16_t editCheckMinArity( const IngestResult& ing, NodeId def, const EditCheckSpliced& spliced )
+{
+    const Symbol& f = ing.symbols[ def ];
+    if( !langCompatible( f.lang, Lang::C ) || f.arityExact == 0 || !isDefinitionNotDeclaration( f ) )
+    {
+        return f.params;
+    }
+    const EditCheckParamList defList  = editCheckParamList( editCheckSignatureText( ing, f, spliced ), f );
+    std::uint16_t            minArity = f.params;
+    for( NodeId cand = 0; defList.ok && cand < ing.symbols.size(); ++cand )
+    {
+        const std::optional<std::uint16_t> defaulted = ( ing.symbols[ cand ].name == f.name )
+                                                     ? editCheckDeclDeclares( ing, cand, def, defList, spliced ) : std::nullopt;
+        minArity = std::min<std::uint16_t>( minArity, std::uint16_t( f.params - std::min( defaulted.value_or( 0 ), f.params ) ) );
+    }
+    return minArity;
+}
+
+inline EditCheckDeclDefaults editCheckDeclDefaults( const IngestResult& ing, std::span<const NodeId> overloadNodes, const EditCheckSpliced& spliced )
+{
+    EditCheckDeclDefaults res{};
+    res.minArity.reserve( overloadNodes.size() );
+    for( NodeId ov : overloadNodes )
+    {
+        res.minArity.push_back( editCheckMinArity( ing, ov, spliced ) );
+        res.fromDecl = res.fromDecl || res.minArity.back() < ing.symbols[ ov ].params;
+    }
+    ENSURES( res.minArity.size() == overloadNodes.size() );
+    return res;
+}
+
 // ── §A6a: the DISTINCT contracts one --edit-check selector matched ───────────────────────────────────────
 // A contract is per definition site. --callers may honestly UNION the callers of every overload (it says so:
 // defs="3"); this verb may not — "did I break a contract?" answered about a definition the agent never edited
 // is worse than no answer, because status="unchanged" reads as reassurance. So a selector that matches more
 // than one definition SITE is REFUSED, and the refusal hands back the spellings that pick one.
 //
-// The group key is (file, scope) — see editCheckOverloadSet on why canonId alone is not enough. `spelling` is
+// The group key is (file, scope) — see editCheckOverloadSet on why canonId alone is not enough — with ONE exception for
+// the post-hoc verb: a C/C++ declaration group folds into the definition group it provably declares (editCheckFoldDeclGroups,
+// the identity rule above editCheckDeclDeclares), because a prototype and its definition are one contract. `spelling` is
 // what the caller should retype: `file:name` when that file holds exactly one group, else the canonical id
 // (both resolve through resolveAllByNameQualified).
 struct EditCheckGroup
@@ -122,12 +405,88 @@ struct EditCheckGroup
     std::string spelling;      // a selector that resolves to THIS group and no other
 };
 
-inline std::vector<EditCheckGroup> editCheckGroups( const IngestResult& ing, const Graph& g, std::span<const NodeId> matches )
+// The (file, contract) KEYS of a match list with each key's members, in first-seen order: matches arrive in ascending
+// node id (resolveAllByNameQualified walks ing.symbols in order), so members[i][0] IS group i's lowest id.
+struct EditCheckGroupKeys
 {
-    // one pass, keyed by (fileId, canonId): matches arrive in ascending node id (resolveAllByNameQualified
-    // walks ing.symbols in order), so the first node seen for a key IS the group's lowest id.
-    std::vector<EditCheckGroup>               groups;
     std::vector<std::pair<std::uint32_t, std::string>> keys;
+    std::vector<std::vector<NodeId>>                   members;
+};
+
+// THE FOLD (2026-10-01, the decl/def identity rule above editCheckDeclDeclares): a group made only of C/C++ declarations
+// is dropped when every one of them declares a definition in the match list AND all of those definitions sit in ONE
+// other group — the declaration and its definition are then one contract, answered at the definition. A declaration
+// that declares nothing in the list, or definitions in two groups (one header, a posix.cpp and a win.cpp), keeps its
+// group: those are distinct contracts and the refusal still names them.
+// The ONE group every declaration of group `groupIndex` declares into, or groupCount when some declaration declares
+// nothing in the list or the declarations land in two groups. `defListOf` parses each definition's list once.
+template <class DefListOf>
+inline std::size_t editCheckDeclTargetGroup( const IngestResult& ing, const EditCheckGroupKeys& gk, std::size_t groupIndex, DefListOf& defListOf )
+{
+    const std::size_t groupCount = gk.keys.size();
+    std::size_t       target     = groupCount;
+    for( NodeId decl : gk.members[ groupIndex ] )
+    {
+        bool declares = false;
+        for( std::size_t other = 0; other < groupCount; ++other )
+        {
+            const bool hits = other != groupIndex && std::any_of( gk.members[ other ].begin(), gk.members[ other ].end(), [ & ]( NodeId def )
+            {
+                return isDefinitionNotDeclaration( ing.symbols[ def ] ) && editCheckDeclDeclares( ing, decl, def, defListOf( def ), {} ).has_value();
+            } );
+            if( hits && target != groupCount && target != other )
+            {
+                return groupCount;   // definitions in two groups: two contracts, nothing to fold into
+            }
+            target   = hits ? other : target;
+            declares = declares || hits;
+        }
+        if( !declares )
+        {
+            return groupCount;
+        }
+    }
+    return target;
+}
+
+inline void editCheckFoldDeclGroups( const IngestResult& ing, EditCheckGroupKeys& gk )
+{
+    const std::size_t groupCount = gk.keys.size();
+    if( groupCount < 2 )
+    {
+        return;
+    }
+    std::vector<std::pair<NodeId, EditCheckParamList>> defLists;   // each definition's list, parsed once
+    const auto defListOf = [ & ]( NodeId def ) -> const EditCheckParamList&
+    {
+        const auto at = std::find_if( defLists.begin(), defLists.end(), [ def ]( const auto& entry ) { return entry.first == def; } );
+        if( at != defLists.end() )
+        {
+            return at->second;
+        }
+        defLists.emplace_back( def, editCheckParamList( editCheckSignatureText( ing, ing.symbols[ def ], {} ), ing.symbols[ def ] ) );
+        return defLists.back().second;
+    };
+
+    EditCheckGroupKeys kept;
+    for( std::size_t groupIndex = 0; groupIndex < groupCount; ++groupIndex )
+    {
+        const bool declOnly = std::all_of( gk.members[ groupIndex ].begin(), gk.members[ groupIndex ].end(), [ & ]( NodeId m )
+                              { return langCompatible( ing.symbols[m].lang, Lang::C ) && !isDefinitionNotDeclaration( ing.symbols[m] ); } );
+        if( declOnly && editCheckDeclTargetGroup( ing, gk, groupIndex, defListOf ) < groupCount )
+        {
+            continue;   // folded into the definition group it declares
+        }
+        kept.keys.push_back( gk.keys[ groupIndex ] );
+        kept.members.push_back( gk.members[ groupIndex ] );
+    }
+    ENSURES( !kept.keys.empty() );   // a folded group always names a kept one as its target
+    gk = std::move( kept );
+}
+
+inline EditCheckGroupKeys editCheckGroupKeys( const IngestResult& ing, const Graph& g, std::span<const NodeId> matches, bool foldDecls )
+{
+    EditCheckGroupKeys gk;
     for( NodeId m : matches )
     {
         if( m >= ing.symbols.size() )
@@ -136,12 +495,31 @@ inline std::vector<EditCheckGroup> editCheckGroups( const IngestResult& ing, con
         }
         const std::uint32_t fileId = ing.symbols[m].fileId;
         const std::string   canon( editCheckContractId( ( m < g.canonId.size() ) ? g.canonId[m] : ing.symbols[m].name, ing.symbols[m] ) );
-        if( std::find( keys.begin(), keys.end(), std::make_pair( fileId, canon ) ) != keys.end() )
+        const auto          at = std::find( gk.keys.begin(), gk.keys.end(), std::make_pair( fileId, canon ) );
+        if( at != gk.keys.end() )
         {
+            gk.members[ std::size_t( at - gk.keys.begin() ) ].push_back( m );
             continue;
         }
-        keys.emplace_back( fileId, canon );
-        groups.push_back( EditCheckGroup{ m, std::string{} } );
+        gk.keys.emplace_back( fileId, canon );
+        gk.members.push_back( { m } );
+    }
+    if( foldDecls )
+    {
+        editCheckFoldDeclGroups( ing, gk );
+    }
+    return gk;
+}
+
+// `foldDecls` is the post-hoc verb's identity rule (editCheckFoldDeclGroups); the pre-apply preview and the other
+// readers of these groups (the write verbs, --slice) keep one group per (file, scope), so their answers are unchanged.
+inline std::vector<EditCheckGroup> editCheckGroups( const IngestResult& ing, const Graph& g, std::span<const NodeId> matches, bool foldDecls = false )
+{
+    const EditCheckGroupKeys    gk = editCheckGroupKeys( ing, g, matches, foldDecls );
+    std::vector<EditCheckGroup> groups;
+    for( const std::vector<NodeId>& members : gk.members )
+    {
+        groups.push_back( EditCheckGroup{ members.front(), std::string{} } );
     }
 
     // the spelling: file:name is the form an agent can paste from any p="file:line" row, so prefer it and fall
@@ -150,9 +528,9 @@ inline std::vector<EditCheckGroup> editCheckGroups( const IngestResult& ing, con
     for( std::size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex )
     {
         const Symbol&      s            = ing.symbols[ groups[ groupIndex ].lowestNode ];
-        const std::string& canonOfThis  = keys[ groupIndex ].second;
+        const std::string& canonOfThis  = gk.keys[ groupIndex ].second;
         std::size_t        groupsInFile = 0;
-        for( const auto& [fileId, canon] : keys )
+        for( const auto& [fileId, canon] : gk.keys )
         {
             if( fileId == s.fileId )
             {
@@ -431,6 +809,15 @@ inline bool editCheckImplicitReceiver( const Symbol& s ) noexcept
     return ( s.lang == Lang::Python || s.lang == Lang::Ruby ) && !s.scope.empty();
 }
 
+// The arity half of the incompatibility test for one member of the overload set: can a call passing `argCount`
+// arguments bind it? A variadic/defaulted definition (arityExact 0) and an implicit receiver are wildcards; a C/C++
+// definition whose declaration carries defaults accepts [minArity, params] (editCheckDeclDefaults); every other
+// definition's minArity IS its params, so for it this is the exact test.
+inline bool editCheckArityAccepts( const Symbol& os, std::uint16_t minArity, std::uint16_t argCount ) noexcept
+{
+    return os.arityExact == 0 || editCheckImplicitReceiver( os ) || ( minArity <= argCount && argCount <= os.params );
+}
+
 // ── THE CALLEE TEST, with the Elixir arity fold ──────────────────────────────────────────────────────────
 // "Does this call reference name the focus's contract?" For every language but Elixir it is the exact
 // calleeName == name test the in-edge walk already implied, byte for byte. Elixir keys a callable by `name/N`,
@@ -448,9 +835,10 @@ struct EditCheckCalleeTest
     std::span<const NodeId>       overloadNodes;
     std::optional<ElixirResolver> logical;   // engaged for an Elixir focus only
     std::vector<NodeId>           scratch;
+    EditCheckDeclDefaults         declDefaults;   // per overload: the fewest arguments a matching C/C++ declaration admits
 
     EditCheckCalleeTest( const IngestResult& input, const Symbol& focusSymbol, std::span<const NodeId> overloads )
-        : ing( input ), focus( focusSymbol ), overloadNodes( overloads )
+        : ing( input ), focus( focusSymbol ), overloadNodes( overloads ), declDefaults( editCheckDeclDefaults( input, overloads, {} ) )
     {
         if( focus.lang == Lang::Elixir )
         {
@@ -492,12 +880,14 @@ struct EditCheckCalleeTest
 inline std::vector<char> editCheckIncompatibleFlags( const IngestResult& ing, std::span<const NodeId> overloadNodes,
                                                      EditCheckCalleeTest& callee, std::span<const char> seenCaller )
 {
+    // a C/C++ definition whose matching declaration carries defaults accepts the RANGE [minArity, params]
+    // (editCheckDeclDefaults); every other definition's minArity is its params, so the test below is the exact one
+    ASSUME( callee.declDefaults.minArity.size() == overloadNodes.size() );
     const auto provenIncompatible = [ & ]( std::uint16_t argCount ) -> bool
     {
-        for( NodeId ov : overloadNodes )
+        for( std::size_t k = 0; k < overloadNodes.size(); ++k )
         {
-            if( const Symbol& os = ing.symbols[ov];
-                os.arityExact == 0 || editCheckImplicitReceiver( os ) || os.params == argCount )
+            if( editCheckArityAccepts( ing.symbols[ overloadNodes[k] ], callee.declDefaults.minArity[k], argCount ) )
             {
                 return false; // a candidate could still accept it
             }
@@ -708,6 +1098,15 @@ inline constexpr const char* kEditCheckWindowLegend =
     "limit=N (offset=M pages, and a page past the end reads shown_unflagged=\"0\" with has_more=\"0\"); on the root, limit=\"0\" "
     "means no explicit limit was given and the verb's own default page size shaped the window — never a zero-row page. ";
 
+// defaults_from="decl" (2026-10-01): the clause that reads it, emitted only beside it. No double hyphen (G4).
+inline constexpr const char* kEditCheckDefaultsFromDeclLegend =
+    "defaults_from=\"decl\": a C/C++ definition's own parameter list carries no default, but a DECLARATION of it does: same "
+    "name and scope, the same parameter types, in the definition's file or a file it #includes directly. The declaration "
+    "and the definition are one contract (the bare name and the declaration's file:name answer about the definition), and "
+    "a call passing from params minus that declaration's defaults up to params arguments is accepted, so it is never "
+    "flagged. A declaration that cannot be tied that way lends nothing, and its definition's callers are judged against "
+    "the definition's own list. ";
+
 // The root attributes that clause defines: rule 1's noun-prefixed pair plus rule 6's paging half, composed
 // in ONE place so the pair and the half cannot come apart. Empty when the window is inactive, which is what
 // keeps an answer that fits byte-identical to what it was.
@@ -826,7 +1225,9 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
                                         // for emptiness (main.cpp's MainDispatch::notesDegraded), so a sidecar
                                         // that left EVERY line unparsed still reaches this root. Defaults false,
                                         // matching `ni`'s own nullptr default (the MCP verb passes neither today).
-                                        bool notesDegraded = false )
+                                        bool notesDegraded = false,
+                                        // the pre-apply preview's spliced file: its spans index these bytes, not the disk
+                                        const EditCheckSpliced& spliced = {} )
 {
     const Symbol& fsym = ing.symbols[ focus ];
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h) — the ONE
@@ -841,6 +1242,10 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     const std::vector<NodeId> overloadNodes = editCheckOverloadSet( ing, g, focus );
     const EditCheckContract   contract      = editCheckContractVsHead( ing, g, root, maxFileBytes, excludes, focus, overloadNodes );
     EditCheckCalleeTest       callee( ing, fsym, overloadNodes );
+    if( spliced.engaged )
+    {
+        callee.declDefaults = editCheckDeclDefaults( ing, overloadNodes, spliced );   // the preview's spans index the spliced bytes
+    }
     const auto [ callerIds, callerIncompatible ] = editCheckCallers( ing, g, overloadNodes, callee );
 
     // the flagged-caller COUNT, needed BEFORE the headline is written: the verdict joins it with the was/now
@@ -949,6 +1354,10 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     {
         out += kEditCheckWindowLegend;
     }
+    if( callee.declDefaults.fromDecl )
+    {
+        out += kEditCheckDefaultsFromDeclLegend;
+    }
     if( contract.defsUnmeasured )
     {
         out += "defs_unmeasured=\"1\": the HEAD baseline carries no definition COUNT for this symbol (a cache defect), so that "
@@ -1013,6 +1422,10 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     char callersOpen[ 64 ];
     rw::formatTo( callersOpen, sizeof( callersOpen ), " callers=\"{}\" incompatible=\"{}\"", callerIds.size(), incompatibleCount );
     out += callersOpen;
+    if( callee.declDefaults.fromDecl )
+    {
+        out += " defaults_from=\"decl\"";   // beside the incompatible= it widened; defined by the clause emitted only with it
+    }
     out += unprovenDefsAttrXml( unprovenDefs );   // H1: beside the incompatible= it qualifies; absent at zero
     out += declinedCallsAttrXml( declinedCalls ); // callers the resolver declined to bind that could have meant it; absent at zero
     // r26-stamp Task A: the HEAD baseline this contract compares against is only meaningful pinned to a

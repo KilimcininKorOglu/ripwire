@@ -15,6 +15,23 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--edit-check` on C/C++: a declaration and its definition are one contract, and the declaration's defaults count
+
+A header declaring `int scale( int x, int factor = 2 )` and a `.cpp` defining it were two "contracts" to `--edit-check`:
+the bare name was refused as ambiguous, and the definition's handle flagged every caller that relied on a default
+(`incompatible="3"` on three calls that all compile), because the arity test read only the definition's parameter list.
+A bodyless C/C++ declaration now stands for a definition when the name and scope match, the definition's file is the
+declaration's or `#include`s it directly, the definition has external linkage (or shares the file), and the parameter-type
+lists are equal (names and default values stripped, read from each signature's source text). Such a declaration's group
+folds into the definition's, so the bare name and the header's `file:name` answer about the definition, and a call passing
+between `params` minus that declaration's defaults and `params` arguments is never flagged. The root then carries
+`defaults_from="decl"`, defined in the full and compact legends. Real overloads stay separate: each definition takes
+defaults only from the declaration whose types match it. A declaration that cannot be tied that way (an unproven include,
+different types, definitions in two files) lends nothing and keeps today's answer. The fold applies to the post-hoc verb
+(CLI and MCP `edit_check`); the `--dry-run`/`new_body` preview keeps one contract per file and refuses as before. The test
+fixture's own `--edit-check=distance` (declared in `geometry.h`, defined in `geometry.cpp`) now answers instead of refusing.
+The session legend dictionary is `dictv=b3fca206914e7dd4 entries=751`. Gate: `test/editcheckdeclcheck.sh`.
+
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
