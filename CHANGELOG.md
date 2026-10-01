@@ -262,6 +262,37 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
 cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
 
+### Fixed — `--scan-skill(s)`: quoting a sensitive path no longer hides its upload (sensitive-read-upload)
+
+`cat /etc/passwd | curl … @- URL` grades CRITICAL, but `cat "/etc/passwd" | curl …` scanned clean: an
+opening quote put the flow scan back in command position, so the reader's quoted file was read as a command and its
+read was never noted. A quote no longer re-arms command position inside a reader's segment (it still does elsewhere,
+so `sh -c "…"` and `echo "…" | sh` are read as code), and a shell word split by quotes or escapes (`/etc/"passwd"`,
+`@"/etc/passwd"`, `/etc/pass\wd`, `< /etc/"passwd"`) is also read whole, once, when it ends — and in command position
+names the command (`\cat`, `c"a"t`, `\curl`). A runner option's split value stays a value (`sudo -u ro''ot cat`), a split upload
+option still marks its file (`curl -""T /etc/passwd`), and a reader's state stays inside its own command context
+(`cat <(sh -c 'curl … @/etc/passwd …')` is an upload). Single-quoted, mixed, redirected and `head -c "N" FILE` forms are
+covered by `test/skillscan.sh`. Against the previous scanner no finding is lost on the skill fixtures, an adversarial
+set or this repository's own Markdown and scripts; two CRITICAL rows gain `why="sensitive-read-upload"`.
+
+### Fixed — `--cochange` / `--owners` / `--hotspots` in a multi-root workspace name a shallow secondary root when they refuse
+
+When no workspace root had a commit to mine, the refusal probed only the primary root for a shallow clone, so a full
+primary next to a depth-limited secondary still said "git unavailable / no history". The refusal now probes every
+mined root (the one root `--owners=SYM` mines) and names the shallow root it found, as the success paths' `shallow="1"`
+already did. Single-root output is unchanged. Gate: `test/shallowhistorycheck.sh` section 3m.
+
+### Fixed — `--quality-delta` error-masking: log-only recognises loggers spelled with a call, a sigil, an acronym or a digit
+
+The whole-word logger rule split a receiver only on `_`, `-` and camelCase, so `logging.getLogger(__name__).error(…)`,
+`get_logger()`, `structlog.get_logger()`, `@logger`, `$logger`, `this.#logger`, `HTTPLogger`, `logger2`, `mylog` and
+`vlog` were no longer loggers, and Python's gating log-only rows were lost. Trailing call arguments now come off before
+the last `.` segment, words split on every non-alphanumeric byte, at acronym-to-word and at letter-to-digit steps, and a
+logger package spelled as one word (structlog, logfire, logbook, loguru) or log/logger/logging behind a one- or
+two-letter prefix counts (so clog, flog and clogging do too). Longer English words that end in "log" (catalog,
+dialog, backlog, analog, changelog), blog and
+technology still log nothing. Still a miss: a logger behind a longer one-word prefix (`auditlog`).
+
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
 
 - `--quality-delta` log-only handlers: a receiver is a logger only when the first or last word of its last segment is `log`, `logger` or `logging` (words split on `_`, `-` and camelCase), or a known logger package, not whenever it contains "log". A Python `except Exception: store.catalog.write(x)` no longer gates as log-only.

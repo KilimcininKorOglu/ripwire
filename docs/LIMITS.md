@@ -37,8 +37,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **127 of 230 caps are classified
-(42 INDEXING, 41 OUTPUT, 44 BOUNDARY); the remaining 103 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **128 of 230 caps are classified
+(43 INDEXING, 41 OUTPUT, 44 BOUNDARY); the remaining 102 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -360,7 +360,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kMentionsNameMaxDepth` | `512` | — | — |
+| `kMentionsNameMaxDepth` | `512` | INDEXING | undisclosed: a deeper subtree answers "mentions it", so a log-only handler that deep is never flagged |
 
 ### `src/handoff.h`
 

@@ -88,6 +88,24 @@ done
 C="$( run "$SH" --cochange )"
 if { has "$C" "shallow clone" && has "$C" "git fetch --deepen" && ! has "$C" "git unavailable"; }; then ok "cochange on a shallow stub with nothing mineable: 'shallow clone', not 'git unavailable'"; else no "cochange on shallow: $( printf '%s' "$C" | head -c 300 )"; fi
 
+# ── 3m. multi-root refusal: a FULL primary + a SHALLOW secondary, neither with a mineable commit (CodeRabbit, train 22) ──
+# The failure paths probed the primary root alone, so the refusal said "git unavailable" although the secondary is a
+# depth-limited clone. Each root's commits touch only notes.txt, which no verb mines. Control: two full roots.
+MR="$T/mr"; mkdir -p "$MR"
+mk_notes(){ mkdir -p "$1" && ( cd "$1" && git init -q -b main . && echo one > notes.txt && git add -A && git -c user.name=A -c user.email=a@example.invalid commit -qm one && echo two >> notes.txt && git -c user.name=A -c user.email=a@example.invalid commit -qam two ) >/dev/null 2>&1; }
+mk_notes "$MR/P"; mk_notes "$MR/Qsrc"
+git clone -q --depth 1 "file://$MR/Qsrc" "$MR/Q" >/dev/null 2>&1; git clone -q "file://$MR/P" "$MR/P2" >/dev/null 2>&1
+printf 'int p( int x ) { if( x ) { return 1; } return 0; }\n' > "$MR/P/p.c"; cp "$MR/P/p.c" "$MR/P2/p2.c"
+printf 'int q( int x ) { if( x ) { return 2; } return 0; }\n' > "$MR/Q/q.c"
+for v in --cochange --owners; do
+    E="$( "$BIN" "$MR/P" "$MR/Q" "$v" --no-cache 2>&1 >/dev/null )"; RC=$?
+    if [ "$RC" = 1 ] && has "$E" "shallow clone" && has "$E" "git fetch --deepen" && ! has "$E" "git unavailable"; then ok "$v full+shallow workspace, nothing mineable: the refusal names the shallow root, not 'git unavailable'"
+    else no "$v full+shallow workspace refusal (rc=$RC): $( printf '%s' "$E" | head -c 300 )"; fi
+    E="$( "$BIN" "$MR/P" "$MR/P2" "$v" --no-cache 2>&1 >/dev/null )"
+    if has "$E" "git unavailable" && ! has "$E" "shallow"; then ok "$v full+full workspace, nothing mineable: still 'git unavailable', no shallow claim"
+    else no "$v full+full workspace refusal: $( printf '%s' "$E" | head -c 300 )"; fi
+done
+
 # ── 4. churn windows: no all-history over a stub ──
 RB="$( root_of "$( run "$SH" --rank-by=churn-decay )" )"
 if { ! has "$RB" "all-history" && has "$RB" "shallow clone"; }; then ok "rank-by=churn-decay on shallow: window= is not all-history and says shallow clone"; else no "rank-by=churn-decay on shallow: $RB"; fi

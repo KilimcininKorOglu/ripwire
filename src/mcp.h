@@ -1001,6 +1001,7 @@ inline std::string mcpFilterToolsList( std::string resp, const McpDispatchPolicy
             const bool opensWithName = object.starts_with( kNameOpen );
             ASSUME( opensWithName, "every tools/list stanza this file writes opens with its name" );
             const std::size_t nameEnd = object.find( '"', kNameOpen.size() );
+            ASSUME( nameEnd != std::string_view::npos, "every tools/list stanza this file writes closes its name string" );
             if( mcpToolEnabled( policy, object.substr( kNameOpen.size(), nameEnd - kNameOpen.size() ) ) )
             {
                 kept += kept.empty() ? "" : ",";
