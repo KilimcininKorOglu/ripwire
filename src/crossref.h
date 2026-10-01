@@ -115,7 +115,7 @@
 #include <string_view>
 #include <thread>       // the git-spawn pool (fork/exec is the cost, not compute)
 #include "infra/os.h"   // rw::os::getpid / unlink / popen — the blob-batch temp list and its git reader
-#include <tuple>        // std::tie — the rename probe's candidate order
+#include <tuple>        // std::make_tuple — the rename probe's candidate order
 #include <utility>
 #include <vector>
 
@@ -1993,14 +1993,50 @@ inline bool hasWholeWord( std::string_view bytes, std::string_view word )
 
 constexpr std::size_t kMaxRenameProbeFiles = 32;   // HEAD copies one rename probe reads; past it the probe stops (a hint, never a claim)
 
-// The definition the working tree most likely renamed `missing` to, or "" when the evidence names none. A candidate
-// is an indexed definition in a path that differs from HEAD, whose HEAD copy holds `missing` as a whole word and
-// does NOT hold the candidate's own name, and which shares a strict majority of identifier words with `missing`.
-// Best = most shared words, then the closest length, then the name (determinism).
-inline std::string worktreeRenameOf( const IngestResult& ing, std::string_view missing, const std::string& root )
+// One possible rename target: an indexed definition in a changed path, and how many identifier words it shares.
+struct RenameCandidate
+{
+    std::string      path;
+    std::string_view name;
+    std::size_t      shared = 0;
+};
+
+// The candidates for `missing`, best first: definitions in `changedPaths` (sorted) sharing a STRICT MAJORITY of the
+// larger identifier-word set. line_trim/trim_line (2 of 2) and getUserName/fetchUserName (2 of 3) qualify; a shared
+// project prefix alone (zqDoomed/zqFresh, 1 of 2) does not, so a deletion is not read as a rename. Order: most
+// shared words, then the closest length, then name and path (determinism).
+inline std::vector<RenameCandidate> renameCandidatesOf( const IngestResult& ing, std::string_view missing,
+                                                        const std::vector<std::string>& changedPaths, const std::string& root )
 {
     const std::vector<std::string> missingWords = identWordsOf( missing );
-    if( missing.empty() || missingWords.empty() || !quality::gitRepoHasHistory( root ) )
+    std::vector<RenameCandidate>   candidates;
+    for( const Symbol& s : ing.symbols )
+    {
+        const std::string path( relForHash( ing.files[ s.fileId ], root ) );
+        if( s.kind == SymKind::Section || s.name == missing || !std::binary_search( changedPaths.begin(), changedPaths.end(), path ) )
+        {
+            continue;
+        }
+        const std::vector<std::string> words  = identWordsOf( s.name );
+        const std::size_t              shared = std::count_if( words.begin(), words.end(), [ & ]( const std::string& w )
+                                                               { return std::binary_search( missingWords.begin(), missingWords.end(), w ); } );
+        if( shared * 2 > std::max( words.size(), missingWords.size() ) )
+        {
+            candidates.push_back( RenameCandidate{ path, s.name, shared } );
+        }
+    }
+    const auto lengthGap = [ & ]( std::string_view n ) { return n.size() > missing.size() ? n.size() - missing.size() : missing.size() - n.size(); };
+    std::sort( candidates.begin(), candidates.end(), [ & ]( const RenameCandidate& a, const RenameCandidate& b )
+               { return std::make_tuple( b.shared, lengthGap( a.name ), a.name, std::string_view( a.path ) )
+                      < std::make_tuple( a.shared, lengthGap( b.name ), b.name, std::string_view( b.path ) ); } );
+    return candidates;
+}
+
+// The definition the working tree most likely renamed `missing` to, or "" when the evidence names none: the best
+// candidate whose changed file's HEAD copy holds `missing` as a whole word and does NOT hold the candidate's name.
+inline std::string worktreeRenameOf( const IngestResult& ing, std::string_view missing, const std::string& root )
+{
+    if( missing.empty() || identWordsOf( missing ).empty() || !quality::gitRepoHasHistory( root ) )
     {
         return {};
     }
@@ -2009,56 +2045,19 @@ inline std::string worktreeRenameOf( const IngestResult& ing, std::string_view m
     {
         return {};
     }
-
-    struct Candidate { std::string path; std::string_view name; std::size_t shared; };
-    std::vector<Candidate> candidates;
-    for( const Symbol& s : ing.symbols )
-    {
-        if( s.kind == SymKind::Section || s.name == missing )
-        {
-            continue;
-        }
-        const std::string path( relForHash( ing.files[ s.fileId ], root ) );
-        if( !std::binary_search( changed.lines.begin(), changed.lines.end(), path ) )
-        {
-            continue;
-        }
-        const std::vector<std::string> words  = identWordsOf( s.name );
-        std::size_t                    shared = 0;
-        for( const std::string& w : words )
-        {
-            shared += std::binary_search( missingWords.begin(), missingWords.end(), w ) ? 1 : 0;
-        }
-        // A strict majority of the larger word set: line_trim/trim_line (2 of 2) and getUserName/fetchUserName (2 of 3)
-        // qualify; a shared project prefix alone (zqDoomed/zqFresh, 1 of 2) does not, so a deletion is not read as a rename.
-        if( shared * 2 > std::max( words.size(), missingWords.size() ) )
-        {
-            candidates.push_back( Candidate{ path, s.name, shared } );
-        }
-    }
-    std::sort( candidates.begin(), candidates.end(), [ & ]( const Candidate& a, const Candidate& b )
-    {
-        const std::size_t da = a.name.size() > missing.size() ? a.name.size() - missing.size() : missing.size() - a.name.size();
-        const std::size_t db = b.name.size() > missing.size() ? b.name.size() - missing.size() : missing.size() - b.name.size();
-        return std::tie( b.shared, da, a.name, a.path ) < std::tie( a.shared, db, b.name, b.path );
-    } );
-
-    // Best first, so the first candidate whose HEAD copy proves the rename is the answer; one HEAD read per file.
     std::vector<std::pair<std::string, std::string>> headCopies;   // path → its HEAD copy, read at most once
-    for( const Candidate& c : candidates )
+    for( const RenameCandidate& c : renameCandidatesOf( ing, missing, changed.lines, root ) )
     {
-        if( c.path.front() == '"' )
-        {
-            continue;   // a git-quoted spelling is not the path's name
-        }
         auto copy = std::find_if( headCopies.begin(), headCopies.end(), [ & ]( const auto& h ) { return h.first == c.path; } );
+        if( copy == headCopies.end() && headCopies.size() >= kMaxRenameProbeFiles )
+        {
+            break;
+        }
         if( copy == headCopies.end() )
         {
-            if( headCopies.size() >= kMaxRenameProbeFiles )
-            {
-                break;
-            }
-            headCopies.emplace_back( c.path, gitCapture( root, "show " + shSingleQuote( "HEAD:./" + c.path ) + " 2>/dev/null" ) );
+            // A git-quoted spelling ("…") is not the path's name: its HEAD copy reads as empty, which proves nothing.
+            const bool quoted = c.path.front() == '"';
+            headCopies.emplace_back( c.path, quoted ? std::string() : gitCapture( root, "show " + shSingleQuote( "HEAD:./" + c.path ) + " 2>/dev/null" ) );
             copy = std::prev( headCopies.end() );
         }
         if( hasWholeWord( copy->second, missing ) && !hasWholeWord( copy->second, c.name ) )
