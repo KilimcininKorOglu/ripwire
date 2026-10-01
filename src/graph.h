@@ -303,6 +303,17 @@ namespace priorwt
     inline constexpr std::size_t kSpecificMinLen   = 8;         // ≥8 chars …  (aider's)
     inline constexpr std::size_t kSpecificMinWords = 2;         // … AND ≥2 words (camelCase/snake split) (aider's)
 
+    // The DEFAULT MAP's restart-mass multiplier for a data Section (a markdown heading, a YAML/JSON key, a schema
+    // column), applied by rankDefaultMap below to the uniform teleport and nowhere else. NOT FIT: it is the value the
+    // invariant below derives. An in-degree-0 node's rank is exactly γ·p̃ (γ = (1−α) + α·D, one scalar for every
+    // node, D the dangling mass), and every other node's rank is at least γ·p̃. So the map's code-first invariant —
+    // every non-Section row outranks every in-degree-0 Section — holds when the HIGHEST Section prior
+    // (this × the ×1.7 specific-name boost) sits below the LOWEST non-Section prior (both ×0.5 damps): 0.17 < 0.25.
+    // docs/EVALS.md "Map data Sections never crowd code out of the default map" registers it and its measurement.
+    inline constexpr float kSectionPriorMul = 0.1f;
+    static_assert( kSectionPriorMul * kSpecificNameMul < kCommonNameMul * kPrivateNameMul,
+                   "the default map's code-first invariant: the highest Section prior must sit below the lowest non-Section prior" );
+
     // number of word segments in an identifier: split on camelCase transitions, digit/non-alnum
     // separators, and snake_case '_'. Allocation-free, constexpr-friendly (pure scan of the bytes).
     // A run of ≥1 alnum char between boundaries is one word.
@@ -4687,6 +4698,31 @@ inline RankedGraph rankGraph( const Graph& g, float alpha = 0.85f )
 {
     const std::size_t N = g.wOutDeg.size();
     return rankGraphTeleport( g, std::vector<float>( N, N ? 1.0f / float( N ) : 0.f ), alpha );
+}
+
+// The DEFAULT MAP's ranking — the one entry point for the map scope and nothing else: the plain map (XML, --json,
+// --html, --max-tokens) at the default --rank-by with no payload verb, --tree, MCP rank_by=pagerank and MCP analyze
+// on a clean working set. The uniform teleport with each data Section's entry ×kSectionPriorMul, then the unchanged
+// biasPrior inside rankGraphTeleport. Every other rank consumer (impact, graph-query, communities, the eval seed,
+// churn, --map-diff, the MCP working-set bias) keeps rankGraph / rankGraphTeleport and its bytes.
+//
+// Why only the prior: a data Section with no call edge is ranked by its teleport share alone, and priorwt's ×1.7
+// fires on data names (`database_url_12`, "Installation step 12 details"), so a few hundred keys outranked called
+// code and pushed it out of the top-K the map emits (#339's schema columns: 196 of 200 rows). With the multiplier,
+// every non-Section node outranks every in-degree-0 Section (the invariant at kSectionPriorMul). With no edge between
+// Sections and the rest, both groups' internal order is unchanged: each one's rank only rescales.
+inline RankedGraph rankDefaultMap( const Graph& g, const IngestResult& ing, float alpha = 0.85f )
+{
+    const std::size_t  N = g.wOutDeg.size();
+    std::vector<float> p( N, N ? 1.0f / float( N ) : 0.f );
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.kind == SymKind::Section && s.id < N )
+        {
+            p[ s.id ] *= priorwt::kSectionPriorMul;
+        }
+    }
+    return rankGraphTeleport( g, p, alpha );
 }
 
 // out-edge SpMV: h[j] = Σ_{j→i} w·a[i] (the HITS hub step; out-degree is capped, scalar is fine).

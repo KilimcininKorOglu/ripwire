@@ -1658,6 +1658,12 @@ int runDefaultMap( const MainDispatch& d )
     }
 
     std::vector<float> rank;
+    // The map scope (docs/EVALS.md "Map data Sections never crowd code out of the default map"): the plain map — XML,
+    // --json, --html, --max-tokens — at the default --rank-by with no payload verb ranks with rw::rankDefaultMap and
+    // discloses the data Sections its top-K cut. --query, --map-diff, churn, authority/hub/rrf (rrf fuses the PageRank
+    // vector) and a payload verb's ride-along map (--expand, --outline, --pack-signatures, --pack-top-n) keep rankGraph.
+    const bool isDefaultMapScope = cfg.query.empty() && !cfg.mapDiff && cfg.rankBy == RankBy::PageRank && cfg.expand.empty()
+                                && cfg.outline.empty() && !cfg.packSignatures && cfg.packTopN <= 0;
     // W2-F: the map header's pr_iters= / pr_converged= (src/prconverge.h). Default-constructed is
     // isPageRank=false — CORRECT for the arms below that run no power iteration (a lexical query score, the
     // HITS vectors that overwrite `rank`); the PageRank arms fill it via rw::takeRank (graph.h), never apart.
@@ -1764,7 +1770,7 @@ int runDefaultMap( const MainDispatch& d )
     }
     else
     {
-        rank = rw::takeRank( rankGraph( g ), rankDisclosure );
+        rank = rw::takeRank( isDefaultMapScope ? rankDefaultMap( g, ing ) : rankGraph( g ), rankDisclosure );
     }
 
     // HITS: surface hubs (entrypoints/orchestrators) or authorities (core APIs) instead of the default
@@ -1860,6 +1866,7 @@ int runDefaultMap( const MainDispatch& d )
     mapAnn.recentMinedHistory = recentAnyHistory;   // the block rides on the FACT (serialize.h writeRecentRows)
     mapAnn.recentMergeBombsSkipped = recentMergeBombsSkipped;   // rides <recent> (the rows' own window), filled by assignment like seed
     mapAnn.notesDegraded = d.notesDegraded;   // L3 follow-up (CodeRabbit 4053600616): onto every <r> this run emits
+    mapAnn.discloseDataSections = isDefaultMapScope;   // data_sections_cut= / next= on the map-scope root (serialize.h)
     // C1-b (2026-09-12): --in=DIR — the scoped block and the map stub, filled by assignment like seed. The two next= strings
     // outlive every serialize() call below (mapAnn holds views into them). The scoped next= is the SAME run at the next
     // offset, page size carried when the caller set one; the stub's next= is the same run without in= (the map it stubbed).

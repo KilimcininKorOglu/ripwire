@@ -212,6 +212,8 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
                                        // its own "<!-- ripwire "-prefixed comment, already covered by that row above.
     "<!-- r:root=",                    // the map header's terse spelling of the same block
     "<!-- pr_iters=",                  // the PageRank convergence block on map-family roots
+    "<!-- data_sections_cut=",         // the map scope's Section-cut clause (serialize.h kDataSectionsCutLegend); the
+                                       // completeness table's data_sections_cut row restates it
     "<!-- at= is the git commit",      // the churn/quality provenance block
     "<!-- in=DIR: ",                   // C1-b's scoped-block clause (serialize.h kRecentScopeLegendOpen/Close). Without
                                        // this row the ~640 B prose survived BESIDE the compact terms that restate it,
@@ -400,6 +402,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // compact PageRank root undefined (--impact is an (L) loop verb, which is why its reading is this short).
     // pr_converged="0" rides only a ranking that stopped at the iteration cap.
     { "pr_iters",          "pr_iters=N: PageRank iterations" },
+    // The map scope's Section cut (serialize.h dataSectionsCutOf; --tree's twin carries no next=). Present-only.
+    { "data_sections_cut", "data_sections_cut=N: N data Sections (headings, data keys) not listed here, below every code row when no call reaches them; a map's next= pages them" },
     { "pr_converged",      "pr_converged=0: iteration cap hit before convergence" },
     // Form-conditional map roots whose clauses (kRankByDisclosure, kChurnRankLegend, --around's seed block) are prose.
     // window= and defs= are ELEMENT-qualified: --hotspots carries window= and --callers defs=, each meaning something else.

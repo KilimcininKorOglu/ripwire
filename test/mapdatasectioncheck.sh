@@ -56,7 +56,7 @@ mkfix S3-long-220 S3 long 220 && mkfix S4-long-220 S4 long 220 || { echo "mapdat
 mkdir -p "$TMP/codeonly" && bash "$GEN" "$TMP/codeonly-src" S3 short 1 >/dev/null && cp "$TMP/codeonly-src/app.py" "$TMP/codeonly/" || exit 2
 
 python3 - "$BIN" "$TMP" "${MAPSEC_EXTRA_ROOTS:-}" <<'PYEOF' || no "the arms above reported a failure (or the check body could not run)"
-import json, os, re, shlex, subprocess, sys
+import html as htmlmod, json, os, re, shlex, subprocess, sys
 BIN, TMP, EXTRA = sys.argv[1], sys.argv[2], sys.argv[3]
 CODE = {"load", "parse", "normalize", "transform", "render", "save", "_helper", "main"}
 fails = []
@@ -73,7 +73,11 @@ def mcp(d, tool, k):
     last = [l for l in p.stdout.splitlines() if l.strip()][-1]
     return json.loads(last)["result"]["content"][0]["text"]
 
-ATTR = re.compile(r'([A-Za-z_]+)="([^"]*)"')
+ATTR_RE = re.compile(r'([A-Za-z_]+)="([^"]*)"')
+class _Attr:
+    @staticmethod
+    def findall(s): return [(k, htmlmod.unescape(v)) for (k, v) in ATTR_RE.findall(s)]
+ATTR = _Attr()
 def strip_comments(t): return re.sub(r"<!--.*?-->", "", t, flags=re.S)
 def xml_map(t):
     """root attrs + rows [(file, t, n, weight)] of an XML map document, in emission order."""

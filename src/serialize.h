@@ -1924,7 +1924,57 @@ struct MapAnnotations
     // pointer for emptiness (main.cpp), so a fully-degraded read still reaches this root. Absent on a clean read,
     // the L3 inertness contract's only permitted exception. Filled by assignment, like the trailing fields above.
     bool notesDegraded = false;
+
+    // The map scope (rw::rankDefaultMap ranked this map): disclose the data Sections the top-K left out —
+    // data_sections_cut="N" plus the next= that pages them (dataSectionsCutOf below). Set only by the map-scope callers
+    // (main.cpp's plain map, MCP analyze on a clean working set, MCP rank_by=pagerank); every other map, and every map
+    // whose top-K cut no Section, carries neither attribute. Filled by assignment, like the trailing fields above.
+    bool discloseDataSections = false;
 };
+
+// ── data_sections_cut= / next= (docs/EVALS.md "Map data Sections never crowd code out of the default map") ──────
+// Under rankDefaultMap every non-Section row outranks every Section no call reaches, so a top-K that cuts Sections cuts
+// them from the END of the ranking. The map says how many (N = Sections indexed − Section rows shown) and hands the
+// one call that pages them: the kind(all,sec) graph-query, past the M Sections this map shows, K rows a page. That
+// listing ranks with rankGraph; it skips exactly the M shown Sections because, with no edge from a non-Section into a
+// Section, the two rankings order the Sections identically (each Section's rank only rescales). The count is of
+// DEFINITIONS, the unit shown= counts. Absent at N = 0.
+struct DataSectionsCut
+{
+    std::size_t cut   = 0;   // N: Sections indexed and not shown
+    std::size_t shown = 0;   // M: Section definitions among the kept rows
+    std::size_t topK  = 0;   // K: the rows this map kept (its effective top-k)
+};
+inline DataSectionsCut dataSectionsCutOf( const IngestResult& ing, std::span<const NodeId> kept ) noexcept
+{
+    DataSectionsCut c;
+    std::size_t     indexed = 0;
+    for( const Symbol& s : ing.symbols )
+    {
+        indexed += s.kind == SymKind::Section ? 1u : 0u;
+    }
+    for( const NodeId id : kept )
+    {
+        c.shown += ( id < ing.symbols.size() && ing.symbols[ id ].kind == SymKind::Section ) ? 1u : 0u;
+    }
+    c.cut  = indexed - c.shown;
+    c.topK = kept.size();
+    ENSURES( c.shown <= indexed, "the shown Sections are a subset of the indexed ones" );
+    return c;
+}
+inline std::string dataSectionsNext( const DataSectionsCut& c )
+{
+    return "--graph-query='kind(all,sec)' --offset=" + std::to_string( c.shown ) + " --limit=" + std::to_string( c.topK );
+}
+// The XML legend clause, charged only to a map that carries the attribute. No double hyphen inside a comment (G4).
+inline constexpr std::string_view kDataSectionsCutLegend =
+    "<!-- data_sections_cut=N: N data Sections (doc headings, data and config keys, schema columns) left out of this top-K; "
+    "this map ranks every code row above every Section no call reaches, so they are the lowest-ranked rows. next= is the "
+    "graph-query call that pages them, past the Sections shown here, K rows a page -->";
+// --tree's clause: its rows are each file's top 3, not a rank prefix, so it carries the count and no next=.
+inline constexpr std::string_view kTreeDataSectionsCutLegend =
+    " data_sections_cut=N: N data Sections (doc headings, data and config keys, schema columns) indexed and not listed here; "
+    "the tree ranks every code row above every Section no call reaches.";
 
 // F3: the <recent> element — rank_by=churn-decay's file-level answer FIRST, paths + age in days at HEAD's clock +
 // decayed weight — written before the first <f> group so "what changed recently" is answered before the symbol
@@ -2606,6 +2656,9 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         }
         sortutil::radixSortByScoreDescId( order, rank );
     }
+    // The map scope's Section cut (MapAnnotations::discloseDataSections): read off the very rows this map keeps.
+    const DataSectionsCut dataSecCut = ( ann.discloseDataSections && !stubbed )
+                                     ? dataSectionsCutOf( ing, std::span<const NodeId>( order.data(), keep ) ) : DataSectionsCut{};
 
     // bucket the kept symbols by file, files ordered by their best (first-seen) rank.
     std::vector<std::vector<NodeId>> buckets( stubbed ? 0 : ing.files.size() );
@@ -2784,6 +2837,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     if( ann.notesDegraded )
     {
         legend += std::string( notes::kNotesDegradedComment );
+    }
+    if( dataSecCut.cut > 0 )
+    {
+        legend += kDataSectionsCutLegend;   // charged to the map that carries data_sections_cut=
     }
     // W2-F: the pr_iters= / pr_converged= definition, charged to the maps that carry the attributes — empty
     // for a lexical or HITS ordering, and the prose half only on the map whose iteration stopped short.
@@ -2994,6 +3051,12 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         // L3 follow-up (CodeRabbit 4053600616): TRULY last, past every pre-existing attribute — same placement
         // rule as lens= just above, so no attribute-adjacency assertion in test/ can break on it.
         if( ann.notesDegraded ) { h += notes::kNotesDegradedAttr; }
+        // The map scope's Section cut, last of all (the same placement rule as the two above): absent when nothing was cut.
+        if( dataSecCut.cut > 0 )
+        {
+            h += " data_sections_cut=\"";  h += std::to_string( dataSecCut.cut );  h += "\"";
+            h += nextAttrXml( dataSectionsNext( dataSecCut ) );
+        }
         h += ">";
         return h;
     };
@@ -8247,6 +8310,7 @@ struct JsonMapHeader
     std::size_t                      macroBlankedCount  = 0;    // member-macro re-parse: "macro_blanked_files":N, absent when 0
     std::size_t                      nestRefusedCount   = 0;    // #157: "nest_refused":N, the JSON twin of the XML nest_refused=, absent when 0
     bool                             isEstModelled      = false;   // MapEstimate: "est_measured":false, absent when measured
+    DataSectionsCut                  dataSectionsCut    = {};      // the map scope's Section cut: "data_sections_cut":N + "next", absent at N=0
 };
 
 // §B1.2: the PROVENANCE stamp — the JSON half of the XML `<r at= rank_by= window=>` attributes. Without it
@@ -8469,6 +8533,13 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
     // side just closed. Same slot, same absent-means-converged rule.
     w.write( renderDisclosure( h.ann->prDisclosure, DiscloseAs::JsonKeys ) );
 
+    // The JSON twin of the XML root's data_sections_cut= / next= (dataSectionsCutOf): same keys, same absent-at-zero rule.
+    if( h.dataSectionsCut.cut > 0 )
+    {
+        w.write( ",\"data_sections_cut\":" + std::to_string( h.dataSectionsCut.cut ) + ",\"next\":" );   // composed, not a fixed buffer
+        writeJsonStr( w, dataSectionsNext( h.dataSectionsCut ), esc );
+    }
+
     // §A4b: the multi-root prologue (A13) — `roots_count` joins the header gauges and a
     // `roots` table maps each label to its root path, ONLY when N≥2 (single-root output byte-unchanged).
     // Without it every `"p"` in the payload is an unresolvable root-relative fragment.
@@ -8552,6 +8623,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     sortutil::radixSortByScoreDescId( order, rank );
 
     const std::size_t keep = std::min<std::size_t>( topK > 0 ? std::size_t( topK ) : S, S );
+    const DataSectionsCut dataSecCut = ann.discloseDataSections ? dataSectionsCutOf( ing, std::span<const NodeId>( order.data(), keep ) ) : DataSectionsCut{};
 
     std::vector<std::vector<NodeId>> buckets( ing.files.size() );
     std::vector<std::uint32_t>       fileOrder;
@@ -8626,7 +8698,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         writeJsonMapHeader( hw, esc, JsonMapHeader{ ing, S, outTargets.size(), keep, estTokens, ambTotal,
                                                     unresolvedTotal, orderAttr, outProv, &ann, rootArg, locPinTotal, externalCalls, declinedTotal,
                                                     extentSuspectTotal, macroBlankedFileCount( ing ), ing.crawlSkips.nestRefusedFiles,
-                                                    estimate.isModelled } );
+                                                    estimate.isModelled, dataSecCut } );
         hw.write( ",\"r\":[" );
     };
 
