@@ -260,7 +260,28 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 `kParserVer` 124 → 129 (the function-literal fix takes 128; #338 and #325 take one more), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=a90a6b2e403c48c9 entries=751`.
+
+### Fixed — `--whereis` answers for the checkout, not only for HEAD's commit
+
+`--whereis` scanned committed trees only (HEAD and the local branches). On a checkout with uncommitted changes it
+still printed `complete="1"` and a bare `at=`: a function the edit had just added read `hits="0"`, and one it had
+renamed or deleted was listed at its old HEAD lines. `--callers` on the same tree saw the edit. Every path under the
+root that differs from HEAD (modified, staged, deleted, or untracked and not ignored) is now read from the working
+tree. Its rows say `ref="worktree"` (`tip=` and `date=` name the HEAD commit it overlays) and replace HEAD's rows for
+that path, so on-head=, hits= and the index-backed `head_labels=` count the checkout. The stamp gains `+dirty`, and
+the root says `worktree="read"`. A changed path that cannot be read (permission, over the 2 MB blob ceiling, a name
+git quotes, or more than 8192 changed paths) keeps its HEAD rows, and the root says `worktree="partial"`. When git
+cannot list the changes, the root says `worktree="unlisted"`. Neither claims `complete=`. Other refs are still read
+as their committed trees. A clean checkout's answer is byte-identical. The MCP `whereis` tool shares the code. Both
+legends define `worktree=` and print it only when the root carries it; the session legend dictionary gains that one
+entry (751). The full legend's sentence "at= is sha-only here (never +dirty)" is replaced. Gates: `test/completecheck.sh` §18 (add, rename, delete, deleted file, untracked
+file, the no-stale-row invariant, MCP twin, an unreadable changed path) and `test/gitstampcheck.sh` (the documented
+whereis exception is closed).
+
+A symbol that is not in the index is still a refusal (exit 1) on `--callers`, `--callees`, `--impact`, `--uses` and
+the other symbol verbs, as README §6.2 and the `--callers` example in docs/COMMANDS.md document. `--whereis` already
+answers a zero as a document (exit 0, `hits="0"`). completecheck §18j pins both.
 
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
 

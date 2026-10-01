@@ -360,5 +360,140 @@ else
     no "grep (17 control): the readable fixture did not claim complete over 2 hits — the arm is void: $( grep -o '<grep [^>]*>' "$UG/warm.xml" )"
 fi
 
+# ── 18) whereis on a DIRTY checkout: the working tree is read, or the claim is withheld ───────────────
+# The comparison-table repros (2026-10-01): --whereis scanned committed trees only, so on a dirty checkout it
+# answered hits="0" complete="1" for a function the edit had just added, and listed a renamed or deleted
+# function at its old HEAD lines, also complete="1", with a bare at= (no +dirty). --callers on the same tree
+# saw the edit. Now every path under the root that differs from HEAD (modified, staged, deleted or untracked)
+# is read from disk: its rows say ref="worktree" and replace HEAD's rows for that path, at= gains +dirty and
+# the root says worktree="read". A changed path that cannot be read keeps its HEAD rows, says
+# worktree="partial" and withholds complete=. A clean checkout answers byte-for-byte as before.
+WT="$TMP/wtrepo"; mkdir -p "$WT/src"
+cat >"$WT/src/main.c" <<'EOF'
+int zqKeep( int x ) { return x + 1; }
+int zqOldName( int x ) { return x * 2; }
+int zqDoomed( void ) { return 3; }
+int zqUser( void ) { return zqKeep( 1 ) + zqOldName( 2 ) + zqDoomed(); }
+EOF
+cat >"$WT/src/other.c" <<'EOF'
+int zqOther( void ) { return 4; }
+EOF
+cat >"$WT/src/gone.c" <<'EOF'
+int zqGone( void ) { return 5; }
+EOF
+( cd "$WT" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+WSHA="$( git -C "$WT" rev-parse --short=9 HEAD 2>/dev/null )"
+wroot(){ grep -o '<whereis [^>]*>' | head -1; }
+wwhere(){ "$BIN" "$WT" --whereis="$1" --no-cache "${@:2}" 2>/dev/null; }
+
+# 18a) control: the clean checkout claims, with a bare at= and no worktree= — the pre-fix shape, unchanged
+W0="$( wwhere zqOldName | wroot )"
+{ printf '%s' "$W0" | grep -q " at=\"$WSHA\" complete=\"1\"" && ! printf '%s' "$W0" | grep -q 'worktree='; } \
+    && ok 'whereis (18a control): a clean checkout claims complete="1" with a bare at= and no worktree=' \
+    || no "whereis (18a control): the clean shape changed: $W0"
+
+# the edit: add a function, rename one, delete one, delete a whole tracked file, add an untracked file
+cat >"$WT/src/main.c" <<'EOF'
+int zqKeep( int x ) { return x + 1; }
+int zqNewName( int x ) { return x * 2; }
+int zqFresh( void ) { return 6; }
+int zqUser( void ) { return zqKeep( 1 ) + zqNewName( 2 ) + zqFresh(); }
+EOF
+rm -f "$WT/src/gone.c"
+printf 'int zqUntracked( void ) { return 7; }\n' >"$WT/src/new.c"
+
+# 18b) a function the edit ADDED is found, as a worktree definition, and the stamp says the tree is dirty
+W1="$( wwhere zqFresh )"; W1R="$( printf '%s' "$W1" | wroot )"
+{ printf '%s' "$W1" | grep -q '<hit ref="worktree" [^>]*p="src/main.c" l="3" kind="def"' \
+  && printf '%s' "$W1R" | grep -q " at=\"$WSHA+dirty\" worktree=\"read\"" && printf '%s' "$W1R" | grep -q ' on-head="1"'; } \
+    && ok 'whereis (18b): a function added in the working tree is found (ref="worktree" kind="def"), at= says +dirty, worktree="read"' \
+    || { no 'whereis (18b): a function the working tree added is still invisible (the stale-and-silent answer)'; printf '%s\n' "$W1R"; }
+
+# 18c) a RENAMED-away name no longer lists its old HEAD line; the new name is found
+W2R="$( wwhere zqOldName | wroot )"; W2="$( wwhere zqOldName )"
+{ printf '%s' "$W2R" | grep -q ' hits="0"' && ! printf '%s' "$W2" | grep -q '<hit ref="HEAD"'; } \
+    && ok 'whereis (18c): a name the working tree renamed away lists no stale HEAD row (hits="0")' \
+    || { no 'whereis (18c): the renamed-away name still lists its old HEAD lines'; printf '%s\n' "$W2R"; }
+wwhere zqNewName | grep -q '<hit ref="worktree" [^>]*p="src/main.c" l="2" kind="def"' \
+    && ok 'whereis (18c): the rename target is found in the working tree' \
+    || no 'whereis (18c): the rename target is not found'
+
+# 18d) a DELETED definition, and a whole deleted tracked file, drop out
+for s in zqDoomed zqGone; do
+    W3R="$( wwhere "$s" | wroot )"
+    printf '%s' "$W3R" | grep -q ' hits="0"' \
+        && ok "whereis (18d): $s, deleted in the working tree, has no rows" \
+        || { no "whereis (18d): $s, deleted in the working tree, still has rows"; printf '%s\n' "$W3R"; }
+done
+
+# 18e) an UNTRACKED file is part of the checkout; an untouched path keeps its HEAD row
+wwhere zqUntracked | grep -q '<hit ref="worktree" [^>]*p="src/new.c" l="1" kind="def"' \
+    && ok 'whereis (18e): a definition in an untracked file is found' \
+    || no 'whereis (18e): a definition in an untracked file is invisible'
+wwhere zqOther | grep -q '<hit ref="HEAD" [^>]*p="src/other.c" l="1" kind="def"' \
+    && ok 'whereis (18e): a path the edit did not touch still answers from HEAD (ref="HEAD")' \
+    || no 'whereis (18e): an untouched path lost its HEAD row'
+
+# 18f) the INVARIANT: no complete="1" answer carries a HEAD row for a path that differs from HEAD
+CHANGED="$( git -C "$WT" diff --name-only HEAD; git -C "$WT" ls-files --others --exclude-standard )"
+bad=0
+for s in zqKeep zqFresh zqOldName zqNewName zqDoomed zqGone zqUntracked zqOther zqUser; do
+    out="$( wwhere "$s" )"
+    printf '%s' "$out" | wroot | grep -q 'complete="1"' || continue
+    for p in $CHANGED; do
+        printf '%s' "$out" | grep -q "<hit ref=\"HEAD\" [^>]*p=\"$p\"" && { bad=1; no "whereis (18f): $s claims complete=\"1\" beside a stale HEAD row for changed $p"; }
+    done
+done
+[ $bad -eq 0 ] && ok 'whereis (18f): no complete="1" answer carries a HEAD row for a path the working tree changed'
+
+# 18g) the twin: MCP whereis reads the same working tree, row for row
+if command -v python3 >/dev/null 2>&1; then
+    M1="$( python3 - "$BIN" "$WT" <<'PY'
+import json, subprocess, sys
+msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
+         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "whereis", "arguments": { "path": sys.argv[2], "symbol": "zqFresh" } } } ]
+p = subprocess.run( [ sys.argv[1], "--mcp" ], input = "".join( json.dumps( m ) + "\n" for m in msgs ), capture_output = True, text = True, timeout = 300 )
+d = json.loads( [ l for l in p.stdout.splitlines() if l.strip() ][ -1 ] )
+print( d.get( "result", {} ).get( "content", [ {} ] )[ 0 ].get( "text", "" ) )
+PY
+)"
+    C1H="$( printf '%s' "$W1" | grep -o '<hit [^>]*/>' )"; M1H="$( printf '%s' "$M1" | grep -o '<hit [^>]*/>' )"
+    { [ -n "$C1H" ] && [ "$C1H" = "$M1H" ] && printf '%s' "$M1" | wroot | grep -q " at=\"$WSHA+dirty\" worktree=\"read\""; } \
+        && ok 'whereis (18g): the MCP twin serves the same worktree rows, +dirty stamp and worktree="read"' \
+        || { no 'whereis (18g): the MCP twin disagrees with the CLI on a dirty checkout'; printf '%s\n' "$M1" | wroot; }
+fi
+
+# 18h) the legend defines worktree= wherever it rides, in both dialects
+grep -q 'worktree=read|partial|unlisted' <<<"$W1" \
+    && ok 'whereis (18h): the compact legend defines worktree=' || no 'whereis (18h): worktree= rides with no compact definition'
+wwhere zqFresh --legend=full | grep -q 'WORKTREE: worktree=' \
+    && ok 'whereis (18h): the full legend defines worktree=' || no 'whereis (18h): worktree= rides with no full-legend definition'
+
+# 18i) MUTATION: a changed path that cannot be READ keeps its HEAD rows, says partial, and never claims
+chmod 000 "$WT/src/main.c"
+if cat "$WT/src/main.c" >/dev/null 2>&1; then
+    printf '  SKIP  18i: chmod 000 does not stop this user reading the file (root?) — the arm cannot plant its fault\n'
+else
+    W4R="$( wwhere zqKeep | wroot )"
+    { printf '%s' "$W4R" | grep -q ' worktree="partial"' && ! printf '%s' "$W4R" | grep -q 'complete='; } \
+        && ok 'whereis (18i): an unreadable changed path says worktree="partial" and withholds complete=' \
+        || { no 'whereis (18i): an unreadable changed path still claims a complete answer'; printf '%s\n' "$W4R"; }
+fi
+chmod 644 "$WT/src/main.c"
+
+# 18j) "none found" is an ANSWER on whereis (rc 0, a document) and stays the documented REFUSAL on callers
+# (README §6.2: 1 = refused; docs/COMMANDS.md --callers "Unknown-symbol REFUSAL shape (exit 1)").
+"$BIN" "$WT" --whereis=zqDoomed --no-cache >"$TMP/wt0.xml" 2>/dev/null; rc=$?
+{ [ $rc -eq 0 ] && wroot <"$TMP/wt0.xml" | grep -q ' hits="0"'; } \
+    && ok 'whereis (18j): a name the working tree deleted answers rc 0 with a hits="0" document' \
+    || no "whereis (18j): the deleted name did not answer as a document (rc=$rc)"
+"$BIN" "$WT" --callers=zqDoomed --no-cache >"$TMP/wt0c.xml" 2>"$TMP/wt0c.err"; rc=$?
+{ [ $rc -eq 1 ] && [ ! -s "$TMP/wt0c.xml" ] && grep -q 'not found' "$TMP/wt0c.err"; } \
+    && ok 'callers (18j): the same name is the documented refusal (exit 1, stderr names it, stdout empty)' \
+    || no "callers (18j): the unknown-symbol contract moved (rc=$rc)"
+command -v xmllint >/dev/null 2>&1 && { printf '%s' "$W1" | xmllint --noout - 2>/dev/null \
+    && ok 'whereis (18): the dirty-checkout document is well-formed' || no 'whereis (18): the dirty-checkout document fails xmllint'; }
+
 [ $fail -eq 0 ] && printf 'completecheck: ALL PASS\n' || printf 'completecheck: FAILURES ABOVE\n'
 exit $fail

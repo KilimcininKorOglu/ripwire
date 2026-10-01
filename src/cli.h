@@ -2068,6 +2068,8 @@ inline constexpr char kHelpTail[] =
         "                               still reads as a definition. head_labels=\"lexical\" ⇒ HEAD fell back to that heuristic too (no\n"
         "                               indexed def of the name, or a working tree that drifted from HEAD). refs_scanned= is the SCAN\n"
         "                               denominator (refs read besides HEAD), not a matched count. Read-only; single-root only.\n"
+        "                               A checkout that differs from HEAD is read from disk: each changed path's rows say\n"
+        "                               ref=\"worktree\" and replace HEAD's, at= gains +dirty, and worktree= says whether every one was read.\n"
         "                               LIMITS: a TREE scan finds only what some ref STILL carries, so hits=\"0\" alone cannot\n"
         "                               tell a name this repo never had from one it deleted, and content dropped by every tree\n"
         "                               is invisible. Add --with-history: a <fate> row then says v=\"never\" or v=\"removed\"\n"

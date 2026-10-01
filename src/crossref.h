@@ -23,7 +23,9 @@
 //                        the gitoracle.h lane — one `git log` pass that says whether HEAD's own history ever
 //                        removed the name, and in which commit. hits="0" then separates "never existed here"
 //                        from "deleted in commit X on DATE", which is the difference between a typo and rot.
-//   --stray-content    — per ref: the content the ref's own divergent work AUTHORED that the live line does
+//                        HEAD's side is the CHECKOUT: a path the working tree changed is read from disk
+//                        (scanWorktree), so an uncommitted edit is never answered from the commit it left.
+//   --stray-content   — per ref: the content the ref's own divergent work AUTHORED that the live line does
 //                        NOT have, plus a verdict (merged / superseded / unmerged).
 //
 // ── the cost model: per-BLOB, keyed by blob sha ───────────────────────────────────────────────────────────
@@ -87,6 +89,7 @@
 
 #include "model.h"
 #include "quality.h"            // gitOneLine / gitHeadSha / gitRepoHasHistory / popenTrimmed
+#include "pathguard.h"          // readRegularFileNoFollow — the worktree overlay reads a changed path regular-file-only, no-follow
 #include "gitstamp.h"           // stampAt — the at="<sha>[+dirty]" anchor (M10: --stray-content had head= with no dirty bit)
 #include "gitoracle.h"          // the SHARED name-history oracle — the deleted-from-every-tree lane for whereis
 #include "arch.h"               // fnv1a64
@@ -105,7 +108,9 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>   // the worktree overlay: symlink_status / read_symlink / file_size on a changed path
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>       // the git-spawn pool (fork/exec is the cost, not compute)
@@ -1367,6 +1372,12 @@ struct WhereHit
     std::uint32_t line = 0;
     bool          isDef = false;      // LEXICAL definition heuristic — see definitionShaped()
     std::string   text;               // the trimmed source line (evidence, so the caller can judge)
+    bool          fromWorktree = false;   // read from the WORKING-TREE copy of a path that differs from HEAD (ref="worktree")
+
+    // The CHECKOUT is HEAD's tree overlaid with the working copy of every path that differs from it: those rows
+    // sort, label and count as one group, ahead of the other refs. Keyed on the flag, never on the ref name, so a
+    // local branch that happens to be NAMED "worktree" is still an ordinary ref.
+    bool inCheckout() const noexcept { return fromWorktree || ref == "HEAD"; }
 };
 
 // §A7: where the parsed INDEX says SYM is defined — supplied by the caller (both surfaces hold an IngestResult
@@ -1405,6 +1416,15 @@ inline std::vector<IndexDefSite> whereisIndexDefSites( const IngestResult& ing, 
     return sites;
 }
 
+// What the scan learned about the WORKING TREE under the root (the 2026-10-01 freshness fix). The answer used
+// to read committed trees only and still claimed complete= on a dirty checkout, so a just-added function read
+// hits="0" and a just-deleted one kept its HEAD lines. Now every path that differs from HEAD is read from disk.
+//   Clean     nothing under the root differs from HEAD — the committed scan IS the checkout (byte-identical output)
+//   Read      every differing path was read (or is gone); its rows are ref="worktree" and replace HEAD's
+//   Partial   some differing path could not be read; ITS HEAD rows stand and may be stale — complete= is withheld
+//   Unlisted  git could not list what differs; every HEAD row may be stale — complete= is withheld
+enum class WorktreeOverlay : std::uint8_t { Clean, Read, Partial, Unlisted };
+
 struct WhereResult
 {
     bool                  ok = true;
@@ -1417,6 +1437,7 @@ struct WhereResult
     std::size_t           distinctBlobs = 0;
     std::string           filter;             // H14/M6: the --stray-filter SUBSTR this scan was narrowed by ("" = none)
     std::vector<WhereHit> hits;
+    WorktreeOverlay       worktree = WorktreeOverlay::Clean;   // what the overlay did (worktree= on the root, +dirty on at=)
 
     // T1 (completeness claims): true iff the scan PROVABLY covered every text blob of every scanned ref's
     // full tree — no missing/oversized/short-read blob, the batch served every sha, and no ref's tree
@@ -1607,7 +1628,7 @@ inline void scanLineForSymbol( std::string_view line, std::string_view sym, cons
             --b;
         }
         out.push_back( WhereHit{ ref.name, ref.tip, ref.date, path, lineNo,
-                                 definitionShaped( line, sym, at ), std::string( line.substr( a, b - a ) ) } );
+                                 definitionShaped( line, sym, at ), std::string( line.substr( a, b - a ) ), false } );
         return;                                                               // one hit per line — the line IS the evidence
     }
 }
@@ -1713,7 +1734,7 @@ inline bool relabelHeadHitsFromIndex( std::vector<WhereHit>& hits, std::span<con
         for( std::size_t hitIndex = 0; hitIndex < hits.size(); ++hitIndex )
         {
             const WhereHit& h = hits[ hitIndex ];
-            if( h.ref != "HEAD" || !sameTreePath( h.path, def.path ) )
+            if( !h.inCheckout() || !sameTreePath( h.path, def.path ) )
             {
                 continue;
             }
@@ -1738,12 +1759,212 @@ inline bool relabelHeadHitsFromIndex( std::vector<WhereHit>& hits, std::span<con
     }
     for( std::size_t hitIndex = 0; hitIndex < hits.size(); ++hitIndex )
     {
-        if( hits[hitIndex].ref == "HEAD" )
+        if( hits[hitIndex].inCheckout() )
         {
             hits[hitIndex].isDef = promoted[hitIndex] != 0;
         }
     }
     return true;
+}
+
+// ── the working-tree overlay (2026-10-01 freshness fix) ──────────────────────────────────────────────────
+//
+// A git listing whose SUCCESS is known. gitOneLine answers "" both for "nothing to list" and for "git failed",
+// and the overlay must not read a failed `git diff` as a clean checkout — that is the silent stale answer this
+// fix exists to remove. Same command prefix as gitOneLine (core.quotepath=false, -C root), so the paths are
+// spelled exactly as lsTree spells them: cwd-relative to the root, git-quoted only when a byte forces it.
+struct GitListing
+{
+    std::vector<std::string> lines;
+    bool                     ok = false;
+};
+
+inline GitListing gitListChecked( const std::string& root, const std::string& tail )
+{
+    GitListing        out;
+    const std::string cmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " " + tail + " 2>/dev/null";
+    std::FILE*        pipe = os::popen( cmd.c_str(), "r" );
+    if( pipe == nullptr )
+    {
+        return out;
+    }
+    std::string raw;
+    char        buf[ 8192 ];
+    for( std::size_t n = std::fread( buf, 1, sizeof( buf ), pipe ); n > 0; n = std::fread( buf, 1, sizeof( buf ), pipe ) )
+    {
+        raw.append( buf, n );
+    }
+    const int status = os::pclose( pipe );
+    out.ok           = WIFEXITED( status ) && WEXITSTATUS( status ) == 0;
+    for( std::string_view line : splitLines( raw ) )
+    {
+        if( !line.empty() )
+        {
+            out.lines.emplace_back( line );
+        }
+    }
+    return out;
+}
+
+// Every path under the root whose working copy differs from HEAD: tracked paths modified, staged, or deleted
+// (`diff HEAD`, renames split into their two sides) plus untracked, not-ignored files. Sorted and de-duplicated
+// (determinism). ok=false when either listing failed — the caller then cannot vouch for any HEAD row.
+inline GitListing worktreeChangedPaths( const std::string& root, const std::string& headSha )
+{
+    if( !isRevisionToken( headSha ) )
+    {
+        return {};
+    }
+    GitListing changed = gitListChecked( root, "diff --name-only --no-renames --relative " + shSingleQuote( headSha ) + " --" );
+    GitListing others  = gitListChecked( root, "ls-files --others --exclude-standard" );
+    changed.ok         = changed.ok && others.ok;
+    changed.lines.insert( changed.lines.end(), others.lines.begin(), others.lines.end() );
+    std::sort( changed.lines.begin(), changed.lines.end() );
+    changed.lines.erase( std::unique( changed.lines.begin(), changed.lines.end() ), changed.lines.end() );
+    return changed;
+}
+
+// A cap on how many changed paths one answer reads from disk. Past it the rest keep their HEAD rows and the
+// answer says worktree="partial" — a checkout with this many uncommitted paths is a generated tree, not an edit.
+constexpr std::size_t kMaxWorktreePaths = 8192;
+
+// One changed path's working copy, as the overlay sees it.
+enum class WorktreeCopy : std::uint8_t
+{
+    Text,      // read: scan it, and it REPLACES HEAD's blob for this path
+    Gone,      // absent from disk (deleted): no rows, and HEAD's rows for it are dropped
+    NotText,   // binary, a directory (a submodule) or another non-file: no text symbol can occur, HEAD's rows dropped
+    Unread,    // exists but could not be read (permission, oversized, a git-quoted name): HEAD's rows STAND
+};
+
+// The bytes git would store for this path: a regular file's contents, or a symbolic link's target text (git
+// stores the link, not what it points at). Mirrors streamBlobs' rules: over kMaxBlobBytes is UNREAD (it could
+// hold the symbol, so it forfeits the claim), a NUL in the probe window is binary (it cannot).
+inline WorktreeCopy readWorktreeCopy( const std::string& root, const std::string& relPath, std::string& bytes )
+{
+    bytes.clear();
+    if( relPath.empty() || relPath.front() == '"' )
+    {
+        return WorktreeCopy::Unread;   // git quoted a byte it would not print raw — this spelling is not the file's name
+    }
+    const std::filesystem::path p = std::filesystem::path( root ) / relPath;
+    std::error_code             ec;
+    const auto                  st = std::filesystem::symlink_status( p, ec );
+    if( st.type() == std::filesystem::file_type::not_found )
+    {
+        return WorktreeCopy::Gone;
+    }
+    if( ec )
+    {
+        return WorktreeCopy::Unread;
+    }
+    if( std::filesystem::is_symlink( st ) )
+    {
+        const std::filesystem::path target = std::filesystem::read_symlink( p, ec );
+        if( ec )
+        {
+            return WorktreeCopy::Unread;
+        }
+        bytes = target.string();
+        return WorktreeCopy::Text;
+    }
+    if( !std::filesystem::is_regular_file( st ) )
+    {
+        return WorktreeCopy::NotText;
+    }
+    const std::uintmax_t size = std::filesystem::file_size( p, ec );
+    if( ec || size > kMaxBlobBytes )
+    {
+        return WorktreeCopy::Unread;
+    }
+    std::optional<std::string> got = pathguard::readRegularFileNoFollow( p.string() );
+    if( !got )
+    {
+        return WorktreeCopy::Unread;
+    }
+    bytes = std::move( *got );
+    if( bytes.size() > kMaxBlobBytes )
+    {
+        bytes.clear();
+        return WorktreeCopy::Unread;   // grew between the size probe and the read
+    }
+    if( std::string_view( bytes ).substr( 0, std::min( bytes.size(), kBinaryProbe ) ).find( '\0' ) != std::string_view::npos )
+    {
+        bytes.clear();
+        return WorktreeCopy::NotText;
+    }
+    return WorktreeCopy::Text;
+}
+
+// The overlay's yield: the paths whose HEAD rows it REPLACED (sorted — the HEAD-site filter binary-searches it),
+// the rows it found, and whether HEAD's own tree text held the name in a replaced copy (on-head=).
+struct WorktreeScan
+{
+    WorktreeOverlay          state = WorktreeOverlay::Clean;
+    std::vector<std::string> replaced;
+    std::vector<WhereHit>    hits;
+    bool                     mentions = false;
+    enum class DisclosureWhy : std::uint8_t
+    {
+        ListingFailed,   // git diff / ls-files failed: nothing can be vouched for
+        CopyUnread,      // a changed path could not be read: its HEAD rows stand
+        OverPathCap,     // more changed paths than kMaxWorktreePaths: the rest keep their HEAD rows
+    };
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        state = ( why == DisclosureWhy::ListingFailed ) ? WorktreeOverlay::Unlisted : WorktreeOverlay::Partial;
+    }
+};
+
+// Read the working copy of every path under the root that differs from HEAD and scan it for SYM. A row found
+// here is ref="worktree" (tip=/date= the HEAD commit it overlays); a path read here (or gone) has its HEAD rows
+// dropped by the caller, so a deleted or renamed definition stops answering from a commit the checkout left.
+inline WorktreeScan scanWorktree( const std::string& root, std::string_view sym, const RefInfo& head )
+{
+    WorktreeScan     scan;
+    const GitListing changed = worktreeChangedPaths( root, head.tip );
+    if( !changed.ok )
+    {
+        DISCLOSE( scan, WorktreeScan::DisclosureWhy::ListingFailed, "whereis: git could not list the working tree's changes — HEAD rows may be stale, complete= withheld" );
+        return scan;
+    }
+    if( changed.lines.empty() )
+    {
+        return scan;   // a clean checkout: the committed scan is the whole answer, byte-identical to before
+    }
+    scan.state = WorktreeOverlay::Read;
+    if( changed.lines.size() > kMaxWorktreePaths )
+    {
+        DISCLOSE( scan, WorktreeScan::DisclosureWhy::OverPathCap, "whereis: more changed paths than the overlay reads — the rest keep their HEAD rows, complete= withheld" );
+    }
+    const RefInfo worktreeRef{ "worktree", head.tip, head.date };
+    const std::size_t readCount = std::min( changed.lines.size(), kMaxWorktreePaths );
+    std::string bytes;
+    for( std::size_t pathIndex = 0; pathIndex < readCount; ++pathIndex )
+    {
+        const std::string& relPath = changed.lines[ pathIndex ];
+        const WorktreeCopy copy    = readWorktreeCopy( root, relPath, bytes );
+        if( copy == WorktreeCopy::Unread )
+        {
+            DISCLOSE( scan, WorktreeScan::DisclosureWhy::CopyUnread, "whereis: a changed path could not be read from the working tree — its HEAD rows stand, complete= withheld" );
+            continue;
+        }
+        scan.replaced.push_back( relPath );
+        if( copy != WorktreeCopy::Text || bytes.find( sym ) == std::string::npos )
+        {
+            continue;
+        }
+        scan.mentions = true;
+        const std::size_t first = scan.hits.size();
+        scanBlobForSymbol( bytes, sym, worktreeRef, relPath, scan.hits );
+        for( std::size_t hitIndex = first; hitIndex < scan.hits.size(); ++hitIndex )
+        {
+            scan.hits[ hitIndex ].fromWorktree = true;
+        }
+    }
+    // computeWhereis binary-searches `replaced`: a subsequence of the sorted, de-duplicated listing, so sorted too.
+    ENSURES( std::is_sorted( scan.replaced.begin(), scan.replaced.end() ), "whereis: the overlay's replaced paths must stay sorted for the HEAD-site filter" );
+    return scan;
 }
 
 // The whole --whereis computation. Every ref's FULL tree is enumerated, but each distinct blob is READ once:
@@ -1782,6 +2003,13 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
     refs.insert( refs.begin(), RefInfo{ "HEAD", result.headSha, quality::gitCommitterDateIso( root ) } );
     if( refs.size() > kMaxRefs ) { result.ok = false; return result; }
 
+    // The CHECKOUT, not just HEAD's commit: every path that differs from HEAD is read from the working tree, and
+    // HEAD's rows for exactly those paths are dropped below — the stale-and-silent answer the comparison table
+    // caught 12 times (an added function at hits="0", a deleted one at its old lines, both complete="1").
+    WorktreeScan worktree = scanWorktree( root, sym, refs.front() );
+    result.worktree       = worktree.state;
+    result.onHead         = worktree.mentions;
+
     // blob sha → every (ref index, path) that points at it, in a deterministic order.
     struct Site { std::uint32_t refIndex; std::string path; };
     bool anyEmptyTree = false;   // T1: a zero-row ls-tree could be a FAILED listing — it forfeits complete=
@@ -1795,6 +2023,10 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
         }
         for( const RawRow& r : rows )
         {
+            if( i == 0 && std::binary_search( worktree.replaced.begin(), worktree.replaced.end(), r.path ) )
+            {
+                continue;   // HEAD's blob for a path the working tree changed: the overlay's rows answer for it
+            }
             sites[ r.bSha ].push_back( Site{ i, r.path } );
         }
     }
@@ -1823,7 +2055,9 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
 
     // T1: exhaustive-over-text iff every sha streamed clean AND no ref's tree listing was suspect. An empty
     // sha list (every scanned tree empty, or none) trivially streamed clean — anyEmptyTree covers that shape.
-    result.scanExhaustive = blobStats.exhaustiveOverText() && !anyEmptyTree && enumeration.refsDropped == 0;
+    result.scanExhaustive = blobStats.exhaustiveOverText() && !anyEmptyTree && enumeration.refsDropped == 0
+                         && ( worktree.state == WorktreeOverlay::Clean || worktree.state == WorktreeOverlay::Read );
+    result.hits.insert( result.hits.end(), std::make_move_iterator( worktree.hits.begin() ), std::make_move_iterator( worktree.hits.end() ) );
 
     // §A7: HEAD's rows are the INDEX's answer, not the shape test's — before the sort, because "definitions
     // before references" is a sort key and a wrong label re-orders the first screen.
@@ -1831,14 +2065,16 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
 
     // HEAD first, then refs by name; within a ref, SOURCE before test before docs (§P11.5, see this
     // function's header), then definitions before references, then path/line.
+    // The checkout (HEAD plus its worktree rows) is ONE group: a definition the edit just added sorts among
+    // HEAD's definitions, not after them. The two never share a path, so the group needs no ref order inside it.
     std::sort( result.hits.begin(), result.hits.end(), []( const WhereHit& a, const WhereHit& b )
     {
-        const bool ah = a.ref == "HEAD", bh = b.ref == "HEAD";
+        const bool ah = a.inCheckout(), bh = b.inCheckout();
         if( ah != bh )
         {
             return ah;
         }
-        if( a.ref != b.ref )
+        if( !ah && a.ref != b.ref )
         {
             return a.ref < b.ref;
         }
@@ -1855,7 +2091,11 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
         {
             return a.path < b.path;
         }
-        return a.line < b.line;
+        if( a.line != b.line )
+        {
+            return a.line < b.line;
+        }
+        return a.fromWorktree < b.fromWorktree;
     } );
     return result;
 }
@@ -2244,8 +2484,8 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
                        "with the with_history flag and the fate row says which, naming the commit that removed it. "
                        "ANCHORING: none, by design. This verb runs no diff at all — it scans each ref's FULL tree, which is "
                        "what lets it find content a branch merely INHERITED (exactly what a merge base anchored diff would "
-                       "exclude), so nothing here can fire merely because HEAD moved. at= is sha-only here (never +dirty): "
-                       "a tree scan reads committed blobs, so the working tree's cleanliness does not enter the answer. "
+                       "exclude), so nothing here can fire merely because HEAD moved. at= gains +dirty exactly when some path "
+                       "under the root differs from HEAD, and then the answer reads that path's working copy (worktree= says how). "
                        // §B11.2 — the one zero this verb prints that is NOT a measurement, named in the legend.
                        "SELECTOR: this verb takes a BARE symbol name, not the file:name spelling that callers, uses, "
                        "impact, around, lego and edit_check accept. A file:name spelling is searched as a LITERAL "
@@ -2287,6 +2527,21 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
     {
         std::fputs( gitoracle::kHistoryProbeLegend, out );
     }
+    // The overlay's own vocabulary, only on an answer that carries it — a clean checkout pays no bytes for it.
+    if( res.worktree != WorktreeOverlay::Clean )
+    {
+        rw::emitRaw( out, "WORKTREE: worktree= on the root means the checkout under this root differs from HEAD, so HEAD's "
+                           "committed tree alone would be a stale answer. Every path that differs (modified, staged, deleted or "
+                           "untracked and not ignored) is read from the working tree instead: its rows say ref=\"worktree\" (tip= "
+                           "and date= name the HEAD commit it overlays) and REPLACE HEAD's rows for that path, so a definition the "
+                           "edit added is listed and one it deleted or renamed is not. HEAD's rows stand only for paths the working "
+                           "tree left alone. on-head=, hits= and head_labels= count the checkout: HEAD plus those rows. worktree=read: "
+                           "every differing path was read, and complete= keeps its meaning over the checkout. worktree=partial: some "
+                           "differing path could not be read (permission, over the 2 MB ceiling, a name git had to quote, or more "
+                           "changed paths than one answer reads), so its HEAD rows stand and may be stale. worktree=unlisted: git "
+                           "could not list the changes, so any HEAD row may be stale. Under partial or unlisted complete= is never "
+                           "claimed. Other refs are always their committed trees. " );
+    }
     std::fputs( "-->", out );
     char pab[ kPageDisclosureCap ];
     // §A7(iii): refs_scanned=, not refs=. --stray-content and --abi both spell the MATCHED set refs=; this one
@@ -2300,12 +2555,17 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
     // H14/M6: refs_scanned="80" under a ref-name filter is a total for the FILTER, not for the repo (the
     // audit measured 80 filtered vs 189 unfiltered) — so the filter is named beside the number it bounds.
     const std::string whFilterAttr = res.filter.empty() ? std::string() : ( " filter=\"" + ex( res.filter ) + "\"" );
-    rw::emitTo( out, "<whereis sym=\"{}\" on-head=\"{}\" refs_scanned=\"{}\" blobs=\"{}\" hits=\"{}\" head_labels=\"{}\"{}{} at=\"{:.9}\"{}>",
+    // The overlay's two marks, both absent on a clean checkout (so its answer is byte-identical to before): +dirty
+    // on the stamp whenever a differing path was seen, and worktree= naming what the overlay managed.
+    static constexpr std::string_view kWorktreeAttr[] = { "", " worktree=\"read\"", " worktree=\"partial\"", " worktree=\"unlisted\"" };
+    const bool dirty = res.worktree == WorktreeOverlay::Read || res.worktree == WorktreeOverlay::Partial;
+    rw::emitTo( out, "<whereis sym=\"{}\" on-head=\"{}\" refs_scanned=\"{}\" blobs=\"{}\" hits=\"{}\" head_labels=\"{}\"{}{} at=\"{:.9}{}\"{}{}>",
                   ex( res.sym ).c_str(), res.onHead ? 1 : 0, res.refsScanned, res.distinctBlobs, res.hits.size(),
                   res.headLabelsFromIndex ? "index" : "lexical", whFilterAttr.c_str(),
                   pageDisclosure( pab, sizeof( pab ), hitPage.end - hitPage.begin, res.hits.size(), hitPage.end,
                                   pageLimit, pageOffset, true ),
-                  res.headSha.c_str(),
+                  res.headSha.c_str(), dirty ? "+dirty" : "",
+                  kWorktreeAttr[ std::size_t( res.worktree ) ],
                   completeClaim ? " complete=\"1\"" : "" );
 
     // §B11.2 — a zero that is a SPELLING fact, not a repository fact, says so. Emitted first, before the
