@@ -15,6 +15,17 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — C/C++: a body-less `enum X` in a function signature no longer poses as the function's encloser
+
+tmux writes `static enum cmd_retval` on one line and the function name on the next. The tags query indexes every named
+`enum` specifier, and the body-less one in a return or parameter type then took the whole enclosing function's span, so
+`--at` chained `struct cmd_retval` around the function, `--grep` labelled its hits `in="cmd_retval"`, and `--callers`
+named `struct box_lines` (from an `enum box_lines` parameter) as a caller. A body-less C/C++ enum, struct, union or class
+specifier now keeps its own span: on tmux, `--callers=options_get_number` lists 121 functions and no struct, and the
+four `"no current session"` hits name their functions. The specifier itself is still indexed, at its own line.
+`kParserVer` 129 → 130 (record values change for C/C++ only; `kCacheVersion` stays 27). Gate: `test/ccheck.sh`, the
+body-less type specifier arms.
+
 ### Changed — `--callers`/`--callees` flag a name whose definitions are of different kinds (`cross_kind=`)
 
 A bare name can resolve to unrelated definitions: `getPath` was one free function in `src/utils/url.ts` and ten

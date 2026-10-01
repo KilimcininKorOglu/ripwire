@@ -207,6 +207,65 @@ grep -q "RUN_EDGE_GONE:True" "$TMP/mut_check" \
     && ok "mutation: renamed main.c CROSS-FILE call site -> run -> add_one edge vanished (non-tautological)" \
     || no "mutation: run -> add_one edge survived a renamed call site — the edge assertion is a tautology"
 
+# ═══════════════════════════════════════════════════════════════════════════
+echo
+echo "=== a body-less type specifier in a signature is not the function's encloser (comparison table tmux-07/tmux-15) ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# tmux writes `static enum cmd_retval⏎cmd_set_environment_exec(…)`. The tags query captures every named
+# enum_specifier as a type definition, and the body-less one in the return type then CLIMBED to the enclosing
+# function_definition (the climb exists for function_declarator → function_definition) and took the WHOLE
+# function's span. So `--at` chained `struct cmd_retval` around the function, `--grep` labelled hits in="cmd_retval",
+# and a call inside a function with an `enum box_lines` PARAMETER was attributed to a caller `struct box_lines`.
+# RED on main 953818d6 for (a)-(d); (e) pins that the real enum definition is untouched.
+EN="$TMP/enumsig"
+mkdir -p "$EN/cpp"
+cat >"$EN/a.c" <<'EOF'
+enum cmd_retval { CMD_RETURN_NORMAL, CMD_RETURN_ERROR };
+enum box_lines { BOX_SINGLE, BOX_DOUBLE };
+
+static int helper(int x)
+{
+	return x + 1;
+}
+
+static enum cmd_retval
+cmd_split_exec(int a)
+{
+	helper(a);
+	errmsg("ENUMSIG no current session");
+	return CMD_RETURN_NORMAL;
+}
+
+int
+menu_display(int a,
+    enum box_lines lines)
+{
+	return helper(a) + (int)lines;
+}
+EOF
+cp "$EN/a.c" "$EN/cpp/b.cpp"
+EN_AT="$( "$BIN" "$EN" --no-cache --at=a.c:13 2>/dev/null )"
+printf '%s' "$EN_AT" | grep -q 'sym="cmd_split_exec" chain="1"' \
+    && ok "(a) --at inside a 'static enum X⏎name(' function chains the function alone" \
+    || no "(a) --at chains something around cmd_split_exec: $( printf '%s' "$EN_AT" | grep -o '<at .*' | cut -c1-300 )"
+EN_GREP="$( "$BIN" "$EN" --no-cache --grep="ENUMSIG no current session" 2>/dev/null )"
+printf '%s' "$EN_GREP" | grep -q 'in="cmd_split_exec"' \
+    && ok "(b) a --grep hit in that function names in=\"cmd_split_exec\"" \
+    || no "(b) --grep in= is not the function: $( printf '%s' "$EN_GREP" | grep -o '<hit l=[^>]*>' | head -1 )"
+EN_CALLERS="$( "$BIN" "$EN" --no-cache --callers=helper 2>/dev/null )"
+if printf '%s' "$EN_CALLERS" | grep -q '<s t="fn" n="menu_display"' && ! printf '%s' "$EN_CALLERS" | grep -q 't="struct"'; then
+    ok "(c) a call in a function with an 'enum box_lines' parameter is attributed to the function, no struct caller"
+else
+    no "(c) --callers=helper names a struct as a caller: $( printf '%s' "$EN_CALLERS" | grep -o '<s [^>]*>' | tr '\n' ' ' )"
+fi
+EN_CPP="$( "$BIN" "$EN/cpp" --no-cache --at=b.cpp:13 2>/dev/null )"
+printf '%s' "$EN_CPP" | grep -q 'sym="cmd_split_exec" chain="1"' \
+    && ok "(d) the C++ grammar (.cpp, and .h which C++ owns) gets the same span" \
+    || no "(d) C++: --at chains something around cmd_split_exec: $( printf '%s' "$EN_CPP" | grep -o '<at .*' | cut -c1-300 )"
+"$BIN" "$EN" --no-cache --at=a.c:1 2>/dev/null | grep -q '<s n="cmd_retval" t="struct" l="1" el="1"/>' \
+    && ok "(e) the real 'enum cmd_retval { … }' definition is unchanged (t=\"struct\", its own line)" \
+    || no "(e) the bodied enum definition moved"
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 echo
 if [ "$fail" -eq 0 ]; then

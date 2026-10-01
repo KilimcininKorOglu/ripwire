@@ -296,7 +296,13 @@ constexpr std::uint32_t kCacheVersion = 27;           // 27: same record layout 
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 129;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 130;          // bump on any grammar/.scm/extraction change
+                                                      // 130 = 2026-10-01 (lane answer-honesty-067, test/ccheck.sh "body-less
+                                                      //   type specifier" arm; the train may renumber): a C/C++ enum/struct/
+                                                      //   union/class specifier with no body keeps its own node as its span
+                                                      //   instead of climbing to the enclosing function_definition, so a
+                                                      //   C/C++ record's startByte/endByte/line range CHANGE value (tmux's
+                                                      //   `static enum cmd_retval⏎fn(…)`). Same layout: kCacheVersion stays 27.
                                                       // 129 = 2026-09-30 (train 22): ONE bump past fn-literal's 128 for the two community
                                                       //   PRs that merge after it — #338 (RSpec described_class, its 125 note below) and #325
                                                       //   (Ruby inheritance edges, its note below). Each note keeps the number its PR carried.
