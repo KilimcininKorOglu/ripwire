@@ -9,7 +9,9 @@
 // doc or web page each figure was read from, quoted. A claim about a change that has not merged yet
 // says "pending merge: #N" in those notes and lives in a commit of its own, so it can be kept or dropped
 // when that PR lands; once it lands the note says "merged: #N (<merge commit>)" instead, and the figure
-// is re-checked against the merged tree. No note on this deck is pending as of main 40a1895b.
+// is re-checked against the merged tree. No note on this deck is pending as of main a5229aca (the 2026-09-30 refresh: 25 grammars, nine wrap agents, the
+// since-0.6.1 slide and the field-report slide). A double-braced MEASURE placeholder is a figure that moves with the tree and
+// is re-measured on the merged binary before the deck is rendered; the deck is never rendered with one left in it.
 const pptxgen = require("pptxgenjs");
 
 const p = new pptxgen();
@@ -135,10 +137,11 @@ function storyCards(s, { kick, head, stories, footText }){
     { x: wireX+0.3, y: 5.3, w: wireW-0.6, h: 0.62, fontFace: SANS, fontSize: 15, color: TEXT, valign: "top", margin: 0 });
   s.addText("Every truncation is disclosed, and every guess says how many it chose from.",
     { x: wireX+0.3, y: 5.98, w: wireW-0.6, h: 0.42, fontFace: SANS, fontSize: 12.5, color: MUTED, valign: "top", margin: 0 });
-  foot(s, "Apache-2.0  ·  single binary  ·  hermetic build (proven with the network off)  ·  24 vendored tree-sitter grammars");
+  foot(s, "Apache-2.0  ·  single binary  ·  hermetic build (proven with the network off)  ·  25 vendored tree-sitter grammars");
   notes(s, [
     "SOURCES (cover)",
-    "- \"24 vendored tree-sitter grammars\" — merged: #126 (merge commit 1ad9184a, 2026-09-11), which vendors the Kotlin grammar (PR #126 body: \"vendored fwcd/tree-sitter-kotlin grammar\"). Before #126 the count was 23. On main 40a1895b: README.md, \"24 vendored grammars\", and third_party/deps/ holds a kotlin/ directory.",
+    "- \"25 vendored tree-sitter grammars\" — CHANGELOG.md [0.6.2], \"### Added — GDScript (`.gd`), the 25th vendored grammar (parser version 108)\", PR #233 (\"Thanks to @sclyde.\"). README.md on main a5229aca: \"25 vendored grammars\"; third_party/deps/ holds 24 grammar projects, tree-sitter-typescript supplying two (typescript and tsx). Astro (#320) adds no grammar: it rides the TypeScript one.",
+    "- Before GDScript: 24 — merged: #126 (merge commit 1ad9184a, 2026-09-11), which vendors the Kotlin grammar (PR #126 body: \"vendored fwcd/tree-sitter-kotlin grammar\"). Before #126 the count was 23. On main 40a1895b: README.md, \"24 vendored grammars\", and third_party/deps/ holds a kotlin/ directory.",
     "- The 23 it builds on: commit 680a0a3d,\"It is 23: 22 upstream projects under third_party/deps/, with tree-sitter-typescript supplying both typescript and tsx\"; PR #106's title, \"Dart: a 23rd grammar …\"; README.md, \"23 vendored grammars\".",
     "- The wave under \"The ripgrep of AI context.\": present/assets/paddle-out.png, rendered from docs/assets/paddle-out.svg (commit 680a0a3d; PR #133 moved the wave from the README hero to this deck).",
   ]);
@@ -169,12 +172,13 @@ function storyCards(s, { kick, head, stories, footText }){
   kicker(s, "// one binary, the whole pipeline", CYAN);
   notes(s, [
     "SOURCES (grammar count and language row)",
-    "- \"24 vendored grammars\" and Kotlin in the language row — merged: #126 (merge commit 1ad9184a, 2026-09-11); PR body, \"Adds Kotlin (.kt) language support: vendored fwcd/tree-sitter-kotlin grammar\". Before #126: 23 (commit 680a0a3d) and no Kotlin. README.md on main 40a1895b says \"24 vendored grammars\".",
+    "- \"25 vendored grammars\", GDScript and Astro in the language row — CHANGELOG.md [0.6.2] \"### Added — GDScript (`.gd`), the 25th vendored grammar (parser version 108)\" (#233, @sclyde); CHANGELOG.md [0.6.4] \"### Added — Astro (`.astro`) frontmatter is indexed on the TypeScript grammar (#320, #67)\". The language row wraps to three lines at 12 pt; check it is not clipped in the render.",
+    "- Before GDScript: \"24 vendored grammars\" and Kotlin in the language row — merged: #126 (merge commit 1ad9184a, 2026-09-11); PR body, \"Adds Kotlin (.kt) language support: vendored fwcd/tree-sitter-kotlin grammar\". Before #126: 23 (commit 680a0a3d) and no Kotlin. README.md on main 40a1895b says \"24 vendored grammars\".",
   ]);
   title(s, "Crawl → parse → resolve → rank → emit. Deterministic, end to end.");
   const stages = [
     ["crawl",   "the tree, no VCS needed"],
-    ["parse",   "tree-sitter, 24 vendored grammars"],
+    ["parse",   "tree-sitter, 25 vendored grammars"],   // CHANGELOG [0.6.2] "the 25th vendored grammar" (GDScript, #233)
     ["resolve", "references → call graph"],
     ["rank",    "Personalized PageRank"],
     ["emit",    "minified XML, one line"],
@@ -190,7 +194,7 @@ function storyCards(s, { kick, head, stories, footText }){
   const props = [
     ["byte-identical", "two runs, same bytes — a gate on every push, not a tendency; warm equals cold"],
     ["zero runtime deps", "CMake + a C++23 compiler; builds with the network off — vendored everything"],
-    ["the languages", "Rust · C++ · ObjC/C++ · C · Metal · CUDA · Python · Go · Swift · TypeScript · JavaScript · Java · Kotlin · Ruby · PHP · Lua · Elixir · Dart · Bash · C# · JSON · TOML · YAML · Markdown — 24 vendored grammars; markdown headings are real symbols"],
+    ["the languages", "Rust · C++ · ObjC/C++ · C · Metal · CUDA · Python · Go · Swift · TypeScript · JavaScript · Java · Kotlin · Ruby · PHP · Lua · Elixir · Dart · GDScript · Bash · C# · JSON · TOML · YAML · Markdown — 25 vendored grammars, Astro frontmatter on the TypeScript one; markdown headings are real symbols"],   // GDScript: CHANGELOG [0.6.2] (#233); Astro: CHANGELOG [0.6.4] (#320)
     ["agent-native", "an MCP server and 185 long flags behind one `--help` that is always the authority"],
   ];
   // Row height carries the LONGEST body (the language line, which wraps to three at this width),
@@ -216,7 +220,7 @@ function storyCards(s, { kick, head, stories, footText }){
     ["quality & risk",   "Where is the risk, and did I just add some?",         "--quality-panel  --quality-delta  --dmm  --biggest-first  --ensemble  --context-ratio  --nonlocal-state  --field-affinity  --hotspots  --lint  --clones"],
     ["self-diagnosis",   "Is my setup actually working?",                       "--doctor  --skipped"],
     ["security",         "Is this agent skill file safe to install?",           "--scan-skill  --scan-skills"],
-    ["knobs & modes",    "Shape, format, cache, budget.",                       "--json  --format  --mcp"],
+    ["knobs & modes",    "Shape, format, cache, budget.",                       "--json  --format  --mcp  --lsp  --max-memory"],   // --lsp: CHANGELOG [0.6.2] "`--lsp` — a read-only navigation LSP server over stdio (Phase 1)"; --max-memory: CHANGELOG [Unreleased] "### Added — a memory guard on every root" (#350, merged #363)
   ];
   let y = 1.85;
   for (const [fam, q, flags] of fams){
@@ -452,7 +456,94 @@ function storyCards(s, { kick, head, stories, footText }){
     "- 114 MB → 368 KB: #208. 'The call graph keeps, for every call the resolver declines to bind, the list of candidates it declined between. Those lists were stored once per call, so the structure grew with calls x candidates: 27.9 M entries, 114 MB, on llvm-project. One stored copy per distinct list makes that 9,879 distinct lists and 62,359 entries - 368 KB - with every count and every byte of output unchanged.'",
     "- The second row exists so the slide cannot be read as an output change. It is a structure change with byte-identical output, and saying so is the point.",
     "FOOTER (the instruments). From the release notes' Highlights: 'Three readouts, all registered before the work began, and none of them a model's opinion. A frozen bank of 30 retrieval questions, each answered in ONE call on a 2,066-file C++ corpus pinned at one commit, scored on the gold files the question's answer must name. A follow-up ladder over the same bank: six deterministic steps per tool, no model in the loop... And a held-out draw registered separately, so a round cannot be tuned onto the bank it is graded on.'",
-    "NOT ON THIS SLIDE, DELIBERATELY: no competitor is named and no comparison is drawn (the head-to-head re-measure is held for 0.6.2); no flag is named that the shipped --help does not carry (deckcheck); and the shape/routing figures are on the companion slide because they are re-measured on the instruments rather than argued from per-verb byte tables.",
+    "NOT ON THIS SLIDE, DELIBERATELY: no competitor is named and no comparison is drawn (no head-to-head round has been re-run since this slide was written, and none is drawn here); no flag is named that the shipped --help does not carry (deckcheck); and the shape/routing figures are on the companion slide because they are re-measured on the instruments rather than argued from per-verb byte tables.",
+  ]);
+}
+
+/* ── S5e3 · since 0.6.1 ─────────────────────────────────────────────────── */
+{
+  // Same four-quadrant listCard shape as 0.6.0 and 0.6.1. Window: after the v0.6.1 tag (2026-09-14) through main
+  // a5229aca — releases 0.6.2 to 0.6.5 and CHANGELOG.md [Unreleased] (merged: #365). Every row names its source in the
+  // comment beside it and again in the notes. The fn-literal figures move with the corpus and the binary, so they are
+  // double-braced MEASURE placeholders until re-measured on the merged binary. Left out on purpose: skill scanning (not a
+  // central feature) and any head-to-head figure (none has been re-measured).
+  const s = p.addSlide(); bg(s);
+  kicker(s, "// since v0.6.1 (2026-09-14): 0.6.2–0.6.5 and main; each row names its PR", CYAN);
+  title(s, "Since 0.6.1: more places it runs, more of the code it answers for", { size: 30 });
+  const CW = (W - 2*MX - 0.14) / 2, CH = 2.43, X2 = MX + CW + 0.14, Y2 = 1.72 + CH + 0.12;
+
+  listCard(s, MX, 1.72, CW, CH, "where and how it runs", CYAN, [
+    // CHANGELOG [0.6.2] "### Added — native Windows x64 (clang-cl, MSVC ABI), behind `src/infra/os.h` — thanks to @lennix1337 (#44)";
+    // CHANGELOG [0.6.2] "### Added — Microsoft's `cl.exe` builds the tree"; CHANGELOG [0.6.3] "### Added — a Windows x64 release asset (preview)";
+    // README.md platform row: "the 658-gate suite does not run there"
+    ["Windows x64",  "builds under clang-cl and MSVC cl.exe; a release zip ships as a preview. The gate suite does not run there yet (@lennix1337, #44)", CYAN],
+    // CHANGELOG [0.6.2] "`--lsp` — a read-only navigation LSP server over stdio (Phase 1)" … "Thanks to @mpapis."
+    ["--lsp",        "a read-only navigation LSP server over stdio: definition, references, document and workspace symbols, hover (@mpapis)", CYAN],
+    // CHANGELOG [Unreleased] "### Added — a memory guard on every root: zero-config …" (#350 layer 3, merged #363): "The limit is 65% of
+    // the machine's memory (physical RAM, or the cgroup v2 `memory.max` when lower)"; "ripwire exits **5** (new exit code)"
+    ["65% · exit 5", "a zero-config memory guard: past 65% of RAM or the cgroup limit, a disclosed partial map or exit 5, not a swap storm; --max-memory moves the line (#350)", GREEN],
+  ], { bigW: 1.75 });
+
+  listCard(s, X2, 1.72, CW, CH, "better answers", GREEN, [
+    // CHANGELOG [Unreleased] "### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality
+    // verbs measure it" (merge 48279226): "measure 2,083 functions (was 63)" on "a 583-file TypeScript agent repo". RE-MEASURE.
+    ["{{MEASURE:fnliteral_functions_before}} → {{MEASURE:fnliteral_functions_after}}", "functions --quality-panel measures on a {{MEASURE:fnliteral_ts_files}}-file TypeScript repo: a name bound to an arrow or function literal now owns its body (JS, TS, Lua, Python)", GREEN],
+    // CHANGELOG [Unreleased] "### Changed — `--metrics` prints one row per definition" (merge 2df0de0a)
+    ["one row per def", "--metrics: overloads and #ifdef twins each get their own row and metrics, instead of sharing one body's", GREEN],
+    // CHANGELOG [Unreleased] "### Added — Ruby has inheritance edges: `class Child < Parent` reaches the lego view …" (PR #325, merge d38a0e36)
+    // and "### Added — RSpec's `described_class` is the class its example group names …" (#338, merge 3418eba6); both PRs by @andriytyurnikov
+    ["Ruby, from the community", "class Child < Parent is an edge, so --lego answers for Ruby (#325); RSpec's described_class pins to the class under test (#338), @andriytyurnikov", GREEN],
+    // CHANGELOG [0.6.2] "### Fixed — a call written outside every named function now has a caller …" (#60): "Measured before the change
+    // with `--pin-census`, as the share of call sites with no caller node: **72.8% of vue-core**" — a dated pre-change figure
+    ["72.8% of vue-core", "call sites had no caller, measured before the fix: a call outside every named function now has a module-scope owner (#60)", GREEN],
+  ], { bigW: 1.95, lsize: 9 });
+
+  listCard(s, MX, Y2, CW, CH, "honest answers", AMBER, [
+    // CHANGELOG [0.6.3] "### Changed — `--callers`, `--uses` and the `--impact` import tier rank before they cap" and "### Fixed — body
+    // packing, `--outline` and `--pack-signatures` rank before they cut, and every cut is named"; CHANGELOG [Unreleased] "### Fixed — three
+    // answers that cut silently now say what they left out" (merge ac65b668)
+    ["rank, then cut", "capped verbs keep their strongest rows and name what they dropped (0.6.3); three answers that cut silently now say what they left out", AMBER],
+    // CHANGELOG [Unreleased] "### Fixed — the history verbs say so when a clone is shallow" (merge b5ef8317)
+    ["shallow=\"1\"",  "on a depth-1 clone, the CI checkout default, the history verbs say the history is shallow instead of calling the boundary commit a root", AMBER],
+    // CHANGELOG [Unreleased], five "### Fixed" entries (merge 1e77b647): `--flags` reads JS/TS `process.env` switches; `--doc-drift`
+    // three false drifts on a Python repository; `--from-trace` `next=`; `--connect` from the definition that joins; `--dead-code` pytest methods
+    ["five false answers", "--flags, --doc-drift, --from-trace, --connect and --dead-code each answered falsely on a real repository; each is fixed", AMBER],
+  ], { bigW: 1.95 });
+
+  listCard(s, X2, Y2, CW, CH, "quality you can act on", CYAN, [
+    // CHANGELOG [Unreleased] "### Added — `--quality-delta` placeholder kind (the eleventh): stubs and TODOs a change adds" (merge f6d6cf05):
+    // "Every row is `origin=\"new-symbol\"` and never gates"
+    ["placeholder", "the 11th --quality-delta kind: the stubs and TODOs a change adds, per symbol. It lists them and never gates", CYAN],
+    // CHANGELOG [Unreleased] "### Changed — `--impact` lists the blast radius nearest first, with its hop depth" (merge 83f30561)
+    ["d= hop depth", "--impact lists the blast radius nearest first, so a cut page drops the deepest rows first; by_depth= says where it stopped", CYAN],
+    // CHANGELOG [Unreleased] "### Added — `--mcp-tools=LIST`: the MCP server can list a subset of its tools" (merge 89f6beb6): `core` names
+    // 8 tools; "With no flag, or `--mcp-tools=full`, every byte the server sends is unchanged"
+    ["--mcp-tools", "the MCP server lists only the tools you name, or a core profile of 8; the full 33 stay the default, byte for byte", CYAN],
+  ], { bigW: 1.75 });
+
+  // CHANGELOG [Unreleased] "### Changed — the versions this release moves, stated once"; src/ingest_cache.h kParserVer = 129, kCacheVersion = 27
+  foot(s, "upgrade note: parser 129 · cache 27 — a cached index from an earlier build re-indexes once on first use");
+  notes(s, [
+    "SOURCES (since 0.6.1). Window: after the v0.6.1 tag (2026-09-14) through main a5229aca (merge of #365, 2026-09-30): CHANGELOG.md [0.6.2] to [0.6.5], and [Unreleased] for what main carries into the next release.",
+    "LEFT OUT, DELIBERATELY: skill scanning (not a central feature of the tool), any head-to-head figure (none re-measured), and per-verb byte counts.",
+    "WHERE AND HOW IT RUNS",
+    "- Windows x64: CHANGELOG [0.6.2] '### Added — native Windows x64 (clang-cl, MSVC ABI), behind src/infra/os.h — thanks to @lennix1337 (#44)' and '### Added — Microsoft's cl.exe builds the tree, so both Windows front ends compile and both gate'; CHANGELOG [0.6.3] '### Added — a Windows x64 release asset (preview)'. The caveat is README.md's platform row: the gate suite does not run on Windows, and ASan is compiled there but never executed.",
+    "- --lsp: CHANGELOG [0.6.2], '--lsp — a read-only navigation LSP server over stdio (Phase 1)': definition, references, documentSymbol, workspace symbol and hover. 'Thanks to @mpapis.'",
+    "- Memory guard: CHANGELOG [Unreleased] '### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)', merged with #363 (b90547fa). 'The limit is 65% of the machine's memory (physical RAM, or the cgroup v2 memory.max when lower); --max-memory=N[K|M|G] or RIPWIRE_MAX_MEMORY replaces it'; past the limit 'ripwire exits 5 (new exit code)'.",
+    "BETTER ANSWERS",
+    "- Function-literal bodies: CHANGELOG [Unreleased] '### Fixed — a name bound to a function literal has a body: no more false bodyless_defs, and quality verbs measure it' (merge 48279226). The CHANGELOG states '--biggest-first, --ensemble and --quality-panel measure 2,083 functions (was 63)' on 'a 583-file TypeScript agent repo'. Re-measured for this slide on the merged binary: {{MEASURE:fnliteral_functions_before}} → {{MEASURE:fnliteral_functions_after}} over {{MEASURE:fnliteral_ts_files}} files.",
+    "- --metrics: CHANGELOG [Unreleased] '### Changed — --metrics prints one row per definition' (merge 2df0de0a): overloads and a function defined in several #ifdef branches each get their own row with l=. Gate: test/metricscheck.sh.",
+    "- Ruby: CHANGELOG [Unreleased] '### Added — Ruby has inheritance edges: class Child < Parent reaches the lego view and the resolver's base walk' (PR #325, merge d38a0e36) and '### Added — RSpec's described_class is the class its example group names, so a spec's calls pin to the class under test (#338)' (merge 3418eba6). Both PRs were contributed by @andriytyurnikov.",
+    "- vue-core: CHANGELOG [0.6.2] '### Fixed — a call written outside every named function now has a caller' (#60): 'Measured before the change with the pin census, as the share of call sites with no caller node: 72.8% of vue-core'. A dated pre-change figure from a committed instrument, so it is not re-measured.",
+    "HONEST ANSWERS",
+    "- rank, then cut: CHANGELOG [0.6.3] '### Changed — --callers, --uses and the --impact import tier rank before they cap' and '### Fixed — body packing, --outline and --pack-signatures rank before they cut, and every cut is named'; CHANGELOG [Unreleased] '### Fixed — three answers that cut silently now say what they left out' (merge ac65b668).",
+    "- shallow: CHANGELOG [Unreleased] '### Fixed — the history verbs say so when a clone is shallow' (merge b5ef8317): --owners, --hotspots and --cochange carry shallow=\"1\"; --quality-delta=REV on the boundary commit says it is a shallow clone, not a root commit.",
+    "- five false answers: CHANGELOG [Unreleased], merge 1e77b647 — '--flags reads JavaScript and TypeScript process.env switches' (it had answered gates=\"0\" env=\"0\"), '--doc-drift: three false drifts on a Python repository', '--from-trace no longer pairs one file's line with another file's definition in next=', '--connect searches a many-definition terminal from the definition that joins', '--dead-code no longer reports a pytest test method as an internal-linkage orphan'.",
+    "QUALITY YOU CAN ACT ON",
+    "- placeholder: CHANGELOG [Unreleased] '### Added — --quality-delta placeholder kind (the eleventh): stubs and TODOs a change adds' (merge f6d6cf05): 'Every row is origin=\"new-symbol\" and never gates'.",
+    "- --impact depth: CHANGELOG [Unreleased] '### Changed — --impact lists the blast radius nearest first, with its hop depth' (merge 83f30561): rows run by hop depth first, the order is applied before the window cuts, and by_depth= counts reaches= per depth. Gate: test/impactdepthcheck.sh.",
+    "- --mcp-tools: CHANGELOG [Unreleased] '### Added — --mcp-tools=LIST: the MCP server can list a subset of its tools' (merge 89f6beb6). The core profile is explore, batch, from_trace, impact, uses, fetch_body, edit_check and quality_delta (8); 'With no flag, or --mcp-tools=full, every byte the server sends is unchanged.'",
+    "FOOTER: CHANGELOG [Unreleased] '### Changed — the versions this release moves, stated once': kParserVer 124 → 129, kCacheVersion 25 → 27; 'Every ingest cache written by an earlier build is refused and re-indexed once'. src/ingest_cache.h on main a5229aca: kParserVer = 129, kCacheVersion = 27.",
   ]);
 }
 
@@ -1072,14 +1163,14 @@ function storyCards(s, { kick, head, stories, footText }){
   card(s, 8.5, 5.25, 4.1, 1.45);
   s.addText([
     { text: "The map grades itself before it answers. ", options: { color: TEXT, bold: true } },
-    { text: "This repository's own src/: files=166 symbols=5778 edges=17150 ambiguous=7441 unresolved=1658 declined=4803.", options: { color: MUTED, fontFace: MONO } },
+    { text: "This repository's own src/: {{MEASURE:src_census}}.", options: { color: MUTED, fontFace: MONO } },   // re-measured: `ripwire ./src` on main a5229aca
   ], { x: 8.68, y: 5.36, w: 3.8, h: 1.24, fontFace: SANS, fontSize: 10, margin: 0 });
   foot(s, "docs/EVALS.md §8 lists the numbers this project refuses to publish, each with its reason");
   notes(s, [
     "SOURCES (the tripwire)",
-    "- The src/ census is re-derived, not remembered: `ripwire ./src` on main 40a1895b prints files=166 symbols=5778 edges=17150 ambiguous=7441 unresolved=1658 declined=4803 (warm and --no-cache identical). It read files=153 symbols=5122 edges=14182 ambiguous=5982 unresolved=1598 when the slide was written on 2026-09-06.",
+    "- The src/ census is re-derived, not remembered: `ripwire ./src` on main a5229aca prints {{MEASURE:src_census}} (warm and --no-cache identical). On main 40a1895b (2026-09-11) it read files=166 symbols=5778 edges=17150 ambiguous=7441 unresolved=1658 declined=4803. It read files=153 symbols=5122 edges=14182 ambiguous=5982 unresolved=1598 when the slide was written on 2026-09-06.",
     "- declined= is new in 0.6.0 — #136, merge commit d752d953: a call the resolver refused to guess at is now counted instead of vanishing. It belongs on this slide because it is the same contract the other three rules state.",
-    "- The --callers example: `ripwire . --callers=rankGraphTeleport` on main 40a1895b still answers defs=\"1\" count=\"6\" counts_floor=\"1\", with runEval and rankGraph as its first two rows.",
+    "- The --callers example: `ripwire . --callers=rankGraphTeleport` answered defs=\"1\" count=\"6\" counts_floor=\"1\", with runEval and rankGraph as its first two rows, on main 40a1895b. On main a5229aca: {{MEASURE:callers_rankGraphTeleport}}.",
   ]);
 }
 
@@ -1127,7 +1218,7 @@ function storyCards(s, { kick, head, stories, footText }){
     ["byte-identical, always", "two runs over the same tree produce the same bytes; warm equals cold. Enforced in CI, twice — Release AND a plain flavour, because NDEBUG once blinded a whole class of checks"],
     ["differential refactoring", "a refactor must prove it changed nothing observable: two binaries, hundreds of argv vectors, stdout + stderr + exit codes byte-identical"],
     ["held-out labels, authored blind", "eval labels were written by reading source before the ranker ever ran on them — so the eval is allowed to say the ranker is wrong. It has."],
-    ["sanitizer wall", "ASan + UBSan + integer + float-cast, no-recover; TSan separately; leak suppression is one pinned file"],
+    ["sanitizer wall", "ASan + UBSan + integer + float-cast, no-recover; 16 libFuzzer targets over its own readers of bytes it did not create; ThreadSanitizer nightly on main; leak suppression is one pinned file"],   // CHANGELOG [0.6.2] "### Added — reader fuzzers for ripwire's own parsers of bytes it did not create" (16 = CMakeLists.txt RIPWIRE_FUZZ_READERS); CHANGELOG [0.6.2] "### Added — a nightly ThreadSanitizer run against main"
     ["its own output is audited", "the showcase capture is regenerated and adversarially re-read as a claims corpus — the methodology ships in docs/METHODOLOGY.md"],
   ];
   const cw = 3.95, ch = 2.2; let i = 0;
@@ -1270,7 +1361,8 @@ function storyCards(s, { kick, head, stories, footText }){
   kicker(s, "// built for the agent's seat", CYAN);
   title(s, "One command wires it into your agent", { size: 32 });
   chip(s, "$ ripwire wrap claude", MX, 1.95, 4.35, GREEN, { size: 14, h: 0.55 });
-  s.addText("claude · cursor · codex · windsurf · gemini · aider — or --all to detect every one you have installed",
+  // the nine agents: src/wrap.h's agent table on main a5229aca
+  s.addText("claude · cursor · codex · windsurf · gemini · aider · opencode · openclaw · hermes — or --all to detect every one you have installed",
     { x: 5.2, y: 1.95, w: 7.4, h: 0.55, fontFace: SANS, fontSize: 12, color: MUTED, valign: "middle", margin: 0 });
   const cards = [
     ["33 MCP verbs", "17 read verbs mirroring the CLI, 13 flagship reflexes (impact, uses, affected, edit_check, from_trace, connect …), 3 span-addressed edit verbs with a safety contract"],
@@ -1294,9 +1386,59 @@ function storyCards(s, { kick, head, stories, footText }){
   foot(s, "the MCP server exposes the same deterministic engine — one index, shared with the CLI, staleness-checked");
   notes(s, [
     "SOURCES (agent wiring)",
+    "- The nine agents after `wrap`: src/wrap.h's agent table on main a5229aca — claude, codex, cursor, windsurf, gemini, opencode, openclaw, hermes, aider. This line named six until 2026-09-30. On the merged binary, `ripwire wrap --help`: {{MEASURE:wrap_agents}}.",
     "- “33 MCP verbs … 17 read verbs … 13 flagship reflexes … 3 span-addressed edit verbs” — README.md, lane/t10-mcp-coverage: “One stdio server, 33 verbs — 17 read, 13 flagship-reflex, 3 span-addressed edit” (rank_by and affected joined the MCP surface, matching the CLI --rank-by / --affected twins).",
     "- “18 agent skills” — README.md: “skills/ ships eighteen task-shaped skills”; skills/ holds 18 directories.",
     "- “12 orchestrator loops” — README.md: “prompts/ holds twelve self-contained orchestrator prompts”, and prompts/ holds 12 .md files besides its own README.md. This card said 11 until 2026-09-11; test/readmedriftcheck.sh arm (I1) gates the README against the directory, and the deck now states the same number.",
+  ]);
+}
+
+/* ── S12f · in the field ────────────────────────────────────────────────── */
+{
+  // OUTCOMES ONLY. Source: README.md's field report (merged: #361, merge commit 99dc46eb): one engagement, the orchestrating
+  // agent's own report, on an older version. It is testimony, not an instrument, so under this deck's rule of no number
+  // without a committed instrument behind it ("Claims you can trust") no figure from the report appears on this slide:
+  // not its token savings, its call-site counts, its agent count or its codebase size. What happened, and its boundary.
+  const s = p.addSlide(); bg(s);
+  kicker(s, "// in the field: one engagement, the agent's own report, an older version", AMBER);
+  title(s, "What it did for an orchestrated fleet of coding agents", { size: 32 });
+  const outcomes = [
+    // README.md field report: "one `--callers` query returned **zero production callers**, redirecting the task to the real gap"
+    ["--callers", "one call redirected a task",
+     "A task was chartered to switch on a behaviour the team believed was live. One --callers call showed it had no production caller, and the task moved to the real gap: the data it needed had never been wired."],
+    // README.md field report: "`--edit-check` flagged … call sites as incompatible — sites a text search had missed"
+    ["--edit-check", "a silent divergence, caught early",
+     "A widely shared computation was refactored. --edit-check flagged incompatible call sites that a text search had missed; left alone, they would have drifted from the canonical path the day the feature was enabled."],
+    // README.md field report: "all caught by `--quality-delta` at each agent's \"I think I'm done\" moment"; "the same \"fix or justify with a
+    // written reason\" discipline"
+    ["--quality-delta", "quality became a protocol",
+     "Run at each agent's \"done\", it made fix-or-justify the habit of agents that shared no context. Duplicated routines and near-identical twins were fixed, not waived."],
+  ];
+  const GAP = 0.14, cw = (W - 2*MX - 2*GAP) / 3, cy = 1.75, chh = 2.95;
+  outcomes.forEach(([flag, head, body], i) => {
+    const x = MX + i * (cw + GAP);
+    card(s, x, cy, cw, chh);
+    s.addText(flag, { x: x+0.2, y: cy+0.14, w: cw-0.4, h: 0.3,  fontFace: MONO, fontSize: 12.5, bold: true, color: CYAN, margin: 0 });
+    s.addText(head, { x: x+0.2, y: cy+0.48, w: cw-0.4, h: 0.5,  fontFace: SANS, fontSize: 16, bold: true, color: TEXT, valign: "top", margin: 0 });
+    s.addText(body, { x: x+0.2, y: cy+1.04, w: cw-0.4, h: 1.8,  fontFace: SANS, fontSize: 11.5, color: MUTED, valign: "top", margin: 0 });
+  });
+  // README.md field report, "The honest boundary": the deepest findings came from bespoke measurement the agents built; the contract
+  // checker's arity heuristic over-counts on defaulted trailing parameters, and the tool's own notes say to verify by compiling
+  const by = cy + chh + 0.2, bh = 1.62;
+  s.addShape("roundRect", { x: MX, y: by, w: W-2*MX, h: bh, fill: { color: "1F1B13" }, rectRadius: 0.09, line: { color: AMBER, width: 1.5 } });
+  s.addText("the honest boundary, from the same report", { x: MX+0.3, y: by+0.14, w: 11.5, h: 0.32, fontFace: MONO, fontSize: 12.5, bold: true, color: AMBER, margin: 0 });
+  s.addText([
+    { text: "The deepest findings did not come from the tool. ", options: { color: TEXT, bold: true } },
+    { text: "They came from measurement the agents built themselves: worktree diffs, attribution sweeps, funnels. The tool was a floor for orientation and honesty, not a substitute for measurement design. And one known false-positive mode: --edit-check's arity heuristic over-counts where trailing parameters have defaults, and compiling settles it, as its own notes say.", options: { color: MUTED } },
+  ], { x: MX+0.3, y: by+0.5, w: 11.5, h: 1.02, fontFace: SANS, fontSize: 12, valign: "top", margin: 0 });
+  foot(s, "source: README.md field report (#361) · one engagement · the agent's own report · an older version · testimony, not measurement");
+  notes(s, [
+    "SOURCES (in the field). README.md on main a5229aca, the collapsed 'Field report' section and its text version — merged: #361 (merge commit 99dc46eb). The README labels it: 'The model's own report of one engagement, on a version before 0.5; not a controlled measurement. Controlled measurements are in docs/EVALS.md.' This slide carries the same three labels: one engagement, the agent's own report, an older version.",
+    "WHY NO NUMBERS: the 'Claims you can trust' slide states that no number on this deck lacks a committed instrument behind it. The report's figures (its token-spend estimate, per-call factors, call-site counts, defect counts, agent counts, codebase size) are testimony with no committed instrument, so none is quoted here. The outcomes are.",
+    "- --callers card: the report, 'Two tasks had their direction changed by a single call': a task 'chartered to activate a steering behavior the team believed was in production'; one --callers query 'redirecting the task to the real gap (the data provider that behavior needed had never been wired anywhere)'.",
+    "- --edit-check card: the same paragraph: a task that 'refactored a widely-shared computation'; --edit-check flagged call sites 'a text search had missed' that 'would otherwise have silently diverged from the canonical path the day the feature was enabled'.",
+    "- --quality-delta card: 'all caught by --quality-delta at each agent's \"I think I'm done\" moment' (a duplicated routine, a hand-duplicated cost function, near-identical functions with a flipped sign); and 'The quality gate as a protocol': agents 'none sharing context, all converged on the same \"fix or justify with a written reason\" discipline'.",
+    "- The boundary card: 'The honest boundary' — 'The engagement's deepest findings did not come from the tool' but from 'bespoke measurement the agents built'; 'The tool is a floor for honesty and orientation, not a substitute for measurement design'; and the 'Known false-positive mode': the contract checker's arity heuristic 'over-counts on defaulted trailing parameters', and the tool's notes 'say to verify by compiling in exactly this case'.",
   ]);
 }
 
@@ -1372,11 +1514,12 @@ function storyCards(s, { kick, head, stories, footText }){
     ["What-to-Retrieve · arXiv 2503.20589", "retrieval selection beats retrieval volume for coding agents → the selection-over-dumping thesis"],
     ["LocAgent / Loc-Bench (2025)", "the localization metric (strict Acc@k) and the frozen 560-instance dataset every accuracy number here is scored on"],
     ["scip-clang · Serena / clangd", "the compiler-grade oracle round 9 graded both tools against — an outside referee, not a rival"],
-    ["tree-sitter", "the incremental GLR parsing substrate — 24 grammars vendored, one parser per thread"],
+    ["tree-sitter", "the incremental GLR parsing substrate — 25 grammars vendored, one parser per thread"],   // CHANGELOG [0.6.2] GDScript, "the 25th vendored grammar" (#233)
   ];
   notes(s, [
     "SOURCES (grammar count only)",
-    "- \"24 grammars vendored\" — merged: #126, merge commit 1ad9184a (PR body: \"vendored fwcd/tree-sitter-kotlin grammar\"). Before #126 the count was 23 (commit 680a0a3d); README.md on main 40a1895b says \"24 vendored grammars\".",
+    "- \"25 grammars vendored\" — CHANGELOG.md [0.6.2], \"### Added — GDScript (`.gd`), the 25th vendored grammar (parser version 108)\" (#233, @sclyde).",
+    "- Before GDScript: 24 — merged: #126, merge commit 1ad9184a (PR body: \"vendored fwcd/tree-sitter-kotlin grammar\"). Before #126 the count was 23 (commit 680a0a3d); README.md on main 40a1895b says \"24 vendored grammars\".",
   ]);
   y = 2.05;
   for (const [t, d] of modern){
@@ -1394,7 +1537,7 @@ function storyCards(s, { kick, head, stories, footText }){
   kicker(s, "// do not take any of it on trust", AMBER);
   title(s, "Every claim, and the command that re-derives it");
   const claims = [
-    ["185 long flags · 34 slides",        "bash test/deckclaimcheck.sh"],
+    ["185 long flags · 36 slides",        "bash test/deckclaimcheck.sh"],
     ["every --flag named here exists",    "bash test/deckcheck.sh"],
     ["74.7% fewer element bytes",         "bash test/showcasecapturecheck.sh"],
     ["658 gate scripts",                  "bash test/manifestcheck.sh"], // gatecount
