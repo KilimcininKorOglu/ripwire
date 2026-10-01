@@ -95,4 +95,42 @@ else
     no "(h) a wrong scope silently resolved — the tier leaks into bare-name matching"; printf '%s\n' "$OUTH" | tail -2
 fi
 
+# ── (i)-(m) THE DOTTED SPELLINGS: `Class.method` and `Class#method` are the Scope::name tier too (2026-10-01) ─────────
+# Agents and docs name a method `Class.method` (Python, JS, Java) or `Class#method` (Ruby, JSDoc); every SYM verb
+# answered "not found" while `Class::method` resolved. RED-FIRST on the parent binary: (i)-(l) fail; (m) is a pin.
+for sel in 'Box.lid' 'Box#lid'; do
+    OUTI="$( "$BIN" "$FIX" --no-cache --callees="$sel" 2>&1 )"
+    if printf '%s' "$OUTI" | grep -q 'n="boxHelper"' && ! printf '%s' "$OUTI" | grep -q 'n="crateHelper"'; then
+        ok "(i) --callees=$sel resolves like Box::lid and names boxHelper only"
+    else
+        no "(i) --callees=$sel did not resolve to Box::lid alone"; printf '%s\n' "$OUTI" | tail -2
+    fi
+done
+PY="$( mktemp -d )"; trap 'rm -rf "$PY"' EXIT
+printf 'class Shape:\n    def area(self, k):\n        return k\n\nclass Disc:\n    def area(self, k):\n        return k * 3\n\ndef run():\n    return Shape().area(2)\n' >"$PY/shapes.py"
+OUTJ="$( "$BIN" "$PY" --no-cache --callers=Shape.area 2>&1 )"
+if printf '%s' "$OUTJ" | grep -q 'defs="1"' && printf '%s' "$OUTJ" | grep -q 'n="run"'; then
+    ok "(j) --callers=Shape.area (Python) resolves to the one Shape method (defs=\"1\") and lists run"
+else
+    no "(j) --callers=Shape.area did not resolve to Shape's area"; printf '%s\n' "$OUTJ" | tail -2
+fi
+OUTK="$( "$BIN" "$PY" --no-cache --impact=Shape#area 2>&1 )"
+if printf '%s' "$OUTK" | grep -q '<impact[^>]* defs="1"'; then
+    ok "(k) --impact=Shape#area resolves to one definition"
+else
+    no "(k) --impact=Shape#area did not resolve"; printf '%s\n' "$OUTK" | tail -2
+fi
+OUTL="$( "$BIN" "$PY" --no-cache --edit-check=Shape.area 2>&1 )"
+if printf '%s' "$OUTL" | grep -q '<edit-check[^>]* p="shapes.py:2"'; then
+    ok "(l) --edit-check=Shape.area answers about shapes.py:2"
+else
+    no "(l) --edit-check=Shape.area did not answer about Shape's area"; printf '%s\n' "$OUTL" | tail -2
+fi
+OUTM="$( "$BIN" "$FIX" --no-cache --callees=Nope.lid 2>&1 )"
+if printf '%s' "$OUTM" | grep -qE 'not found|matched no|no symbol'; then
+    ok "(m) --callees=Nope.lid refuses (a wrong dotted scope never degrades to the bare name)"
+else
+    no "(m) --callees=Nope.lid resolved — the dotted tier leaks into bare-name matching"; printf '%s\n' "$OUTM" | tail -2
+fi
+
 exit $fail

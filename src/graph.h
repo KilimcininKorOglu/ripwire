@@ -5749,6 +5749,29 @@ inline void declToDefFollowThrough( const IngestResult& ing, std::string_view fi
     std::sort( sel.begin(), sel.end() );   // NodeId order - the contract every caller of this already relies on
 }
 
+// THE DOTTED SCOPE TIER (2026-10-01). Agents and docs write a method as `Class.method` (Python, JS, Java, the
+// comparison tables) or `Class#method` (Ruby, JSDoc), and every SYM verb answered "symbol not found" for a method the
+// Scope::name tier resolves at once. Probed LAST, only when every other tier matched nothing, and only for a spec with
+// no ':' (a file:name or Scope::name spelling is never re-read) and no '/' (a path): each '.' and '#' becomes "::" and
+// the Scope::name tier answers with exactly its own match (so a dotted spelling resolves precisely where its `::`
+// spelling does, and a namespace-qualified one does not, as `ns::Class::method` does not). Purely additive: a spec that resolved before resolves identically, because this runs only on an empty result.
+// Several matches are returned as they are (the verbs' defs= discloses a union; --edit-check refuses and lists them).
+// `found` is what the earlier tiers matched, returned untouched unless it is empty.
+inline std::vector<NodeId> resolveAllByDottedScope( const IngestResult& ing, std::string_view spec, std::vector<NodeId> found )
+{
+    const bool dotted = spec.find_first_of( ".#" ) != std::string_view::npos && spec.find_first_of( ":/" ) == std::string_view::npos;
+    if( !found.empty() || !dotted )
+    {
+        return found;
+    }
+    std::string scoped;
+    for( const char c : spec )
+    {
+        scoped += ( c == '.' || c == '#' ) ? std::string_view( "::" ) : std::string_view( &c, 1 );
+    }
+    return resolveAllByScopeQualified( ing, scoped );
+}
+
 // `unprovenDefCountOut` (H1, optional): the residue declToDefFollowThrough dropped — see its contract. Zero
 // on every path that never reaches the widening (an @FILE:LINE seed, a canonical id, a Scope::name tier, a
 // bare name), so a reader never has to ask whether the number is stale.
@@ -5802,7 +5825,7 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
     // #63: a header-qualified selector resolves to DECLARATIONS, which carry no call-graph edges.
     // Widen to the definitions they stand for. Full contract and its limits: declToDefFollowThrough above.
     declToDefFollowThrough( ing, file, name, out, unprovenDefCountOut );
-    return out;
+    return resolveAllByDottedScope( ing, spec, std::move( out ) );   // `Class.method` / `Class#method`, only when `out` is empty
 }
 
 // ─── MEMBER VARIABLES: `Owner.field` selection + per-site use resolution (the member-variable round, card A3) ─

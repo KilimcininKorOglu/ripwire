@@ -15,6 +15,16 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `Class.method` and `Class#method` are selectors wherever `Class::method` is
+
+Agents and documentation name a method `Class.method` (Python, JS, Java) or `Class#method` (Ruby, JSDoc), and every
+symbol-taking verb (`--callers`, `--callees`, `--impact`, `--uses`, `--edit-check`, `--expand`, …) answered "symbol not
+found" while `Class::method` resolved. When no other spelling matches, a selector with no `:` or `/` now has each `.` and
+`#` read as `::` and goes through the existing `Scope::name` tier, so it resolves exactly where the `::` spelling does
+(a namespace-qualified `ns.Class.method` does not, as `ns::Class::method` does not). Several matches are disclosed as
+usual (`defs=N`, or `--edit-check`'s refusal). A selector that resolved before resolves identically. `--whereis` is a
+lexical scan of every ref and is unchanged. Gate: `test/selectorscopecheck.sh` arms (i)-(m).
+
 ### Fixed — every handle an `--edit-check` ambiguity refusal prints is accepted when pasted back
 
 The refusal's "Qualify one contract:" list offered `file:name` for a header declaration, and the `file:name` tier widens a
