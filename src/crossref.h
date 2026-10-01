@@ -1839,7 +1839,7 @@ inline WorktreeCopy readWorktreeCopy( const std::string& root, const std::string
     {
         return WorktreeCopy::Unread;
     }
-    if( std::filesystem::is_symlink( st ) )
+    if( st.type() == std::filesystem::file_type::symlink )
     {
         const std::filesystem::path target = std::filesystem::read_symlink( p, ec );
         if( ec )
@@ -1849,7 +1849,7 @@ inline WorktreeCopy readWorktreeCopy( const std::string& root, const std::string
         bytes = target.string();
         return WorktreeCopy::Text;
     }
-    if( !std::filesystem::is_regular_file( st ) )
+    if( st.type() != std::filesystem::file_type::regular )
     {
         return WorktreeCopy::NotText;
     }

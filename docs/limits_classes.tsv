@@ -100,6 +100,7 @@ kMaxStructsPerRef	OUTPUT
 kMaxStructsShown	OUTPUT
 kMaxTsModulesWalked	BOUNDARY
 kMaxUniqueQueryTerms	INDEXING
+kMaxWorktreePaths	INDEXING
 kMeasuredDigitsPricedWidth	OUTPUT
 kMemberSpellingsShown	OUTPUT
 kMentionMaxDirectSymbols	INDEXING
