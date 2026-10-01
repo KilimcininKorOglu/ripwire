@@ -402,8 +402,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // compact PageRank root undefined (--impact is an (L) loop verb, which is why its reading is this short).
     // pr_converged="0" rides only a ranking that stopped at the iteration cap.
     { "pr_iters",          "pr_iters=N: PageRank iterations" },
-    // The map scope's Section cut (serialize.h dataSectionsCutOf; --tree's twin carries no next=). Present-only.
-    { "data_sections_cut", "data_sections_cut=N: N data Sections (headings, data keys) not listed here, below every code row when no call reaches them; a map's next= pages them" },
+    // The map scope's code-first pick (serialize.h codeFirstKeep): the Sections it swapped out. Present-only.
+    { "data_sections_cut", "data_sections_cut=N: N data Sections (headings, data keys) swapped out of this top-K for lower-ranked code rows; next= pages them first" },
     { "pr_converged",      "pr_converged=0: iteration cap hit before convergence" },
     // Form-conditional map roots whose clauses (kRankByDisclosure, kChurnRankLegend, --around's seed block) are prose.
     // window= and defs= are ELEMENT-qualified: --hotspots carries window= and --callers defs=, each meaning something else.

@@ -1925,41 +1925,84 @@ struct MapAnnotations
     // the L3 inertness contract's only permitted exception. Filled by assignment, like the trailing fields above.
     bool notesDegraded = false;
 
-    // The map scope (rw::rankDefaultMap ranked this map): disclose the data Sections the top-K left out —
-    // data_sections_cut="N" plus the next= that pages them (dataSectionsCutOf below). Set only by the map-scope callers
-    // (main.cpp's plain map, MCP analyze on a clean working set, MCP rank_by=pagerank); every other map, and every map
-    // whose top-K cut no Section, carries neither attribute. Filled by assignment, like the trailing fields above.
-    bool discloseDataSections = false;
+    // The map scope (main.cpp's plain map, MCP analyze on a clean working set, MCP rank_by=pagerank): pick the kept rows
+    // code-first (codeFirstKeep below) and disclose the Sections that pick swapped out — data_sections_cut="N" plus the
+    // next= that pages them. Every other map keeps the plain rank-order cut, and a map-scope map whose cut swapped
+    // nothing carries neither attribute (byte-identical). Filled by assignment, like the trailing fields above.
+    bool codeFirstRows = false;
 };
 
-// ── data_sections_cut= / next= (docs/EVALS.md "Map data Sections never crowd code out of the default map") ──────
-// Under rankDefaultMap every non-Section row outranks every Section no call reaches, so a top-K that cuts Sections cuts
-// them from the END of the ranking. The map says how many (N = Sections indexed − Section rows shown) and hands the
-// one call that pages them: the kind(all,sec) graph-query, past the M Sections this map shows, K rows a page. That
-// listing ranks with rankGraph; it skips exactly the M shown Sections because, with no edge from a non-Section into a
-// Section, the two rankings order the Sections identically (each Section's rank only rescales). The count is of
-// DEFINITIONS, the unit shown= counts. Absent at N = 0.
+// ── the code-first row pick: data_sections_cut= / next= (docs/EVALS.md "Map data Sections never crowd code out of the
+// default map") ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A data Section (a markdown heading, a YAML/JSON key, a schema column) with no call edge is ranked by its teleport share
+// alone, and priorwt's x1.7 specific-name boost fires on data names, so a data file of a few hundred keys outranked called
+// code and pushed it out of the top-K the map emits (#339's schema columns: 196 of 200 rows). The rank vector stays as it
+// is; the map's ROW PICK changes: while the rank-ordered top-K keeps a Section and leaves a non-Section row out, the
+// lowest-ranked kept Section is swapped for the highest-ranked excluded non-Section row. Survivors keep rank order. So
+// a Section is shown only when every non-Section row is, and a map whose top-K cut no non-Section row is unchanged.
+// The swapped Sections are disclosed: N = the swaps, and next= is the kind(all,sec) graph-query past the M Sections still
+// shown, K rows a page. That listing orders Sections by the same rank, so its first N rows are exactly the swapped ones.
 struct DataSectionsCut
 {
-    std::size_t cut   = 0;   // N: Sections indexed and not shown
-    std::size_t shown = 0;   // M: Section definitions among the kept rows
-    std::size_t topK  = 0;   // K: the rows this map kept (its effective top-k)
+    std::size_t cut   = 0;   // N: Sections swapped out of the top-K for lower-ranked code rows
+    std::size_t shown = 0;   // M: Section definitions still among the kept rows
+    std::size_t topK  = 0;   // K: the rows this map keeps (its effective top-k)
 };
-inline DataSectionsCut dataSectionsCutOf( const IngestResult& ing, std::span<const NodeId> kept ) noexcept
+// `order` is the full (rank desc, id asc) order; its first `keep` entries are rewritten to the code-first pick (rank order
+// among the survivors) and the rest to the remaining ids in rank order. Returns the disclosure counts.
+inline DataSectionsCut codeFirstKeep( const IngestResult& ing, std::vector<NodeId>& order, std::size_t keep )
 {
+    EXPECTS( keep <= order.size(), "the kept prefix lies inside the order" );
+    const auto isSection = [ & ]( NodeId id ) { return id < ing.symbols.size() && ing.symbols[ id ].kind == SymKind::Section; };
+    std::vector<std::size_t> keptSections;      // positions in `order`, rank order
+    std::vector<std::size_t> excludedCode;      // positions in `order`, rank order
+    for( std::size_t pos = 0; pos < order.size(); ++pos )
+    {
+        if( pos < keep && isSection( order[ pos ] ) )
+        {
+            keptSections.push_back( pos );
+        }
+        else if( pos >= keep && !isSection( order[ pos ] ) )
+        {
+            excludedCode.push_back( pos );
+        }
+    }
     DataSectionsCut c;
-    std::size_t     indexed = 0;
-    for( const Symbol& s : ing.symbols )
+    c.cut   = std::min( keptSections.size(), excludedCode.size() );
+    c.shown = keptSections.size() - c.cut;
+    c.topK  = keep;
+    if( c.cut == 0 )
     {
-        indexed += s.kind == SymKind::Section ? 1u : 0u;
+        return c;   // nothing crowded: the rank-order cut stands, byte-identical
     }
-    for( const NodeId id : kept )
+    std::vector<char> isKept( order.size(), 0 );
+    for( std::size_t pos = 0; pos < keep; ++pos )
     {
-        c.shown += ( id < ing.symbols.size() && ing.symbols[ id ].kind == SymKind::Section ) ? 1u : 0u;
+        isKept[ pos ] = 1;
     }
-    c.cut  = indexed - c.shown;
-    c.topK = kept.size();
-    ENSURES( c.shown <= indexed, "the shown Sections are a subset of the indexed ones" );
+    for( std::size_t s = 0; s < c.cut; ++s )
+    {
+        isKept[ keptSections[ keptSections.size() - 1 - s ] ] = 0;   // the lowest-ranked kept Sections leave
+        isKept[ excludedCode[ s ] ]                         = 1;   // the highest-ranked excluded code rows come in
+    }
+    std::vector<NodeId> picked;
+    picked.reserve( order.size() );
+    for( std::size_t pos = 0; pos < order.size(); ++pos )
+    {
+        if( isKept[ pos ] )
+        {
+            picked.push_back( order[ pos ] );
+        }
+    }
+    for( std::size_t pos = 0; pos < order.size(); ++pos )
+    {
+        if( !isKept[ pos ] )
+        {
+            picked.push_back( order[ pos ] );
+        }
+    }
+    ENSURES( picked.size() == order.size(), "the pick is a permutation of the order" );
+    order = std::move( picked );
     return c;
 }
 inline std::string dataSectionsNext( const DataSectionsCut& c )
@@ -1968,13 +2011,9 @@ inline std::string dataSectionsNext( const DataSectionsCut& c )
 }
 // The XML legend clause, charged only to a map that carries the attribute. No double hyphen inside a comment (G4).
 inline constexpr std::string_view kDataSectionsCutLegend =
-    "<!-- data_sections_cut=N: N data Sections (doc headings, data and config keys, schema columns) left out of this top-K; "
-    "this map ranks every code row above every Section no call reaches, so they are the lowest-ranked rows. next= is the "
-    "graph-query call that pages them, past the Sections shown here, K rows a page -->";
-// --tree's clause: its rows are each file's top 3, not a rank prefix, so it carries the count and no next=.
-inline constexpr std::string_view kTreeDataSectionsCutLegend =
-    " data_sections_cut=N: N data Sections (doc headings, data and config keys, schema columns) indexed and not listed here; "
-    "the tree ranks every code row above every Section no call reaches.";
+    "<!-- data_sections_cut=N: N data Sections (doc headings, data and config keys, schema columns) that ranked inside this "
+    "top-K were swapped out for the code rows ranked just below it, so a Section is shown only when every code row is. "
+    "next= is the graph-query call that pages the Sections past those shown, the N swapped ones first, K rows a page -->";
 
 // F3: the <recent> element — rank_by=churn-decay's file-level answer FIRST, paths + age in days at HEAD's clock +
 // decayed weight — written before the first <f> group so "what changed recently" is answered before the symbol
@@ -2656,9 +2695,8 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         }
         sortutil::radixSortByScoreDescId( order, rank );
     }
-    // The map scope's Section cut (MapAnnotations::discloseDataSections): read off the very rows this map keeps.
-    const DataSectionsCut dataSecCut = ( ann.discloseDataSections && !stubbed )
-                                     ? dataSectionsCutOf( ing, std::span<const NodeId>( order.data(), keep ) ) : DataSectionsCut{};
+    // The map scope's code-first row pick (MapAnnotations::codeFirstRows): rewrites the kept prefix, returns its disclosure.
+    const DataSectionsCut dataSecCut = ( ann.codeFirstRows && !stubbed ) ? codeFirstKeep( ing, order, keep ) : DataSectionsCut{};
 
     // bucket the kept symbols by file, files ordered by their best (first-seen) rank.
     std::vector<std::vector<NodeId>> buckets( stubbed ? 0 : ing.files.size() );
@@ -3051,7 +3089,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         // L3 follow-up (CodeRabbit 4053600616): TRULY last, past every pre-existing attribute — same placement
         // rule as lens= just above, so no attribute-adjacency assertion in test/ can break on it.
         if( ann.notesDegraded ) { h += notes::kNotesDegradedAttr; }
-        // The map scope's Section cut, last of all (the same placement rule as the two above): absent when nothing was cut.
+        // The code-first pick's swaps, last of all (the same placement rule as the two above): absent when nothing was swapped.
         if( dataSecCut.cut > 0 )
         {
             h += " data_sections_cut=\"";  h += std::to_string( dataSecCut.cut );  h += "\"";
@@ -8310,7 +8348,7 @@ struct JsonMapHeader
     std::size_t                      macroBlankedCount  = 0;    // member-macro re-parse: "macro_blanked_files":N, absent when 0
     std::size_t                      nestRefusedCount   = 0;    // #157: "nest_refused":N, the JSON twin of the XML nest_refused=, absent when 0
     bool                             isEstModelled      = false;   // MapEstimate: "est_measured":false, absent when measured
-    DataSectionsCut                  dataSectionsCut    = {};      // the map scope's Section cut: "data_sections_cut":N + "next", absent at N=0
+    DataSectionsCut                  dataSectionsCut    = {};      // the code-first pick's swaps: "data_sections_cut":N + "next", absent at N=0
 };
 
 // §B1.2: the PROVENANCE stamp — the JSON half of the XML `<r at= rank_by= window=>` attributes. Without it
@@ -8533,7 +8571,7 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
     // side just closed. Same slot, same absent-means-converged rule.
     w.write( renderDisclosure( h.ann->prDisclosure, DiscloseAs::JsonKeys ) );
 
-    // The JSON twin of the XML root's data_sections_cut= / next= (dataSectionsCutOf): same keys, same absent-at-zero rule.
+    // The JSON twin of the XML root's data_sections_cut= / next= (codeFirstKeep): same keys, same absent-at-zero rule.
     if( h.dataSectionsCut.cut > 0 )
     {
         w.write( ",\"data_sections_cut\":" + std::to_string( h.dataSectionsCut.cut ) + ",\"next\":" );   // composed, not a fixed buffer
@@ -8623,7 +8661,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     sortutil::radixSortByScoreDescId( order, rank );
 
     const std::size_t keep = std::min<std::size_t>( topK > 0 ? std::size_t( topK ) : S, S );
-    const DataSectionsCut dataSecCut = ann.discloseDataSections ? dataSectionsCutOf( ing, std::span<const NodeId>( order.data(), keep ) ) : DataSectionsCut{};
+    const DataSectionsCut dataSecCut = ann.codeFirstRows ? codeFirstKeep( ing, order, keep ) : DataSectionsCut{};   // serialize()'s pick, same rule
 
     std::vector<std::vector<NodeId>> buckets( ing.files.size() );
     std::vector<std::uint32_t>       fileOrder;

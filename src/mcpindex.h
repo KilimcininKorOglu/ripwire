@@ -500,8 +500,8 @@ struct McpIndex
                                                       //   pr_iters= / pr_converged= on every ranked MCP payload.
                                                       //   Held beside the vector it describes so a verb cannot
                                                       //   serve one without the other (src/prconverge.h).
-    bool                              rankIsDefaultMap = false;   // `rank` is rw::rankDefaultMap's (a clean working set):
-                                                                  //   analyze then discloses data_sections_cut= / next=
+    bool                              isCleanWorkingSet = false;   // no uncommitted change: `rank` is the plain uniform one,
+                                                                   //   the default map's question — analyze picks code-first
     std::vector<long long>            fileMtime;   // parallel to ing.files
     std::vector<long long>            fileSize;    // parallel to ing.files: st_size at index build (staleness fast-path discriminator,
                                                    //   free from the same stat() as mtime — a size change is caught without a read).
@@ -1197,12 +1197,10 @@ inline const McpIndex& getIndex( const std::string& root )
         }
     }
     ix.workingSetHash = workingSetHashOf( changed );
-    // The map scope (docs/EVALS.md "Map data Sections never crowd code out of the default map"): a CLEAN working set
-    // (changed==0, where diffTeleport is the uniform prior) is the default map's own question, so it ranks with
-    // rankDefaultMap like the CLI map. A dirty tree keeps the working-set teleport and its bytes.
-    ix.rankIsDefaultMap = std::none_of( changed.begin(), changed.end(), []( char c ) { return c != 0; } );
-    const auto [ wsRank, wsIters, wsConverged ] = ix.rankIsDefaultMap ? rankDefaultMap( ix.g, ix.ing )
-                                                                      : rankGraphTeleport( ix.g, diffTeleport( ix.ing, changed ) );
+    // The map scope (docs/EVALS.md "Map data Sections never crowd code out of the default map"): a CLEAN working set is
+    // the default map's own question, so analyze then picks its rows code-first like the CLI map (serialize.h codeFirstKeep).
+    ix.isCleanWorkingSet = std::none_of( changed.begin(), changed.end(), []( char c ) { return c != 0; } );
+    const auto [ wsRank, wsIters, wsConverged ] = rankGraphTeleport( ix.g, diffTeleport( ix.ing, changed ) );
     ix.rank         = wsRank;
     ix.prDisclosure = RankDisclosure{ wsIters, wsConverged, true };   // W2-F: a teleport variant is still a power iteration
 

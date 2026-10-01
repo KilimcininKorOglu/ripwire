@@ -2468,7 +2468,8 @@ inline void writeDocumentShell( std::FILE* out, const std::string& pageTitle )
 //   members, sorted (member count desc, id asc) — mirrors --communities' "a lone symbol is not a
 //   module" rule so the wiki and the text verb agree.
 inline void writeHtml( std::FILE* out, const IngestResult& ing, const std::vector<float>& rank, const Graph& g, int topK, const HtmlColorExtras& color,
-                       std::string_view rootArg = {} )   // R-R: the root FILES[] entries are relative to
+                       std::string_view rootArg = {},   // R-R: the root FILES[] entries are relative to
+                       bool codeFirstRows = false )     // the default map's code-first node pick (serialize.h codeFirstKeep)
 {
     const std::vector<std::uint32_t>& outOff     = g.outOff;
     const std::vector<NodeId>&        outTargets = g.outTargets;
@@ -2494,6 +2495,10 @@ inline void writeHtml( std::FILE* out, const IngestResult& ing, const std::vecto
         if( rank[a] != rank[b] ) { return rank[a] > rank[b];
 }
         return a < b; } );
+    if( codeFirstRows )
+    {
+        codeFirstKeep( ing, order, cap );   // the same pick the XML/JSON map makes over its kept rows (the page has no disclosure root)
+    }
     order.resize( cap );
 
     // map original symbol id → selected-array index (kNoNode if not selected)

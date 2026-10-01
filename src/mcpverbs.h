@@ -447,7 +447,7 @@ inline std::string analyzeToString( const std::string& root, int topK, bool stab
                                     // W2-F: the map's convergence disclosure. The CLI map carries pr_iters= and
                                     // this one must too — "the clause landed at 3 of its 5 echo sites" is the
                                     // §B4 family, and mcpclidiffcheck is the gate that keeps the two surfaces one.
-                                    /*ann=*/rw::MapAnnotations{ .prDisclosure = ix.prDisclosure, .discloseDataSections = ix.rankIsDefaultMap },
+                                    /*ann=*/rw::MapAnnotations{ .prDisclosure = ix.prDisclosure, .codeFirstRows = ix.isCleanWorkingSet },
                                     /*statsFirstScreen=*/true, anRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls ); } );
 }
 
@@ -470,24 +470,23 @@ inline std::string analyzeToString( const std::string& root, int topK, bool stab
 // runs a PLAIN `rankGraph(g)` with no working-set bias (main.cpp's `else` arm) — the `ix.rank` shortcut
 // would make this verb NOT byte-identical to its CLI twin on a dirty tree, which is exactly the parity
 // this lane is required to hold. A fresh, uniform-teleport run costs one extra power iteration per call;
-// correctness over that call's own CLI-parity gate wins the trade. rank_by=pagerank is the map scope: it ranks with
-// rankDefaultMap exactly as the CLI's plain map does, and discloses the data Sections its top-K cut.
+// correctness over that call's own CLI-parity gate wins the trade.
 inline std::string rankByText( const std::string& root, std::string_view mode, int topK, bool stable = false )
 {
     const McpIndex& ix = getIndex( root );
 
+    RankDisclosure      plainDisclosure;
+    std::vector<float>  plainRank = takeRank( rankGraph( ix.g ), plainDisclosure );   // CLI parity: rankGraph(g), no working-set bias
+
     std::vector<float> rank;
     RankDisclosure      disclosure;   // default: isPageRank=false — HITS rankings disclose no pr_iters=/pr_converged=
     const char*         rankByLabel = nullptr;   // nullptr ⇒ pagerank, the CLI's own windowless-label convention (§B2.1)
-    bool                isDefaultMapRank = false;   // pagerank: the map scope's ranking, so the Section cut is disclosed
 
     if( mode == "authority" || mode == "hub" || mode == "rrf" )
     {
         auto [ authority, hub ] = hits( ix.g );   // HITS runs ALONGSIDE PageRank — does not replace it (graph.h)
         if( mode == "rrf" )
         {
-            RankDisclosure           plainDisclosure;
-            const std::vector<float> plainRank = takeRank( rankGraph( ix.g ), plainDisclosure );   // CLI parity: rankGraph(g), no working-set bias
             rank        = rrfFuse( { &plainRank, &authority, &hub } );   // fuse pagerank + authority + hub, CLI parity
             disclosure  = plainDisclosure;   // rrf keeps pagerank's disclosure — pagerank is one of the three fused vectors
             rankByLabel = "rrf";
@@ -498,10 +497,10 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
             rankByLabel = ( mode == "hub" ) ? "hub" : "authority";
         }
     }
-    else   // "pagerank" (and the closed-set default): the map scope, CLI parity with the plain map's rankDefaultMap
+    else   // "pagerank" (and the closed-set default)
     {
-        rank             = takeRank( rankDefaultMap( ix.g, ix.ing ), disclosure );
-        isDefaultMapRank = true;
+        rank       = std::move( plainRank );
+        disclosure = plainDisclosure;
     }
 
     const std::string_view rbRootArg = ix.ing.realPaths.empty() ? std::string_view( root ) : std::string_view();
@@ -515,7 +514,7 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
                                     ix.g.bindLabel.empty() ? nullptr : &ix.g.bindLabel,
                                     /*autoOrder=*/false, /*outEstTokens=*/nullptr,
                                     /*extraPayloadTokens=*/0,
-                                    /*ann=*/rw::MapAnnotations{ .rankByLabel = rankByLabel, .prDisclosure = disclosure, .discloseDataSections = isDefaultMapRank },
+                                    /*ann=*/rw::MapAnnotations{ .rankByLabel = rankByLabel, .prDisclosure = disclosure, .codeFirstRows = rankByLabel == nullptr },   // pagerank: the map scope's code-first pick
                                     /*statsFirstScreen=*/true, rbRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls ); } );
 }
 

@@ -3575,9 +3575,7 @@ std::optional<int> runStructureText( const MainDispatch& d )
     // symbol rank, path breaking ties; symbols within a file by rank, id breaking ties).
     if( cfg.tree )
     {
-        // The map scope (docs/EVALS.md "Map data Sections never crowd code out of the default map"): the orientation map
-        // ranks like the default map, so a data file's Sections no longer lead the file order over the code.
-        const auto [ rank, prIters, prConverged ] = rankDefaultMap( g, ing );
+        const auto [ rank, prIters, prConverged ] = rankGraph( g );
         const rw::RankDisclosure prD{ prIters, prConverged, true };   // W2-F: this document is PageRank-ordered
         const std::uint32_t      F    = std::uint32_t( ing.files.size() );
         SymbolsByFile              byFile = symbolsByFileInIdOrder( ing, []( const Symbol& ) { return true; } );
@@ -3622,26 +3620,6 @@ std::optional<int> runStructureText( const MainDispatch& d )
             treeSymsTotal += byFile[ ford[fi] ].size();
         }
         const std::string treeSymsCut = rw::secondaryCutAttrs( "symbols", treeSymsShown, treeSymsTotal );
-        // The data Sections this page does not list (data_sections_cut=, absent at 0). The rows are each file's top
-        // kTreeSymbolsPerFile by rank, not a rank prefix, so the --offset next= the map carries cannot serve them here:
-        // the count rides alone. Each window file's symbols are put in rank order once, here, for this count and the rows.
-        std::size_t treeSecIndexed = 0, treeSecShown = 0;
-        for( const Symbol& s : ing.symbols )
-        {
-            treeSecIndexed += s.kind == SymKind::Section ? 1u : 0u;
-        }
-        for( std::size_t fi = pw.begin; fi < pw.end; ++fi )
-        {
-            FileSymbols& syms = byFile[ ford[fi] ];
-            std::sort( syms.begin(), syms.end(), [ & ]( NodeId a, NodeId b ) { return rank[a] != rank[b] ? rank[a] > rank[b] : a < b; } );
-            const std::size_t topN = std::min<std::size_t>( kTreeSymbolsPerFile, syms.size() );
-            for( std::size_t i = 0; i < topN; ++i )
-            {
-                treeSecShown += ing.symbols[ syms[i] ].kind == SymKind::Section ? 1u : 0u;
-            }
-        }
-        const std::size_t treeSecCut     = treeSecIndexed - treeSecShown;
-        const std::string treeSecCutAttr = treeSecCut > 0 ? " data_sections_cut=\"" + std::to_string( treeSecCut ) + "\"" : std::string();
         rw::emitTo( stdout, "<!-- ripwire tree: each file + its 3 top symbols by rank{}, files ordered by their best "
                      "symbol's rank (path breaks ties) — a session-start orientation map. files= is the indexed "
                      "corpus; rows list files WITH symbols; files_unlisted= holds the symbol-less remainder "
@@ -3655,8 +3633,7 @@ std::optional<int> runStructureText( const MainDispatch& d )
                      // P4 (L7): the default window, defined where the reader meets it
                      "The rows are a WINDOW even without explicit paging: the default prints the 80 files with the best-ranked symbols "
                      "(shown=/capped=/total=/has_more=/next_offset= disclose the cut) and next= pastes the next page; limit= raises it. "
-                     "{}{}-->{}", treeSymsCut.empty() ? "" : " (symbols= counts all; shown_symbols=/symbols_capped= on the root mark a cut)",
-                     treeSecCut > 0 ? kTreeDataSectionsCutLegend : std::string_view(),
+                     "{}-->{}", treeSymsCut.empty() ? "" : " (symbols= counts all; shown_symbols=/symbols_capped= on the root mark a cut)",
                      rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(),
                      rw::rootRelPathsLegend( trSingleRoot ) );
         // T2 + §P8 G1: --limit/--offset paginate over the (sorted) non-empty file set. files= stays the TRUE
@@ -3670,16 +3647,17 @@ std::optional<int> runStructureText( const MainDispatch& d )
         const bool        treeCut  = pw.end - pw.begin < ford.size();
         const std::string treeNext = treeCut ? rw::nextAttrXml( rw::pagedNext( "--tree", cfg.pageLimit, pw.end ) ) : std::string();
         char              pab[ kPageDisclosureCap ];
-        rw::emitTo( stdout, "<tree files=\"{}\" files_unlisted=\"{}\"{}{}{}{}{}>", F, filesUnlisted,
+        rw::emitTo( stdout, "<tree files=\"{}\" files_unlisted=\"{}\"{}{}{}{}>", F, filesUnlisted,
                      ( pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, ford.size(), pw.end,
                                        cfg.pageLimit, cfg.pageOffset, treeCut )
                        + rw::renderDisclosure( prD, rw::DiscloseAs::XmlAttrs ) ).c_str(),
-                     trRootAttr.c_str(), treeSymsCut.c_str(), treeNext.c_str(), treeSecCutAttr.c_str() );
+                     trRootAttr.c_str(), treeSymsCut.c_str(), treeNext.c_str() );
         std::vector<char> trEsc;
         for( std::size_t fi = pw.begin; fi < pw.end; ++fi )
         {
             const std::uint32_t f    = ford[fi];
-            const FileSymbols&  syms = byFile[f];   // already in rank order (the data_sections_cut= count above sorted it)
+            FileSymbols&        syms = byFile[f];
+            std::sort( syms.begin(), syms.end(), [ & ]( NodeId a, NodeId b ) { return rank[a] != rank[b] ? rank[a] > rank[b] : a < b; } );
             // path and symbol names may contain & < > " — escape them to keep XML well-formed.
             const auto ep = rw::escapeXml( trSingleRoot ? rw::sarif::rootRelativeUri( ing.files[f], trRootPrefix )
                                                         : std::string_view( ing.files[f] ), trEsc );

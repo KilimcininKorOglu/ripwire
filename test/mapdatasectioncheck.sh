@@ -4,9 +4,11 @@
 # A data Section (a markdown heading, a YAML/JSON key, a Rails schema column) is a SymKind::Section row. With no call
 # edge in or out, its rank is its share of the teleport prior, and priorwt's x1.7 specific-name boost fires on data
 # names like `database_url_12`. So a data file of a few hundred keys used to push called code, `main` and `_helper`
-# out of the top-K the map emits. The map now ranks with rw::rankDefaultMap (Section restart mass x0.1, then the
-# unchanged biasPrior). Every non-Section row then outranks every in-degree-0 Section, and the map discloses the cut
-# as data_sections_cut= with a next= that pages the cut Sections.
+# out of the top-K the map emits. The map now picks its rows CODE-FIRST (serialize.h codeFirstKeep, the registered
+# Option B; Option A, a Section prior x0.1, failed the registered --eval margin): while the rank-order top-K keeps a
+# Section and leaves a non-Section row out, the lowest-ranked kept Section is swapped for the highest-ranked excluded
+# non-Section row. The rank vector is untouched. The swaps are disclosed as data_sections_cut= with a next= that pages
+# them first.
 #
 # The statistic is end-to-end (docs/METHODOLOGY.md §7): code rows in the top-K the map actually emits, out of 8.
 # Fixture: test/mapdatasectionfix/gen.sh — eight Python functions (a call chain under an uncalled `main`, plus an
@@ -16,16 +18,15 @@
 #
 # Arms (the pre-registration in docs/EVALS.md "Map data Sections" names them):
 #   (P)  §1 grid: shape x {long,short} x N in {20,40,200} x K in {200,16}, plus the primary cells S3/S4 long N=220.
-#        Surfaces: XML, --json, the --html node set, --tree (the code file is listed first), --max-tokens=1500, and
-#        MCP analyze on a clean git tree. Pass = 8/8 code rows on every cell x surface (--tree: code file first).
-#   (I1) at the K where every non-Section row is in, no in-degree-0 Section row is in.
-#   (D)  Gate D: data_sections_cut = kind(all,sec) count - Section rows shown; next= then next_offset= (until
-#        has_more="0") pages exactly the cut Sections, each once, every page <= K rows. Run on XML and --max-tokens;
-#        --json, MCP analyze and MCP rank_by must carry the same disclosure as the XML at the same K. --tree carries
-#        data_sections_cut= with no next= (its rows are a per-file top 3, not a rank prefix).
+#        Surfaces: XML, --json, the --html node set, --tree (the code file is listed first; --tree is not re-picked),
+#        --max-tokens=1500, and MCP analyze on a clean git tree. Pass = 8/8 code rows on every cell x surface.
+#   (D)  Gate D, for the pick: data_sections_cut = Sections in the rank-order top-K - Sections still shown; next= then
+#        next_offset= (until has_more="0") pages every unshown Section once, the swapped ones first, every page <= K rows.
+#        Run on XML and --max-tokens; --json, MCP analyze and MCP rank_by must carry the XML's disclosure.
+#   (C)  the pick's invariant: a map that shows any Section shows every non-Section row.
 #   (L)  the attribute is defined in the full XML legend, the compact legend and --help, and only where it rides.
 #   (Z)  a Section-free fixture carries no data_sections_cut= and no next= on its root.
-# MAPSEC_EXTRA_ROOTS=dir1:dir2 runs (I1) and (D) on those trees too (the measurement harness's corpora).
+# MAPSEC_EXTRA_ROOTS=dir1:dir2 runs (D) and (C) on those trees too (the measurement harness's corpora).
 # Exit 0 all pass, 1 any fail, 2 setup.
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -116,17 +117,27 @@ def sections_all(d):
     return count, sorted(rows)
 
 def gate_d(label, d, root, rows, K, allsec):
-    """Gate D on one map document: the count identity, the frozen next= spelling, and the paging walk."""
+    """Gate D on one map document (the code-first pick): data_sections_cut = the Sections the rank-order top-K would have
+    kept minus those still shown (the rank order is graph-query's `all` listing, the same vector); the frozen next=
+    spelling past the M shown; the walk (next=, then next_offset= until has_more="0") pages every unshown Section once,
+    the swapped ones first, every page <= K rows."""
     count, full = allsec
     M = sec_shown(rows)
-    N = count - M
+    _, topk = gq(d, "--graph-query=all", "--limit=%d" % K)
+    secNames = {}
+    for x in full: secNames[x] = secNames.get(x, 0) + 1
+    wk = []
+    pool = dict(secNames)
+    for r in topk:
+        if pool.get(r, 0) > 0: wk.append(r); pool[r] -= 1
+    N = len(wk) - M
     got = root.get("data_sections_cut")
-    if N == 0:
-        if got is None and "next" not in root: ok("%s: no Section cut, no data_sections_cut= / next=" % label)
-        else: no("%s: data_sections_cut=%s next=%s on a map that cut no Section" % (label, got, root.get("next")))
+    if N <= 0:
+        if got is None and "next" not in root: ok("%s: nothing swapped, no data_sections_cut= / next=" % label)
+        else: no("%s: data_sections_cut=%s next=%s on a map that swapped nothing" % (label, got, root.get("next")))
         return
     if got != str(N):
-        no("%s: data_sections_cut=%s, expected %d (= kind(all,sec) count %d - %d Section rows shown)" % (label, got, N, count, M)); return
+        no("%s: data_sections_cut=%s, expected %d (= %d Sections in the rank-order top-%d - %d still shown)" % (label, got, N, len(wk), K, M)); return
     want = "--graph-query='kind(all,sec)' --offset=%d --limit=%d" % (M, K)
     if root.get("next") != want:
         no("%s: next=%r, expected %r" % (label, root.get("next"), want)); return
@@ -139,32 +150,23 @@ def gate_d(label, d, root, rows, K, allsec):
         if a.get("has_more") != "1": break
         if pages > count + 2: no("%s: paging did not terminate" % label); return
         args = [x if not x.startswith("--offset=") else "--offset=" + a["next_offset"] for x in args]
-    if sorted(paged + sec_multiset(rows)) != full or len(paged) != N:
+    if sorted(paged + sec_multiset(rows)) != full:
         no("%s: the %d paged Sections + %d shown != the %d indexed (each once)" % (label, len(paged), M, count)); return
-    ok("%s: data_sections_cut=%d; next= pages exactly the cut Sections in %d page(s) of <= %d" % (label, N, pages, K))
+    swapped = sorted(wk[M:]) if sorted(wk[:M]) == sorted(sec_multiset(rows)) else None
+    if swapped is None or sorted(paged[:N]) != swapped:
+        no("%s: the first %d paged Sections are not the %d swapped out of the top-K" % (label, N, N)); return
+    ok("%s: data_sections_cut=%d swapped; next= pages them first, then the rest, in %d page(s) of <= %d" % (label, N, pages, K))
 
-def i1(label, d):
-    """I1: at the smallest K holding every non-Section row, every Section row in it has in-degree > 0."""
+def code_first(label, d, K):
+    """The pick's invariant: a map that shows any Section shows every non-Section row."""
     S = int(json.loads(run(d, "--json", "--top-k=1"))["symbols"])
-    _, rowsS = json_map(run(d, "--json", "--top-k=%d" % S))
-    m = sum(w for (p, t, n, w) in rowsS if t != "sec")
-    lo, hi = m, S
-    while lo < hi:
-        mid = (lo + hi) // 2
-        _, r = json_map(run(d, "--json", "--top-k=%d" % mid))
-        if sum(w for (p, t, n, w) in r if t != "sec") >= m: hi = mid
-        else: lo = mid + 1
-    _, rj = json_map(run(d, "--json", "--top-k=%d" % lo))
-    a, _ = gq(d, "--graph-query=fanin(kind(all,sec),1)", "--limit=1")
-    nin = int(a.get("count", "0"))
-    _, insec = gq(d, "--graph-query=fanin(kind(all,sec),1)", "--limit=%d" % max(nin, 1)) if nin else ({}, [])
-    pool = sorted(insec)
-    bad = 0
-    for x in sec_multiset(rj):
-        if x in pool: pool.remove(x)
-        else: bad += 1
-    if bad == 0: ok("%s I1: the %d non-Section rows are all in by K=%d, with no in-degree-0 Section ahead of them" % (label, m, lo))
-    else: no("%s I1: %d in-degree-0 Section row(s) rank ahead of the last non-Section row (K=%d, %d non-Section rows)" % (label, bad, lo, m))
+    _, allrows = json_map(run(d, "--json", "--top-k=%d" % S))
+    total = sum(w for (p, t, n, w) in allrows if t != "sec")
+    _, r = json_map(run(d, "--json", "--top-k=%d" % K))
+    shownCode = sum(w for (p, t, n, w) in r if t != "sec")
+    shownSec = sum(w for (p, t, n, w) in r if t == "sec")
+    good = shownSec == 0 or shownCode == total
+    (ok if good else no)("%s K=%d code-first: %d Section and %d of %d non-Section rows shown%s" % (label, K, shownSec, shownCode, total, "" if good else " — a Section rides while code is left out"))
 
 print("== (P) code rows in the emitted top-K, (D) the disclosure, per cell ==")
 cells = [(s, l, n) for s in ("S1", "S2", "S3", "S4") for l in ("long", "short") for n in (20, 40, 200)] + [("S3", "long", 220), ("S4", "long", 220)]
@@ -202,15 +204,11 @@ for (shape, ln, n) in cells:
         for name, other in (("json", {k: str(v) for k, v in jo.items() if k in ("data_sections_cut", "next")}), ("mcp analyze", aroot), ("mcp rank_by", rroot)):
             pair = (other.get("data_sections_cut"), other.get("next"))
             (ok if pair == (xroot.get("data_sections_cut"), xroot.get("next")) else no)("%s %s: same data_sections_cut=/next= as the XML map %s" % (lab, name, pair))
-    troot = dict(ATTR.findall(re.search(r"<tree\s([^>]*)>", strip_comments(tree)).group(1)))
-    tsec = len(re.findall(r'<s t="sec"', strip_comments(tree)))
-    want = allsec[0] - tsec
-    (ok if troot.get("data_sections_cut") == (str(want) if want else None) and "next" not in troot else no)(
-        "%s %s N=%d tree: data_sections_cut=%s (expected %s), no next=" % (shape, ln, n, troot.get("data_sections_cut"), want or "absent"))
 
-print("== (I1) no in-degree-0 Section ahead of a non-Section row ==")
+print("== (C) code-first: a Section is shown only when every non-Section row is ==")
 for c in ("S2-long-200", "S3-long-220", "S4-long-220", "S3-short-40"):
-    i1(c, os.path.join(TMP, c))
+    for K in (16, 200):
+        code_first(c, os.path.join(TMP, c), K)
 
 print("== (L) legend: defined where it rides ==")
 d = os.path.join(TMP, "S3-long-220")
@@ -233,7 +231,7 @@ for extra in [x for x in EXTRA.split(":") if x]:
     for K in (200, 16):
         r, rows = xml_map(run(extra, "--top-k=%d" % K))
         gate_d("%s K=%d xml" % (os.path.basename(extra), K), extra, r, rows, K, allsec)
-    i1(os.path.basename(extra), extra)
+        code_first(os.path.basename(extra), extra, K)
 
 print("mapdatasectioncheck: %d failure(s)" % len(fails))
 sys.exit(1 if fails else 0)
