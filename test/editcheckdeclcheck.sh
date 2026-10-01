@@ -21,6 +21,8 @@
 #       overload alone, a 5-argument call by neither).
 #   (G) a declaration whose parameter TYPES match no definition is not folded and lends no defaults: the 1-argument
 #       call against `scale( double, int )` stays flagged, and the bare name stays refused.
+#   (H) E2 — every handle printed after "Qualify one contract:" is accepted on a rerun, on (G) and on a two-platform
+#       corpus (one declaration, two .cpp definitions, which is two contracts and must stay refused).
 #   (I) an unproven declaration (the definition's file does not include the header) lends no defaults.
 #
 # Operates on private temp git repos. Needs git and python3.
@@ -168,6 +170,45 @@ ec "$G" scale >/dev/null
 [ "$( rc )" = 1 ] && grep -q 'Qualify one contract' "$TMP/err" \
     && ok "(G) the bare name stays refused: the declaration and the definition are two contracts here" \
     || no "(G) --edit-check=scale exited $( rc ), expected the ambiguity refusal: $( cat "$TMP/err" )"
+
+echo "=== (H) E2: every handle the refusal prints is accepted on a rerun ==="
+P="$TMP/platform"; mkdir -p "$P"
+printf 'int scale( int x, int f = 2 );\n' >"$P/lib.h"
+printf '#include "lib.h"\nint scale( int x, int f ) { return x * f; }\n' >"$P/posix.cpp"
+printf '#include "lib.h"\nint scale( int x, int f ) { return x + f; }\n' >"$P/win.cpp"
+printf '#include "lib.h"\nint a1() { return scale( 1 ); }\n' >"$P/use.cpp"
+commit "$P"
+roundTrip(){ # roundTrip <label> <corpus> <selector>
+    ec "$2" "$3" >/dev/null
+    if [ "$( rc )" != 1 ]; then no "$1: --edit-check=$3 exited $( rc ), expected the ambiguity refusal"; return; fi
+    _list="$( sed -n 's/.*Qualify one contract: \(.*\) — e\.g\..*/\1/p' "$TMP/err" )"
+    [ -n "$_list" ] || { no "$1: no handle list in the refusal: $( cat "$TMP/err" )"; return; }
+    _n=0
+    for _h in $( printf '%s' "$_list" | sed 's/ (+[0-9]* more contracts)//' | tr ',' ' ' ); do
+        _n=$(( _n + 1 ))
+        _o="$( ec "$2" "$_h" )"
+        if [ "$( rc )" = 0 ] && [ -n "$( root "$_o" )" ]; then
+            ok "$1: suggested handle '$_h' is accepted (exit 0)"
+        else
+            no "$1: suggested handle '$_h' is refused on rerun (exit $( rc )): $( cat "$TMP/err" )"
+        fi
+    done
+    [ "$_n" -ge 2 ] || no "$1: the refusal listed $_n handle(s), expected at least 2"
+}
+roundTrip "(H) mismatched types" "$G" scale
+roundTrip "(H) two platform definitions" "$P" scale
+# the pre-apply preview keeps one contract per file, so it still refuses the field corpus; its handles must round-trip too
+printf 'int scale( int x, int factor, int bias )\n{\n    return x;\n}\n' >"$TMP/payload.txt"
+( cd "$F" && "$BIN" . --no-cache --edit-check=scale --edit-payload="$TMP/payload.txt" --dry-run >/dev/null 2>"$TMP/err" )
+case "$( cat "$TMP/err" )" in
+    *'./lib.h:scale'*) no "(H) the --dry-run refusal still offers ./lib.h:scale, which the preview refuses again: $( cat "$TMP/err" )" ;;
+    *'Qualify one contract'*'@./lib.h:1'*) ok "(H) the --dry-run refusal offers @./lib.h:1 for the declaration, a handle that resolves to it alone" ;;
+    *) no "(H) unexpected --dry-run answer: $( cat "$TMP/err" )" ;;
+esac
+OP="$( ec "$P" ./posix.cpp:scale )"
+[ "$( attr "$( root "$OP" )" defaults_from )" = decl ] && [ -z "$( flagged "$OP" )" ] \
+    && ok "(H) each platform definition still takes the shared header's defaults (posix.cpp: defaults_from=\"decl\", nothing flagged)" \
+    || no "(H) ./posix.cpp:scale: flags=[$( flagged "$OP" )] defaults_from=\"$( attr "$( root "$OP" )" defaults_from )\""
 
 echo "=== (I) an UNPROVEN declaration (no #include of it) lends no defaults ==="
 U="$TMP/unproven"; mkdir -p "$U"

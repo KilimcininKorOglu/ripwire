@@ -15,6 +15,15 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — every handle an `--edit-check` ambiguity refusal prints is accepted when pasted back
+
+The refusal's "Qualify one contract:" list offered `file:name` for a header declaration, and the `file:name` tier widens a
+header's declaration to the definitions it stands for, so `./lib.h:scale` was refused again with the same list. Each
+handle shown is now re-resolved before it is printed and must land on exactly its own contract; otherwise the canonical
+id, then the `@FILE:LINE` seed (which names one place, one symbol) is offered. The same check runs for the `--dry-run`
+preview's refusal and for every other verb that prints these handles; a handle that already round-tripped is unchanged.
+Gate: `test/editcheckdeclcheck.sh` arm (H).
+
 ### Fixed — `--edit-check` on C/C++: a declaration and its definition are one contract, and the declaration's defaults count
 
 A header declaring `int scale( int x, int factor = 2 )` and a `.cpp` defining it were two "contracts" to `--edit-check`:

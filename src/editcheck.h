@@ -511,6 +511,34 @@ inline EditCheckGroupKeys editCheckGroupKeys( const IngestResult& ing, const Gra
     return gk;
 }
 
+// E2 (2026-10-01): every spelling the refusal prints must be ACCEPTED when it is pasted back. `file:name` failed that
+// for a header whose declaration the file:name tier widens to its definitions (#63): `./lib.h:scale` re-resolved to
+// the declaration AND the definition and was refused again. So each shown spelling is re-resolved here and must land on
+// exactly this group; otherwise the canonical id, then the `@FILE:LINE` seed (one place, one symbol) is offered.
+constexpr std::size_t kEditCheckSpellingsShown = 6;
+
+inline void editCheckRoundTripSpelling( const IngestResult& ing, const Graph& g, EditCheckGroup& group, const std::string& canon, bool foldDecls )
+{
+    const Symbol&            s = ing.symbols[ group.lowestNode ];
+    std::vector<std::string> tries{ group.spelling };
+    if( canon != s.name && canon != group.spelling )
+    {
+        tries.push_back( canon );
+    }
+    tries.push_back( "@" + ing.files[ s.fileId ] + ":" + std::to_string( s.line ) );
+    for( const std::string& spelling : tries )
+    {
+        const std::vector<NodeId> again = resolveAllByNameQualified( ing, spelling );
+        const EditCheckGroupKeys  gk    = editCheckGroupKeys( ing, g, again, foldDecls );
+        if( gk.keys.size() == 1 && gk.members[0].front() == group.lowestNode )
+        {
+            group.spelling = spelling;
+            return;
+        }
+    }
+    // no spelling round-trips (a line holding two definitions): the original stays — it still names the right file
+}
+
 // `foldDecls` is the post-hoc verb's identity rule (editCheckFoldDeclGroups); the pre-apply preview and the other
 // readers of these groups (the write verbs, --slice) keep one group per (file, scope), so their answers are unchanged.
 inline std::vector<EditCheckGroup> editCheckGroups( const IngestResult& ing, const Graph& g, std::span<const NodeId> matches, bool foldDecls = false )
@@ -541,6 +569,11 @@ inline std::vector<EditCheckGroup> editCheckGroups( const IngestResult& ing, con
         const bool fileIsEnough = ( groupsInFile == 1 ) || ( canonOfThis == s.name );
         groups[ groupIndex ].spelling = fileIsEnough ? ing.files[ s.fileId ] + ":" + s.name : canonOfThis;
     }
+    // only a refusal prints spellings, and only the first kEditCheckSpellingsShown of them
+    for( std::size_t groupIndex = 0; groups.size() > 1 && groupIndex < std::min( groups.size(), kEditCheckSpellingsShown ); ++groupIndex )
+    {
+        editCheckRoundTripSpelling( ing, g, groups[ groupIndex ], gk.keys[ groupIndex ].second, foldDecls );
+    }
     return groups;
 }
 
@@ -558,7 +591,7 @@ inline std::vector<EditCheckGroup> editCheckGroups( const IngestResult& ing, con
 // about a sibling verb's output, which is the worst kind of wrong — an agent can act on it without re-running
 // anything. Each number now carries the noun it actually is. definitionCount >= groups.size() always
 // (collapsing distinct matches into a group can never invent one), which is asserted rather than assumed.
-constexpr std::size_t kEditCheckSpellingsShown = 6;
+// (kEditCheckSpellingsShown, the cap, is defined beside editCheckRoundTripSpelling, which verifies exactly that many.)
 
 inline std::string editCheckAmbiguousMessage( std::string_view spec, std::span<const EditCheckGroup> groups,
                                               std::string_view exampleForm, std::size_t definitionCount )
