@@ -28,7 +28,7 @@ Section is swapped for the highest-ranked excluded non-Section row; survivors ke
 `k=` are unchanged, and a map whose top-K left no code row out is byte-identical (django, webpack and this repository at
 `--top-k=16`; `test/golden.xml`). Scope: the plain map at the default `--rank-by` with no payload verb (XML, `--json`,
 `--html`, `--max-tokens`), MCP `analyze` on a clean working set and MCP `rank_by=pagerank`. `--tree`, `--query`,
-`--map-diff`, churn, authority/hub/rrf and the `--expand`/`--outline`/`--pack-*` ride-along maps keep the rank-order cut.
+`--map-diff`, churn, authority/hub/rrf and the `--expand`/`--outline`/`--pack-signatures`/`--pack-top-n` ride-along maps keep the rank-order cut.
 A map that swapped carries `data_sections_cut="N"` (the swaps) and `next="--graph-query='kind(all,sec)' --offset=M
 --limit=K"`, which pages the Sections past the M still shown, the swapped ones first; both are defined in the full and
 compact legends and `--help=all`. This repository's own default map swaps its one `sec` row (`data_sections_cut="1"`).

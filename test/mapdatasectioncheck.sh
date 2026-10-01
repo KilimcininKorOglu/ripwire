@@ -30,6 +30,7 @@
 # Exit 0 all pass, 1 any fail, 2 setup.
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$PWD/$BIN"
 GEN="$ROOT/test/mapdatasectionfix/gen.sh"
