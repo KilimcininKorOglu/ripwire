@@ -263,6 +263,54 @@ inline EditCheckRawParams editCheckSplitParams( std::string_view text, std::size
     return raw;
 }
 
+// ── macros that may open or close a scope (the brace counter cannot see through them) ──────────────────────────
+// A namespace opened by a macro (`#define NS_BEGIN namespace outer {` … `NS_BEGIN` … `NS_END`) leaves the braces balanced
+// and the chain reading GLOBAL — a false pairing. So a file's chain is UNREADABLE when, at namespace scope, a statement
+// starts with (1) a macro the file #defines with a brace or `namespace` in its body, (2) an ALL-CAPS identifier standing
+// alone on its line (an argument list allowed): the shape of a scope macro defined in another header, or (3) an ALL-CAPS
+// identifier naming NAMESPACE, BEGIN or END. Each over-reads (a lone `Q_DECLARE_METATYPE( X )` trips it too); every
+// over-read fails CLOSED and is disclosed (defaults_untied=).
+inline bool editCheckAllCaps( std::string_view w ) noexcept
+{
+    const auto lower = std::find_if( w.begin(), w.end(), []( char c ) { return !( ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' ); } );
+    return w.size() >= 2 && lower == w.end() && !( w[0] >= '0' && w[0] <= '9' );
+}
+
+inline bool editCheckLineStartsAt( std::string_view text, std::size_t i ) noexcept
+{
+    const std::size_t lineStart = ( i == 0 ) ? std::string_view::npos : text.rfind( '\n', i - 1 );
+    const std::size_t from      = ( lineStart == std::string_view::npos ) ? 0 : lineStart + 1;
+    return text.substr( from, i - from ).find_first_not_of( " \t" ) == std::string_view::npos;
+}
+
+// does the identifier [i, end) stand alone on its line (an argument list after it allowed)?
+inline bool editCheckAloneOnLine( std::string_view text, std::size_t i, std::size_t end ) noexcept
+{
+    std::size_t after = text.find_first_not_of( " \t", end );
+    if( after != std::string_view::npos && text[ after ] == '(' )
+    {
+        const std::size_t close = text.find( ')', after );
+        after = ( close == std::string_view::npos ) ? close : text.find_first_not_of( " \t", close + 1 );
+    }
+    const bool lineEnds = after == std::string_view::npos || text[ after ] == '\n' || text[ after ] == '\r' || text[ after ] == ';';
+    return lineEnds && editCheckLineStartsAt( text, i );
+}
+
+// the NAME of a `#define NAME body` line whose body opens or closes a scope, else empty
+inline std::string_view editCheckScopeDefine( std::string_view line ) noexcept
+{
+    const std::size_t def  = line.find( "define" );
+    const std::size_t name = ( def == std::string_view::npos ) ? def : line.find_first_not_of( " \t", def + 6 );
+    std::size_t       end  = name;
+    while( end != std::string_view::npos && end < line.size() && namesplit::isIdentChar( line[ end ] ) )
+    {
+        ++end;
+    }
+    const std::string_view body = ( end == std::string_view::npos ) ? std::string_view{} : line.substr( end );
+    const bool opensScope = body.find_first_of( "{}" ) != std::string_view::npos || body.find( "namespace" ) != std::string_view::npos;
+    return ( end != name && opensScope ) ? line.substr( name, end - name ) : std::string_view{};
+}
+
 // ── the full scope chain ──────────────────────────────────────────────────────────────────────────────────────
 // The ENCLOSING half: a brace lexer over the comment-blanked file. Every '{' pushes the labels that a `namespace A::B`,
 // `namespace` (anonymous), `struct S`, `class S` or `union S` head left pending (an `enum class` and every other block
@@ -279,6 +327,7 @@ public:
     {
         std::optional<std::vector<std::string>> snapshot;
         std::size_t                             i = 0;
+        askedOffset                               = offset;
         while( i < text.size() && balanced )
         {
             if( !snapshot && i >= offset )
@@ -291,8 +340,12 @@ public:
         {
             snapshot = current();
         }
-        return ( balanced && stack.empty() ) ? snapshot : std::nullopt;
+        return ( balanced && stack.empty() && !scopeMacro ) ? snapshot : std::nullopt;
     }
+
+    // a `using namespace X;` came before the offset asked about: a QUALIFIED definition there (`int S::f`) may name a
+    // member of X, so its written chain is not certain (the caller then reads the chain as unknown)
+    bool usingDirectiveBefore() const noexcept { return usingBefore; }
 
 private:
     std::vector<std::string> current() const
@@ -313,46 +366,64 @@ private:
         {
             return skipLiteral( i );
         }
-        if( c == '#' && lineStartsAt( i ) )
+        if( c == '#' && editCheckLineStartsAt( text, i ) )
         {
+            stmtStart = true;
             return skipDirective( i );
         }
         if( namesplit::isIdentChar( c ) )
         {
-            return word( i );
+            const std::size_t end = word( i );
+            stmtStart             = false;
+            return end;
         }
-        if( c == '{' )
-        {
-            stack.push_back( pending.value_or( std::vector<std::string>{} ) );
-            pending.reset();
-        }
-        else if( c == '}' )
-        {
-            balanced = !stack.empty();
-            if( balanced )
-            {
-                stack.pop_back();
-            }
-        }
-        else if( c == ';' || c == '(' || c == '=' )
-        {
-            pending.reset();
-        }
+        punctuation( c );
         return i + 1;
     }
 
-    bool lineStartsAt( std::size_t i ) const
+    // a '{' pushes the pending head's labels, a '}' pops; ';', '(' and '=' cancel a pending head
+    void punctuation( char c )
     {
-        const std::size_t lineStart = text.rfind( '\n', i == 0 ? 0 : i - 1 );
-        const std::size_t from      = ( lineStart == std::string_view::npos || i == 0 ) ? 0 : lineStart + 1;
-        return text.substr( from, i - from ).find_first_not_of( " \t" ) == std::string_view::npos;
+        if( c == '{' )
+        {
+            stack.push_back( pending.value_or( std::vector<std::string>{} ) );
+            stackIsNamespace.push_back( char( pending.has_value() && pendingNamespace ? 1 : 0 ) );
+            pending.reset();
+        }
+        else if( c == '}' && stack.empty() )
+        {
+            balanced = false;   // a close with nothing open: the file cannot be read
+        }
+        else if( c == '}' )
+        {
+            stack.pop_back();
+            stackIsNamespace.pop_back();
+        }
+        pending  = ( c == ';' || c == '(' || c == '=' ) ? std::nullopt : pending;
+        stmtStart = ( c == ';' || c == '{' || c == '}' ) || ( stmtStart && std::string_view( " \t\r\n" ).find( c ) != std::string_view::npos );
     }
 
-    std::size_t skipDirective( std::size_t i ) const
+    // see editCheckScopeDefine above for the three shapes; only at namespace scope, only at a statement's start
+    bool scopeMacroAt( std::string_view w, std::size_t i, std::size_t end ) const
     {
+        const bool atNamespaceScope = std::find( stackIsNamespace.begin(), stackIsNamespace.end(), char( 0 ) ) == stackIsNamespace.end();
+        const bool namesScope       = w.find( "NAMESPACE" ) != std::string_view::npos || w.find( "BEGIN" ) != std::string_view::npos
+                                   || w.find( "END" ) != std::string_view::npos;
+        return stmtStart && atNamespaceScope
+            && ( std::find( braceMacros.begin(), braceMacros.end(), w ) != braceMacros.end()
+                 || ( editCheckAllCaps( w ) && ( namesScope || editCheckAloneOnLine( text, i, end ) ) ) );
+    }
+
+    std::size_t skipDirective( std::size_t i )
+    {
+        const std::size_t start = i;
         while( i < text.size() && !( text[i] == '\n' && text[ i - 1 ] != '\\' ) )
         {
             ++i;
+        }
+        if( const std::string_view name = editCheckScopeDefine( text.substr( start, i - start ) ); !name.empty() )
+        {
+            braceMacros.push_back( name );   // a `#define NAME body` whose body opens or closes a scope
         }
         return i;
     }
@@ -384,13 +455,17 @@ private:
             ++end;
         }
         const std::string_view w = text.substr( i, end - i );
-        if( w == "namespace" || ( ( w == "struct" || w == "class" || w == "union" ) && lastWord != "enum" ) )
+        scopeMacro  = scopeMacro || scopeMacroAt( w, i, end );
+        usingBefore = usingBefore || ( lastWord == "using" && w == "namespace" && i < askedOffset );
+        if( ( w == "namespace" && lastWord != "using" ) || ( ( w == "struct" || w == "class" || w == "union" ) && lastWord != "enum" ) )
         {
-            pending = headLabels( end, w == "namespace" );
+            pending          = headLabels( end, w == "namespace" );
+            pendingNamespace = w == "namespace";
         }
         else if( ( w == "struct" || w == "class" ) && lastWord == "enum" )
         {
-            pending = std::vector<std::string>{};
+            pending          = std::vector<std::string>{};
+            pendingNamespace = false;
         }
         lastWord = w;
         return end;
@@ -454,9 +529,16 @@ private:
 
     std::string_view                        text;
     std::vector<std::vector<std::string>>   stack;
+    std::vector<char>                       stackIsNamespace;   // parallel to `stack`: 1 = a namespace's braces
     std::optional<std::vector<std::string>> pending;
+    std::vector<std::string_view>           braceMacros;        // this file's #defines whose body opens or closes a scope
     std::string_view                        lastWord;
-    bool                                    balanced = true;
+    std::size_t                             askedOffset = 0;
+    bool                                    pendingNamespace = false;
+    bool                                    balanced         = true;
+    bool                                    stmtStart        = true;
+    bool                                    scopeMacro       = false;
+    bool                                    usingBefore      = false;
 };
 
 // The WRITTEN half: the qualifier spelled before the declarator's name, read backwards from `nameAt` — `outer::detail::`
@@ -578,9 +660,12 @@ inline EditCheckSignature editCheckSignatureOf( EditCheckSources& sources, const
 
     const std::size_t                              nameInFile = s.sigStartByte + nameAt;
     const std::optional<EditCheckWrittenQualifier> written    = editCheckWrittenQualifier( file, nameInFile );
-    std::optional<std::vector<std::string>>        chain      = written && !written->absolute ? EditCheckBraceLexer( file ).chainAt( nameInFile )
-                                                                                               : std::optional<std::vector<std::string>>( std::vector<std::string>{} );
-    if( written && chain )
+    EditCheckBraceLexer                            lexer( file );
+    std::optional<std::vector<std::string>>        chain      = lexer.chainAt( nameInFile );   // also proves the file's braces readable
+    // a qualified, non-absolute declarator after `using namespace X;` may name X's member: its chain is not certain
+    const bool usingAmbiguous = written && !written->absolute && !written->names.empty() && lexer.usingDirectiveBefore();
+    chain = ( written && written->absolute && chain ) ? std::optional<std::vector<std::string>>( std::vector<std::string>{} ) : chain;
+    if( written && chain && !usingAmbiguous )
     {
         chain->insert( chain->end(), written->names.begin(), written->names.end() );
         sig.chain = std::move( chain );

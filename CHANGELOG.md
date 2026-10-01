@@ -50,8 +50,9 @@ comments stripped, read from each signature's source text). Such a declaration's
 bare name and the header's `file:name` answer about the definition, and a call passing between `params` minus that
 declaration's defaults and `params` arguments is never flagged. The root then carries `defaults_from="decl"`. Real
 overloads stay separate: each definition takes defaults only from the declaration that matches it. Anything unproven fails
-closed and keeps today's answer; when such a declaration may carry a default (a transitive include, an unreadable scope
-chain, a signature past 16 KiB or one this reader cannot parse) and a caller is flagged, the root says so with
+closed and keeps today's answer — including a scope opened or closed by a macro (`NS_BEGIN`, `QT_BEGIN_NAMESPACE`) and a
+qualified definition after `using namespace`, whose chains are unreadable; when such a declaration may carry a default (a
+transitive include, an unreadable scope chain, a signature past 16 KiB or one this reader cannot parse) and a caller is flagged, the root says so with
 `defaults_untied="N"`. Both attributes are defined in the full and compact legends. The fold applies to the post-hoc verb
 (CLI and MCP `edit_check`); the `--dry-run`/`new_body` preview keeps one contract per file. The test fixture's own
 `--edit-check=distance` (declared in `geometry.h`, defined in `geometry.cpp`) now answers instead of refusing. The session

@@ -29,6 +29,8 @@
 #   (L) M1 — the identity is the FULL scope chain plus the member's cv/ref qualifiers: outer::detail::f vs ::detail::f,
 #       outer::a::f vs ::a::f, Outer::S::f vs ::S::f and a const member never share a default; a chain spelled two ways
 #       (namespace block vs qualified out-of-line definition) still pairs.
+#   (O) a namespace opened by a macro (in-file #define, or QT_BEGIN_NAMESPACE from another header) makes the chain
+#       unreadable: never paired, disclosed as defaults_untied=; a qualified definition after `using namespace` likewise.
 #   (M) S1 — comments in a parameter list (`/* = 2 */`, trailing `//`) do not block the pairing.
 #   (N) S2 — a declaration with matching types and defaults that the include proof cannot reach is disclosed as
 #       defaults_untied= beside the flags.
@@ -305,6 +307,42 @@ ON5="$( ec "$N5" ./impl.cpp:f )"
 [ "$( attr "$( root "$ON5" )" defaults_from )" = decl ] && [ -z "$( flagged "$ON5" )" ] \
     && ok "(L) CONTROL: outer::detail::f declared in a namespace block and defined qualified out of line still pairs" \
     || no "(L) CONTROL: ./impl.cpp:f flags=[$( flagged "$ON5" )] defaults_from=\"$( attr "$( root "$ON5" )" defaults_from )\""
+
+echo "=== (O) a namespace opened by a MACRO: the chain is unreadable, never paired, and disclosed ==="
+MA="$TMP/macrons"; mkdir -p "$MA"
+printf '#define NS_BEGIN namespace outer {\n#define NS_END }\nNS_BEGIN\nint f( int x, int y, int z = 0 );\nNS_END\n' >"$MA/h.h"
+printf '#include "h.h"\nint f( int x, int y ) { return x + y; }\n' >"$MA/impl.cpp"
+printf '#include "h.h"\nint a() { return f( 1, 2 ); }\n' >"$MA/use.cpp"
+commit "$MA"
+printf '#include "h.h"\nint f( int x, int y, int z ) { return x + y + z; }\n' >"$MA/impl.cpp"
+OMA="$( ec "$MA" ./impl.cpp:f )"; RMA="$( root "$OMA" )"
+if [ "$( flagged "$OMA" )" = a ] && [ -z "$( attr "$RMA" defaults_from )" ] && [ "$( attr "$RMA" defaults_untied )" = 1 ]; then
+    ok "(O) MACRO: outer::f behind NS_BEGIN lends nothing to ::f (a flagged, defaults_untied=\"1\")"
+else
+    no "(O) MACRO: flags=[$( flagged "$OMA" )] defaults_from=\"$( attr "$RMA" defaults_from )\" defaults_untied=\"$( attr "$RMA" defaults_untied )\""
+fi
+ec "$MA" f >/dev/null
+[ "$( rc )" = 1 ] && ok "(O) MACRO: the bare name stays refused — not silently merged" \
+                   || no "(O) MACRO: --edit-check=f exited $( rc ) — the macro-opened declaration was folded into ::f"
+MB="$TMP/macroext"; mkdir -p "$MB"
+printf 'QT_BEGIN_NAMESPACE\nint f( int x, int y, int z = 0 );\nQT_END_NAMESPACE\n' >"$MB/h.h"
+cp "$MA/use.cpp" "$MB/use.cpp"; printf '#include "h.h"\nint f( int x, int y, int z ) { return x + y + z; }\n' >"$MB/impl.cpp"
+commit "$MB"
+OMB="$( ec "$MB" ./impl.cpp:f )"
+[ "$( flagged "$OMB" )" = a ] && [ -z "$( attr "$( root "$OMB" )" defaults_from )" ] \
+    && ok "(O) a scope macro defined in ANOTHER header (QT_BEGIN_NAMESPACE) is unreadable too" \
+    || no "(O) QT_BEGIN_NAMESPACE: flags=[$( flagged "$OMB" )] defaults_from=\"$( attr "$( root "$OMB" )" defaults_from )\""
+US="$TMP/usingns"; mkdir -p "$US"
+printf 'namespace outer { struct S { int f( int x, int y, int z = 0 ); }; }\n' >"$US/s.h"
+printf '#include "s.h"\nusing namespace outer;\nint S::f( int x, int y, int z ) { return x + y + z; }\n' >"$US/s.cpp"
+printf '#include "s.h"\nint u( outer::S& s ) { return s.f( 1, 2 ); }\n' >"$US/use.cpp"
+commit "$US"
+OUS="$( ec "$US" ./s.cpp:f )"; RUS="$( root "$OUS" )"
+if [ -z "$( flagged "$OUS" )" ] || [ "$( attr "$RUS" defaults_untied )" = 1 ]; then
+    ok "(O) USING: S::f after using namespace outer is never a silent false flag (flags=[$( flagged "$OUS" )] defaults_untied=\"$( attr "$RUS" defaults_untied )\")"
+else
+    no "(O) USING: flags=[$( flagged "$OUS" )] with no defaults_untied= — the using-directive reading is silent"
+fi
 
 echo "=== (M) S1: comments inside a parameter list do not block the pairing ==="
 C1="$TMP/cmt"; mkdir -p "$C1"
