@@ -2007,7 +2007,13 @@ inline DataSectionsCut codeFirstKeep( const IngestResult& ing, std::vector<NodeI
 }
 inline std::string dataSectionsNext( const DataSectionsCut& c )
 {
-    return "--graph-query='kind(all,sec)' --offset=" + std::to_string( c.shown ) + " --limit=" + std::to_string( c.topK );
+    // The registered spelling, offset before limit (so nextverb.h pagedNext, which writes limit first, is not it).
+    std::string invocation( "--graph-query='kind(all,sec)'" );
+    for( const auto& [ flag, value ] : { std::pair<std::string_view, std::size_t>{ " --offset=", c.shown }, { " --limit=", c.topK } } )
+    {
+        invocation.append( flag ).append( std::to_string( value ) );
+    }
+    return invocation;
 }
 // The XML legend clause, charged only to a map that carries the attribute. No double hyphen inside a comment (G4).
 inline constexpr std::string_view kDataSectionsCutLegend =
