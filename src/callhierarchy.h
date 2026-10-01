@@ -84,73 +84,77 @@ struct CallHierarchyRows
     std::size_t         declinedIface = 0;   // callers only: declinedIfaceCallsNaming below, the root's declined_iface=
 };
 
-// A TypeScript method with no body: an interface member (method_signature), an abstract member, an ambient (.d.ts)
-// member or an overload signature. declinedIfaceCallsNaming drops the overloads (a bodied same-named method in the
-// same file implements them, so the receiver is that class, not an interface).
-inline bool isTsBodylessMethod( const Symbol& s ) noexcept
+// The TypeScript methods with no body that are a CONTRACT — an interface member (method_signature), an abstract or an
+// ambient (.d.ts) member — as their own symbol ids, minus overload signatures: those sit in the same file as a bodied
+// method of the same name, which implements them, so their receiver is that class and not an interface.
+inline std::vector<NodeId> tsContractSignatures( const IngestResult& ing )
 {
-    return s.lang == Lang::TypeScript && s.kind == SymKind::Method && s.sigEndByte == s.endByte;
+    std::vector<std::pair<std::uint32_t, std::string_view>> bodied;   // (file, name) of every bodied TS method
+    std::vector<NodeId>                                     bodyless;
+    for( NodeId id = 0; id < ing.symbols.size(); ++id )
+    {
+        const Symbol& s = ing.symbols[id];
+        if( s.lang != Lang::TypeScript || s.kind != SymKind::Method )
+        {
+            continue;
+        }
+        if( s.sigEndByte == s.endByte )
+        {
+            bodyless.push_back( id );
+        }
+        else
+        {
+            bodied.emplace_back( s.fileId, s.name );
+        }
+    }
+    std::sort( bodied.begin(), bodied.end() );
+    std::erase_if( bodyless, [ & ]( NodeId id )
+    {
+        const Symbol& s = ing.symbols[id];
+        return std::binary_search( bodied.begin(), bodied.end(), std::pair<std::uint32_t, std::string_view>( s.fileId, s.name ) );
+    } );
+    return bodyless;
 }
 
-// declined_iface= on the callers and impact answers (graphlegend.h kDeclinedIfaceLegend). The resolver does not narrow a
-// TS call on a type annotation (graph.h Rule 2 reads no `x: Router` or `router!: Router`), so a call through an
-// interface-typed receiver whose method name has several definitions is declined, and the interface's own answer did
-// not even count it: the decl/def collapse keeps the bodyless signature out of the candidate list, so declined_calls=
-// on `--callers=router.ts:match` was absent. This counts, once per CALL, the TS declines whose called name is also the
-// name of a TS bodyless method somewhere in the tree, and that either named one of `targets` among their candidates
-// (the subset of declined_calls= the gap explains) or share the name of a signature in `targets` (the interface's own
-// selector). A disclosure, never a bind: the real fix narrows on annotations and is out of this count's scope.
+// One declined list's verdict for declinedIfaceCallsNaming: TypeScript, its called name among `sigNames`, and either a
+// candidate in `isTarget` or the name among `targetSigNames`. A declined list is one called name's same-language
+// definitions, so its first candidate names the call.
+inline bool declinedListIsIfaceNaming( const IngestResult& ing, std::span<const NodeId> cand, std::span<const std::string_view> sigNames,
+                                       std::span<const std::string_view> targetSigNames, const std::vector<char>& isTarget )
+{
+    if( cand.empty() || cand.front() >= ing.symbols.size() )
+    {
+        return false;
+    }
+    const Symbol& head = ing.symbols[ cand.front() ];
+    if( head.lang != Lang::TypeScript || !std::binary_search( sigNames.begin(), sigNames.end(), head.name ) )
+    {
+        return false;
+    }
+    return std::binary_search( targetSigNames.begin(), targetSigNames.end(), head.name )
+        || std::any_of( cand.begin(), cand.end(), [ & ]( NodeId c ) { return c < isTarget.size() && isTarget[c]; } );
+}
+
+// declined_iface= on the callers and impact answers (graphlegend.h kDeclinedIfaceLegend). graph.h Rule 2 does not narrow a
+// TS call to an interface member on an annotation (`x: Router`, `router!: Router`), so a call through an interface-typed
+// receiver whose method name has several definitions is declined, and the interface's own answer could miss it: the
+// decl/def collapse can keep the bodyless signature out of the candidate list, so declined_calls= on
+// `--callers=router.ts:match` was absent. This counts, once per CALL, the TS declines whose called name is also the name
+// of a TS contract signature in the tree (tsContractSignatures), and that either named one of `targets` among their
+// candidates (the subset of declined_calls= the gap explains) or share the name of a signature in `targets` (the
+// interface's own selector). A disclosure, never a bind: the real fix narrows on annotations and is out of this count's scope.
 // Zero, at no cost past one scan of `targets`, when no target is TypeScript, so every other language keeps its bytes.
 inline std::size_t declinedIfaceCallsNaming( const IngestResult& ing, const Graph& g, std::span<const NodeId> targets )
 {
-    if( g.declinedListCallCount.empty() || targets.empty() )
+    const auto isTs = [ & ]( NodeId t ) { return t < ing.symbols.size() && ing.symbols[t].lang == Lang::TypeScript; };
+    if( g.declinedListCallCount.empty() || !std::any_of( targets.begin(), targets.end(), isTs ) )
     {
         return 0;
     }
     EXPECTS( g.declinedListOff.size() == g.declinedListCallCount.size() + 1, "one offset past every declined list" );
-    const bool anyTsTarget = std::any_of( targets.begin(), targets.end(), [ & ]( NodeId t ) { return t < ing.symbols.size() && ing.symbols[t].lang == Lang::TypeScript; } );
-    if( !anyTsTarget )
-    {
-        return 0;
-    }
-    // An overload signature is no interface: its same file holds the bodied implementation under the same name.
-    std::vector<std::pair<std::uint32_t, std::string_view>> bodiedInFile;
-    for( const Symbol& s : ing.symbols )
-    {
-        if( s.lang == Lang::TypeScript && s.kind == SymKind::Method && s.sigEndByte != s.endByte )
-        {
-            bodiedInFile.emplace_back( s.fileId, s.name );
-        }
-    }
-    std::sort( bodiedInFile.begin(), bodiedInFile.end() );
-    const auto isOverloadSignature = [ & ]( const Symbol& s )
-    {
-        return std::binary_search( bodiedInFile.begin(), bodiedInFile.end(), std::pair<std::uint32_t, std::string_view>( s.fileId, s.name ) );
-    };
     std::vector<std::string_view> sigNames;
-    for( const Symbol& s : ing.symbols )
-    {
-        if( isTsBodylessMethod( s ) && !isOverloadSignature( s ) )
-        {
-            sigNames.push_back( s.name );
-        }
-    }
-    if( sigNames.empty() )
-    {
-        return 0;
-    }
-    std::sort( sigNames.begin(), sigNames.end() );
-    sigNames.erase( std::unique( sigNames.begin(), sigNames.end() ), sigNames.end() );
     std::vector<std::string_view> targetSigNames;   // the interface's own selector: its signatures' names
-    for( const NodeId t : targets )
-    {
-        if( t < ing.symbols.size() && isTsBodylessMethod( ing.symbols[t] ) && !isOverloadSignature( ing.symbols[t] ) )
-        {
-            targetSigNames.push_back( ing.symbols[t].name );
-        }
-    }
-    std::sort( targetSigNames.begin(), targetSigNames.end() );
-    std::vector<char> isTarget( ing.symbols.size(), 0 );
+    std::vector<char>             isTarget( ing.symbols.size(), 0 );
     for( const NodeId t : targets )
     {
         if( t < isTarget.size() )
@@ -158,28 +162,23 @@ inline std::size_t declinedIfaceCallsNaming( const IngestResult& ing, const Grap
             isTarget[t] = 1;
         }
     }
+    for( const NodeId id : tsContractSignatures( ing ) )
+    {
+        sigNames.push_back( ing.symbols[id].name );
+        if( isTarget[id] )
+        {
+            targetSigNames.push_back( ing.symbols[id].name );
+        }
+    }
+    std::sort( sigNames.begin(), sigNames.end() );
+    sigNames.erase( std::unique( sigNames.begin(), sigNames.end() ), sigNames.end() );
+    std::sort( targetSigNames.begin(), targetSigNames.end() );
     std::size_t callCount = 0;
     for( std::size_t listIndex = 0; listIndex < g.declinedListCallCount.size(); ++listIndex )
     {
-        const std::uint32_t first = g.declinedListOff[ listIndex ];
-        const std::uint32_t last  = g.declinedListOff[ listIndex + 1 ];
-        if( first == last || g.declinedListCand[ first ] >= ing.symbols.size() )
-        {
-            continue;
-        }
-        // A declined list is one called name's same-language definitions, so its first candidate names the call.
-        const Symbol& head = ing.symbols[ g.declinedListCand[ first ] ];
-        if( head.lang != Lang::TypeScript || !std::binary_search( sigNames.begin(), sigNames.end(), head.name ) )
-        {
-            continue;
-        }
-        bool counted = std::binary_search( targetSigNames.begin(), targetSigNames.end(), head.name );
-        for( std::uint32_t slot = first; !counted && slot < last; ++slot )
-        {
-            const NodeId c = g.declinedListCand[ slot ];
-            counted = c < isTarget.size() && isTarget[c];
-        }
-        if( counted )
+        const std::span<const NodeId> cand( g.declinedListCand.data() + g.declinedListOff[ listIndex ],
+                                            g.declinedListOff[ listIndex + 1 ] - g.declinedListOff[ listIndex ] );
+        if( declinedListIsIfaceNaming( ing, cand, sigNames, targetSigNames, isTarget ) )
         {
             callCount += g.declinedListCallCount[ listIndex ];
         }
