@@ -360,6 +360,13 @@ def parse_help( helpText ):
             current[ 1 ].append( entry )
             continue
 
+        if mIndent:
+            # Four spaces and no dash: a sub-heading ("the pre-PR family — …:") or a shared legend row
+            # (counts_floor="1", pr_iters="N"). classifyHelpLine() gives either its own line, never the
+            # flag above it; appending it here put the next family's heading inside --mentions' prose.
+            entry = None
+            continue
+
         stripped = line.strip()
         if entry is not None and stripped and line.startswith( '    ' ):
             entry[ 'text' ].append( stripped )
