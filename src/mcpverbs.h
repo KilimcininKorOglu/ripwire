@@ -783,6 +783,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // deleting a 43 B clause rather than re-anchoring around it). The key travels self-named in the payload,
     // which is where the disclosure has to be — the same posture bodyless_defs= already holds here.
     out += unprovenDefsKeyJson( chRows.unprovenDefs );
+    out += crossKindKeyJson( chRows.crossKind );   // hono-07: the CLI root's cross_kind=, self-named like unproven_defs above
     out += pageDisclosure( pab, sizeof( pab ), pwPrimary.end - pwPrimary.begin, rowTotal, pwPrimary.end,
                            page.limit, page.offset, discloseCap, kJsonPageSyntax );
     if( !referencingOnly )

@@ -323,6 +323,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
     { "declined_calls",    "declined_calls=K: K call sites left unbound (no evidence chose one def), in no count or row" },
+    { "cross_kind",        "cross_kind=kind:N,...: the defs= definitions differ in kind; rows union all of them (narrow with file:name)" },
     // #220 part 1: the FILE graph's gauge (graphlegend.h importsUnresolvedAttrXml), absent at zero, on the --deps/--arch/
     // --impact roots and the MCP impact twin. What it means for the numbers is the reading BESIDE it, never this row:
     // graph_partial= on --deps/--arch (next row), counts_floor= on --impact (its own row above; importers= only rises).

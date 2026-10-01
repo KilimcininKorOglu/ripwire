@@ -15,6 +15,17 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `--callers`/`--callees` flag a name whose definitions are of different kinds (`cross_kind=`)
+
+A bare name can resolve to unrelated definitions: `getPath` was one free function in `src/utils/url.ts` and ten
+`protected getPath` methods of adapter classes. The rows union the callers of all of them, which `defs="11"`
+disclosed, but nothing said the definitions were not even the same kind of thing, so `createRequest` (it calls
+`this.getPath`) read as a caller of the utils function. The root now carries `cross_kind="fn:1,method:10"` (each kind
+with its definition count) whenever the definitions span two or more kinds, defined in the full and compact legends,
+on the XML, columnar and `--json` forms and on the MCP `find_symbol`/`find_referencing_symbols` twins. It is absent
+when every definition shares one kind, so overload sets keep their bytes. A `file:name` selector narrows to one
+definition. Gate: `test/callerscheck.sh` arm X.
+
 ### Changed — `--grep` serves a source file's string literal when every code hit is only a use of it
 
 A literal question ("which code reads the option `escape-time`", "who reads `TEXTUAL_DRIVER`") is answered by a

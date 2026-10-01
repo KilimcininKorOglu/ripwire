@@ -206,7 +206,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
                          rw::declinedCallsLegendWithGate( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0 ),   // exactly when the root carries declined_calls=
-                         rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ),     // H1: likewise, exactly when unproven_defs= is there
+                         ( std::string( rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ) )      // H1: likewise, exactly when unproven_defs= is there
+                           + rw::crossKindLegend( !chRows.crossKind.empty() ) ).c_str(),           // hono-07: likewise for cross_kind=
                          rw::modScopeLegend( chHasModScope ),                   // #60: likewise, exactly when a t="modscope" row is
                          rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
@@ -235,6 +236,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                                    + "\" count=\"" + std::to_string( result.size() ) + "\""
                                    + ( !wantCallers && bodylessDefsCount > 0 ? " bodyless_defs=\"" + std::to_string( bodylessDefsCount ) + "\"" : "" )
                                    + chUnprovenAttr     // H1: the decl→def residue, on BOTH directions
+                                   + rw::crossKindAttrXml( chRows.crossKind )   // hono-07: defs of 2+ kinds, beside defs=
                                    + chTested.xmlAttr   // A6: hop_tested=/hop_untested=, the same partition on every dialect
                                    + chDeclinedAttr     // the tier-3 declines, beside the count they are not in
                                    + chRootAttr   // R-E: same root= the XML/JSON branches carry
@@ -257,7 +259,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             {
                 rw::emitTo( stdout, ",\"bodyless_defs\":{}", bodylessDefsCount );
             }
-            rw::emitTo( stdout, "{}", rw::unprovenDefsKeyJson( chRows.unprovenDefs ).c_str() );   // H1: absent at zero, like its XML twin
+            rw::emitTo( stdout, "{}{}", rw::unprovenDefsKeyJson( chRows.unprovenDefs ).c_str(),   // H1: absent at zero, like its XML twin
+                         rw::crossKindKeyJson( chRows.crossKind ).c_str() );                   // hono-07: absent unless defs span 2+ kinds
             // R-E: the JSON twin of the XML root= below — right after the leading identifying fields.
             if( chSingleRoot ) { rw::emitTo( stdout, ",\"root\":\"{}\"", jsonStr( cfg.roots[0] ).c_str() ); }
             rw::emitTo( stdout, ",\"hop_tested\":{},\"hop_untested\":{}{}", chTested.tested, chTested.untested,
@@ -278,7 +281,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         {
             rw::emitTo( stdout, " bodyless_defs=\"{}\"", bodylessDefsCount );
         }
-        rw::emitTo( stdout, "{}{}{}", chUnprovenAttr.c_str(), chTested.xmlAttr.c_str(), chDeclinedAttr.c_str() );   // H1's residue; then A6's partition and the declines
+        rw::emitTo( stdout, "{}{}{}{}", chUnprovenAttr.c_str(), rw::crossKindAttrXml( chRows.crossKind ).c_str(),   // H1's residue; hono-07's cross_kind=
+                     chTested.xmlAttr.c_str(), chDeclinedAttr.c_str() );                                         // then A6's partition and the declines
         rw::emitTo( stdout, "{}{}{}>", pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, result.size(), pw.end,
                                     cfg.pageLimit, cfg.pageOffset, chDiscloseCap ),
                      rw::graphCountFloorAttrXml( g ).c_str(),

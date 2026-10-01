@@ -783,6 +783,22 @@ inline constexpr const char* kUnprovenDefsLegend =
     "unproven_defs=K (absent when 0) counts same-named DEFINITIONS this file:name selector found and could not tie to the file it named: they are NOT in defs= and no row or count here includes them. A declaration widens to the definitions it stands for only where the definition is IN the named file, or its own file includes the named file, resolved path-precisely; a same-named body anywhere else is not evidence and is never served. Widen the selector to the bare NAME, or to Scope::name, to see them. ";
 inline const char* unprovenDefsLegend( bool on ) noexcept { return on ? kUnprovenDefsLegend : ""; }
 
+// ── cross_kind= on the callers/callees answers (comparison table hono-07; test/callerscheck.sh arm X) ──
+// The definitions a selector resolved to are of 2+ KINDS (a free function and unrelated methods sharing a name), so the
+// union the defs= clause describes mixes neighbours of things that are not the same API. Emitted exactly when the
+// attribute is, the unprovenDefsLegend( bool ) rule. G4: inside an XML comment, so no double hyphen.
+inline constexpr const char* kCrossKindLegend =
+    "cross_kind=kind:N,... (absent when every definition shares one kind) says the defs= definitions are of DIFFERENT kinds, N of each: the rows union the neighbours of all of them, so a row may reach a definition other than the one you mean. Narrow with a file:name selector. ";
+inline const char* crossKindLegend( bool on ) noexcept { return on ? kCrossKindLegend : ""; }
+inline std::string crossKindAttrXml( const std::string& value )
+{
+    return value.empty() ? std::string() : " cross_kind=\"" + value + "\"";
+}
+inline std::string crossKindKeyJson( const std::string& value )
+{
+    return value.empty() ? std::string() : ",\"cross_kind\":\"" + value + "\"";
+}
+
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
 // A file-scope call (a top-level statement, or a call inside an anonymous callback body) used to have no
 // caller node, so --callers/--impact answered with a row short. It now has one, and the row's t= is a kind
