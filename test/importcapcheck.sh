@@ -38,7 +38,7 @@
 #                                    include under an ERROR node all stay OUT, exactly as the walk left them
 #  13  no kParserVer bump is owed    — a cache written by a PRE-CHANGE binary is accepted and reads
 #                                    identically, which is the evidence the records did not change
-#                                    (set RIPWIRE_PRECHANGE_BIN to point at one; the arm SKIPs without it)
+#                                    (RIPWIRE_BASE_BIN, the house name; SKIPs when unset, as on CI)
 #
 # Usage:  test/importcapcheck.sh
 #         RIPWIRE_BIN=asan/ripwire test/importcapcheck.sh
@@ -312,11 +312,20 @@ cmp -s "$TMP/cold.xml" "$TMP/nocache.xml" \
 # a stale cache therefore still holds the truth. This arm is the evidence for that claim: a cache written
 # by the pre-change binary is ACCEPTED (not rejected), and reading it must equal --no-cache exactly. If a
 # future change makes the two disagree, this arm is what says a bump is owed.
-if [ -x /tmp/ripwire_base_new ] || [ -n "${RIPWIRE_PRECHANGE_BIN:-}" ]; then
-    PB="${RIPWIRE_PRECHANGE_BIN:-/tmp/ripwire_base_new}"
+# It SKIPs unless RIPWIRE_BASE_BIN names one — which is every CI run, because CI has no pre-change
+# binary to hand, so that path must be safe with the variable UNSET. It was not, once: an earlier draft
+# expanded `$RIPWIRE_PRECHANGE_BIN` bare inside this very message, and `set -u` killed the gate mid-run
+# with NO output — the shape pargates reports as "the gate died before its own reporting", which cost a
+# 12-job CI cycle to find. A gate that can die silently is worse than one that fails.
+#
+# The name and the shape are the house convention, not a new one: test/recallbudgetcheck.sh and
+# test/selectorchaincheck.sh take the same optional reference binary, read it the same way
+# (`BASE="${RIPWIRE_BASE_BIN:-}"`), and SKIP when it is absent.
+BASE_BIN="${RIPWIRE_BASE_BIN:-}"
+if [ -n "$BASE_BIN" ] && [ -x "$BASE_BIN" ]; then
     PCACHE="$TMP/pre.bin"
     rm -f "$PCACHE"
-    "$PB" "$WORK" --cache="$PCACHE" --deps >/dev/null 2>&1
+    "$BASE_BIN" "$WORK" --cache="$PCACHE" --deps >/dev/null 2>&1
     "$BIN" "$WORK" --cache="$PCACHE" --deps > "$TMP/prewarm.xml" 2>/dev/null
     if cmp -s "$TMP/prewarm.xml" "$TMP/nocache.xml"; then
         ok "a pre-change binary's cache is accepted and reads identically — no kParserVer bump is owed"
@@ -324,7 +333,7 @@ if [ -x /tmp/ripwire_base_new ] || [ -n "${RIPWIRE_PRECHANGE_BIN:-}" ]; then
         no "a pre-change cache reads DIFFERENTLY from --no-cache — extraction output changed, so kParserVer must be bumped"
     fi
 else
-    skip "pre-change-binary cache arm: no pre-change binary at $RIPWIRE_PRECHANGE_BIN (set it to run this arm)"
+    skip "pre-change-cache arm (set RIPWIRE_BASE_BIN=<path to a pre-change ripwire> to run it)"
 fi
 
 # ── arm 10: determinism ───────────────────────────────────────────────────────────────────────────────
