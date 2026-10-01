@@ -1772,8 +1772,9 @@ inline bool relabelHeadHitsFromIndex( std::vector<WhereHit>& hits, std::span<con
 //
 // A git listing whose SUCCESS is known. gitOneLine answers "" both for "nothing to list" and for "git failed",
 // and the overlay must not read a failed `git diff` as a clean checkout — that is the silent stale answer this
-// fix exists to remove. Same command prefix as gitOneLine (core.quotepath=false, -C root), so the paths are
-// spelled exactly as lsTree spells them: cwd-relative to the root, git-quoted only when a byte forces it.
+// fix exists to remove. gitmine.h's gitCommandLines reads the lines and keeps pclose's status; same command
+// prefix as gitOneLine (core.quotepath=false, -C root), so the paths are spelled exactly as lsTree spells
+// them: cwd-relative to the root, git-quoted only when a byte forces it.
 struct GitListing
 {
     std::vector<std::string> lines;
@@ -1782,29 +1783,8 @@ struct GitListing
 
 inline GitListing gitListChecked( const std::string& root, const std::string& tail )
 {
-    GitListing        out;
-    const std::string cmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " " + tail + " 2>/dev/null";
-    std::FILE*        pipe = os::popen( cmd.c_str(), "r" );
-    if( pipe == nullptr )
-    {
-        return out;
-    }
-    std::string raw;
-    char        buf[ 8192 ];
-    for( std::size_t n = std::fread( buf, 1, sizeof( buf ), pipe ); n > 0; n = std::fread( buf, 1, sizeof( buf ), pipe ) )
-    {
-        raw.append( buf, n );
-    }
-    const int status = os::pclose( pipe );
-    out.ok           = WIFEXITED( status ) && WEXITSTATUS( status ) == 0;
-    for( std::string_view line : splitLines( raw ) )
-    {
-        if( !line.empty() )
-        {
-            out.lines.emplace_back( line );
-        }
-    }
-    return out;
+    GitCommandLines res = gitCommandLines( gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " " + tail + " 2>/dev/null" );
+    return GitListing{ std::move( res.lines ), res.isStarted && WIFEXITED( res.status ) && WEXITSTATUS( res.status ) == 0 };
 }
 
 // Every path under the root whose working copy differs from HEAD: tracked paths modified, staged, or deleted
