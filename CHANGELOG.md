@@ -257,10 +257,22 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 124 → 129 (the function-literal fix takes 128; #338 and #325 take one more), `kCacheVersion` 25 → 27
+`kParserVer` 124 → 131 (the function-literal fix takes 128; #338 and #325 take one more; `await f<T>(x)` calls take 131), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
 cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
+
+### Fixed — TypeScript: `await f<T>(x)` is a call
+
+tree-sitter-typescript parses an `await` in front of a call with explicit type arguments as `(await f)<T>(x)`: the
+call's function is the await expression. The TypeScript and TSX queries looked only for a name or a member access
+there, so the site was not a reference at all. It drew no edge and was counted in no declined or unresolved gauge, so
+`--callers`, `--impact` and the map missed it without saying so. The bare (`await f<T>(x)`), member
+(`await o.svc.f<T>(x)`) and `#private` (`await this.#p<T>(x)`) forms are now call references in `.ts`, `.mts`,
+`.cts`, `.tsx` and Astro frontmatter. `await f(x)` without type arguments was already found. On hono, the
+method-override middleware is now a caller of `parseBody`
+(`await parseBody<Record<string, string>>(c.req)`). `kParserVer` moves, so a TypeScript cache is re-indexed once.
+Gate: `tsshapecheck` §7, in `.ts` and `.tsx`.
 
 ### Fixed — `--scan-skill(s)`: quoting a sensitive path no longer hides its upload (sensitive-read-upload)
 

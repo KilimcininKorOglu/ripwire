@@ -296,7 +296,13 @@ constexpr std::uint32_t kCacheVersion = 27;           // 27: same record layout 
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 129;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 131;          // bump on any grammar/.scm/extraction change
+                                                      // 131 = 2026-10-01 (lane recall, test/tsshapecheck.sh §7): queries/typescript and queries/tsx
+                                                      //   capture `await f<T>(x)`, which tree-sitter-typescript parses as `(await f)<T>(x)` — a call
+                                                      //   whose function: is the await_expression — as a call reference (bare, member and #private
+                                                      //   forms). Those sites were no reference at all before, so a TS/TSX cache written at 129 lacks
+                                                      //   them. 130 is left to a language lane that reserved it; the train renumbers on a collision.
+                                                      //   New records, same layout: kCacheVersion stays 27; kQSnapCacheScheme unchanged.
                                                       // 129 = 2026-09-30 (train 22): ONE bump past fn-literal's 128 for the two community
                                                       //   PRs that merge after it — #338 (RSpec described_class, its 125 note below) and #325
                                                       //   (Ruby inheritance edges, its note below). Each note keeps the number its PR carried.
