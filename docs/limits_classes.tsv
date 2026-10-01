@@ -88,6 +88,7 @@ kMaxProbeCommits	INDEXING
 kMaxQualifierHops	INDEXING
 kMaxQueryNesting	BOUNDARY
 kMaxRefs	INDEXING
+kMaxRenameProbeFiles	INDEXING
 kMaxSample	INDEXING
 kMaxScopeChars	OUTPUT
 kMaxScored	INDEXING

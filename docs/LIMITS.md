@@ -16,10 +16,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 231 | 91 | 128 | **103** |
+| 232 | 91 | 128 | **104** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 231 + 7 is the 238 constants this generator parses out of `src/`.
+are not counted as caps, and 232 + 7 is the 239 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -37,8 +37,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **128 of 231 caps are classified
-(43 INDEXING, 41 OUTPUT, 44 BOUNDARY); the remaining 103 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **129 of 232 caps are classified
+(44 INDEXING, 41 OUTPUT, 44 BOUNDARY); the remaining 103 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -88,7 +88,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 91 files that declare a cap — the 231 caps counted above, and no parameter.
+One table for each of the 91 files that declare a cap — the 232 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -186,6 +186,7 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kMaxGitWorkers` | `12` | — | matches the ingest pool's measured ~12-way; these are |
 | `kMaxRefs` | `512` | INDEXING | refusal bound — a sweep, not a fork-network crawl |
+| `kMaxRenameProbeFiles` | `32` | INDEXING | HEAD copies one rename probe reads; past it the probe stops (a hint, never a claim) |
 | `kMaxWorktreePaths` | `8192` | INDEXING | — |
 | `kWhereisHits` | `60` | OUTPUT | — |
 
