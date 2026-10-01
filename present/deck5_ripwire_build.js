@@ -469,7 +469,7 @@ function storyCards(s, { kick, head, stories, footText }){
   // central feature) and any head-to-head figure (none has been re-measured).
   const s = p.addSlide(); bg(s);
   kicker(s, "// since v0.6.1 (2026-09-14): 0.6.2–0.6.5 and main; each row names its PR", CYAN);
-  title(s, "Since 0.6.1: more places it runs, more of the code it answers for", { size: 30 });
+  title(s, "Since 0.6.1: more places it runs, more code it answers for", { size: 30 });
   const CW = (W - 2*MX - 0.14) / 2, CH = 2.43, X2 = MX + CW + 0.14, Y2 = 1.72 + CH + 0.12;
 
   listCard(s, MX, 1.72, CW, CH, "where and how it runs", CYAN, [
@@ -487,7 +487,7 @@ function storyCards(s, { kick, head, stories, footText }){
   listCard(s, X2, 1.72, CW, CH, "better answers", GREEN, [
     // CHANGELOG [Unreleased] "### Fixed — a name bound to a function literal has a body: no more false `bodyless_defs`, and quality
     // verbs measure it" (merge 48279226): "measure 2,083 functions (was 63)" on "a 583-file TypeScript agent repo". RE-MEASURE.
-    ["{{MEASURE:fnliteral_functions_before}} → {{MEASURE:fnliteral_functions_after}}", "functions --quality-panel measures on a {{MEASURE:fnliteral_ts_files}}-file TypeScript repo: a name bound to an arrow or function literal now owns its body (JS, TS, Lua, Python)", GREEN],
+    ["63 → 2,083", "functions --quality-panel measures on a 583-file TypeScript repo: a name bound to an arrow or function literal now owns its body (JS, TS, Lua, Python)", GREEN],
     // CHANGELOG [Unreleased] "### Changed — `--metrics` prints one row per definition" (merge 2df0de0a)
     ["one row per def", "--metrics: overloads and #ifdef twins each get their own row and metrics, instead of sharing one body's", GREEN],
     // CHANGELOG [Unreleased] "### Added — Ruby has inheritance edges: `class Child < Parent` reaches the lego view …" (PR #325, merge d38a0e36)
@@ -531,7 +531,7 @@ function storyCards(s, { kick, head, stories, footText }){
     "- --lsp: CHANGELOG [0.6.2], '--lsp — a read-only navigation LSP server over stdio (Phase 1)': definition, references, documentSymbol, workspace symbol and hover. 'Thanks to @mpapis.'",
     "- Memory guard: CHANGELOG [Unreleased] '### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)', merged with #363 (b90547fa). 'The limit is 65% of the machine's memory (physical RAM, or the cgroup v2 memory.max when lower); --max-memory=N[K|M|G] or RIPWIRE_MAX_MEMORY replaces it'; past the limit 'ripwire exits 5 (new exit code)'.",
     "BETTER ANSWERS",
-    "- Function-literal bodies: CHANGELOG [Unreleased] '### Fixed — a name bound to a function literal has a body: no more false bodyless_defs, and quality verbs measure it' (merge 48279226). The CHANGELOG states '--biggest-first, --ensemble and --quality-panel measure 2,083 functions (was 63)' on 'a 583-file TypeScript agent repo'. Re-measured for this slide on the merged binary: {{MEASURE:fnliteral_functions_before}} → {{MEASURE:fnliteral_functions_after}} over {{MEASURE:fnliteral_ts_files}} files.",
+    "- Function-literal bodies: CHANGELOG [Unreleased] '### Fixed — a name bound to a function literal has a body: no more false bodyless_defs, and quality verbs measure it' (merge 48279226). The CHANGELOG states '--biggest-first, --ensemble and --quality-panel measure 2,083 functions (was 63)' on 'a 583-file TypeScript agent repo'. Re-measured for this slide on the merged binary: 63 → 2,083 over 583 files.",
     "- --metrics: CHANGELOG [Unreleased] '### Changed — --metrics prints one row per definition' (merge 2df0de0a): overloads and a function defined in several #ifdef branches each get their own row with l=. Gate: test/metricscheck.sh.",
     "- Ruby: CHANGELOG [Unreleased] '### Added — Ruby has inheritance edges: class Child < Parent reaches the lego view and the resolver's base walk' (PR #325, merge d38a0e36) and '### Added — RSpec's described_class is the class its example group names, so a spec's calls pin to the class under test (#338)' (merge 3418eba6). Both PRs were contributed by @andriytyurnikov.",
     "- vue-core: CHANGELOG [0.6.2] '### Fixed — a call written outside every named function now has a caller' (#60): 'Measured before the change with the pin census, as the share of call sites with no caller node: 72.8% of vue-core'. A dated pre-change figure from a committed instrument, so it is not re-measured.",
@@ -1156,21 +1156,21 @@ function storyCards(s, { kick, head, stories, footText }){
   card(s, 8.5, 1.95, 4.1, 3.1, CARD2);
   s.addText("$ ripwire . --callers=rankGraphTeleport", { x: 8.68, y: 2.1, w: 3.8, h: 0.3, fontFace: MONO, fontSize: 10, color: MUTED, margin: 0 });
   s.addText([
-    { text: "<callers of=\"rankGraphTeleport\"\n  defs=\"1\" count=\"6\" ", options: { color: TEXT } },
+    { text: "<callers of=\"rankGraphTeleport\"\n  defs=\"1\" count=\"7\" ", options: { color: TEXT } },
     { text: "counts_floor=\"1\"", options: { color: AMBER, bold: true } },
-    { text: ">\n<s t=\"fn\" n=\"runEval\" .../>\n<s t=\"fn\" n=\"rankGraph\" .../>\n…\n</callers>", options: { color: TEXT } },
+    { text: ">\n<s t=\"fn\" n=\"getIndex\" .../>\n<s t=\"fn\" n=\"rankGraph\" .../>\n…\n</callers>", options: { color: TEXT } },
   ], { x: 8.68, y: 2.42, w: 3.8, h: 2.5, fontFace: MONO, fontSize: 10.5, valign: "top", margin: 0 });
   card(s, 8.5, 5.25, 4.1, 1.45);
   s.addText([
     { text: "The map grades itself before it answers. ", options: { color: TEXT, bold: true } },
-    { text: "This repository's own src/: {{MEASURE:src_census}}.", options: { color: MUTED, fontFace: MONO } },   // re-measured: `ripwire ./src` on main a5229aca
+    { text: "This repository's own src/: files=189 symbols=8020 edges=23968 ambiguous=8947 unresolved=1956 declined=7418.", options: { color: MUTED, fontFace: MONO } },   // re-measured: `ripwire ./src` on main a5229aca
   ], { x: 8.68, y: 5.36, w: 3.8, h: 1.24, fontFace: SANS, fontSize: 10, margin: 0 });
   foot(s, "docs/EVALS.md §8 lists the numbers this project refuses to publish, each with its reason");
   notes(s, [
     "SOURCES (the tripwire)",
-    "- The src/ census is re-derived, not remembered: `ripwire ./src` on main a5229aca prints {{MEASURE:src_census}} (warm and --no-cache identical). On main 40a1895b (2026-09-11) it read files=166 symbols=5778 edges=17150 ambiguous=7441 unresolved=1658 declined=4803. It read files=153 symbols=5122 edges=14182 ambiguous=5982 unresolved=1598 when the slide was written on 2026-09-06.",
+    "- The src/ census is re-derived, not remembered: `ripwire ./src` on main a5229aca prints files=189 symbols=8020 edges=23968 ambiguous=8947 unresolved=1956 declined=7418 (warm and --no-cache identical). On main 40a1895b (2026-09-11) it read files=166 symbols=5778 edges=17150 ambiguous=7441 unresolved=1658 declined=4803. It read files=153 symbols=5122 edges=14182 ambiguous=5982 unresolved=1598 when the slide was written on 2026-09-06.",
     "- declined= is new in 0.6.0 — #136, merge commit d752d953: a call the resolver refused to guess at is now counted instead of vanishing. It belongs on this slide because it is the same contract the other three rules state.",
-    "- The --callers example: `ripwire . --callers=rankGraphTeleport` answered defs=\"1\" count=\"6\" counts_floor=\"1\", with runEval and rankGraph as its first two rows, on main 40a1895b. On main a5229aca: {{MEASURE:callers_rankGraphTeleport}}.",
+    "- The --callers example: `ripwire . --callers=rankGraphTeleport` answered defs=\"1\" count=\"6\" counts_floor=\"1\", with runEval and rankGraph as its first two rows, on main 40a1895b. On main a5229aca: defs=\"1\" count=\"7\" counts_floor=\"1\", with getIndex and rankGraph as its first two rows (a seventh caller, getIndex in src/mcpindex.h, joined since 40a1895b; the slide sample shows the a5229aca answer).",
   ]);
 }
 
@@ -1386,7 +1386,7 @@ function storyCards(s, { kick, head, stories, footText }){
   foot(s, "the MCP server exposes the same deterministic engine — one index, shared with the CLI, staleness-checked");
   notes(s, [
     "SOURCES (agent wiring)",
-    "- The nine agents after `wrap`: src/wrap.h's agent table on main a5229aca — claude, codex, cursor, windsurf, gemini, opencode, openclaw, hermes, aider. This line named six until 2026-09-30. On the merged binary, `ripwire wrap --help`: {{MEASURE:wrap_agents}}.",
+    "- The nine agents after `wrap`: src/wrap.h's agent table on main a5229aca — claude, codex, cursor, windsurf, gemini, opencode, openclaw, hermes, aider. This line named six until 2026-09-30. On the merged binary, `ripwire wrap --help`: names the same nine (CLI-first: claude, codex, opencode, openclaw, hermes; MCP config: cursor, windsurf, gemini; repo-map: aider).",
     "- “33 MCP verbs … 17 read verbs … 13 flagship reflexes … 3 span-addressed edit verbs” — README.md, lane/t10-mcp-coverage: “One stdio server, 33 verbs — 17 read, 13 flagship-reflex, 3 span-addressed edit” (rank_by and affected joined the MCP surface, matching the CLI --rank-by / --affected twins).",
     "- “18 agent skills” — README.md: “skills/ ships eighteen task-shaped skills”; skills/ holds 18 directories.",
     "- “12 orchestrator loops” — README.md: “prompts/ holds twelve self-contained orchestrator prompts”, and prompts/ holds 12 .md files besides its own README.md. This card said 11 until 2026-09-11; test/readmedriftcheck.sh arm (I1) gates the README against the directory, and the deck now states the same number.",
