@@ -636,6 +636,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "tests", "tests=N: test files listed to run (the rows)", false, "affected", MapHeaderRead::No, {}, "affected" },
     { "reached", "reached=N: symbols the transitive caller walk reached from the seeds (seeds excluded)", false, "affected", MapHeaderRead::No, {}, "affected" },
     { "script_gates_unmodelled", "script_gates_unmodelled=N: test/*.sh runners; their subprocess reach is unmodelled, never in tests=/reached=", false, "affected", MapHeaderRead::No, {}, "affected" },
+    { "must_run", "must_run=N: the first N test files are the must-run tier (changed/partner/hops=1, else the nearest hops=); rest still listed", false, "affected", MapHeaderRead::No, {}, "affected" },
     // callees: src/callhierarchy.h computeHopTestedPartition, spliced in src/verbs_navigate.h
     { "hop_tested", "hop_tested=/hop_untested=: count= split by whether an indexed test reaches the row (in-process calls only)", false, "callees", MapHeaderRead::No, {}, "callees" },   // also defines hop_untested=
     // clones: src/verbs_report.h (the <clones> root emit)
@@ -715,6 +716,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "impacted", "impacted=N: symbols that transitively call the change (changed symbols excluded)", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "shown_tests", "shown_tests=/shown_untested=: t rows and u rows printed, two independent counts", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines shown_untested=
     { "script_gates_unmodelled", "script_gates_unmodelled=N: test/*.sh runners in the corpus, a path count; not call-graph modelled", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    { "must_run", "must_run=N: the first N t rows are the must-run tier (changed/partner/hops=1, else the nearest hops=); rest still listed", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "script_gates_registered", "script_gates_registered=N: shell gates test/regression.sh registers as suite members", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "script_gates_mapped", "script_gates_mapped=N: registered gates with exact dependency evidence (literal paths or RIPWIRE_TEST_DEPS)", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "script_gates_unresolved_dynamic", "script_gates_unresolved_dynamic=N: registered gates with no mappable deps; they may cover the change unlisted", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },

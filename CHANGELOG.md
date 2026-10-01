@@ -15,6 +15,19 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `--affected` and `--test-gate` mark the must-run tier of their tests-to-run list (`must_run=`)
+
+A tests-to-run answer listed every reaching test in evidence order (changed, partner, then `hops=` ascending), 80 to
+249 files on the comparison table's repositories, with nothing marking where the obligation ends and the wider reach
+begins. The root now carries `must_run=N`: the first N test files are the must-run tier, every changed, partner or
+`hops=1` row (the module's own tests and the tests that call it directly), or, when the list has none of those, the
+rows at its smallest `hops=`. Nothing is dropped or reordered; the attribute only marks where the head ends, and it is
+absent when it would split nothing. It is defined in the full and compact legends and carried by `--affected` (and the
+MCP `affected` tool, which shares its renderer), `--test-gate` (XML and `--json`), and the edit receipt's
+`tests_to_run` companions. On hono, `--affected=src/utils/url.ts` gives `must_run="2"`: `src/utils/url.test.ts` and
+`src/hono.test.ts`. `test/testgatelegendbudgetcheck.sh`'s budget moves 3730 → 3930 B for the clause. Gate:
+`test/affectedcheck.sh` arms (7h)–(7o).
+
 ### Fixed — C/C++: a body-less `enum X` in a function signature no longer poses as the function's encloser
 
 tmux writes `static enum cmd_retval` on one line and the function name on the next. The tags query indexes every named

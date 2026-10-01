@@ -300,6 +300,49 @@ printf '%s' "$A" | grep -qE '<test p="test/test_leaf\.cpp" hops="1"|<g hops="1" 
     && ok "(7g) core.cpp's direct test row carries hops=\"1\"" \
     || no "(7g) core.cpp rows lack hops="
 
+# ── 7h) the MUST-RUN tier (comparison table hono-20 / textual-20) ─────────────────────────────────────
+# A tests-to-run answer listed 80-249 files by evidence, and nothing said where the obligation ends and the wider
+# reach begins: textual's snapshot test sat inside an undifferentiated tier of 157. must_run=N marks the head of
+# the evidence order — every changed/partner/hops=1 row, or when none exists the rows at the smallest hops= — and
+# the rest stays listed (no drop). RED on main 953818d6: no must_run= anywhere.
+printf 'int farleaf() { return 9; }\n'                            > "$R/src/farleaf.cpp"
+printf 'int farbridge() { return farleaf(); }\nint farbridge2() { return farbridge(); }\n' > "$R/src/farbridge.cpp"
+printf 'void nf_one() { farbridge(); }\n'                         > "$R/test/test_nfone.cpp"
+printf 'void nf_two() { farbridge2(); }\n'                        > "$R/test/test_nftwo.cpp"
+D="$( run --affected=src/deep.cpp )"
+printf '%s' "$D" | grep -q '<affected [^>]*must_run="2"' \
+    && ok "(7h) --affected=src/deep.cpp: must_run=\"2\" — the partner and the hops=1 row, ahead of hops=2" \
+    || no "(7h) expected must_run=\"2\" on the --affected root, got: $( printf '%s' "$D" | grep -o '<affected [^>]*>' )"
+FAR="$( run --affected=src/farleaf.cpp )"
+if printf '%s' "$FAR" | grep -q '<affected [^>]*must_run="1"' && [ "$( tord "$FAR" )" = "test_nfone.cpp,test_nftwo.cpp," ]; then
+    ok "(7i) no partner or hops=1 row: the nearest hop tier (test_nfone, hops=2) is the must-run tier, hops=3 still listed"
+else
+    no "(7i) expected must_run=\"1\" over test_nfone,test_nftwo; got $( printf '%s' "$FAR" | grep -o '<affected [^>]*>' ) order=$( tord "$FAR" )"
+fi
+printf '%s' "$( run --affected=src/via.cpp )" | grep -q 'must_run=' \
+    && no "(7j) a list that is ALL must-run carries must_run= (it splits nothing)" \
+    || ok "(7j) a list whose every row is must-run carries no must_run= (it splits nothing)"
+printf '%s' "$D" | sed 's/-->.*//' | grep -q 'must_run=N' \
+    && ok "(7k) the legend defines must_run= in the answer that carries it" \
+    || no "(7k) must_run= emitted without its legend clause"
+TG="$( run --test-gate=src/deep.cpp )"
+printf '%s' "$TG" | grep -q '<test-gate [^>]*must_run="2"' \
+    && ok "(7l) --test-gate=src/deep.cpp carries the same must_run=\"2\"" \
+    || no "(7l) --test-gate root lacks must_run=\"2\": $( printf '%s' "$TG" | grep -o '<test-gate [^>]*>' )"
+printf '%s' "$TG" | sed 's/-->.*//' | grep -q 'must_run=N' \
+    && ok "(7m) the --test-gate legend defines must_run=" || no "(7m) --test-gate emits must_run= undefined"
+run --test-gate=src/deep.cpp --json | grep -q '"must_run":2' \
+    && ok "(7n) --test-gate --json carries \"must_run\":2" || no "(7n) --test-gate --json lacks must_run"
+AF_MCP="$( printf '%s\n%s\n%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"affected","arguments":{"path":"'"$R"'","files":"src/deep.cpp"}}}' \
+    | perl -e 'alarm 30; exec @ARGV' "$BIN" "$R" --mcp --no-cache 2>/dev/null | tail -1 )"
+printf '%s' "$AF_MCP" | grep -q 'must_run=\\"2\\"' \
+    && ok "(7o) the MCP affected twin carries must_run=\"2\" (one renderer)" \
+    || { no "(7o) the MCP affected twin lacks must_run"; printf '%s\n' "$AF_MCP" | cut -c1-300; }
+rm -f "$R/src/farleaf.cpp" "$R/src/farbridge.cpp" "$R/test/test_nfone.cpp" "$R/test/test_nftwo.cpp"
+
 # ── 8) issue #60: a call with no enclosing NAMED function is still a call ─────────────────────────────
 # @YogevKr's reproduction, verbatim in shape: a node:test arrow callback calls the changed function, and
 # the test file's name does not share the source file's stem, so the filename-partner fallback cannot fire.
