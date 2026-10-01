@@ -269,7 +269,9 @@ opening quote put the flow scan back in command position, so the reader's quoted
 read was never noted. A quote no longer re-arms command position inside a reader's segment (it still does elsewhere,
 so `sh -c "…"` and `echo "…" | sh` are read as code), and a shell word split by quotes or escapes (`/etc/"passwd"`,
 `@"/etc/passwd"`, `/etc/pass\wd`, `< /etc/"passwd"`) is also read whole, once, when it ends — and in command position
-names the command (`\cat`, `c"a"t`, `\curl`). Single-quoted, mixed, redirected and `head -c "N" FILE` forms are
+names the command (`\cat`, `c"a"t`, `\curl`). A runner option's split value stays a value (`sudo -u ro''ot cat`), a split upload
+option still marks its file (`curl -""T /etc/passwd`), and a reader's state stays inside its own command context
+(`cat <(sh -c 'curl … @/etc/passwd …')` is an upload). Single-quoted, mixed, redirected and `head -c "N" FILE` forms are
 covered by `test/skillscan.sh`. Against the previous scanner no finding is lost on the skill fixtures, an adversarial
 set or this repository's own Markdown and scripts; two CRITICAL rows gain `why="sensitive-read-upload"`.
 
