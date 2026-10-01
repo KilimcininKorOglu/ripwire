@@ -1695,7 +1695,8 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // Fix list #2 (2026-10-01), the CLI twin's parity: a not-found keeps its -32602 refusal and ALSO carries the
             // answer document the CLI prints on stdout (selectorrefuse.h writeNotFoundAnswer) in error.data.answer, with a
             // working-tree rename offered first in both the message and the document. `msg` is the verb's own refusal
-            // sentence; the rename clause goes right after its quoted echo.
+            // sentence; the rename clause goes right after its quoted echo. The document's echo is cappedEcho'd like the
+            // message's, so a 400 KB selector cannot mint a 400 KB frame (mcpw3fixcheck NIT [symbol]).
             const auto notFoundAnswered = [ & ]( std::string msg, NotFoundAnswer answer, bool json ) -> std::string
             {
                 if( answer.near.renamed )
@@ -2172,7 +2173,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         const std::string j = symbolQueryJson( path, symbol, name == "find_referencing_symbols", pg );
                         if( j.empty() && name == "find_referencing_symbols" )
                         {
-                            return notFoundAnswered( notFoundSym( symbol ), NotFoundAnswer{ "callers", { { "of", symbol } }, {}, notFoundNearOf( symbol ) }, true );
+                            return notFoundAnswered( notFoundSym( symbol ), NotFoundAnswer{ "callers", { { "of", mcprefuse::cappedEcho( symbol ) } }, {}, notFoundNearOf( symbol ) }, true );
                         }
                         return j.empty() ? errResultMsg( -32602, notFoundSym( symbol ) ) : textResult( j );
                     } );
@@ -2413,7 +2414,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         {
                             return errResult( -32603, "internal error: the impact answer buffer lost bytes — no answer served" );
                         }
-                        return answer->empty() ? notFoundAnswered( notFoundSym( symbol ), NotFoundAnswer{ "impact", { { "of", symbol } }, {}, notFoundNearOf( symbol ) }, false )
+                        return answer->empty() ? notFoundAnswered( notFoundSym( symbol ), NotFoundAnswer{ "impact", { { "of", mcprefuse::cappedEcho( symbol ) } }, {}, notFoundNearOf( symbol ) }, false )
                                                : textResult( *answer );
                     } );
                 }
@@ -2473,7 +2474,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         const IngestResult& pIng    = getIndex( path ).ing;
                         const bool          fromBad = resolveAllByNameQualified( pIng, from ).empty();
                         return notFoundAnswered( pathEndpointRefusal( pIng, from, to ),
-                                                 NotFoundAnswer{ "path", { { "from", from }, { "to", to } }, fromBad ? "from" : "to",
+                                                 NotFoundAnswer{ "path", { { "from", mcprefuse::cappedEcho( from ) }, { "to", mcprefuse::cappedEcho( to ) } }, fromBad ? "from" : "to",
                                                                  notFoundNearOf( fromBad ? from : to ) }, false );
                     };
                     resp = !answer        ? errResult( -32603, "internal error: the path_between answer buffer lost bytes — no answer served" )

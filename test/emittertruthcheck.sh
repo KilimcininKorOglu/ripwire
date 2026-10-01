@@ -208,7 +208,9 @@ no_="$( wc -c < "$TMP/olmiss.out" | tr -d ' ' )"
 "$BIN" "$SRC" --uses=entryy > "$TMP/usmiss.out" 2>"$TMP/usmiss.err"; usrc=$?
 nu="$( wc -c < "$TMP/usmiss.out" | tr -d ' ' )"
 if [ "$usrc" = "1" ]; then ok "--uses=MISSING exits 1 like its six siblings"; else no "--uses=MISSING exit=$usrc (want 1)"; fi
-if [ "$nu" = "0" ]; then ok "--uses=MISSING writes 0 bytes"; else no "--uses=MISSING wrote $nu bytes"; fi
+# 2026-10-01 (fix list #2): the refusal also prints its found="0" ANSWER on stdout, so "0 bytes" became "no payload":
+# the answer element and its legend only, never a use-site row.
+if grep -q 'found="0"' "$TMP/usmiss.out" && ! sed 's/<!--.*-->//' "$TMP/usmiss.out" | grep -q '<u '; then ok "--uses=MISSING writes only its found=\"0\" answer (no use-site row)"; else no "--uses=MISSING wrote $nu bytes of payload"; fi
 if has "$TMP/usmiss.err" 'did you mean'; then ok "--uses=MISSING offers a did-you-mean"; else no "--uses=MISSING has no did-you-mean"; fi
 
 # the DOCUMENTED external case must survive: zz_undefined_helper is CALLED in app/ext.c but defined nowhere.

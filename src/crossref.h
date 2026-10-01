@@ -100,6 +100,7 @@
 #include "workspace.h"          // wsdetail::segmentsOf
 #include "filter.h"             // §P11.5: rw::pathTierOf — the shared source/test/doc ORDERING tier
 #include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
+#include "infra/sortutil.h"    // svLess — the rename probe orders names in byte order, never via string_view operator<
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -115,7 +116,6 @@
 #include <string_view>
 #include <thread>       // the git-spawn pool (fork/exec is the cost, not compute)
 #include "infra/os.h"   // rw::os::getpid / unlink / popen — the blob-batch temp list and its git reader
-#include <tuple>        // std::make_tuple — the rename probe's candidate order
 #include <utility>
 #include <vector>
 
@@ -2027,8 +2027,19 @@ inline std::vector<RenameCandidate> renameCandidatesOf( const IngestResult& ing,
     }
     const auto lengthGap = [ & ]( std::string_view n ) { return n.size() > missing.size() ? n.size() - missing.size() : missing.size() - n.size(); };
     std::sort( candidates.begin(), candidates.end(), [ & ]( const RenameCandidate& a, const RenameCandidate& b )
-               { return std::make_tuple( b.shared, lengthGap( a.name ), a.name, std::string_view( a.path ) )
-                      < std::make_tuple( a.shared, lengthGap( b.name ), b.name, std::string_view( b.path ) ); } );
+    {
+        if( a.shared != b.shared )
+        {
+            return a.shared > b.shared;
+        }
+        const std::size_t gapA = lengthGap( a.name ), gapB = lengthGap( b.name );
+        if( gapA != gapB )
+        {
+            return gapA < gapB;
+        }
+        // byte order through svLess, never string_view's operator< (libstdc++'s _S_compare wraps under -fsanitize=integer)
+        return a.name != b.name ? sortutil::svLess( a.name, b.name ) : sortutil::svLess( a.path, b.path );
+    } );
     return candidates;
 }
 
