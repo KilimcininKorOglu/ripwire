@@ -605,7 +605,7 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
 // §B4.2: that MESSAGE now lives in selectorrefuse.h and every SYM-taking verb speaks it — this arm is what
 // it was generalized FROM, so what stays here is only the exit code. The wording is unchanged (a file-list
 // cap with an explicit remainder is the one addition, shared by all six arms).
-inline int refuseUsesFileQualifier( const rw::IngestResult& ing, const rw::Config& cfg, std::string_view sym, const UsesSelector& )
+inline int refuseUsesFileQualifier( const rw::IngestResult& ing, const rw::Config& cfg, std::string_view sym )
 {
     return refuseNotFoundWithAnswer( ing, cfg, rw::NotFoundAnswer{ "uses", { { "of", std::string( sym ) } }, {},
                                                                    rw::notFoundNear( ing, sym, notFoundGitRoot( ing, cfg ) ) },
@@ -677,7 +677,7 @@ std::optional<int> runUses( const MainDispatch& d )
         // three siblings all refuse it, and so does this one now.
         if( defs.empty() && sel.fileQualified )
         {
-            return refuseUsesFileQualifier( ing, cfg, sym, sel );
+            return refuseUsesFileQualifier( ing, cfg, sym );
         }
 
         // r27-emitters T3 / §P10.2: external="1" is a real answer, a typo is not — distinguished by the

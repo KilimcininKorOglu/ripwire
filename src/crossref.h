@@ -1983,14 +1983,12 @@ inline std::vector<std::string> identWordsOf( std::string_view name )
     return words;
 }
 
-// Whether `word` occurs in `bytes` as a whole identifier (the same flank rule as every whereis row).
+// Whether `word` occurs in `bytes` as a whole identifier: the whereis row scan itself, so the rule cannot drift.
 inline bool hasWholeWord( std::string_view bytes, std::string_view word )
 {
-    for( std::size_t at = bytes.find( word ); at != std::string_view::npos; at = bytes.find( word, at + 1 ) )
-    {
-        if( wholeWordAt( bytes, at, word.size() ) ) { return true; }
-    }
-    return false;
+    std::vector<WhereHit> rows;
+    scanBlobForSymbol( bytes, word, RefInfo{}, std::string(), rows );
+    return !rows.empty();
 }
 
 constexpr std::size_t kMaxRenameProbeFiles = 32;   // HEAD copies one rename probe reads; past it the probe stops (a hint, never a claim)
@@ -2615,6 +2613,76 @@ inline std::string_view whereisDottedNameOf( std::string_view spec )
     return spec.substr( spec.find_last_of( ".#" ) + 1 );
 }
 
+// The legend's CONDITIONAL tail: each paragraph rides only an answer that carries what it defines, so a plain
+// answer pays no bytes for the with_history lane, test-local rows or the worktree overlay. Split out of
+// writeWhereisPage so the page writer stays a page writer.
+inline void writeWhereisLegendTail( std::FILE* out, const WhereResult& res )
+{
+    // §L10b: the with_history lane's own <history> element, previously undefined on this legend — shared
+    // verbatim with --doc-drift's copy (gitoracle.h kHistoryProbeLegend) so the two cannot drift. Only
+    // when res.history actually made that element reachable — an unconditional splice would cost every
+    // plain --whereis run bytes describing an absent element.
+    if( res.history != nullptr )
+    {
+        std::fputs( gitoracle::kHistoryProbeLegend, out );
+    }
+    // test_local= rides only an answer that holds both kinds of definition (demoteTestLocalDefs), and so does its reading.
+    if( std::any_of( res.hits.begin(), res.hits.end(), []( const WhereHit& h ) { return h.testLocal; } ) )
+    {
+        rw::emitRaw( out, "TEST-LOCAL: test_local=\"1\" on a kind=\"def\" row marks a definition in a test file or a test scope "
+                           "(the index's test lens; on a lexical row, a test-tier path). It appears only when the same answer also "
+                           "holds a production definition, and those rows are ordered after the production definitions and before "
+                           "the references of their tier. Nothing is dropped. " );
+    }
+    // The overlay's own vocabulary, only on an answer that carries it — a clean checkout pays no bytes for it.
+    if( res.worktree != WorktreeOverlay::Clean )
+    {
+        rw::emitRaw( out, "WORKTREE: worktree= on the root means the checkout under this root differs from HEAD, so HEAD's "
+                           "committed tree alone would be a stale answer. Every path that differs (modified, staged, deleted or "
+                           "untracked and not ignored) is read from the working tree instead: its rows say ref=\"worktree\" (tip= "
+                           "and date= name the HEAD commit it overlays) and REPLACE HEAD's rows for that path, so a definition the "
+                           "edit added is listed and one it deleted or renamed is not. HEAD's rows stand only for paths the working "
+                           "tree left alone. on-head=, hits= and head_labels= count the checkout: HEAD plus those rows. worktree=read: "
+                           "every differing path was read, and complete= keeps its meaning over the checkout. worktree=partial: some "
+                           "differing path could not be read (permission, over the 2 MB ceiling, a name git had to quote, or more "
+                           "changed paths than one answer reads), so its HEAD rows stand and may be stale. worktree=unlisted: git "
+                           "could not list the changes, so any HEAD row may be stale. Under partial or unlisted complete= is never "
+                           "claimed. Other refs are always their committed trees. " );
+    }
+}
+
+// The selector-note elements, first after the root: each says which KIND of zero (or of literal) the reader holds.
+inline void writeWhereisSelectorNotes( std::FILE* out, const WhereResult& res, bool dottedSel, const XmlEscaper& ex )
+{
+    // §B11.2 — a zero that is a SPELLING fact, not a repository fact, says so. Emitted first, before the
+    // history lane, so it is the first thing after the root on the one shape where it fires: hits="0" AND a
+    // file-qualified selector. It never appears beside a nonzero hit list, so it cannot dilute a real answer.
+    if( res.hits.empty() && whereisSpecIsFileQualified( res.sym ) )
+    {
+        rw::emitTo( out, "<selector-note r=\"qualified-selector\" spec=\"{}\" retry=\"{}\"/>",
+                      ex( res.sym ).c_str(), ex( whereisBareNameOf( res.sym ) ).c_str() );
+    }
+    // The dotted spelling, on EVERY answer that carries one: a nonzero list is the literal's occurrences (call sites
+    // like `Shape.area(…)`), never the definition, so the note rides beside it too.
+    if( dottedSel )
+    {
+        rw::emitTo( out, "<selector-note r=\"dotted-selector\" spec=\"{}\" retry=\"{}\"/>",
+                      ex( res.sym ).c_str(), ex( whereisDottedNameOf( res.sym ) ).c_str() );
+    }
+    // H7: the same element, two more reasons — the line seed that was RESOLVED before the scan (so sym= is a
+    // name and not the raw @spec), and the near-miss beside a zero the index can explain.
+    if( !res.seedSpec.empty() )
+    {
+        rw::emitTo( out, "<selector-note r=\"line-seed\" spec=\"{}\" retry=\"{}\"/>",
+                      ex( res.seedSpec ).c_str(), ex( res.sym ).c_str() );
+    }
+    if( res.hits.empty() && !res.nearMiss.empty() )
+    {
+        rw::emitTo( out, "<selector-note r=\"near-miss\" spec=\"{}\" retry=\"{}\"/>",
+                      ex( res.sym ).c_str(), ex( res.nearMiss ).c_str() );
+    }
+}
+
 // Contract-level defect: this verb said hits="2560" and printed 60, and
 // --limit/--offset were accepted and ignored, so a paging loop over it never advanced and never ended.
 // `pageLimit`/`pageOffset` (0 = un-paginated) window the hit list, which is already deterministically
@@ -2691,37 +2759,7 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
                        "Binary blobs are outside the claim (a text symbol cannot occur in one); an oversized TEXT blob suppresses "
                        "the claim instead of being silently skipped. Its ABSENCE claims nothing. "
                        "raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it). " );
-    // §L10b: the with_history lane's own <history> element, previously undefined on this legend — shared
-    // verbatim with --doc-drift's copy (gitoracle.h kHistoryProbeLegend) so the two cannot drift. Only
-    // when res.history actually made that element reachable — an unconditional splice would cost every
-    // plain --whereis run bytes describing an absent element.
-    if( res.history != nullptr )
-    {
-        std::fputs( gitoracle::kHistoryProbeLegend, out );
-    }
-    // test_local= rides only an answer that holds both kinds of definition (demoteTestLocalDefs), and so does its reading.
-    if( std::any_of( res.hits.begin(), res.hits.end(), []( const WhereHit& h ) { return h.testLocal; } ) )
-    {
-        rw::emitRaw( out, "TEST-LOCAL: test_local=\"1\" on a kind=\"def\" row marks a definition in a test file or a test scope "
-                           "(the index's test lens; on a lexical row, a test-tier path). It appears only when the same answer also "
-                           "holds a production definition, and those rows are ordered after the production definitions and before "
-                           "the references of their tier. Nothing is dropped. " );
-    }
-    // The overlay's own vocabulary, only on an answer that carries it — a clean checkout pays no bytes for it.
-    if( res.worktree != WorktreeOverlay::Clean )
-    {
-        rw::emitRaw( out, "WORKTREE: worktree= on the root means the checkout under this root differs from HEAD, so HEAD's "
-                           "committed tree alone would be a stale answer. Every path that differs (modified, staged, deleted or "
-                           "untracked and not ignored) is read from the working tree instead: its rows say ref=\"worktree\" (tip= "
-                           "and date= name the HEAD commit it overlays) and REPLACE HEAD's rows for that path, so a definition the "
-                           "edit added is listed and one it deleted or renamed is not. HEAD's rows stand only for paths the working "
-                           "tree left alone. on-head=, hits= and head_labels= count the checkout: HEAD plus those rows. worktree=read: "
-                           "every differing path was read, and complete= keeps its meaning over the checkout. worktree=partial: some "
-                           "differing path could not be read (permission, over the 2 MB ceiling, a name git had to quote, or more "
-                           "changed paths than one answer reads), so its HEAD rows stand and may be stale. worktree=unlisted: git "
-                           "could not list the changes, so any HEAD row may be stale. Under partial or unlisted complete= is never "
-                           "claimed. Other refs are always their committed trees. " );
-    }
+    writeWhereisLegendTail( out, res );
     std::fputs( "-->", out );
     char pab[ kPageDisclosureCap ];
     // §A7(iii): refs_scanned=, not refs=. --stray-content and --abi both spell the MATCHED set refs=; this one
@@ -2751,33 +2789,7 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
                   kWorktreeAttr[ std::size_t( res.worktree ) ],
                   completeClaim ? " complete=\"1\"" : "" );
 
-    // §B11.2 — a zero that is a SPELLING fact, not a repository fact, says so. Emitted first, before the
-    // history lane, so it is the first thing after the root on the one shape where it fires: hits="0" AND a
-    // file-qualified selector. It never appears beside a nonzero hit list, so it cannot dilute a real answer.
-    if( res.hits.empty() && whereisSpecIsFileQualified( res.sym ) )
-    {
-        rw::emitTo( out, "<selector-note r=\"qualified-selector\" spec=\"{}\" retry=\"{}\"/>",
-                      ex( res.sym ).c_str(), ex( whereisBareNameOf( res.sym ) ).c_str() );
-    }
-    // The dotted spelling, on EVERY answer that carries one: a nonzero list is the literal's occurrences (call sites
-    // like `Shape.area(…)`), never the definition, so the note rides beside it too.
-    if( dottedSel )
-    {
-        rw::emitTo( out, "<selector-note r=\"dotted-selector\" spec=\"{}\" retry=\"{}\"/>",
-                      ex( res.sym ).c_str(), ex( whereisDottedNameOf( res.sym ) ).c_str() );
-    }
-    // H7: the same element, two more reasons — the line seed that was RESOLVED before the scan (so sym= is a
-    // name and not the raw @spec), and the near-miss beside a zero the index can explain.
-    if( !res.seedSpec.empty() )
-    {
-        rw::emitTo( out, "<selector-note r=\"line-seed\" spec=\"{}\" retry=\"{}\"/>",
-                      ex( res.seedSpec ).c_str(), ex( res.sym ).c_str() );
-    }
-    if( res.hits.empty() && !res.nearMiss.empty() )
-    {
-        rw::emitTo( out, "<selector-note r=\"near-miss\" spec=\"{}\" retry=\"{}\"/>",
-                      ex( res.sym ).c_str(), ex( res.nearMiss ).c_str() );
-    }
+    writeWhereisSelectorNotes( out, res, dottedSel, ex );
 
     // The history lane, when it was asked for: what the probe did, then this symbol's own verdict.
     // §L10: the oracle answers "did any line carrying this name ever leave the tree", and a doc that merely
