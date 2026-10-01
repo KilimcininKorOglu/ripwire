@@ -23,6 +23,15 @@
 #       call against `scale( double, int )` stays flagged, and the bare name stays refused.
 #   (H) E2 — every handle printed after "Qualify one contract:" is accepted on a rerun, on (G) and on a two-platform
 #       corpus (one declaration, two .cpp definitions, which is two contracts and must stay refused).
+#   (J) M2 — a header that drops a default over two platform definitions: no printed handle is the declaration's,
+#       whose own answer has no call edges (callers="0"), and the definitions' handles flag the broken call.
+#   (K) M3 — `./lib.cpp` beside `./sub/lib.cpp`, and paths with a space: every printed handle names one contract.
+#   (L) M1 — the identity is the FULL scope chain plus the member's cv/ref qualifiers: outer::detail::f vs ::detail::f,
+#       outer::a::f vs ::a::f, Outer::S::f vs ::S::f and a const member never share a default; a chain spelled two ways
+#       (namespace block vs qualified out-of-line definition) still pairs.
+#   (M) S1 — comments in a parameter list (`/* = 2 */`, trailing `//`) do not block the pairing.
+#   (N) S2 — a declaration with matching types and defaults that the include proof cannot reach is disclosed as
+#       defaults_untied= beside the flags.
 #   (I) an unproven declaration (the definition's file does not include the header) lends no defaults.
 #
 # Operates on private temp git repos. Needs git and python3.
@@ -178,37 +187,161 @@ printf '#include "lib.h"\nint scale( int x, int f ) { return x * f; }\n' >"$P/po
 printf '#include "lib.h"\nint scale( int x, int f ) { return x + f; }\n' >"$P/win.cpp"
 printf '#include "lib.h"\nint a1() { return scale( 1 ); }\n' >"$P/use.cpp"
 commit "$P"
-roundTrip(){ # roundTrip <label> <corpus> <selector>
+# The handles a refusal lists, one per line: split on ", " (a quoted handle may hold a space), quotes removed.
+handles(){ sed -n 's/.*Qualify one contract: \(.*\) — e\.g\..*/\1/p' "$TMP/err" | sed 's/ (+[^)]*)//g' | awk 'BEGIN{RS=", "} {sub(/\n$/,""); gsub(/^'"'"'|'"'"'$/,""); if (length) print}'; }
+example(){ sed -n "s/.* — e\.g\. --edit-check=\(.*\)$/\1/p" "$TMP/err" | sed "s/^'//; s/'\$//"; }
+roundTrip(){ # roundTrip <label> <corpus> <selector> <min callers every pasted handle must answer>
     ec "$2" "$3" >/dev/null
     if [ "$( rc )" != 1 ]; then no "$1: --edit-check=$3 exited $( rc ), expected the ambiguity refusal"; return; fi
-    _list="$( sed -n 's/.*Qualify one contract: \(.*\) — e\.g\..*/\1/p' "$TMP/err" )"
-    [ -n "$_list" ] || { no "$1: no handle list in the refusal: $( cat "$TMP/err" )"; return; }
-    _n=0
-    for _h in $( printf '%s' "$_list" | sed 's/ (+[0-9]* more contracts)//' | tr ',' ' ' ); do
-        _n=$(( _n + 1 ))
+    handles >"$TMP/handles"
+    [ -s "$TMP/handles" ] || { no "$1: no handle list in the refusal: $( cat "$TMP/err" )"; return; }
+    _ex="$( example )"
+    grep -qxF -- "$_ex" "$TMP/handles" && ok "$1: the e.g. handle '$_ex' is one of the listed handles" \
+                                       || no "$1: the e.g. handle '$_ex' is not among the listed handles: $( cat "$TMP/err" )"
+    while IFS= read -r _h; do
         _o="$( ec "$2" "$_h" )"
-        if [ "$( rc )" = 0 ] && [ -n "$( root "$_o" )" ]; then
-            ok "$1: suggested handle '$_h' is accepted (exit 0)"
-        else
+        if [ "$( rc )" != 0 ] || [ -z "$( root "$_o" )" ]; then
             no "$1: suggested handle '$_h' is refused on rerun (exit $( rc )): $( cat "$TMP/err" )"
+        elif [ "$( attr "$( root "$_o" )" callers )" -lt "$4" ]; then
+            no "$1: suggested handle '$_h' answers callers=\"$( attr "$( root "$_o" )" callers )\" (want >= $4): a handle whose answer is not the definition's"
+        else
+            ok "$1: suggested handle '$_h' is accepted and answers callers=\"$( attr "$( root "$_o" )" callers )\""
         fi
-    done
-    [ "$_n" -ge 2 ] || no "$1: the refusal listed $_n handle(s), expected at least 2"
+    done <"$TMP/handles"
 }
-roundTrip "(H) mismatched types" "$G" scale
-roundTrip "(H) two platform definitions" "$P" scale
-# the pre-apply preview keeps one contract per file, so it still refuses the field corpus; its handles must round-trip too
+roundTrip "(H) mismatched types" "$G" scale 1
+roundTrip "(H) two platform definitions" "$P" scale 1
+# the pre-apply preview keeps one contract per file, so it still refuses the field corpus — and must not steer the reader to
+# the declaration, whose own answer has no call edges (M2)
 printf 'int scale( int x, int factor, int bias )\n{\n    return x;\n}\n' >"$TMP/payload.txt"
 ( cd "$F" && "$BIN" . --no-cache --edit-check=scale --edit-payload="$TMP/payload.txt" --dry-run >/dev/null 2>"$TMP/err" )
 case "$( cat "$TMP/err" )" in
-    *'./lib.h:scale'*) no "(H) the --dry-run refusal still offers ./lib.h:scale, which the preview refuses again: $( cat "$TMP/err" )" ;;
-    *'Qualify one contract'*'@./lib.h:1'*) ok "(H) the --dry-run refusal offers @./lib.h:1 for the declaration, a handle that resolves to it alone" ;;
+    *'lib.h'*'— e.g.'*) no "(H) the --dry-run refusal lists a handle for the declaration in lib.h: $( cat "$TMP/err" )" ;;
+    *'Qualify one contract: ./lib.cpp:scale'*'declaration-only'*) ok "(H) the --dry-run refusal lists only the definition and counts the declaration-only contract" ;;
     *) no "(H) unexpected --dry-run answer: $( cat "$TMP/err" )" ;;
 esac
+
+echo "=== (J) M2: a header that drops a default, two platform definitions — no handle answers callers=\"0\" ==="
+W="$TMP/pwbreak"; mkdir -p "$W"
+printf 'int f( int x, int y = 0 );\n' >"$W/h.h"
+printf '#include "h.h"\nint f( int x, int y ) { return x * y; }\n' >"$W/posix.cpp"
+printf '#include "h.h"\nint f( int x, int y ) { return x + y; }\n' >"$W/win.cpp"
+printf '#include "h.h"\nint a() { return f( 1 ); }\n' >"$W/use.cpp"
+commit "$W"
+printf 'int f( int x, int y );\n' >"$W/h.h"
+roundTrip "(J) dropped default" "$W" f 1
+case "$( cat "$TMP/err" )" in *'h.h'*'— e.g.'*) no "(J) the refusal still lists a handle for h.h's declaration: $( cat "$TMP/err" )" ;; *) ok "(J) no handle for the declaration-only contract" ;; esac
+OW="$( ec "$W" ./posix.cpp:f )"
+[ "$( flagged "$OW" )" = a ] && ok "(J) the definition's handle flags the call the dropped default broke" \
+                               || no "(J) ./posix.cpp:f flags=[$( flagged "$OW" )], expected [a]"
+
+echo "=== (K) M3: a path that is a suffix of another, and a path with a space — every handle is unique ==="
+X="$TMP/suffix"; mkdir -p "$X/sub" "$X/my dir" "$X/other dir/my dir"
+printf 'int sc( int x ) { return x; }\n' >"$X/lib.cpp"
+printf 'int sc( int x, int y ) { return x + y; }\n' >"$X/sub/lib.cpp"
+printf 'int sp( int x ) { return x; }\n' >"$X/my dir/a b.cpp"
+printf 'int sp( int x, int y ) { return x - y; }\n' >"$X/other dir/my dir/a b.cpp"
+printf 'int sc( int x );\nint sp( int x );\nint u() { return sc( 1 ) + sp( 1 ); }\n' >"$X/use.cpp"
+commit "$X"
+roundTrip "(K) suffix-overlapping paths" "$X" sc 0
+roundTrip "(K) paths with a space" "$X" sp 0
+OK1="$( ec "$X" ./lib.cpp:sc )"
+[ "$( attr "$( root "$OK1" )" p )" = lib.cpp:1 ] && ok "(K) ./lib.cpp:sc answers lib.cpp, not sub/lib.cpp" \
+                                                 || no "(K) ./lib.cpp:sc answered p=\"$( attr "$( root "$OK1" )" p )\" (exit $( rc ))"
+
 OP="$( ec "$P" ./posix.cpp:scale )"
 [ "$( attr "$( root "$OP" )" defaults_from )" = decl ] && [ -z "$( flagged "$OP" )" ] \
     && ok "(H) each platform definition still takes the shared header's defaults (posix.cpp: defaults_from=\"decl\", nothing flagged)" \
     || no "(H) ./posix.cpp:scale: flags=[$( flagged "$OP" )] defaults_from=\"$( attr "$( root "$OP" )" defaults_from )\""
+
+echo "=== (L) M1: the FULL scope chain is the identity — a same-named innermost scope is a different function ==="
+# lone <label> <corpus> <selector> <want flagged> — the definition takes no default from a declaration in another scope chain
+lone(){
+    _o="$( ec "$2" "$3" )"; _r="$( root "$_o" )"
+    if [ -n "$_r" ] && [ "$( flagged "$_o" )" = "$4" ] && [ -z "$( attr "$_r" defaults_from )" ]; then
+        ok "$1: $3 flags [$4] and borrows no default (no defaults_from=)"
+    elif [ -z "$_r" ] && [ "$( rc )" = 1 ] && grep -q 'is ambiguous' "$TMP/err"; then
+        ok "$1: $3 is refused as more than one contract (no answer, so no false zero)"
+    else
+        no "$1: $3 flags=[$( flagged "$_o" )] defaults_from=\"$( attr "$_r" defaults_from )\" (exit $( rc )) — a declaration in another scope chain lent its default"
+    fi
+}
+N1="$TMP/detail"; mkdir -p "$N1"
+printf 'namespace outer { namespace detail { int f( int x, int y, int z = 0 ); } }\n' >"$N1/outer.h"
+printf '#include "outer.h"\nnamespace detail { int f( int x, int y ) { return x + y; } }\n' >"$N1/impl.cpp"
+printf '#include "outer.h"\nint a() { return detail::f( 1, 2 ); }\n' >"$N1/use.cpp"
+commit "$N1"
+printf '#include "outer.h"\nnamespace detail { int f( int x, int y, int z ) { return x + y + z; } }\n' >"$N1/impl.cpp"
+lone "(L) DETAIL outer::detail::f vs ::detail::f" "$N1" ./impl.cpp:f a
+ec "$N1" f >/dev/null
+[ "$( rc )" = 1 ] && ok "(L) DETAIL: the bare name stays refused — two functions, two contracts" \
+                   || no "(L) DETAIL: --edit-check=f exited $( rc ) — outer::detail::f was folded into ::detail::f"
+N2="$TMP/nsnest"; mkdir -p "$N2"
+printf 'namespace outer { namespace a { int f( int x, int y = 0 ); } }\nnamespace a { int f( int x, int y ); }\n' >"$N2/h.h"
+printf '#include "h.h"\nnamespace a { int f( int x, int y ) { return x + y; } }\n' >"$N2/a.cpp"
+printf '#include "h.h"\nint u() { return a::f( 1 ); }\n' >"$N2/use.cpp"
+commit "$N2"
+lone "(L) NSNEST outer::a::f vs ::a::f" "$N2" ./a.cpp:f u
+lone "(L) NSNEST, through the header's handle" "$N2" ./h.h:f u
+N3="$TMP/nest2"; mkdir -p "$N3"
+printf 'struct Outer { struct S { int f( int x, int y, int z = 0 ); }; };\nstruct S { int f( int x, int y, int z ); };\n' >"$N3/s.h"
+printf '#include "s.h"\nint S::f( int x, int y, int z ) { return x + y + z; }\n' >"$N3/n.cpp"
+printf '#include "s.h"\nint u( S& s ) { return s.f( 1, 2 ); }\n' >"$N3/use.cpp"
+commit "$N3"
+lone "(L) NEST2 Outer::S::f vs ::S::f" "$N3" ./n.cpp:f u
+N4="$TMP/constq"; mkdir -p "$N4"
+printf 'struct S\n{\n    int f( int x, int y, int z = 0 );\n    int f( int x, int y, int z ) const;\n};\n' >"$N4/s.h"
+printf '#include "s.h"\nint S::f( int x, int y, int z ) const { return x + y + z; }\n' >"$N4/s.cpp"
+printf '#include "s.h"\nint u( const S& s ) { return s.f( 1, 2 ); }\n' >"$N4/use.cpp"
+commit "$N4"
+lone "(L) CONSTQ: the const member takes no default from the non-const declaration" "$N4" ./s.cpp:f u
+# CONTROL: the same chain spelled two ways still pairs — namespace block in the header, qualified out-of-line definition
+N5="$TMP/nsok"; mkdir -p "$N5"
+printf 'namespace outer { namespace detail { int f( int x, int y, int z = 0 ); } }\n' >"$N5/outer.h"
+printf '#include "outer.h"\nint outer::detail::f( int x, int y, int z ) { return x + y + z; }\n' >"$N5/impl.cpp"
+printf '#include "outer.h"\nint a() { return outer::detail::f( 1, 2 ); }\n' >"$N5/use.cpp"
+commit "$N5"
+ON5="$( ec "$N5" ./impl.cpp:f )"
+[ "$( attr "$( root "$ON5" )" defaults_from )" = decl ] && [ -z "$( flagged "$ON5" )" ] \
+    && ok "(L) CONTROL: outer::detail::f declared in a namespace block and defined qualified out of line still pairs" \
+    || no "(L) CONTROL: ./impl.cpp:f flags=[$( flagged "$ON5" )] defaults_from=\"$( attr "$( root "$ON5" )" defaults_from )\""
+
+echo "=== (M) S1: comments inside a parameter list do not block the pairing ==="
+C1="$TMP/cmt"; mkdir -p "$C1"
+printf 'int scale( int x, int factor = 2 );\n' >"$C1/lib.h"
+printf '#include "lib.h"\nint scale( int x, int factor /* = 2 */ ) { return x * factor; }\n' >"$C1/lib.cpp"
+printf '#include "lib.h"\nint a() { return scale( 1 ); }\n' >"$C1/use.cpp"
+commit "$C1"
+OC1="$( ec "$C1" ./lib.cpp:scale )"
+[ "$( attr "$( root "$OC1" )" defaults_from )" = decl ] && [ -z "$( flagged "$OC1" )" ] \
+    && ok "(M) a /* = 2 */ reminder on the definition: paired, nothing flagged" \
+    || no "(M) CMT: flags=[$( flagged "$OC1" )] defaults_from=\"$( attr "$( root "$OC1" )" defaults_from )\""
+C2="$TMP/cmtml"; mkdir -p "$C2"
+printf 'int scale( int x,      // the value\n           int factor = 2 // the multiplier, (a, b)\n         );\n' >"$C2/lib.h"
+printf '#include "lib.h"\nint scale( int x, int factor ) { return x * factor; }\n' >"$C2/lib.cpp"
+printf '#include "lib.h"\nint a() { return scale( 1 ); }\n' >"$C2/use.cpp"
+commit "$C2"
+OC2="$( ec "$C2" ./lib.cpp:scale )"
+[ "$( attr "$( root "$OC2" )" defaults_from )" = decl ] && [ -z "$( flagged "$OC2" )" ] \
+    && ok "(M) a multi-line declaration with trailing // comments: paired, nothing flagged" \
+    || no "(M) CMTML: flags=[$( flagged "$OC2" )] defaults_from=\"$( attr "$( root "$OC2" )" defaults_from )\""
+
+echo "=== (N) S2: a declaration the include proof cannot reach is disclosed beside the flags it might admit ==="
+T1="$TMP/trans"; mkdir -p "$T1"
+printf 'int scale( int x, int factor = 2 );\n' >"$T1/lib.h"
+printf '#include "lib.h"\n' >"$T1/mid.h"
+printf '#include "mid.h"\nint scale( int x, int factor ) { return x * factor; }\n' >"$T1/lib.cpp"
+printf '#include "lib.h"\nint a() { return scale( 1 ); }\n' >"$T1/use.cpp"
+commit "$T1"
+OT1="$( ec "$T1" ./lib.cpp:scale )"; RT1="$( root "$OT1" )"
+if [ "$( flagged "$OT1" )" = a ] && [ "$( attr "$RT1" defaults_untied )" = 1 ] && [ -z "$( attr "$RT1" defaults_from )" ]; then
+    ok "(N) TRANS: the transitive include is not proven (a stays flagged) and defaults_untied=\"1\" says a default may admit it"
+else
+    no "(N) TRANS: flags=[$( flagged "$OT1" )] defaults_untied=\"$( attr "$RT1" defaults_untied )\" defaults_from=\"$( attr "$RT1" defaults_from )\""
+fi
+case "$( legend "$OT1" )" in *'defaults_untied='*) ok "(N) the legend defines defaults_untied=" ;; *) no "(N) defaults_untied= is not defined in the legend" ;; esac
+[ -z "$( attr "$( root "$OB" )" defaults_untied )" ] && ok "(N) absent where every declaration was tied (the field corpus)" \
+                                                    || no "(N) the field corpus carries defaults_untied="
 
 echo "=== (I) an UNPROVEN declaration (no #include of it) lends no defaults ==="
 U="$TMP/unproven"; mkdir -p "$U"

@@ -660,6 +660,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "shown_unflagged", "shown_unflagged=N: unflagged callers on this page; flagged ones always print, total= counts unflagged only", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     // 2026-10-01: present-only — rides only a C/C++ definition whose declaration's defaults widened its accepted arity
     { "defaults_from", "defaults_from=decl: a C/C++ declaration of this definition (same types) has defaults; calls within them are never flagged", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
+    { "defaults_untied", "defaults_untied=N: N same-name C/C++ declarations with possible defaults could not be tied (not applied); a flag may be one", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     // exemplar: src/verbs_for.h + src/exemplar.h selectExemplar/pickWinnerOfKind
     { "candidates", "candidates=N: instances of kind= under the ccx ceiling the pick was ranked from", false, "exemplar", MapHeaderRead::No, {}, "exemplar" },
     { "low_confidence", "low_confidence=1: weak task-to-kind match, fell back to fn; pass a kind (fn|method|class...) instead", false, "exemplar", MapHeaderRead::No, {}, "exemplar" },

@@ -16,7 +16,7 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 231 | 91 | 129 | **102** |
+| 231 | 92 | 128 | **103** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
 are not counted as caps, and 231 + 7 is the 238 constants this generator parses out of `src/`.
@@ -88,7 +88,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 91 files that declare a cap — the 231 caps counted above, and no parameter.
+One table for each of the 92 files that declare a cap — the 231 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -240,7 +240,14 @@ Discloses: `unflagged_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kEditCheckSpellingsShown` | `6` | OUTPUT | — |
-| `kSigCap` | `16384` | — | — |
+
+### `src/editcheckdecl.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kEditCheckSigCap` | `16384` | — | disclosed as defaults_untied= beside a nonzero incompatible= |
 
 ### `src/editpreview.h`
 
