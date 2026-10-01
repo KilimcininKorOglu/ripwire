@@ -22,6 +22,7 @@ section, and it is not an afterthought.
 | **Ensemble calibration harness** | `bench/ensemblecal/` | Whether `--ensemble`'s four evidence families are actually orthogonal, how often each fires, how stable each is across commits — and the preset ladder derived from that (§9). |
 | **Differential argv harness** | `test/argvdiffcheck.sh` | That a refactor changed *nothing observable*: two binaries, every argv vector, stdout + stderr + exit code byte-identical. |
 | **The gate suite** | `test/regression.sh`, `test/pargates.py` | 658 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
+
 | **`--quality-delta`** | `src/quality.h` | Ten measured code-quality failure modes, reported only where a change made them worse. |
 
 ### The labeling protocol (why the held-out eval is allowed to disagree with the ranker)
@@ -5868,6 +5869,7 @@ tags, wrap, stable-order defaults), seven individually invoked standalone gates 
 `taskroutecheck`), and a single loop
 naming **658 gate scripts**, all of which exist on disk. <!-- gatecount -->
 
+
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same scripts in parallel so a full
 verification fits in one sitting. It does not modify `regression.sh`.
 
@@ -6970,6 +6972,7 @@ Listed because the reason is more useful than the silence.
   the ablations in §4.
 - **A single round gate-count.** Two in-tree numbers disagree (`test/pargates.py`'s docstring says
   ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 658. The <!-- gatecount -->
+
   loop is the authority; the stale docstrings are a known drift. Since 2026-09-10 the number is not
   written by hand anywhere: `docs/gatecount_build.py` derives it from the loop and rewrites every
   published site, `test/gatecountcheck.sh` fails if any of them drifts, and `test/manifestcheck.sh`
