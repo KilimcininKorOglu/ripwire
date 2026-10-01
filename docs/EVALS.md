@@ -14464,6 +14464,6 @@ BASE is `a5229aca`, the lane's branch point (DEV-1); Gate D's walk ends on `has_
 attribute, having no disclosure root (DEV-3, DEV-4); the JSON map has no legend, so the definition rides the full and compact
 legends and `--help=all` (DEV-5); this registration's text above names no file outside the repository (DEV-6); `--max-tokens=1500`,
 `--tree` = code file first, MCP via `--mcp --top-k=K` (DEV-7); Gate S's argv list gained a `RIPWIRE_DEV=1` `--anchor` row before
-any A binary ran, because `--anchor` refuses without it; Gate S masks the MCP `_index` stamp (it folds file mtimes, so BASE differs
+any A binary ran, because `--anchor` refuses without it (DEV-12); Gate S masks the MCP `_index` stamp (it folds file mtimes, so BASE differs
 from itself there) and the initialize reply's `dictv=` (DEV-9); I2 is read at the emitted 4-dp precision (DEV-10); B does not
 re-pick `--tree`, whose own offset paging a window swap would break (DEV-11).

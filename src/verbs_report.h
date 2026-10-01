@@ -1065,6 +1065,31 @@ inline bool anyMinedRootShallow( const std::string& root, bool multiRoot, const 
     return false;
 }
 
+// The failure paths' twin of anyMinedRootShallow: the shallow-history cause of the first mined root that has one, or ""
+// when none does. Mining reads every workspace root, so a full primary next to a shallow secondary that mined nothing
+// must name the shallow root, not "git unavailable" (the probe read the primary alone). On a multi-root run the cause
+// is prefixed with the root it was found on.
+inline std::string minedRootShallowCause( const std::string& root, bool multiRoot, const std::vector<rw::WorkspaceRoot>& ws,
+                                          std::uint32_t onlyRoot = UINT32_MAX )
+{
+    if( !multiRoot )
+    {
+        return rw::gitstamp::shallowHistoryCause( root );
+    }
+    for( std::uint32_t r = 0; r < ws.size(); ++r )
+    {
+        if( onlyRoot != UINT32_MAX && onlyRoot != r )
+        {
+            continue;
+        }
+        if( std::string why = rw::gitstamp::shallowHistoryCause( ws[r].arg ); !why.empty() )
+        {
+            return "workspace root " + ws[r].arg + ": " + why;
+        }
+    }
+    return {};
+}
+
 // §CLIO — one repo-wide co-change pair, and the document that renders them. `PR` used to be a struct local
 // to the --cochange branch; it moved out with the loop for the same reason the legends and the group form did.
 struct CoPairRow { std::uint32_t a, b, n; double deg, confAb, confBa; std::uint32_t recur; bool surprising; bool depCapable; };
@@ -1256,7 +1281,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                              windowLabel.c_str(), ing.files.size(), ing.files.size(), gitstamp::atAttr( root ).c_str() );
                 return 0;
             }
-            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            if( const std::string shallowWhy = minedRootShallowCause( root, multiRoot, ws ); !shallowWhy.empty() )   // 0.6.6: shallow says so, on any mined root
             {
                 rw::emitTo( stderr, "ripwire --hotspots: {}\n", shallowWhy );
             }
@@ -1554,7 +1579,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                 rw::emitTo( stdout, "<cochange pairs=\"0\" commits=\"0\" window=\"{}\" sub_windows=\"0\" shown=\"0\" capped=\"0\"{}></cochange>", coWindowLabel.c_str(), gitstamp::atAttr( root ).c_str() );
                 return 0;
             }
-            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            if( const std::string shallowWhy = minedRootShallowCause( root, multiRoot, ws ); !shallowWhy.empty() )   // 0.6.6: shallow says so, on any mined root
             {
                 rw::emitTo( stderr, "ripwire --cochange: {}\n", shallowWhy );
             }
@@ -1726,7 +1751,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
         }
         if( ownerships.empty() )
         {
-            if( const std::string shallowWhy = gitstamp::shallowHistoryCause( root ); !shallowWhy.empty() )   // 0.6.6: shallow says so
+            if( const std::string shallowWhy = minedRootShallowCause( root, multiRoot, ws, ( multiRoot && onlyFileId != UINT32_MAX ) ? ing.fileRoot[ onlyFileId ] : UINT32_MAX ); !shallowWhy.empty() )   // 0.6.6: on any mined root
             {
                 rw::emitTo( stderr, "ripwire --owners: {}\n", shallowWhy );
             }

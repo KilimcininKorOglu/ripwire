@@ -2404,7 +2404,7 @@ std::optional<int> runImpact( const MainDispatch& d )
         const auto [ rank, prIters, prConverged ] = rankGraph( g );
         const rw::RankDisclosure         prD{ prIters, prConverged, true };   // W2-F: the listing is PageRank-ordered within a depth
         std::vector<NodeId>              show  = reach;
-        rw::orderByDepthThenRank( show, imDepth, rank );   // ranked BEFORE the page window below cuts: the deepest rows go first
+        rw::orderByDepthThenRank( show, imDepth, rank );   // ranked BEFORE the page window below cuts: the nearest rows (fewest hops) go first
         const std::vector<std::uint32_t> imByDepth = rw::depthCounts( reach, imDepth );
 
         // A6 (survey card A6, agent-lsp): tested/untested partition of the blast radius, over the FULL

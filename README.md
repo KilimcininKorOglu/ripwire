@@ -12,7 +12,7 @@
 **The ripgrep of AI context. A map before your agent reads the repo — and a check on what it writes.**
 
 Ranked, deterministic call graph: what to touch, what it breaks, which tests to run. On the edit: blast
-radius, tests that reach it, ten quality kinds reporting only what got worse, forgotten co-changes, fields
+radius, tests that reach it, eleven quality kinds reporting only what got worse, forgotten co-changes, fields
 read and written, names that resolve more than one way.
 
 **Just want to use it?** Install it with the one line below, then start each coding session by telling your agent to
