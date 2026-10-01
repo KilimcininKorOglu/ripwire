@@ -539,7 +539,8 @@ struct NetFlowScan
     NetFlow              flow;
     bool                 expectCommand = true, segNet = false, segDest = false, segSensitive = false, stdinSensitive = false;
     bool                 redirectIn = false, redirectOut = false, segNetcat = false, segCurlWget = false, segReader = false;
-    bool                 prevBareWord = false, skipValue = false;
+    bool                 prevBareWord = false, skipValue = false, cmdReader = false, inBacktick = false;
+    std::vector<char>    outerReader;   // cmdReader of each open `(` / `<(` / `$(` / backtick context, restored when it closes
     const CommandPrefix* activePrefix = nullptr;
     std::string_view     prevToken;
 
@@ -555,7 +556,26 @@ struct NetFlowScan
         segNet = segDest = segSensitive = redirectIn = redirectOut = segNetcat = segCurlWget = segReader = prevBareWord = skipValue = false;
         activePrefix  = nullptr;
         expectCommand = true;
+        cmdReader     = false;
         prevToken     = {};
+    }
+
+    // A nested command context opens (`<(`, `$(`, `(`, an opening backtick) or closes (`)`, the closing backtick). The
+    // current command's reader state belongs to its own context: `cat <(sh -c '…')` must not read sh's quoted script as
+    // cat's file, and `cat <(…) "/etc/passwd"` must read it again once the context closes.
+    void nest( bool open ) noexcept
+    {
+        if( open )
+        {
+            outerReader.push_back( cmdReader ? 1 : 0 );
+            cmdReader = false;
+            return;
+        }
+        if( !outerReader.empty() )
+        {
+            cmdReader = outerReader.back() != 0;
+            outerReader.pop_back();
+        }
     }
 
     // Bytes of punctuation consumed at line[i], or 0 when a shell word starts there.
@@ -576,6 +596,7 @@ struct NetFlowScan
         }
         if( ( c == '<' || c == '>' ) && next == '(' )
         {   // `<( … )` / `>( … )` process substitution: a NESTED command, not a redirect — open a command context
+            nest( true );
             expectCommand = true;
             activePrefix  = nullptr;
             skipValue     = false;
@@ -590,7 +611,13 @@ struct NetFlowScan
         // EXCEPT in a reader's segment, where it quotes the file the reader reads: re-arming there read
         // `cat "/etc/passwd" | curl … @-` as a command named /etc/passwd, so the read was never noted and R2 stayed silent,
         // and `head -c "4096" /etc/passwd` made the count a prefix and the file the command.
-        const bool runsQuote = ( c == '"' || c == '\'' ) && ( i == 0 || line[ i - 1 ] == ' ' || line[ i - 1 ] == '\t' ) && !segReader;
+        if( c == '(' || c == ')' || c == '`' )
+        {
+            const bool open = c == '(' || ( c == '`' && !inBacktick );
+            inBacktick      = c == '`' ? !inBacktick : inBacktick;
+            nest( open );
+        }
+        const bool runsQuote = ( c == '"' || c == '\'' ) && ( i == 0 || line[ i - 1 ] == ' ' || line[ i - 1 ] == '\t' ) && !cmdReader;
         const bool rearm = c == '(' || c == '`' || runsQuote;
         if( rearm && !expectCommand )   // a new command may start inside `$(`, a backtick or an opening quote
         {
@@ -645,7 +672,8 @@ struct NetFlowScan
         segNet      = segNet || isNetcat || in( kNetVerbs );
         segNetcat   = segNetcat || isNetcat;
         segCurlWget = segCurlWget || verb == "curl" || verb == "wget";
-        segReader   = segReader || in( kReaders );
+        cmdReader   = in( kReaders );
+        segReader   = segReader || cmdReader;
     }
 
     // A read operand: note whether it is sensitive, and whether it is named like a credential.
@@ -704,14 +732,14 @@ inline WordStart wordStartOf( const NetFlowScan& scan ) noexcept
 // word() still classified every piece, so this only adds: a read operand, and in command position the command it
 // names (`\cat` is cat; `\sudo curl` leaves curl the command). Called once per word, so a word of k pieces costs
 // its length, never k times it.
-inline void wholeWord( NetFlowScan& scan, std::string_view whole, const WordStart& at ) noexcept
+inline void wholeWord( NetFlowScan& scan, std::string_view whole, std::string_view raw, const WordStart& at ) noexcept
 {
     if( at.commandPosition )
     {   // re-judge the whole word from the state its first piece met: a value stays a value, a flag stays a flag
         scan.expectCommand = true;
         scan.skipValue     = at.skipValue;
         scan.activePrefix  = at.activePrefix;
-        if( scan.prefixWord( whole, whole ) )
+        if( scan.prefixWord( raw, whole ) )
         {
             scan.expectCommand = true;
         }
@@ -738,12 +766,24 @@ inline void wholeWord( NetFlowScan& scan, std::string_view whole, const WordStar
 struct ShellWordJoin
 {
     std::string whole;
+    std::string raw[2];          // the word as written (case kept, quotes and escapes dropped); two buffers, so the
+    int         cur   = 0;       // finished word stays the scan's prevToken while the next word is assembled
     bool        split = false;   // more than one piece, or an escape: the whole word differs from its pieces
 
-    void add( std::string_view piece )
+    void add( std::string_view piece, std::string_view rawPiece )
     {
+        const auto unescaped = []( char ch ) noexcept { return ch != '\\'; };
         split = split || !whole.empty() || piece.find( '\\' ) != std::string_view::npos;
-        std::copy_if( piece.begin(), piece.end(), std::back_inserter( whole ), []( char ch ) noexcept { return ch != '\\'; } );
+        std::copy_if( piece.begin(), piece.end(), std::back_inserter( whole ), unescaped );
+        std::copy_if( rawPiece.begin(), rawPiece.end(), std::back_inserter( raw[cur] ), unescaped );
+    }
+    // The word is done: the next one is assembled in the other buffer, so this one's spelling stays readable.
+    void finish()
+    {
+        cur ^= 1;
+        raw[cur].clear();
+        whole.clear();
+        split = false;
     }
     // Does the word go on past `end`: one or more quotes, then a byte that starts another piece?
     static bool continuesAt( std::string_view line, std::size_t end, std::string_view separators ) noexcept
@@ -771,16 +811,16 @@ inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexce
         {
             at = wordStartOf( scan );
         }
-        join.add( lowered.substr( i, end - i ) );
+        join.add( lowered.substr( i, end - i ), line.substr( i, end - i ) );
         scan.word( line.substr( i, end - i ), lowered.substr( i, end - i ) );
         if( !ShellWordJoin::continuesAt( line, end, kFlowSeparators ) )
         {
             if( join.split )
             {
-                wholeWord( scan, join.whole, at );
+                wholeWord( scan, join.whole, join.raw[join.cur], at );
+                scan.prevToken = join.raw[join.cur];   // `--upload-""file FILE`: the option as written precedes FILE
             }
-            join.whole.clear();
-            join.split = false;
+            join.finish();
         }
         i = end;
     }
