@@ -274,7 +274,9 @@ const char* grepTierLegend( const rw::GrepTierReport& tier )
     }
     return "SPAN TIERS: each hit is classified by the tree-sitter span it sits in (code/comment/string) and this answer serves "
            "the CODE tier, or — when no hit is code — comment and string TOGETHER; tier= names what was served when it is not "
-           "code, so a pattern living only in prose is answered, never emptied. "
+           "code, so a pattern living only in prose is answered, never emptied. When every code hit is a USE of the literal (a "
+           "test/doc file, or a shell, YAML, TOML or JSON file) and a source file holds it as a string, the string tier is "
+           "served WITH code, labelled code+string; comments stay held back. "
            // M17 (capture-audit 2026-09-04, lens1 F4): the label is a CLAIM, and this sentence is the
            // difference between a proven one and an unproven one. Deliberately no attribute=value literal
            // (this verb's own rule — gates parse the header counters by grep).

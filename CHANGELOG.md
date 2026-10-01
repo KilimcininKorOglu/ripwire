@@ -15,6 +15,17 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `--grep` serves a source file's string literal when every code hit is only a use of it
+
+A literal question ("which code reads the option `escape-time`", "who reads `TEXTUAL_DRIVER`") is answered by a
+string literal in source: `"escape-time"` in an options table, `get_environ("TEXTUAL_DRIVER")`. The span tiers served
+the code tier whenever it held anything, so a test script's `set -g escape-time 0` or a changelog line outranked the
+answer, which rode only as `suppressed_string=N`. When no code hit sits in source code (every one is in a test, bench
+or doc file, or in a shell, YAML, TOML or JSON file, where a bare word parses as code) and a source file holds the
+literal as a string, the default answer now serves the string tier beside the code tier, labelled
+`tier="code+string"`; comments stay held back and counted. A code hit in source code keeps today's answer. The MCP
+`grep` tool makes the same choice. Gate: `test/greptiercheck.sh` arm (12).
+
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
