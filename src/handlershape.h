@@ -468,29 +468,34 @@ inline std::pair<std::string_view, std::string_view> edgeWordsOf( std::string_vi
 }
 
 // `logging.getLogger(__name__)` -> `logging.getLogger`: trailing balanced call argument lists come off BEFORE the last
-// `.` segment is taken, since an argument may hold dots of its own (`getLogger('a.b')`). Unbalanced: left as it is.
+// `.` segment is taken, since an argument may hold dots of its own (`getLogger('a.b')`). One forward pass; a paren inside
+// a quoted argument (`getLogger("svc.worker)")`, `getStore("logger(")`) is text, not a delimiter, and an escape inside a
+// string skips the next byte. Unbalanced or an unterminated string: left as it is.
 inline std::string_view withoutTrailingCalls( std::string_view recv ) noexcept
 {
-    while( recv.ends_with( ')' ) )
+    int         depth    = 0;
+    char        quote    = 0;
+    std::size_t openAt   = 0;
+    std::size_t runStart = std::string_view::npos;   // where the run of call groups that ends recv starts
+    for( std::size_t i = 0; i < recv.size(); ++i )
     {
-        int         depth = 0;
-        std::size_t i     = recv.size();
-        while( i > 0 )
+        const char c = recv[i];
+        if( quote != 0 )
         {
-            --i;
-            depth += recv[i] == ')' ? 1 : ( recv[i] == '(' ? -1 : 0 );
-            if( depth == 0 )
-            {
-                break;
-            }
+            i += c == '\\' ? 1 : 0;
+            quote = c == quote ? 0 : quote;
+            continue;
         }
-        if( depth != 0 )
+        if( c == ')' && depth == 0 )
         {
             return recv;
         }
-        recv = recv.substr( 0, i );
+        quote    = ( c == '"' || c == '\'' || c == '`' ) ? c : 0;
+        openAt   = ( c == '(' && depth == 0 ) ? i : openAt;
+        depth   += c == '(' ? 1 : ( c == ')' ? -1 : 0 );
+        runStart = ( c == ')' && depth == 0 ) ? std::min( runStart, openAt ) : ( depth == 0 && c != ')' ? std::string_view::npos : runStart );
     }
-    return recv;
+    return ( quote != 0 || depth != 0 || runStart == std::string_view::npos ) ? recv : recv.substr( 0, runStart );
 }
 
 // One WORD that says log: log / logger / logging; a logger package spelled as one word (structlog, logfire, logbook,

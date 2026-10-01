@@ -885,8 +885,8 @@ qd_has  "5l python" error-masking save_app_log gating
 # and Python's gating rows with them: a call before the last dot (logging.getLogger(__name__)), a sigil (@logger,
 # this.#logger, $logger), an acronym run (HTTPLogger), a digit (logger2), a one-word name (mylog, vlog, structlog).
 # Every listed spelling is a row again; the English words that end in "log" stay out.
-lr_py_pos='logging.getLogger(__name__) logging.getLogger() get_logger() structlog.get_logger() self.get_logger() mylog logfire logbook logger2 vlog structlog'
-lr_py_neg='catalog dialog backlog changelog analog technology blog'
+lr_py_pos='logging.getLogger(__name__) logging.getLogger() get_logger() structlog.get_logger() self.get_logger() mylog logfire logbook logger2 vlog structlog logging.getLogger("service.worker)")'
+lr_py_neg='catalog dialog backlog changelog analog technology blog getStore("logger(")'
 LPB=''; LPE=''; n=0
 for r in $lr_py_pos $lr_py_neg; do n=$(( n + 1 ))
     LPB="$LPB
