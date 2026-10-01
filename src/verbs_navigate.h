@@ -2248,7 +2248,7 @@ struct ImpactView
     std::size_t                    radiusTested;    // A6: |reach ∩ tested|, over the FULL (un-windowed) reach set
     std::size_t                    radiusUntested;  // A6: reaches - radiusTested
     std::size_t                    declinedCalls;   // tier-3 declines naming SYM or a radius symbol (graph.h declinedCallsNaming)
-    std::size_t                    declinedIface;   // those an interface-typed TS receiver explains (callhierarchy.h declinedIfaceCallsNaming)
+    std::size_t                    declinedIface;   // declines sharing a name with a TS interface signature, by name only, not a subset (callhierarchy.h)
     const rw::Graph&               g;               // M15: the gauge pair (graphCountFloorAttrXml) reads ambOut/unresolvedOut
     const std::vector<std::uint32_t>& depth;        // 0.6.5: transitiveCallersDepth's hop per node — the row's d=
     std::span<const std::uint32_t> byDepth;         // 0.6.5: graph.h depthCounts over the FULL reach set — the root's by_depth=
@@ -2421,7 +2421,7 @@ std::optional<int> runImpact( const MainDispatch& d )
         std::vector<NodeId>     imDeclineTargets( reach );
         imDeclineTargets.insert( imDeclineTargets.end(), seeds.begin(), seeds.end() );
         const std::size_t       imDeclinedCalls  = rw::declinedCallsNaming( g, imDeclineTargets );
-        const std::size_t       imDeclinedIface  = rw::declinedIfaceCallsNaming( ing, g, imDeclineTargets );   // the share an interface-typed TS receiver explains
+        const std::size_t       imDeclinedIface  = rw::declinedIfaceCallsNaming( ing, g, imDeclineTargets );   // declines sharing a name with a TS interface signature (by name; not a subset)
         // ── LB-H (r10 §5): the IMPORT tier — every file that directly imports a file defining SYM. ONE
         // measurement (graph.h::impactImportTier) feeds all three dialects AND the MCP twin, so the two
         // surfaces cannot drift. The two reaches stay separate all the way to the bytes: a separate count

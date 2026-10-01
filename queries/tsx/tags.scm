@@ -152,6 +152,23 @@
     (member_expression
       property: (private_property_identifier) @name))) @reference.call
 
+; The same precedence quirk for the unary operators: `!f<T>(x)`, `typeof f<T>(x)`, `void f<T>(x)` and `-f<T>(x)`
+; parse as `(!f)<T>(x)`, a call whose function: is the unary_expression. Same three forms, same receiver
+; reading (the bare form's @name parent is the unary_expression, which receiverOf reads as a bare call).
+(call_expression
+  function: (unary_expression
+    argument: (identifier) @name)) @reference.call
+
+(call_expression
+  function: (unary_expression
+    argument: (member_expression
+      property: (property_identifier) @name))) @reference.call
+
+(call_expression
+  function: (unary_expression
+    argument: (member_expression
+      property: (private_property_identifier) @name))) @reference.call
+
 (new_expression
   constructor: (identifier) @name) @reference.call
 

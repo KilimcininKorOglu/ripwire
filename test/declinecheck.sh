@@ -536,6 +536,21 @@ for c in check parse; do
     ifr --callers=$c >"$TMP/if.xml"; R="$( root_tag "$TMP/if.xml" callers )"
     if [ "$( attr "$R" declined_calls )" = 1 ]; then ok "(I) control premise: --callers=$c is declined_calls=\"1\""; else no "(I) control premise ($c): ${R:-none}"; fi
 done
+# The wording is pinned, both forms: the count matches by NAME (no receiver type is read), a counted call MAY go through
+# the interface, and it is not a subset of declined_calls= (the shared-name arm can exceed it).
+ifr --callers=src/router.ts:match >"$TMP/if.xml"
+if legend_of "$TMP/if.xml" | grep -q 'by name only (MAY go through it); not a subset of declined_calls='; then
+    ok "(I) the compact declined_iface= reading says by name only, MAY, and not a subset"
+else
+    no "(I) the compact declined_iface= reading lost its by-name / MAY / not-a-subset wording"
+fi
+ifr --callers=src/router.ts:match --legend=full >"$TMP/if.xml"
+if legend_of "$TMP/if.xml" | grep -q "It matches by NAME only: the receiver's type is not read, so a counted call MAY go through that interface" \
+   && legend_of "$TMP/if.xml" | grep -q 'it is NOT a subset of declined_calls= and can exceed it'; then
+    ok "(I) the full declined_iface= clause says by name only, MAY, and not a subset"
+else
+    no "(I) the full declined_iface= clause lost its by-name / MAY / not-a-subset wording"
+fi
 for v in callers impact; do
     ifr --$v=src/router.ts:match --legend=full >"$TMP/if.xml"
     legend_of "$TMP/if.xml" | grep -q 'declined_iface=K (absent when 0) counts declined TypeScript call SITES' \

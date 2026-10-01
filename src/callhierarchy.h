@@ -147,8 +147,10 @@ inline bool declinedListIsIfaceNaming( const IngestResult& ing, std::span<const 
 // decl/def collapse can keep the bodyless signature out of the candidate list, so declined_calls= on
 // `--callers=router.ts:match` was absent. This counts, once per CALL, the TS declines whose called name is also the name
 // of a TS contract signature in the tree (tsContractSignatures), and that either named one of `targets` among their
-// candidates (the subset of declined_calls= the gap explains) or share the name of a signature in `targets` (the
-// interface's own selector). A disclosure, never a bind: the real fix narrows on annotations and is out of this count's scope.
+// candidates or share the name of a signature in `targets` (the interface's own selector). The second arm is why it is
+// NOT a subset of declined_calls= and can exceed it. The match is by NAME: no receiver type is read, so a counted call
+// MAY go through the interface or may be another same-named method (String.prototype.match). A disclosure, never a
+// bind: the real fix narrows on annotations and is out of this count's scope.
 // Zero, at no cost past one scan of `targets`, when no target is TypeScript, so every other language keeps its bytes.
 inline std::size_t declinedIfaceCallsNaming( const IngestResult& ing, const Graph& g, std::span<const NodeId> targets )
 {

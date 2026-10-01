@@ -636,12 +636,13 @@ inline std::string declinedCallsKeyJson( std::size_t declinedCalls )
 }
 
 // ── declined_iface= on the callers and impact answers and their MCP twins (callhierarchy.h declinedIfaceCallsNaming) ──
-// The declines a TypeScript interface-typed receiver explains: the resolver does not narrow on a type annotation, so
-// `r.match()` with `r: Router` is declined once `match` has several definitions, and the interface's own answer had no
-// count for it at all. Absent at zero, like declined_calls=; its clause rides exactly when the attribute does. No double
-// hyphen anywhere, because it lands inside an XML comment.
+// Declined TypeScript calls that share their name with an interface or abstract signature. The resolver does not narrow
+// on a type annotation, so `r.match()` with `r: Router` is declined once `match` has several definitions, and the
+// interface's own answer could have no count for it. The match is by NAME (the receiver's type is not read), so a
+// counted call MAY go through the interface; the count is not a subset of declined_calls=. Absent at zero; its clause
+// rides exactly when the attribute does. No double hyphen anywhere, because it lands inside an XML comment.
 inline constexpr const char* kDeclinedIfaceLegend =
-    "declined_iface=K (absent when 0) counts declined TypeScript call SITES whose called name is also a method signature with no body in this tree (an interface or abstract member; an overload signature beside its implementation is not one): the resolver does not narrow a call on a TypeScript type annotation, so a call through an interface-typed receiver is declined when the name has two or more definitions, and it is in no count or row here. It counts the declined calls that could have meant these definitions (or, for impact, a symbol in the radius) and those sharing the name of a signature among them, each once; the uses verb on the called name lists the sites. ";
+    "declined_iface=K (absent when 0) counts declined TypeScript call SITES that share their called name with a method signature with no body in this tree (an interface or abstract member; an overload signature beside its implementation is not one). It matches by NAME only: the receiver's type is not read, so a counted call MAY go through that interface or may be another same-named method (a string's match, say). The resolver does not narrow a call on a TypeScript type annotation, so a call through an interface-typed receiver is declined once the name has two or more definitions, and it is in no count or row here. It counts the declined calls that could have meant these definitions (or, for impact, a symbol in the radius) and those sharing the name of a signature among them, each once, so it is NOT a subset of declined_calls= and can exceed it; the uses verb on the called name lists the sites. ";
 inline const char* declinedIfaceLegend( bool on ) noexcept { return on ? kDeclinedIfaceLegend : ""; }
 inline std::string declinedIfaceAttrXml( std::size_t declinedIface )
 {

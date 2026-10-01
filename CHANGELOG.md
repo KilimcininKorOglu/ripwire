@@ -257,12 +257,12 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 124 → 131 (the function-literal fix takes 128; #338 and #325 take one more; `await f<T>(x)` calls take 131), `kCacheVersion` 25 → 27
+`kParserVer` 124 → 131 (the function-literal fix takes 128; #338 and #325 take one more; `await f<T>(x)` and `!f<T>(x)` calls take 131), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=4f61f75d28af9f3a entries=751`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=729b8a15ff59ab03 entries=751`.
 
-### Fixed — TypeScript: `await f<T>(x)` is a call
+### Fixed — TypeScript: `await f<T>(x)` and `!f<T>(x)` are calls
 
 tree-sitter-typescript parses an `await` in front of a call with explicit type arguments as `(await f)<T>(x)`: the
 call's function is the await expression. The TypeScript and TSX queries looked only for a name or a member access
@@ -271,10 +271,13 @@ there, so the site was not a reference at all. It drew no edge and was counted i
 (`await o.svc.f<T>(x)`) and `#private` (`await this.#p<T>(x)`) forms are now call references in `.ts`, `.mts`,
 `.cts`, `.tsx` and Astro frontmatter. `await f(x)` without type arguments was already found. On hono, the
 method-override middleware is now a caller of `parseBody`
-(`await parseBody<Record<string, string>>(c.req)`). `kParserVer` moves, so a TypeScript cache is re-indexed once.
+(`await parseBody<Record<string, string>>(c.req)`). The unary operators bind the same way: `!f<T>(x)`, `typeof f<T>(x)`,
+`void f<T>(x)` and `-f<T>(x)` parse as `(!f)<T>(x)` and are now call references in the same three forms. A comparison
+chain (`await (a < b) > (c)`), an instantiation expression without a call (`await f<T>`) and a type argument
+(`f<typeof g>(1)`) still mint no call. `kParserVer` moves, so a TypeScript cache is re-indexed once.
 Gate: `tsshapecheck` §7, in `.ts` and `.tsx`.
 
-### Fixed — `--callers` / `--impact` count calls through a TypeScript interface that the resolver declined (`declined_iface=`)
+### Fixed — `--callers` / `--impact` disclose declined TypeScript calls that share a name with an interface or abstract signature (`declined_iface=`)
 
 The resolver does not narrow a TypeScript call by a type annotation. A call such as `r.match()` with `r: Router`, or
 `app.router.match()` through a field typed by the `Router` interface, is therefore declined once `match` has two or
@@ -283,8 +286,10 @@ more definitions. On a small tree the interface's own answer did not count it: `
 in the MCP `find_referencing_symbols` and `impact` twins. It is absent at 0, and its
 legend clause is printed only when the attribute is. It counts declined TypeScript calls whose called name is also an
 interface or abstract method signature (not an overload signature beside its implementation) and that could have
-meant the selector's definitions, or a symbol in the impact radius, or that share a signature's name with them. This
-is a disclosure. These calls still get no edge. On hono, `--callers=src/router.ts:match` now reads `count="6"`
+meant the selector's definitions, or a symbol in the impact radius, or that share a signature's name with them. The
+match is by name only: the receiver's type is not read, so a counted call may go through the interface, or may be
+another same-named method such as a string's `match`. Because of the shared-name arm it is not a subset of
+`declined_calls=` and can exceed it. This is a disclosure. These calls still get no edge. On hono, `--callers=src/router.ts:match` now reads `count="6"`
 `declined_calls="170" declined_iface="172"`. Gate: `declinecheck` arm (I).
 
 ### Fixed — `--scan-skill(s)`: quoting a sensitive path no longer hides its upload (sensitive-read-upload)
