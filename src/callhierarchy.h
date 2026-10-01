@@ -23,6 +23,7 @@
 #include "filter.h"    // pathTierIndexOver / compareTierThenPath — the tier-then-path row order both surfaces serve
 #include "graph.h"     // resolveAllByNameQualified, the CSR, testSymbolForwardReach / countTestedIn / isTestedByReach
 #include "model.h"
+#include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 
 #include <algorithm>
 #include <span>
@@ -107,11 +108,16 @@ inline std::vector<NodeId> tsContractSignatures( const IngestResult& ing )
             bodied.emplace_back( s.fileId, s.name );
         }
     }
-    std::sort( bodied.begin(), bodied.end() );
+    using FileName           = std::pair<std::uint32_t, std::string_view>;
+    const auto byFileThenName = []( const FileName& a, const FileName& b ) noexcept
+    {
+        return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second );
+    };
+    std::sort( bodied.begin(), bodied.end(), byFileThenName );
     std::erase_if( bodyless, [ & ]( NodeId id )
     {
         const Symbol& s = ing.symbols[id];
-        return std::binary_search( bodied.begin(), bodied.end(), std::pair<std::uint32_t, std::string_view>( s.fileId, s.name ) );
+        return std::binary_search( bodied.begin(), bodied.end(), FileName( s.fileId, s.name ), byFileThenName );
     } );
     return bodyless;
 }
@@ -127,11 +133,11 @@ inline bool declinedListIsIfaceNaming( const IngestResult& ing, std::span<const 
         return false;
     }
     const Symbol& head = ing.symbols[ cand.front() ];
-    if( head.lang != Lang::TypeScript || !std::binary_search( sigNames.begin(), sigNames.end(), head.name ) )
+    if( head.lang != Lang::TypeScript || !std::binary_search( sigNames.begin(), sigNames.end(), head.name, sortutil::svLess ) )
     {
         return false;
     }
-    return std::binary_search( targetSigNames.begin(), targetSigNames.end(), head.name )
+    return std::binary_search( targetSigNames.begin(), targetSigNames.end(), head.name, sortutil::svLess )
         || std::any_of( cand.begin(), cand.end(), [ & ]( NodeId c ) { return c < isTarget.size() && isTarget[c]; } );
 }
 
@@ -170,9 +176,9 @@ inline std::size_t declinedIfaceCallsNaming( const IngestResult& ing, const Grap
             targetSigNames.push_back( ing.symbols[id].name );
         }
     }
-    std::sort( sigNames.begin(), sigNames.end() );
+    std::sort( sigNames.begin(), sigNames.end(), sortutil::svLess );
     sigNames.erase( std::unique( sigNames.begin(), sigNames.end() ), sigNames.end() );
-    std::sort( targetSigNames.begin(), targetSigNames.end() );
+    std::sort( targetSigNames.begin(), targetSigNames.end(), sortutil::svLess );
     std::size_t callCount = 0;
     for( std::size_t listIndex = 0; listIndex < g.declinedListCallCount.size(); ++listIndex )
     {

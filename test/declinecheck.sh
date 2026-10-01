@@ -534,7 +534,7 @@ R="$( root_tag "$TMP/if.xml" callees )"; [ "$( attr "$R" declined_calls )" = 1 ]
     || no "(I) --callees=getRouterName premise: declined_calls missing: ${R:-none}"
 for c in check parse; do
     ifr --callers=$c >"$TMP/if.xml"; R="$( root_tag "$TMP/if.xml" callers )"
-    [ "$( attr "$R" declined_calls )" = 1 ] && ok "(I) control premise: --callers=$c is declined_calls=\"1\"" || no "(I) control premise ($c): ${R:-none}"
+    if [ "$( attr "$R" declined_calls )" = 1 ]; then ok "(I) control premise: --callers=$c is declined_calls=\"1\""; else no "(I) control premise ($c): ${R:-none}"; fi
 done
 for v in callers impact; do
     ifr --$v=src/router.ts:match --legend=full >"$TMP/if.xml"
@@ -542,7 +542,7 @@ for v in callers impact; do
         && ok "(I) --$v --legend=full carries the full declined_iface= clause" || no "(I) --$v --legend=full lacks the full declined_iface= clause"
 done
 for j in "--callers=src/router.ts:match" "--impact=src/router.ts:match"; do
-    ifr $j --json | grep -q '"declined_iface":1[,}]' && ok "(I) $j --json carries \"declined_iface\":1" || no "(I) $j --json lacks \"declined_iface\":1"
+    if ifr $j --json | grep -q '"declined_iface":1[,}]'; then ok "(I) $j --json carries \"declined_iface\":1"; else no "(I) $j --json lacks \"declined_iface\":1"; fi
 done
 ifr --callers=check --json | grep -q '"declined_iface"' && no "(I) --callers=check --json carries declined_iface" || ok "(I) --callers=check --json: no declined_iface key"
 M="$( mcp_text "$( call find_referencing_symbols '{"path":"'"$IF"'","symbol":"src/router.ts:match"}' )" )"
