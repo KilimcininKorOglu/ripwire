@@ -54,24 +54,42 @@ namespace rw
 namespace
 {
 
-// The import-container DEPTH a captured directive sits at, counted as the number of ALLOWLISTED
-// containers on the path from the file root down to it — the same quantity captureIncludes' walk carried
-// in its frame, recovered here from the captured node's ancestry because the walk no longer runs for this
-// language. Counting the same predicate the walk's entry test used (isImportContainer) is what makes the
-// two agree: an include under one `#if` measures 1, and under 600 measures 600.
+// The import-container REACH of a captured directive, and its DEPTH — the walk's own two rules,
+// re-derived from the captured node because the walk no longer runs for this language.
 //
-// STOPS AT THE BOUND rather than climbing to the root: past kMaxImportContainerDepth the answer cannot
-// change, and a hostile generated file must not be able to turn per-import capture into an unbounded
-// parent walk. An include at file scope costs one parent hop, which is the overwhelmingly common case.
-std::uint16_t importContainerDepth( TSNode directive, Lang lang ) noexcept
+// REACH. captureIncludes seeded the frame stack with root's DIRECT children and then entered only
+// `isImportContainer` nodes, so a directive was reachable exactly when every node between the file root
+// and it was an import container. A flat tags query has no such notion: `(preproc_include path: (_)
+// @import.path)` is unanchored and matches at any depth. Without this test the round would WIDEN the
+// C-family graph by 10 edges on the maintainer's probe tree — `extern "C" { #include "n.h" }` (the
+// standard C-header idiom), `namespace ns { #include "d.inc" }`, an `#include` inside a function body
+// (the X-macro `.def` pattern), and an include under an ERROR node in a header whose guard arm failed
+// to parse: main 17, this 27. All four are real dependencies and capturing them is arguably a FIX, which
+// is exactly why it cannot ride along in this PR — #358's rule is that each slice is byte-identical.
+// So reach is restored here and the widening is left as its own follow-up.
+//
+// The file root is deliberately NOT tested: its children are what the walk always started from, so
+// `isImportContainer(root)` being false must not reject a file-scope include. The loop stops when
+// `p`'s own parent is null, which is the root.
+std::uint16_t importContainerReach( TSNode directive, Lang lang, bool& reachable ) noexcept
 {
-    std::uint16_t depth = 0;
+    std::uint16_t depth     = 0;
+    reachable = true;
     for( TSNode p = ts_node_parent( directive ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
     {
-        if( isImportContainer( lang, ts_node_type( p ) ) && ++depth >= kMaxImportContainerDepth )
+        if( ts_node_is_null( ts_node_parent( p ) ) )
         {
+            break;                                   // p is the file root: reached unconditionally
+        }
+        if( !isImportContainer( lang, ts_node_type( p ) ) )
+        {
+            reachable = false;                       // the walk would not have entered this node
             break;
         }
+        if( ++depth >= kMaxImportContainerDepth )
+        {
+            break;                                   // STOPS AT THE BOUND: past it the answer cannot change, and
+        }                                            // a hostile file must not buy an unbounded parent walk
     }
     return depth;
 }
@@ -96,6 +114,11 @@ struct ImportSpec
 // which the query above captures and NONE of which is a physical dependency. Under the ObjC grammar
 // `#import` IS a preproc_include and needs no gate, which is why this branch tests the node kind rather
 // than the text alone. Every non-`#import` spelling is dropped: a floor, never a fabricated edge.
+//
+// DISCLOSED FLOOR, unchanged by this round and named here rather than left to be rediscovered:
+// `#include_next "x.h"` also parses as a preproc_call, so it fails this same gate and is NOT captured —
+// before and after, on main exactly as here. It is a real dependency and the fix is its own arm (a
+// `#include_next` spelling admitted alongside `#import`); it is out of scope for a pure refactor.
 ImportSpec normaliseCFamilyImport( TSNode directive, std::string_view raw, std::string_view src )
 {
     ImportSpec out;
@@ -137,14 +160,13 @@ ImportSpec normaliseImportSpecifier( DepDialect dialect, TSNode directive, std::
 // segment — `dir/x.h` → `x`, `<vector>` → `vector` — and a target with no identifier head (a relative
 // `../x`) names nothing and emits no ref, since there is nothing for the resolver to key on.
 //
-// THE NESTING BOUND IS KEPT, deliberately. A flat tags query has no depth limit of its own, so nothing
-// about THIS path forces it — but the contract the walk carried is a real one: past
-// kMaxImportContainerDepth a file's deeper imports are NOT captured, the file still indexes, and the fact
-// is announced (test/preproccondcheck.sh's 600-deep arm pins all three). Dropping the bound here would
-// silently CAPTURE those imports instead, which is a behaviour change on a hostile-input case and would
-// leave that arm asserting a disclosure this path no longer owes. So the bound is re-derived from ancestry
-// (importContainerDepth above) and the same DISCLOSE fires — one behaviour, measured on the node rather
-// than on a walk frame, with the announcement unchanged.
+// THE NESTING BOUND AND THE REACH, both kept deliberately. A flat tags query has no depth limit and no
+// container allowlist of its own, so nothing about THIS path forces either — but the contract the walk
+// carried is a real one: past kMaxImportContainerDepth a file's deeper imports are NOT captured, the file
+// still indexes, and the fact is announced (test/preproccondcheck.sh's 600-deep arm pins all three), and
+// an import under a non-container ancestor was NEVER captured at all. Re-deriving both from ancestry
+// keeps the round a pure refactor; the widening an unanchored query would otherwise buy is real, and
+// belongs in its own PR.
 //
 // SEVEN PARAMETERS, and that is the house shape rather than an accident. --quality-delta's `params` check
 // bars 5, and this is over it; the siblings it sits between take 5 (captureBases, captureFields,
@@ -157,11 +179,16 @@ void emitCapturedImport( TSNode pathNode, std::uint32_t fileId, Lang lang, std::
                          std::vector<Include>& includes, std::vector<RawRef>& refs, ExtractShortfall& shortfall )
 {
     const TSNode directive = ts_node_parent( pathNode );
-    if( importContainerDepth( directive, lang ) >= kMaxImportContainerDepth )
+    bool           reachable = false;
+    if( importContainerReach( directive, lang, reachable ) >= kMaxImportContainerDepth )
     {
         DISCLOSE( shortfall, ExtractShortfall::DisclosureWhy::ImportNestingTooDeep,
                   "ingest: import-container nesting past the depth bound — deeper imports not captured" );
         return;   // the same degrade the walk performed: not captured, file still indexed
+    }
+    if( !reachable )
+    {
+        return;   // a non-container ancestor the walk would never have entered — see importContainerReach
     }
     const ImportSpec spec = normaliseImportSpecifier( dependencyDialect( lang ), directive, nodeTextOf( pathNode, src ), src );
     if( spec.text.empty() )

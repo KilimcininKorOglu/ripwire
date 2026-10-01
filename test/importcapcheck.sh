@@ -7,9 +7,10 @@
 # the ONE DepDialect::CFamily specifier normaliser in src/ingest_importcap.h. This gate pins that the
 # EMITTED dependency edges are exactly the ones the extractor emitted, for every shape the round touches:
 #
-#   1  the vocabulary is LIVE      — an @import.path capture is what produces the edge, so dropping the
-#                                    patterns from tags.scm must make these rows disappear (the control for
-#                                    "the query is not decoration").
+#   1  the vocabulary is COMPILED IN — the capture name is in the binary's EMBEDDED tags.scm, which a
+#                                    --match probe cannot show (it feeds its own query to the astQuery
+#                                    engine, so it matched even on a pre-change binary); and the two
+#                                    extractor functions this replaces name nothing in src/ any more
 #   2  quote vs angle              — the isAngle bit, from the delimiter. Resolution leaves <x.h> alone.
 #   3  #import under BOTH spellings — the C and C++ grammars have no #import rule (it parses as a generic
 #                                    preproc_call, argument-gated in C++); the ObjC grammar HAS one.
@@ -26,8 +27,18 @@
 #                                    dep_elif.h both come back as edges.
 #   8  the use-site half            — every Include has its ABS-3 import-role use-site ref, so --uses
 #                                    still reports the include site of a header by its importable name.
-#   9  cache round-trip             — cold == warm byte-identically, and warm == --no-cache.
-#  10  determinism                  — two independent cold runs byte-identical.
+#   9  cache round-trip on --deps   — cold == warm byte-identically, and warm == --no-cache, on the view
+#                                    that actually reads Include records (the map view does not carry them)
+#  10  determinism                  — two independent cold runs byte-identical
+#  11  the cuda/metal grammars      — `.cu`/`.cuh` ride the vendored tree-sitter-cuda grammar on
+#                                    queries/cpp/tags.scm; a pattern that fails to COMPILE makes every
+#                                    file of that language disclose extract-partial instead of erroring
+#  12  THE REACH GATE               — an unanchored query must NOT widen the graph: extern "C" { #include },
+#                                    namespace ns { #include }, an #include in a function body, and an
+#                                    include under an ERROR node all stay OUT, exactly as the walk left them
+#  13  no kParserVer bump is owed    — a cache written by a PRE-CHANGE binary is accepted and reads
+#                                    identically, which is the evidence the records did not change
+#                                    (set RIPWIRE_PRECHANGE_BIN to point at one; the arm SKIPs without it)
 #
 # Usage:  test/importcapcheck.sh
 #         RIPWIRE_BIN=asan/ripwire test/importcapcheck.sh
@@ -39,8 +50,9 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative RIPWIRE_BIN
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
+skip(){ printf '  SKIP  %s\n' "$*"; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 echo "importcapcheck: BIN=$BIN  TMP=$TMP"
@@ -202,18 +214,25 @@ else
     no "#import rows missing for one of the three grammars (got $(grep -o 't="dep_imported\.h"' "$OUT" | wc -l), want 3)"
 fi
 
-# ── arm 1: the vocabulary is LIVE, and the extractors it replaces are GONE ─────────────────────────────
-# There is no query-override seam (the tags queries are compiled into the binary), so "the capture is what
-# produces the edge" is pinned two ways instead: the @import.path pattern must MATCH on a real parse —
-# which is only true if it survived compilation into the embedded query — and the two extractor functions
-# it replaced must name nothing in src/ any more (the issue's acceptance: "the per-language extractors
-# removed as each language moves over").
+# ── arm 1: the vocabulary is COMPILED IN, and the extractors it replaces are GONE ─────────────────────
+# The earlier version of this arm ran `--match=(preproc_include path: (_) @import.path)` on the command
+# line, which was VACUOUS: --match feeds the query to the astQuery engine, so it matched on ANY binary
+# including a pre-change one, and the whole gate passed 15/15 against main. It proved the grammar parses,
+# not that the tags.scm carries the capture. The capture lives in the tags.scm EMBEDDED IN THE BINARY, so
+# that is where it is looked for: the literal `import.path` is in the emitted image on this branch and
+# absent from a pre-change one (measured: 5 hits vs 0), which is a red-on-main reason that means
+# something. The --match probe is kept as a second, weaker statement about the grammar, not the gate.
+if grep -qa 'import\.path' "$BIN"; then
+    ok "@import.path is present in the binary's embedded tags.scm (absent from a pre-change build)"
+else
+    no "@import.path is nowhere in this binary — the capture is not compiled in"
+fi
 MHITS=$("$BIN" "$WORK" --no-cache '--match=(preproc_include path: (_) @import.path)' 2>/dev/null \
         | grep -o 'hits="[0-9]*"' | head -1 | grep -o '[0-9]*')
 if [ -n "$MHITS" ] && [ "$MHITS" -ge 3 ]; then
-    ok "@import.path matches $MHITS sites on a real parse — the vocabulary is compiled in and live"
+    ok "the @import.path pattern matches $MHITS sites on a real parse (grammar shape, not the wiring)"
 else
-    no "@import.path matched ${MHITS:-0} sites; expected >= 3 (the pattern is not reaching the tags query)"
+    no "@import.path matched ${MHITS:-0} sites; expected >= 3"
 fi
 for gone in preprocIncludeTarget preprocImportTarget; do
     if grep -rq "$gone" "$ROOT/src"; then
@@ -233,27 +252,93 @@ else
     no "--uses lost the import-role use-site ref for an included header"
 fi
 
-# ── arm 9: cache round-trip ───────────────────────────────────────────────────────────────────────────
+# ── arm 12: THE REACH GATE — an unanchored query must not widen the C-family graph ─────────────────────
+# This is the round's load-bearing negative. `(preproc_include path: (_) @import.path)` is unanchored, so
+# it matches at ANY depth, while the walk this replaces entered only `isImportContainer` nodes and started
+# from root's direct children. Left unchecked the round WIDENED the graph by 10 edges on the maintainer's
+# probe tree (main 17, this 27): `extern "C" { #include }` in .cpp/.mm/.cu, `namespace ns { #include }`,
+# an `#include` inside a function body (the X-macro `.def` pattern) in .c/.cpp/.metal/.cu, and an include
+# under an ERROR node in a header whose guard arm failed to parse.
+#
+# All of those are real dependencies, so capturing them is arguably a FIX — which is exactly why it must
+# not ride along here: #358's rule is that each slice is byte-identical, and the widening is its own PR.
+# Each shape below is asserted to produce NO edge; only the file-scope include survives.
+# The fixture carries NINE includes. Main captures THREE of them — the two file-scope `fn_body.h` and the
+# `d.inc` under `#ifdef GUARD`, because a preproc conditional IS a container the walk entered. Main's set
+# is the specification: #358 requires this slice byte-identical, so the arm asserts main's exact set rather
+# than a count I reasoned out. The six main does NOT capture, and neither does this:
+#   extern "C" { #include "n.h" }   x3  (.cpp / .mm / .cu) — the standard C-header idiom
+#   namespace ns { #include "d.inc" }    — a wrapper the walk never entered
+#   an #include inside a function body   x2  (the X-macro `.def` pattern)
+WR="$TMP/reach"; mkdir -p "$WR"
+for h in fn_body macro_hdr; do printf 'int %s_helper( void );\n' "$h" > "$WR/$h.h"; done
+printf 'extern "C" {\n#include "n.h"\n}\n'                                        > "$WR/extc.cpp"
+printf 'extern "C" {\n#import "n.h"\n}\n'                                        > "$WR/extc.mm"
+printf 'extern "C" {\n#include "n.h"\n}\n__global__ void k(){}\n'                 > "$WR/extc.cu"
+printf 'namespace ns {\n#include "d.inc"\n}\n'                                     > "$WR/ns.cpp"
+printf '#include "fn_body.h"\nvoid f( void ){\n#include "macro_hdr.h"\n}\n'        > "$WR/body.c"
+printf '#include "fn_body.h"\nvoid f( void ){\n#include "macro_hdr.h"\n}\n'        > "$WR/body.metal"
+printf '#ifdef GUARD\n#include "d.inc"\nthis is not valid C at all ((( \n#endif\n'  > "$WR/broken.h"
+"$BIN" "$WR" --deps --no-cache > "$TMP/reach.xml" 2>/dev/null
+R_FNBODY=$(grep -o '<inc t="fn_body\.h"'  "$TMP/reach.xml" | wc -l)
+R_DINC=$(grep -o '<inc t="d\.inc"'         "$TMP/reach.xml" | wc -l)
+R_NH=$(grep -o '<inc t="n\.h"'             "$TMP/reach.xml" | wc -l)
+R_MACRO=$(grep -o '<inc t="macro_hdr\.h"' "$TMP/reach.xml" | wc -l)
+R_TOTAL=$(grep -o '<inc ' "$TMP/reach.xml" | wc -l)
+if [ "$R_TOTAL" -eq 3 ] && [ "$R_FNBODY" -eq 2 ] && [ "$R_DINC" -eq 1 ] && [ "$R_NH" -eq 0 ] && [ "$R_MACRO" -eq 0 ]; then
+    ok "reach gate: exactly main's 3 of 9 — file-scope x2 and the guarded one kept; extern\"C\", namespace and function-body all out"
+else
+    no "reach gate: total=$R_TOTAL fn_body=$R_FNBODY d.inc=$R_DINC n.h=$R_NH macro_hdr=$R_MACRO (want 3/2/1/0/0) — an unanchored query is widening the graph"
+    sed 's/></>\n</g' "$TMP/reach.xml" | grep -o '<inc t="[^"]*"' | sed 's/^/              /'
+fi
+
+# ── arm 9: cache round-trip, on --deps — where the include edges actually show ────────────────────────
+# The map view does not carry Include rows, so the earlier version of this arm compared two documents in
+# which the cached records are invisible. --deps is the view that reads them.
 CACHE="$TMP/c.bin"
-"$BIN" "$WORK" --cache="$CACHE" --no-cache >/dev/null 2>&1   # populate
-"$BIN" "$WORK" --cache="$CACHE"            > "$TMP/cold.xml" 2>/dev/null
-"$BIN" "$WORK" --cache="$CACHE"            > "$TMP/warm.xml" 2>/dev/null
-"$BIN" "$WORK" --no-cache                  > "$TMP/nocache.xml" 2>/dev/null
+"$BIN" "$WORK" --cache="$CACHE" --deps > "$TMP/cold.xml" 2>/dev/null      # populate
+"$BIN" "$WORK" --cache="$CACHE" --deps > "$TMP/warm.xml" 2>/dev/null
+"$BIN" "$WORK" --no-cache   --deps > "$TMP/nocache.xml" 2>/dev/null
 cmp -s "$TMP/cold.xml" "$TMP/warm.xml" \
-    && ok "warm == cold (the Include round-trip, incl. isAngle, is byte-identical)" \
-    || no "warm != cold — the Include cache round-trip changed"
+    && ok "warm == cold on --deps (the Include round-trip, incl. isAngle, is byte-identical)" \
+    || no "warm != cold on --deps — the Include cache round-trip changed"
 cmp -s "$TMP/cold.xml" "$TMP/nocache.xml" \
-    && ok "cache path == no-cache path" \
-    || no "cache vs no-cache diverged"
+    && ok "cache path == no-cache path on --deps" \
+    || no "cache vs no-cache diverged on --deps"
+
+# ── arm 13: a cache written by a PRE-CHANGE binary is still correct for this one ──────────────────────
+# kParserVer is bumped "on any grammar/.scm/extraction change" (src/ingest_cache.h), and this round
+# changed both a .scm and the extraction path — yet it needs NO bump, because the records are identical and
+# a stale cache therefore still holds the truth. This arm is the evidence for that claim: a cache written
+# by the pre-change binary is ACCEPTED (not rejected), and reading it must equal --no-cache exactly. If a
+# future change makes the two disagree, this arm is what says a bump is owed.
+if [ -x /tmp/ripwire_base_new ] || [ -n "${RIPWIRE_PRECHANGE_BIN:-}" ]; then
+    PB="${RIPWIRE_PRECHANGE_BIN:-/tmp/ripwire_base_new}"
+    PCACHE="$TMP/pre.bin"
+    rm -f "$PCACHE"
+    "$PB" "$WORK" --cache="$PCACHE" --deps >/dev/null 2>&1
+    "$BIN" "$WORK" --cache="$PCACHE" --deps > "$TMP/prewarm.xml" 2>/dev/null
+    if cmp -s "$TMP/prewarm.xml" "$TMP/nocache.xml"; then
+        ok "a pre-change binary's cache is accepted and reads identically — no kParserVer bump is owed"
+    else
+        no "a pre-change cache reads DIFFERENTLY from --no-cache — extraction output changed, so kParserVer must be bumped"
+    fi
+else
+    skip "pre-change-binary cache arm: no pre-change binary at $RIPWIRE_PRECHANGE_BIN (set it to run this arm)"
+fi
 
 # ── arm 10: determinism ───────────────────────────────────────────────────────────────────────────────
 "$BIN" "$WORK" --no-cache > "$TMP/d1.xml" 2>/dev/null
 "$BIN" "$WORK" --no-cache > "$TMP/d2.xml" 2>/dev/null
-cmp -s "$TMP/d1.xml" "$TMP/d2.xml" && ok "deterministic (two --no-cache runs identical)" || no "non-deterministic output"
+if cmp -s "$TMP/d1.xml" "$TMP/d2.xml"; then
+    ok "deterministic (two --no-cache runs identical)"
+else
+    no "non-deterministic output"
+fi
 
 # ── well-formed XML ───────────────────────────────────────────────────────────────────────────────────
 if command -v xmllint >/dev/null 2>&1; then
-    xmllint --noout "$TMP/cold.xml" 2>/dev/null && ok "xml well-formed" || no "xml malformed"
+    if xmllint --noout "$TMP/cold.xml" 2>/dev/null; then ok "xml well-formed"; else no "xml malformed"; fi
 else
     ok "xml well-formed (xmllint absent — skipped)"
 fi
