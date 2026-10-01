@@ -105,7 +105,10 @@ deps() { "$BIN" "$1" --deps 2>/dev/null; }
 OUT="$TMP/deps.xml"
 deps "$WORK" > "$OUT"
 
-# arm 1 + 2 + 3 + 5 + 6 + 7: the exact thirteen rows, in the exact spelling.
+# arm 1 + 3 + 5 + 6 + 7: the exact fourteen rows, in the exact spelling. (Counted, not estimated: the
+# list below has 14 entries — 9 from main.cpp, 3 from main.c, 2 from thing.m — and every label that
+# quotes a number quotes THIS one. CodeRabbit caught 13 and 15 here; the assertion itself was always
+# right because it compares against the list, never against the number in the message.)
 want='dep_quoted.h
 dep_angle.h
 dep_imported.h
@@ -122,9 +125,9 @@ dep_imported.h
 dep_imported_angle.h'
 got=$(grep -o '<inc t="[^"]*"' "$OUT" | sed 's/<inc t="//; s/"$//')
 if [ "$got" = "$want" ]; then
-    ok "15 Include rows, exact set and order (quote/angle, three #import spellings, macro, guarded)"
+    ok "14 Include rows, exact set and order (three #import spellings, macro include, guarded arms)"
 else
-    no "Include rows differ from the expected 15"
+    no "Include rows differ from the expected 14"
     printf '    expected:\n%s\n' "$(printf '%s\n' "$want" | sed 's/^/      /')"
     printf '    got:\n%s\n'      "$(printf '%s\n' "$got"   | sed 's/^/      /')"
 fi
@@ -169,7 +172,27 @@ else
     no "cuda + metal: got ${CU_EDGES:-0} edges (want 6), stderr=[$(head -c 160 "$TMP/cu.err")]"
 fi
 
-# arm 3 on its own: #import under all THREE grammars. The C and C++ grammars have no #import rule — it
+# ── arm 2: the quote-vs-angle discriminator, asserted where it is actually OBSERVABLE ─────────────────
+# `Include::isAngle` is invisible in the row list above. Both spellings normalise to the same bare path
+# and both appear as an `<inc t=...>` directive row, so counting spellings proves nothing about the bit —
+# a label that claimed otherwise would be a gate arm that cannot fail, which this repo's own
+# .coderabbit.yaml path_instructions name as a defect. The bit IS observable one level up, in whether the
+# target RESOLVES: a quoted include is resolved relative to the includer and the header earns its own
+# `<f>` row, while an angle include is left unresolved (no build system to search) and earns none.
+# Measured on exactly this fixture: quoted.h -> afferent="1"; angled.h -> no row at all.
+AT="$TMP/angle"; mkdir -p "$AT"
+printf 'int quoted_helper( void );\n' > "$AT/quoted.h"
+printf 'int angled_helper( void );\n'  > "$AT/angled.h"
+printf '#include "quoted.h"\n#include <angled.h>\nint use( void ){ return quoted_helper(); }\n' > "$AT/a.cpp"
+"$BIN" "$AT" --deps --no-cache > "$TMP/angle.xml" 2>/dev/null
+A_CAPTURED=$(grep -o '<inc t="\(quoted\|angled\)\.h"' "$TMP/angle.xml" | wc -l)
+A_QUOTED=$(grep -c '<f p="quoted\.h"' "$TMP/angle.xml" || true)
+A_ANGLED=$(grep -c '<f p="angled\.h"' "$TMP/angle.xml" || true)
+if [ "$A_CAPTURED" -eq 2 ] && [ "$A_QUOTED" -ge 1 ] && [ "$A_ANGLED" -eq 0 ]; then
+    ok "quote-vs-angle: both spellings captured, and only the quoted one resolves (2 directives, 1 resolved, 0 for angle)"
+else
+    no "quote-vs-angle: captured=$A_CAPTURED quoted_rows=$A_QUOTED angled_rows=$A_ANGLED (want 2 / >=1 / 0)"
+fi
 # parses as a generic preproc_call and is gated on the directive TEXT in C++ — while the ObjC grammar has
 # an #import rule and routes it through the preproc_include pattern instead. Three rows, three routes.
 # The quoted form with its closing delimiter, so `dep_imported_angle.h` cannot ride in on the prefix.

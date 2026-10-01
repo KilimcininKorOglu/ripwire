@@ -49,7 +49,7 @@ both binaries and running them against one unchanged tree — the pre-change bui
 `.` (2 354 files, 3 730 include edges, 0 added, 0 lost), `test/`, `test/nestedimportfix` and `test/includeprecisefix`,
 on both `--no-cache` and `--deps`. The new `test/importcapcheck.sh` pins the shapes (quote vs angle, all three
 `#import` spellings, a macro include, guarded arms, both dead arms, the `#pragma`/`#error` gate, the import-role
-use-site half, cache round-trip, determinism) over a 15-edge fixture it builds itself.
+use-site half, cache round-trip, determinism) over a 14-edge fixture it builds itself.
 
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
