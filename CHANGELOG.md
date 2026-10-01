@@ -272,6 +272,13 @@ so `sh -c "…"` and `echo "…" | sh` are read as code), and a shell word split
 covered by `test/skillscan.sh`. Against the previous scanner no finding is lost on the skill fixtures, an adversarial
 set or this repository's own Markdown and scripts; two CRITICAL rows gain `why="sensitive-read-upload"`.
 
+### Fixed — `--cochange` / `--owners` / `--hotspots` in a multi-root workspace name a shallow secondary root when they refuse
+
+When no workspace root had a commit to mine, the refusal probed only the primary root for a shallow clone, so a full
+primary next to a depth-limited secondary still said "git unavailable / no history". The refusal now probes every
+mined root (the one root `--owners=SYM` mines) and names the shallow root it found, as the success paths' `shallow="1"`
+already did. Single-root output is unchanged. Gate: `test/shallowhistorycheck.sh` section 3m.
+
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
 
 - `--quality-delta` log-only handlers: a receiver is a logger only when the first or last word of its last segment is `log`, `logger` or `logging` (words split on `_`, `-` and camelCase), or a known logger package, not whenever it contains "log". A Python `except Exception: store.catalog.write(x)` no longer gates as log-only.
