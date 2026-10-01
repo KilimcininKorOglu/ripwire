@@ -285,6 +285,7 @@
 "luacheck.sh": 3.5,
 "macroedgecheck.sh": 3.6,
 "manifestcheck.sh": 62.9,
+"mapdatasectioncheck.sh": 55.0,
 "mapdiffcheck.sh": 3.3,
 "matchcapturecheck.sh": 11.8,
 "matchgrammarcheck.sh": 0.6,

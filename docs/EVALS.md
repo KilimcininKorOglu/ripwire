@@ -21,7 +21,7 @@ section, and it is not an afterthought.
 | **Co-change / known-item evals** | `--eval`, `--eval-retrieval` (see `bench/ANSWERQUALITY.md`) | Whether the tool surfaces the other files a real historical commit touched; and known-item retrieval across four rankers. |
 | **Ensemble calibration harness** | `bench/ensemblecal/` | Whether `--ensemble`'s four evidence families are actually orthogonal, how often each fires, how stable each is across commits — and the preset ladder derived from that (§9). |
 | **Differential argv harness** | `test/argvdiffcheck.sh` | That a refactor changed *nothing observable*: two binaries, every argv vector, stdout + stderr + exit code byte-identical. |
-| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 658 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
+| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 659 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
 | **`--quality-delta`** | `src/quality.h` | Ten measured code-quality failure modes, reported only where a change made them worse. |
 
 ### The labeling protocol (why the held-out eval is allowed to disagree with the ranker)
@@ -5866,7 +5866,7 @@ copy here would be exactly the dialect divergence that gate exists to catch. Com
 tags, wrap, stable-order defaults), seven individually invoked standalone gates (`g1freshcheck`,
 `skillscan`, `htmlexport`, `compresscheck`, `handoffcheck`, `releaseinstallcheck`,
 `taskroutecheck`), and a single loop
-naming **658 gate scripts**, all of which exist on disk. <!-- gatecount -->
+naming **659 gate scripts**, all of which exist on disk. <!-- gatecount -->
 
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same scripts in parallel so a full
 verification fits in one sitting. It does not modify `regression.sh`.
@@ -6969,7 +6969,7 @@ Listed because the reason is more useful than the silence.
   shipped**. See `bench/locbench/anchorhop_calib.json`. The mention anchor's reproducible numbers are
   the ablations in §4.
 - **A single round gate-count.** Two in-tree numbers disagree (`test/pargates.py`'s docstring says
-  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 658. The <!-- gatecount -->
+  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 659. The <!-- gatecount -->
   loop is the authority; the stale docstrings are a known drift. Since 2026-09-10 the number is not
   written by hand anywhere: `docs/gatecount_build.py` derives it from the loop and rewrites every
   published site, `test/gatecountcheck.sh` fails if any of them drifts, and `test/manifestcheck.sh`
@@ -14195,3 +14195,182 @@ that `--slice=SYM:VAR` ranks lines by relevance across a whole function is super
 rule is proven only to order the rows it already emits, never to find the most relevant line in a function
 it has not narrowed down first. `src/compactlegend.h`'s `order` reading, `src/slice.h`'s v1/v2 legends, and
 `--help=slice` are worded to this scope.
+
+## Map data Sections never crowd code out of the default map (#339 F1) — PRE-REGISTERED 2026-09-30 (before any fix code or arm number)
+
+The registration below was frozen on 2026-09-30 (frozen text sha256 `e731a459614b32eda140c5c424beb8867ff8bbc24cdbf8ddea524cf47d38ae93`)
+and lands here with the gate, `test/mapdatasectioncheck.sh` (red on `a5229aca`), before any fix code or arm number. It is
+reproduced verbatim, except that its headings are demoted one level to sit under this section and three references to files
+outside this repository (a design note, a decision log, a scratch directory) are replaced by neutral words. Deviations decided
+after the freeze are listed with the result, never edited into this text.
+
+This supersedes the DRAFT, which is left unchanged. Design: the lane's design note (outside this repository). It lands verbatim in `docs/EVALS.md` with the gate commit, before any fix code or arm number exists. Line refs are at BASE `b90547fa`.
+
+**Owner rulings, 2026-09-30:**
+- **R1:** A touches only the map's uniform prior. Every other rank consumer stays byte-identical. There is no per-verb census.
+- **R2:** `--eval` decides on code-seeded commits.
+- **R3:** paired, stratified bootstrap margins on three repos replace the priorwt precedent.
+- **R4:** FIND terminality is a post-release readout with a revert guard.
+
+**Hypothesis.** Under A, every non-Section node outranks every in-degree-0 Section in the map. Then code rows survive the #339 shapes, the non-Section order is unchanged when there are no Section→non-Section edges, and nothing outside the map scope moves.
+
+### 0. Arms and pins
+
+**A.** A new entry point, `rw::rankDefaultMap(…)`, whose name is frozen for MEAS.
+- It is the uniform teleport with Section entries ×`kSectionPriorMul`=0.1, followed by the unchanged `biasPrior`.
+- `static_assert(kSectionPriorMul*kSpecificNameMul < kCommonNameMul*kPrivateNameMul)` re-reads the invariant (0.17 < 0.25) from BASE's constants. β is set by it; it is never fit and never swept.
+
+**Map scope.** The list is exhaustive:
+- the plain map: main.cpp:1762 with no payload verb and the default `--rank-by` (XML, `--json`, `--html`, `--max-tokens`);
+- `--tree` (verbs_report.h:3521);
+- MCP rank_by pagerank (mcpverbs.h:479, the CLI-parity twin);
+- MCP analyze when `changed==0` (mcpindex.h:1198). Analyze is `ix.rank`'s only reader (mcpverbs.h:438).
+
+Everything else keeps BASE bytes, including every payload verb's whole output.
+
+**Disclosure.**
+- **Attribute:** `data_sections_cut="N"` on each map-scope root, where N = Sections indexed − Section rows shown. It is omitted at 0.
+- **`next=`:** `next="--graph-query='kind(all,sec)' --offset=M --limit=K"`, where M = Section rows shown and K = the effective top-k.
+  - `kind(…,sec)` (query.h:63) is main's only kind filter. `--exclude/--include/--path/--scope` filter paths.
+  - graph-query is out of scope. It keeps BASE order (rank desc, id asc; verbs_navigate.h:335–342) and pages itself (`pageDisclosure`, `next_offset=`). So no page exceeds K rows at any N (#339: ≈2,000).
+  - Shown rows are skipped exactly when A's Section-relative order equals BASE's. That holds when no non-Section→Section edge exists, because Section ranks then scale by one factor.
+- **Pre-specified fallback:** if Gate D's set equality fails anywhere, the attribute ships without `next=`. This is a §9.1 dead-end cut, counted apart. No other spelling is tried after data.
+
+**B (fallback).** Code-first row pick (design §2B). The rank vector is untouched.
+
+**C.** Rejected.
+
+**PLACEBO_s (s=1..20).** A, with `kind==Section` replaced by membership in R_s.
+- R_s is n_sec non-Section ids drawn without replacement by `std::mt19937_64(s)` over crawl order.
+- The draw is stratified on the Sections' `priorwt::weight` values, so the removed mass is within 1% of A's. Any shortfall comes from the nearest stratum and is disclosed.
+- It is not degree-matched (disclosed). R_s is dumped and hashed. s is passed by env var.
+- It is skipped where n_sec > 0.5 × the non-Section count.
+
+**Pins.**
+- #339: `pr-339`@`221afc08`, used for S1 only. It is re-pinned before measuring, never after.
+- Corpora:
+  - ripwire@`b90547fa`;
+  - django `03988c5a`/tree `1afcf39f`;
+  - webpack `a943d69c`/tree `4d708c08` (`extcorpus.lock`);
+  - the frozen `snapshot.*pack`.
+
+  The clones are full-history, and HEAD and tree are verified on every run.
+
+**Design numbers are predictions, not data.**
+- The 3/8–7/8 table, the `k=` values and "1 `sec` row in ripwire's top 200" came from the installed 0.6.5 (`built_from=3fcd515ff`). That binary is not an arm.
+- #339's 6/8 and 4/8 came from its review.
+- Step 1 after the freeze re-reads them on BASE (BASE+339 for S1), before any other arm runs.
+
+**Builds.** 9 builds, run after the 3 now running: BASE, BASE+MEAS, A, A+MEAS, B, PLACEBO+MEAS, and BASE/A/B+339 (throwaway merges, never pushed).
+- Each has its own worktree and a Release build, with the same toolchain and flags. Every run uses `--no-cache`.
+- The binary table records sha256, `built_from=` (plus the patch sha256) and the compiler.
+- **At run time,** each wrapper logs `shasum -a 256 $BIN` immediately before the run. Output whose hash ≠ the arm's pin is rejected.
+- Also sha256-pinned before first use: MEAS and PLACEBO (kept outside the repository, never pushed), the fixture generator, Gate S's argv list and MEAS's key/class list.
+
+### 1. Primary, gating, end-to-end (§7): code rows in the emitted top-K
+
+**Harness:** `RIPWIRE_BIN=$BIN test/mapdatasectioncheck.sh`, red-first, with a deterministic generator.
+
+**Fixture:** 8 Python functions (a call chain, an uncalled `main`, `_helper`) plus one data file, with long or short names. The data file is S1 (#339 `db/schema.rb` columns), S2 (md headings), S3 (YAML keys) or S4 (JSON keys).
+
+- **Primary cells (K=200):** S1 at 20/40 tables; S2/S3/S4 long at N=200/220/220.
+- **Grid, gating for A:** shape × {long, short} × N∈{20,40,200} × K∈{200,16}.
+- **Surfaces:** XML, `--json`, the `--html` node set, `--tree` (code file first), `--max-tokens`, MCP analyze (clean tree).
+- **Statistic:** code rows shown / 8. It is exact, so no CI.
+- **BASE must be red** on each primary cell. The predictions are 6, 4, 3, 3; S4 is unmeasured. A cell green on BASE is reported inert and dropped before any A/B number exists, and never replaced.
+- **Pass:** 8/8 on every cell × surface.
+- **Reported only:** bytes before the 1st and the 8th code row (§9.1 #8).
+
+### 2. Gates for A
+
+**Edge census, first:** Section in/out degree by edge type, per corpus and fixture.
+
+**I1.** At `--top-k=S`, no non-Section row follows an in-degree-0 Section row. S is the header's `symbols=`; `--top-k=0` emits no map (cli.h:34).
+
+**I2.** A's non-Section row sequence ≡ BASE's (`--top-k=S --json`, three corpora), with every inversion listed.
+- Bound: 0 inversions between rows whose BASE scores differ by >1e-6 relative.
+- If Section→non-Section edges exist, the bound is instead Kendall τ ≥ 0.99 over the top 200.
+
+**Gate S (R1).** It replaces the census and the draft's §3(b) margins. There is no acceptance path.
+- **(i) Static.** A's diff leaves `priorwt::weight`, graph.h:4378, `biasPrior`, `rankGraphTeleport`, `rankGraph` and `diffTeleport` byte-unchanged. `rankDefaultMap`'s call sites equal the map scope.
+- **(ii) Dynamic.** BASE vs A stdout and exit status are `cmp`-identical, on the three corpora and on S2/S3-long-200. MCP analyze also runs with one uncommitted code edit. The argv list is frozen before any A binary runs:
+  - `--eval`, `--eval-retrieval`, `run_recalleval.py --lane both`, `run_extcorpus.py`;
+  - `--for` (default, candidates, `--anchor`), `--expand`;
+  - `--map-diff` (git, no-git), `--rank-by=churn|churn-decay|authority|hub|rrf`;
+  - `--impact`, `--graph-query`, communities/drill/zoom, `--seams`, `--report`, `--exercises`;
+  - MCP analyze (dirty), MCP impact.
+
+**Gate D.**
+- N equals the `kind(all,sec)` count= minus the Section rows shown.
+- Following `next=` and then `next_offset=` until `capped="0"` yields exactly the cut Sections, each once, with every page ≤ K rows. This must hold on every §1 cell at K∈{200,16} and on the three corpora.
+- The attribute is defined in the XML, JSON and compact legends. Legend coverage fails on an undefined one.
+
+**Byte identity.** Section-free fixtures and goldens do not change. The golden refresh is listed per file, with the reason ("`k=` rescale" or "Section rows moved").
+
+### 3. Non-regression and readouts
+
+#### (a) `--eval` co-change (R2, R3): the `map` column decides
+By R1, eval.h:325 (seeded) and graph.h:5148 (anchored) are non-map consumers. So every printed `--eval` row is byte-identical under A (Gate S), and the bar applies to the one vector A changes.
+
+**MEAS.**
+- It is additions only, in eval.h only; for BASE it also adds a ≤3-line shim, `rankDefaultMap → rankGraph`.
+- It is active only with `RIPWIRE_MEAS_EVAL_ROWS=<path>` and writes only there.
+- It writes one row per scored commit:
+  - the key (newest-first ordinal, sha256 of the sorted changed paths);
+  - the seed path and class;
+  - n_gold and the Section-only gold count;
+  - hits@5/10/20 for every printed ranker and for `map`.
+- `map` = eval.h:326–331's per-file sum over `rankDefaultMap`'s vector, with the seed excluded.
+
+**Output-neutrality, proven before any A number:**
+- `git apply --numstat` shows 0 deletions, and the patch adds no stdout/stderr write.
+- Every non-339 build's `--eval` stdout and exit status `cmp`-equal BASE's on the three corpora (env set on MEAS builds).
+- In each MEAS arm, the rows re-sum exactly to the dumped accumulators (`%.17g`), which reproduce every printed figure.
+- Keys, seeds and classes equal BASE+MEAS's pinned list, or the run is void.
+
+**Code-seeded (mechanical).** The seed (eval.h:299–306: most symbols, tie → lowest id) holds ≥1 indexed symbol whose kind is neither Section nor ModuleScope. Otherwise the seed is `data` (≥1 Section) or `none`. The class is computed on BASE and is the same in every arm.
+
+**Deciding test, code-seeded only.**
+- Commits are paired. The CI is a 95% percentile bootstrap, resampling within repo: 10,000 resamples, seed 20260930. The pooled Δ is commit-weighted.
+- **A fails** if, for any k∈{5,10,20}, the pooled-Δ lower bound is < −1.0 pp or any repo's point Δ is < −2.0 pp.
+- A repo with 0 code-seeded commits is not evaluable.
+
+**Secondary, non-deciding:** `data`/`none` seeds, and gold-kind strata. Ranking is at corpus HEAD, so absolute levels are upper bounds, but the paired Δ is valid.
+
+#### (b) §8 placebo (gates claims, not the ship)
+- It runs on `map`. Fixtures are skipped because they have no matched set.
+- A gain is claimed only if A's pooled Δ beats all 20 placebo Δs (one-sided p ≤ 1/21) and its lower bound is > 0.
+- A loss inside the placebo range is generic perturbation.
+
+#### (c) FIND terminality (P1, R4): post-release, not a merge gate
+- **Command:** `bench/substitution_report.py <frozen log>`, the §5 map row, per repo via `--tag`.
+- **Windows:** baseline = the 21 days before the release that ships the arm; readout = the first ≥200 map rows after it.
+- **Revert guard:** Δ < −5 pp with the Newcombe 95% CI upper bound < 0 → revert.
+- **Power:** ≈ ±9 pp, so this is a guard, not evidence.
+
+### 4. Decision rule (in order; nothing re-tuned after data)
+1. BASE must be red on §1, with inert cells dropped first.
+2. **Ship A** iff all of these hold:
+   - §1 passes;
+   - I1 = 0 and I2 is within bound;
+   - Gate S passes;
+   - Gate D passes, or its fallback applies;
+   - byte identity holds;
+   - §3(a) passes.
+
+   A Gate S or D failure is a wiring defect. Fix only the wiring (β and the kind test unchanged), rerun §1–§3, and log a deviation.
+3. **Ship B** iff A fails only §3(a). B is judged on §1 over the surfaces it wires, on byte identity when no swap fires, and on Gate S(ii) vs BASE.
+4. **A fails §1, I1 or I2:** the premise is false. Go to step 3.
+5. **B also fails §1:** ship the gate and fixtures, revert the feature, and record the negative (EVALS §7). #339 F1 stays open, and C needs its own registration.
+6. **§3(c) trips:** revert.
+
+**What would prove the design wrong:**
+- a Section with in-degree > 0 inside a crowded top-K;
+- an I2 breach;
+- a code-seeded `map` loss beyond margin that the placebo does not reproduce. That would mean demoting data removes co-change signal, which points to B.
+
+**Blind spots:** doc-seeking tasks in doc-heavy repos. Payload verbs and dirty-tree MCP analyze stay BASE by R1, so they can still crowd.
+
+### 5. Published
+- **EVALS:** "PRE-REGISTERED" (this text), then "RESULT at <sha>" with every number above, losses included, and β stated as derived.
+- **CHANGELOG:** the change, `data_sections_cut=`/`next=`, the `k=` golden rescale, and the numbers.
