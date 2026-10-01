@@ -1566,7 +1566,8 @@ inline bool bindsOutsideItsFunction( TSNode roleNode, Lang lang ) noexcept
         }
         const bool localToken  = !e.localChildToken.empty() && ts_node_child_count( roleNode ) > 0
                                  && std::string_view( ts_node_type( ts_node_child( roleNode, 0 ) ) ) == e.localChildToken;
-        const bool localParent = !e.localParentKind.empty() && std::string_view( ts_node_type( ts_node_parent( roleNode ) ) ) == e.localParentKind;
+        const TSNode parent      = ts_node_parent( roleNode );   // null above the root: no parent kind, never ts_node_type( null )
+        const bool   localParent = !e.localParentKind.empty() && !ts_node_is_null( parent ) && std::string_view( ts_node_type( parent ) ) == e.localParentKind;
         return !localToken && !localParent;
     }
     return false;
