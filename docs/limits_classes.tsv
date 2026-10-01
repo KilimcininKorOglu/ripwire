@@ -109,6 +109,7 @@ kMentionMaxNamedIdents	INDEXING
 kMentionMaxNameFiles	BOUNDARY
 kMentionMaxRawTokens	INDEXING
 kMentionMaxSymbolsPerFile	INDEXING
+kMentionsNameMaxDepth	INDEXING
 kMinIdentLen	BOUNDARY
 kMinMentionLen	BOUNDARY
 kMinNameLen	BOUNDARY

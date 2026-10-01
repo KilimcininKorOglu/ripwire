@@ -127,7 +127,7 @@ inline void statementsOf( TSNode body, std::vector<TSNode>& out )
 
 // How deep mentionsName reads below the node it is handed — the handler walk's own pathological-depth bound
 // (walkHandlerShapes' frame.depth > 512).
-inline constexpr int kMentionsNameMaxDepth = 512;
+inline constexpr int kMentionsNameMaxDepth = 512;   // undisclosed: a deeper subtree answers "mentions it", so a log-only handler that deep is never flagged
 
 // mentionsName's walk: true when a named leaf below n spells `name`, OR when it meets a node with named children at
 // kMentionsNameMaxDepth levels down — a subtree too deep to read answers "mentions it", which excludes the handler from
