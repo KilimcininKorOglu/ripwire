@@ -268,7 +268,8 @@ cached quality snapshot is recomputed. The session legend dictionary is `dictv=0
 opening quote put the flow scan back in command position, so the reader's quoted file was read as a command and its
 read was never noted. A quote no longer re-arms command position inside a reader's segment (it still does elsewhere,
 so `sh -c "…"` and `echo "…" | sh` are read as code), and a shell word split by quotes or escapes (`/etc/"passwd"`,
-`@"/etc/passwd"`, `/etc/pass\wd`) is also read whole. Single-quoted, mixed, redirected and `head -c "N" FILE` forms are
+`@"/etc/passwd"`, `/etc/pass\wd`, `< /etc/"passwd"`) is also read whole, once, when it ends — and in command position
+names the command (`\cat`, `c"a"t`, `\curl`). Single-quoted, mixed, redirected and `head -c "N" FILE` forms are
 covered by `test/skillscan.sh`. Against the previous scanner no finding is lost on the skill fixtures, an adversarial
 set or this repository's own Markdown and scripts; two CRITICAL rows gain `why="sensitive-read-upload"`.
 
@@ -286,7 +287,8 @@ The whole-word logger rule split a receiver only on `_`, `-` and camelCase, so `
 `vlog` were no longer loggers, and Python's gating log-only rows were lost. Trailing call arguments now come off before
 the last `.` segment, words split on every non-alphanumeric byte, at acronym-to-word and at letter-to-digit steps, and a
 logger package spelled as one word (structlog, logfire, logbook, loguru) or log/logger/logging behind a one- or
-two-letter prefix counts. English words that end in "log" (catalog, dialog, backlog, analog, changelog, blog) and
+two-letter prefix counts (so clog, flog and clogging do too). Longer English words that end in "log" (catalog,
+dialog, backlog, analog, changelog), blog and
 technology still log nothing. Still a miss: a logger behind a longer one-word prefix (`auditlog`).
 
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
