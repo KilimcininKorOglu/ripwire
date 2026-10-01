@@ -121,7 +121,7 @@ $ ./build/ripwire . --max-tokens=1500
 ... [1 more line(s); run it to see the whole thing]
 ```
 
-**Shaped by:** `--token-budget`, `--recall`, `--detail`, `--pr-context`, `--from-trace`, `--run-trace`, `--limit`
+**Shaped by:** `--token-budget`, `--recall`, `--impact`, `--detail`, `--pr-context`, `--from-trace`, `--run-trace`, `--limit`
 
 **Caveats (stated by the binary):**
 
@@ -854,7 +854,7 @@ $ ./build/ripwire . --graph-query='and(callers(name("rankGraphTeleport"),2),kind
 ... [17 more line(s); run it to see the whole thing]
 ```
 
-**Shaped by:** `--exercises`, `--limit`
+**Shaped by:** `--impact`, `--exercises`, `--limit`
 
 **Caveats (stated by the binary):**
 
@@ -952,7 +952,7 @@ $ ./build/ripwire . --connect=rankGraphTeleport,runEval,getIndex
 
 **Answers:** show everything that reaches SYM — the transitive blast radius before a change transitive blast radius — the indexed symbols that reach SYM (a floor, see counts_floor).
 
-file:name disambiguates like --callers rows run nearest first: d= is the hop depth (1 = a direct caller; printed where it changes), PageRank order within a depth; by_depth=k:n on the root counts reaches= per depth, so a cut drops the deepest first importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM, emitted as <f via="import" lazy="0|1"> rows (format=columnar carries the count only; --limit sizes it). NEVER added to reaches= — files and symbols are different units, and an importer may use a different symbol from that file, or none at all. lazy="1": every one of that importer's edges is written inside a closure — a TS/JS require()/import() inside a function body, a Ruby constant receiver or argument inside a method/lambda/block, a Ruby autoload or rescue class — not at load time: still a real dependency, weaker than a top-level one counts_floor="1"           every count on the graph verbs is a FLOOR, never a total; a 0 means none found on --callers/--callees/--uses/--impact/--edit-check every count is a FLOOR, never a total: the call graph is extracted from source text by name, so dynamic dispatch and declarations that parse without a call expression (C++ most-vexing-parse) contribute no edge; a call through a function pointer/callback is an edge only when ONE function is bound to that variable in scope (reassigned/table-indexed/lambda-bound/escaped — address-taken or reference-bound — pointers stay edge-less, C-family); a macro-generated call site contributes a role="macro" edge when its name uniquely names an indexed function-like #define (t="macro"); a shared name stays a plain call, an unindexed macro's site is no edge. Read a 0 as "none found", never as "none exists". Those five verbs also count DISTINCT (caller,callee) pairs, while --uses counts call SITES — see each verb's own legend pr_iters="N"               how many PageRank iterations produced this ordering on every PageRank-ordered document (the map, and the tree, seams, communities, zoom, impact, graph-query and exercises verbs, plus their MCP twins): how many power iterations produced that ordering. The iteration stops when the L1 residual between successive rank vectors falls below tolerance, or at a fixed iteration ceiling, whichever comes first. pr_converged="0" is emitted ONLY on that second exit and means the ranking is a rank vector that stopped SHORT of tolerance, not the fixed point it approximates. ABSENCE MEANS IT CONVERGED (there is no pr_converged="1": the converged path is the normal one and must cost zero bytes), and absence of pr_iters= itself means the document was not ordered by a power iteration at all (a lexical query score, or a hub or authority HITS vector), never that the count is unknown
+file:name disambiguates like --callers rows run nearest first: d= is the hop depth (1 = a direct caller; printed where it changes), PageRank order within a depth; by_depth=k:n on the root counts reaches= per depth, so a cut drops the deepest first importers= is a SECOND, weaker reach beside it: the files that directly include/import a file defining SYM, emitted as <f via="import" lazy="0|1"> rows (format=columnar carries the count only; --limit sizes it). NEVER added to reaches= — files and symbols are different units, and an importer may use a different symbol from that file, or none at all. lazy="1": every one of that importer's edges is written inside a closure — a TS/JS require()/import() inside a function body, a Ruby constant receiver or argument inside a method/lambda/block, a Ruby autoload or rescue class — not at load time: still a real dependency, weaker than a top-level one counts_floor="1"           every count on the graph verbs is a FLOOR, never a total; a 0 means none found on --callers/--callees/--uses/--impact/--edit-check every count is a FLOOR, never a total: the call graph is extracted from source text by name, so dynamic dispatch and declarations that parse without a call expression (C++ most-vexing-parse) contribute no edge; a call through a function pointer/callback is an edge only when ONE function is bound to that variable in scope (reassigned/table-indexed/lambda-bound/escaped — address-taken or reference-bound — pointers stay edge-less, C-family); a macro-generated call site contributes a role="macro" edge when its name uniquely names an indexed function-like #define (t="macro"); a shared name stays a plain call, an unindexed macro's site is no edge. Read a 0 as "none found", never as "none exists". Those five verbs also count DISTINCT (caller,callee) pairs, while --uses counts call SITES — see each verb's own legend pr_iters="N"               how many PageRank iterations produced this ordering on every PageRank-ordered document (the map, and the tree, seams, communities, zoom, impact, graph-query and exercises verbs, plus their MCP twins): how many power iterations produced that ordering. The iteration stops when the L1 residual between successive rank vectors falls below tolerance, or at a fixed iteration ceiling, whichever comes first. pr_converged="0" is emitted ONLY on that second exit and means the ranking is a rank vector that stopped SHORT of tolerance, not the fixed point it approximates. ABSENCE MEANS IT CONVERGED (there is no pr_converged="1": the converged path is the normal one and must cost zero bytes), and absence of pr_iters= itself means the document was not ordered by a power iteration at all (a lexical query score, or a hub or authority HITS vector), never that the count is unknown data_sections_cut="N"      how many data Sections the default map swapped out for code rows, with next= to page them on the default map (XML and --json, --max-tokens, MCP analyze on a clean tree, MCP rank_by=pagerank): the map's top-K is picked CODE-FIRST — while it keeps a data Section (a markdown heading, a YAML/JSON key, a schema column) and leaves a code row out, the lowest-ranked kept Section is swapped for the highest-ranked excluded code row, so a Section is shown only when every code row is. N counts the swaps; next= pages the Sections past the M still shown (--graph-query='kind(all,sec)' --offset=M --limit=K), the N swapped ones first, K rows a page. The rank (k=) is untouched. Absent when nothing was swapped
 
 **Try it**
 
@@ -4398,7 +4398,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=0e543e1e6a3fe37d entries=750
+ripwire legend dictionary ripwire.dict/v1 dictv=15348b401d04a1dd entries=751
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)
@@ -4431,7 +4431,7 @@ $ ./build/ripwire . --hotspots --json
 (empty)
 ```
 
-**Shaped by:** `--max-tokens`, `--token-budget`, `--for`, `--in`, `--legend`
+**Shaped by:** `--max-tokens`, `--token-budget`, `--for`, `--impact`, `--in`, `--legend`
 
 **Caveats (stated by the binary):**
 

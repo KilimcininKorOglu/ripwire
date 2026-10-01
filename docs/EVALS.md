@@ -14374,3 +14374,96 @@ By R1, eval.h:325 (seeded) and graph.h:5148 (anchored) are non-map consumers. So
 ### 5. Published
 - **EVALS:** "PRE-REGISTERED" (this text), then "RESULT at <sha>" with every number above, losses included, and β stated as derived.
 - **CHANGELOG:** the change, `data_sections_cut=`/`next=`, the `k=` golden rescale, and the numbers.
+
+## Map data Sections — RESULT at `4b3ace8a` (2026-10-01): A FAILED §3(a) by its registered margin; **B SHIPS**
+
+Every number below was measured on Release builds of the nine registered arms (AppleClang 17.0.0), each binary's sha256
+logged immediately before every run and checked against its pin; every run used `--no-cache`; every corpus's HEAD and
+tree were verified before and after each run. Deviations decided after the freeze are listed at the end.
+
+| arm | built from | sha256 (first 16) |
+| --- | --- | --- |
+| BASE | `a5229aca` (origin/main at lane start) | `2ff8bd0006952fdc` |
+| BASE+MEAS | `a5229aca` + MEAS (120 added lines in `src/eval.h`, 0 deleted) | `bc5798eeb6558641` |
+| A | `417ba41b` | `dc97c6bcb858ab7a` |
+| A+MEAS | `417ba41b` + MEAS | `b8b32df91e0b7f76` |
+| PLACEBO+MEAS | `417ba41b` + PLACEBO + MEAS | `89c6900f1dcfccbf` |
+| B | `4b3ace8a` | `deab515df2c22f5b` |
+| BASE/A/B+339 | each merged with `pr-339`@`221afc08` (throwaway, never pushed) | `a74778c45dc03cb6` / `4754026555efb8a6` / `b06eed61d5fc187b` |
+
+**Step 1 — BASE is red on every primary cell** (code rows of 8 at K=200; XML, `--json`, `--html` node set, `--max-tokens=1500`,
+MCP analyze all agree): S2 long N=200 **1/8**, S3 long N=220 **1/8**, S4 long N=220 **1/8**; S1 (BASE+339) 20 tables **7/8**,
+40 tables **1/8**. The design's predictions (3, 3, unmeasured, 6, 4) came from a different fixture and the installed 0.6.5; no
+primary cell was inert. `--tree` listed the code file first on every cell at BASE (an inert surface, reported, not evidence).
+Short names crowd less: 7/8 at N=200. K=16 reads 1/8 (long) and 7/8 (short) from N=20.
+
+**Edge census** (node-level, `--graph-query`; the graph has one edge type feeding PageRank): no edge between a Section and a
+non-Section in any corpus or fixture. Sections with in-edges have them only from Sections — ripwire 271 of 4,755, webpack 70 of
+12,402, django 0 of 724; every fixture Section is edge-less.
+
+**A** (`rankDefaultMap`: the uniform teleport with Section entries x0.1, then the unchanged `biasPrior`; x0.1 derived from
+0.1 x 1.7 = 0.17 < 0.5 x 0.5 = 0.25, held by a `static_assert`):
+- §1: **8/8 on all 40 fixture cells x 6 surfaces** and on the 12 S1 cells of A+339. Bytes before the 1st/8th code row on the
+  primary cells: 1,260/1,602 (S3, S4) and 1,356/1,698 (S2), against BASE's 979/— and 1,075/— (no 8th row): the legend clause and the root
+  disclosure ride in front of the rows.
+- I1: 0 in-degree-0 Sections ahead of a non-Section row, on the fixtures and on all three corpora (ripwire's 17,947 non-Section
+  rows are all in by K=17,976; django's 47,420 by K=47,420; webpack's 24,353 by K=24,376).
+- I2 (at the emitted 4-dp precision, see DEV-10): 0 strict rank reversals on all three corpora. The file-grouped JSON sequences
+  differ by 182 / 861 / 12 pairwise inversions, every one inside a 4-dp tie or a file-block reorder of tied files.
+- Gate S (i): `priorwt::weight`, the `priorWeight` assignment, `biasPrior`, `rankGraphTeleport`, `rankGraph`, `diffTeleport`
+  byte-identical; `rankDefaultMap`'s four call sites are exactly the map scope. (ii): 132 of 132 (root, argv) rows identical to
+  BASE with two non-ranking fields masked (DEV-9); 122 of 132 unmasked.
+- Gate D: on every fixture cell (K=200, 16; XML and `--max-tokens`) and on the three corpora at K=200 and 16, `next=` then
+  `next_offset=` paged exactly the cut Sections, each once (ripwire 4,755 cut, 24 pages at K=200; webpack 12,402, 776 pages at
+  K=16). `--json`, MCP analyze and MCP rank_by carried the XML's disclosure.
+- MEAS neutrality: every MEAS build's `--eval` stdout and exit status `cmp`-equal BASE's on the three corpora; the rows re-sum
+  exactly to the dumped accumulators, which reproduce every printed figure; keys, seeds and classes equal BASE+MEAS's list.
+- **§3(a), the deciding test** (the `map` column, code-seeded commits: ripwire 40, django 74, webpack 72; paired A − BASE, pp;
+  95% percentile bootstrap within repo, 10,000 resamples, seed 20260930):
+
+  | k | pooled Δ | 95% CI | ripwire | django | webpack |
+  | --- | --- | --- | --- | --- | --- |
+  | 5 | +0.927 | [+0.433, +1.521] | +0.714 | 0.000 | +1.997 |
+  | 10 | 0.000 | [0.000, 0.000] | 0.000 | 0.000 | 0.000 |
+  | 20 | **−0.386** | **[−1.068, +0.067]** | −1.795 | 0.000 | 0.000 |
+
+  **A FAILS**: at k=20 the pooled lower bound −1.068 pp is below −1.0 pp. No repo's point Δ is below −2.0 pp. Absolute `map`
+  recall on code-seeded commits is low in both arms (BASE 1.6 / 4.0 / 5.2%, A 2.5 / 4.0 / 4.8% at k=5/10/20): `map` ranks files
+  by the global, unseeded map vector, and the co-change gold is mostly elsewhere.
+  Secondary (non-deciding): data-seeded commits (n=53, 40 of them ripwire's, whose most-symbols file is often a long markdown
+  document) Δ +0.77 / +0.85 / **−12.18** pp; all 240 commits +0.89 / +0.19 / −2.99; code-seeded commits whose gold holds a data
+  file (n=64) +1.62 / 0.00 / −1.32, whose gold holds none (n=122) +0.56 / 0.00 / +0.10. The k=20 loss is concentrated where the
+  gold includes documentation, which the demotion pushes down the `map` file ranking.
+- §3(b) placebo (ripwire + django, n=114 code-seeded; webpack skipped by the registered rule, 12,402 Sections > 0.5 x 24,353;
+  every R_s matched A's removed teleport mass with no shortfall): A Δ +0.251 / 0.000 / −0.630 pp against placebo ranges
+  [−0.418, −0.418] / [+0.439, +0.439] / [0.000, +0.799]. No gain is claimable (k=5 beats all 20 placebos but its lower bound is
+  0.000, not > 0), and the k=20 loss lies OUTSIDE the placebo range: it is not generic perturbation. By the registration's own
+  prove-wrong clause, demoting data removes co-change signal, which points to B.
+
+**Decision, step 3: A fails only §3(a) → SHIP B.**
+
+**B** (`serialize.h` `codeFirstKeep`: the code-first row pick; the rank vector untouched; wired on serialize — XML, `--json`,
+`--max-tokens`, MCP analyze on a clean tree, MCP rank_by=pagerank — and `--html`; not `--tree`, DEV-11):
+- §1: **8/8 on all 40 fixture cells x 6 surfaces** and on the 12 S1 cells of B+339 (20 and 40 tables: 8/8 where BASE+339 read
+  7/8 and 1/8). Bytes before the 1st/8th code row on the primary cells: 1,246/1,588 (S3, S4) and 1,342/1,684 (S2).
+- The pick's invariant (a map that shows a Section shows every non-Section row) holds on every fixture probed and on the three
+  corpora at K=200 and 16.
+- Byte identity when no swap fires: BASE and B maps (XML and `--json`) are byte-identical on django and webpack at K=200 and 16,
+  on this repository at K=16, on `test/fixture` (so `test/golden.xml` and every map pin are unchanged) and on the uncrowded
+  fixture cells. Where a swap fires the root says so: this repository's default map at K=200 swaps its one `sec` row
+  (`data_sections_cut="1"`), and Gate D's walk pages the swapped Section first, then the rest, each once.
+- Gate S (ii): 132 of 132 rows identical to BASE under the same two masks as A (122 of 132 unmasked, the same 10 rows).
+- `--eval` is untouched by construction (B changes neither the rank vector nor `src/eval.h`) and its stdout is in Gate S.
+
+**§3(c) FIND terminality** is a post-release readout: `bench/substitution_report.py` over the 21 days before the release that
+ships B and the first ≥200 map rows after it, per repo; revert if Δ < −5 pp with the Newcombe upper bound < 0. Not yet measured.
+
+**Deviations after the freeze** (each logged before the data it touches existed, except DEV-9 to DEV-11, logged after A's run):
+BASE is `a5229aca`, the lane's branch point (DEV-1); Gate D's walk ends on `has_more="0"`, because graph-query prints
+`capped="1"` on every page past offset 0 (DEV-2); A's `--tree` carried the count without `next=` and `--html` carries no
+attribute, having no disclosure root (DEV-3, DEV-4); the JSON map has no legend, so the definition rides the full and compact
+legends and `--help=all` (DEV-5); this registration's text above names no file outside the repository (DEV-6); `--max-tokens=1500`,
+`--tree` = code file first, MCP via `--mcp --top-k=K` (DEV-7); Gate S's argv list gained a `RIPWIRE_DEV=1` `--anchor` row before
+any A binary ran, because `--anchor` refuses without it; Gate S masks the MCP `_index` stamp (it folds file mtimes, so BASE differs
+from itself there) and the initialize reply's `dictv=` (DEV-9); I2 is read at the emitted 4-dp precision (DEV-10); B does not
+re-pick `--tree`, whose own offset paging a window swap would break (DEV-11).
