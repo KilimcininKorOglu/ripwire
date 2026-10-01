@@ -429,8 +429,25 @@ inline std::size_t countPhrases( std::string_view hay, const std::string_view ( 
     return found;
 }
 
-// The first and last WORD of an identifier segment, words split on `_`, `-` and a lower-to-upper camelCase step:
-// audit_log -> (audit, log), appLogger -> (app, Logger), LOG -> (LOG, LOG). Empty views when it has no word.
+// Does a new word start at seg[i]? A lower-to-upper camelCase step (appLogger), an acronym-to-word step (the L of
+// HTTPLogger: upper after upper, lower after it) or a letter-to-digit step (logger2). seg[i - 1] is alphanumeric.
+inline bool isWordStepAt( std::string_view seg, std::size_t i ) noexcept
+{
+    const auto up = [ & ]( std::size_t k ) noexcept { return std::isupper( (unsigned char)seg[k] ) != 0; };
+    if( std::isdigit( (unsigned char)seg[i] ) )
+    {
+        return std::isalpha( (unsigned char)seg[i - 1] ) != 0;
+    }
+    if( !up( i ) )
+    {
+        return false;
+    }
+    return std::islower( (unsigned char)seg[i - 1] ) || ( up( i - 1 ) && i + 1 < seg.size() && std::islower( (unsigned char)seg[i + 1] ) );
+}
+
+// The first and last WORD of an identifier segment. Words split on every non-alphanumeric byte (`@logger`, `#logger`,
+// `$logger`, audit_log, log-sink) and at isWordStepAt: audit_log -> (audit, log), appLogger -> (app, Logger),
+// HTTPLogger -> (HTTP, Logger), logger2 -> (logger, 2), LOG -> (LOG, LOG). Empty views when it has no word.
 inline std::pair<std::string_view, std::string_view> edgeWordsOf( std::string_view seg )
 {
     std::string_view first;
@@ -438,37 +455,88 @@ inline std::pair<std::string_view, std::string_view> edgeWordsOf( std::string_vi
     std::size_t      wordBegin = 0;
     for( std::size_t i = 0; i <= seg.size(); ++i )
     {
-        const bool atSep   = i == seg.size() || seg[i] == '_' || seg[i] == '-';
-        const bool atCamel = !atSep && i > 0 && std::isupper( (unsigned char)seg[i] ) && std::islower( (unsigned char)seg[i - 1] );
-        if( ( atSep || atCamel ) && i > wordBegin )
+        const bool atSep  = i == seg.size() || !std::isalnum( (unsigned char)seg[i] );
+        const bool atStep = !atSep && i > wordBegin && isWordStepAt( seg, i );
+        if( ( atSep || atStep ) && i > wordBegin )
         {
             last  = seg.substr( wordBegin, i - wordBegin );
             first = first.empty() ? last : first;
         }
-        wordBegin = atSep ? i + 1 : ( atCamel ? i : wordBegin );
+        wordBegin = atSep ? i + 1 : ( atStep ? i : wordBegin );
     }
     return { first, last };
 }
 
-// A logging receiver: anything whose LAST segment's first or last WORD (edgeWordsOf) says log — logger, log, LOG,
-// logging, _log, audit_log, appLogger, log_sink, self.logger, Rails.logger — a known logger package (slog, glog, klog,
+// `logging.getLogger(__name__)` -> `logging.getLogger`: trailing balanced call argument lists come off BEFORE the last
+// `.` segment is taken, since an argument may hold dots of its own (`getLogger('a.b')`). Unbalanced: left as it is.
+inline std::string_view withoutTrailingCalls( std::string_view recv ) noexcept
+{
+    while( recv.ends_with( ')' ) )
+    {
+        int         depth = 0;
+        std::size_t i     = recv.size();
+        while( i > 0 )
+        {
+            --i;
+            depth += recv[i] == ')' ? 1 : ( recv[i] == '(' ? -1 : 0 );
+            if( depth == 0 )
+            {
+                break;
+            }
+        }
+        if( depth != 0 )
+        {
+            return recv;
+        }
+        recv = recv.substr( 0, i );
+    }
+    return recv;
+}
+
+// One WORD that says log: log / logger / logging; a logger package spelled as one word (structlog, logfire, logbook,
+// loguru); or log / logger / logging behind a ONE- or TWO-letter prefix (vlog, mylog, clog, mylogger). A longer prefix
+// is an English word that ends in "log" and logs nothing (catalog, dialog, backlog, analog, changelog), and so is blog.
+inline bool isLogWord( std::string_view word )
+{
+    constexpr std::string_view kLogWords[]    = { "log", "logger", "logging" };
+    constexpr std::string_view kLogPackages[] = { "structlog", "logfire", "logbook", "loguru" };
+    const std::string          lowered        = lowerCopy( word );
+    const auto in = [ & ]( const auto& table ) { return std::find( std::begin( table ), std::end( table ), lowered ) != std::end( table ); };
+    if( in( kLogWords ) || in( kLogPackages ) )
+    {
+        return true;
+    }
+    for( const std::string_view suffix : kLogWords )
+    {
+        const std::size_t prefix = lowered.size() - std::min( lowered.size(), suffix.size() );
+        if( lowered.ends_with( suffix ) && prefix >= 1 && prefix <= 2 && lowered.compare( 0, prefix, "b" ) != 0 )
+        {
+            return std::all_of( lowered.begin(), lowered.begin() + std::ptrdiff_t( prefix ), []( char ch ) { return std::isalpha( (unsigned char)ch ) != 0; } );
+        }
+    }
+    return false;
+}
+
+// A logging receiver: anything whose LAST segment (after trailing calls come off) has a first or last WORD that says
+// log (isLogWord) — logger, log, LOG, logging, _log, audit_log, appLogger, HTTPLogger, logger2, @logger, this.#logger,
+// self.logger, Rails.logger, logging.getLogger(__name__), get_logger(), mylog — a known logger package (slog, glog, klog,
 // logrus, zerolog, syslog), or one of the console/stream spellings every grammar here uses for print-to-a-reader. A
-// WHOLE word, never a substring: catalog, dialog, backlog, analog and technology contain "log" and log nothing, and a
-// Python log-only row gates — precision first, so a logger spelled some other way is a miss, never a false gate.
+// WORD, never a substring: catalog, dialog, backlog, analog, changelog and technology contain "log" and log nothing, and
+// a Python log-only row gates — precision first, so a logger spelled some other way is a miss, never a false gate.
 inline bool isLogReceiver( std::string_view recv )
 {
-    const std::size_t      dot  = recv.find_last_of( '.' );
-    const std::string_view last = ( dot == std::string_view::npos ) ? recv : recv.substr( dot + 1 );
+    const std::string_view bare = withoutTrailingCalls( recv );
+    const std::size_t      dot  = bare.find_last_of( '.' );
+    const std::string_view last = ( dot == std::string_view::npos ) ? bare : bare.substr( dot + 1 );
     constexpr std::string_view kStreamReceivers[] = { "console", "out", "err", "stderr", "stdout", "warnings", "fmt", "debug", "trace",
                                                       "slog", "glog", "klog", "logrus", "zerolog", "syslog" };
-    constexpr std::string_view kLogWords[] = { "log", "logger", "logging" };
-    const auto inTable = []( std::string_view word, const auto& table )   // `word` in any case
+    const std::string lowered = lowerCopy( last );
+    if( std::find( std::begin( kStreamReceivers ), std::end( kStreamReceivers ), lowered ) != std::end( kStreamReceivers ) )
     {
-        const std::string lowered = lowerCopy( word );
-        return std::find( std::begin( table ), std::end( table ), lowered ) != std::end( table );
-    };
+        return true;
+    }
     const auto [ firstWord, lastWord ] = edgeWordsOf( last );
-    return inTable( last, kStreamReceivers ) || inTable( firstWord, kLogWords ) || inTable( lastWord, kLogWords );
+    return ( !firstWord.empty() && isLogWord( firstWord ) ) || ( !lastWord.empty() && isLogWord( lastWord ) );
 }
 
 // The verbs a logging call ends in. `exception` is deliberately ABSENT (Python's logger.exception writes

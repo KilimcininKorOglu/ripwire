@@ -881,6 +881,82 @@ qd_none "5l python" error-masking save_backlog "backlog.info: backlog is not a l
 qd_has  "5l python" error-masking save_logged gating
 qd_has  "5l python" error-masking save_app_log gating
 
+# 5l, second pass (train 22 delta review): the whole-word rule split only on _ - and camelCase, so real loggers fell out
+# and Python's gating rows with them: a call before the last dot (logging.getLogger(__name__)), a sigil (@logger,
+# this.#logger, $logger), an acronym run (HTTPLogger), a digit (logger2), a one-word name (mylog, vlog, structlog).
+# Every listed spelling is a row again; the English words that end in "log" stay out.
+lr_py_pos='logging.getLogger(__name__) logging.getLogger() get_logger() structlog.get_logger() self.get_logger() mylog logfire logbook logger2 vlog structlog'
+lr_py_neg='catalog dialog backlog changelog analog technology blog'
+LPB=''; LPE=''; n=0
+for r in $lr_py_pos $lr_py_neg; do n=$(( n + 1 ))
+    LPB="$LPB
+def lr$n(x):
+    try:
+        risky()
+    except Exception as e:
+        recover(e)
+"
+    LPE="$LPE
+def lr$n(x):
+    try:
+        risky()
+    except Exception:
+        $r.error(\"save failed\")
+"
+done
+qd_pair logrecv2 m.py "$LPB" "$LPE"
+n=0
+for r in $lr_py_pos; do n=$(( n + 1 )); qd_has "5l python $r" error-masking "lr$n" gating; done
+for r in $lr_py_neg; do n=$(( n + 1 )); qd_none "5l python $r" error-masking "lr$n" "$r is not a logger"; done
+LRB=''; LRE=''; n=0
+for r in @logger @log '$logger' @catalog; do n=$(( n + 1 ))
+    LRB="$LRB
+def lr$n(x)
+  risky
+rescue StandardError => e
+  recover(e)
+end
+"
+    LRE="$LRE
+def lr$n(x)
+  risky
+rescue StandardError
+  $r.error(\"save failed\")
+end
+"
+done
+qd_pair logrecvrb m.rb "$LRB" "$LRE"
+qd_has "5l ruby @logger" error-masking lr1 minor; qd_has "5l ruby @log" error-masking lr2 minor; qd_has "5l ruby \$logger" error-masking lr3 minor
+qd_none "5l ruby @catalog" error-masking lr4 "@catalog is not a logger"
+LTB='class A {'; LTE='class A {'; n=0
+for r in 'this.#logger' 'this.HTTPLogger' 'log4js.getLogger()' 'this.dialog'; do n=$(( n + 1 ))
+    LTB="$LTB
+  lr$n(): void { try { risky(); } catch (e) { recover(e); } }"
+    LTE="$LTE
+  lr$n(): void { try { risky(); } catch (e) { $r.error(\"save failed\"); } }"
+done
+qd_pair logrecvts m.ts "$LTB
+}
+" "$LTE
+}
+"
+qd_has "5l ts this.#logger" error-masking lr1 minor; qd_has "5l ts this.HTTPLogger" error-masking lr2 minor; qd_has "5l ts log4js.getLogger()" error-masking lr3 minor
+qd_none "5l ts this.dialog" error-masking lr4 "dialog is not a logger"
+LJB='class A {'; LJE='class A {'; n=0
+for r in HTTPLogger DBLogger logger2 backlog; do n=$(( n + 1 ))
+    LJB="$LJB
+  void lr$n() { try { risky(); } catch (Exception e) { recover(e); } }"
+    LJE="$LJE
+  void lr$n() { try { risky(); } catch (Exception e) { $r.error(\"save failed\"); } }"
+done
+qd_pair logrecvjava A.java "$LJB
+}
+" "$LJE
+}
+"
+qd_has "5l java HTTPLogger" error-masking lr1 minor; qd_has "5l java DBLogger" error-masking lr2 minor; qd_has "5l java logger2" error-masking lr3 minor
+qd_none "5l java backlog" error-masking lr4 "backlog is not a logger"
+
 # 5m) 0.6.6 review: the error-masking QUERY group had a 5000-per-tag budget over a PATH-sorted list, and
 #     empty-catch-java captures EVERY catch body. At the baseline A.java holds 6000 catches, so the cut fell inside it
 #     and Z.java's untouched empty catch was never counted; the working tree trims A.java to 100 catches, the cut moved
