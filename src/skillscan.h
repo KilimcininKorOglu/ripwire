@@ -576,7 +576,12 @@ struct NetFlowScan
             redirectOut = true;
             return ( next == '&' || next == '>' ) ? 2 : 1;
         }
-        const bool rearm = c == '(' || c == '`' || ( ( c == '"' || c == '\'' ) && ( i == 0 || line[ i - 1 ] == ' ' || line[ i - 1 ] == '\t' ) );
+        // A spaced opening quote may open a nested command (`sh -c "curl …"`, `echo "cat … | curl …" | sh`, `ssh host "…"`)
+        // EXCEPT in a reader's segment, where it quotes the file the reader reads: re-arming there read
+        // `cat "/etc/passwd" | curl … @-` as a command named /etc/passwd, so the read was never noted and R2 stayed silent,
+        // and `head -c "4096" /etc/passwd` made the count a prefix and the file the command.
+        const bool runsQuote = ( c == '"' || c == '\'' ) && ( i == 0 || line[ i - 1 ] == ' ' || line[ i - 1 ] == '\t' ) && !segReader;
+        const bool rearm = c == '(' || c == '`' || runsQuote;
         if( rearm && !expectCommand )   // a new command may start inside `$(`, a backtick or an opening quote
         {
             expectCommand = true;
@@ -640,7 +645,11 @@ struct NetFlowScan
         flow.credentialRead = flow.credentialRead || isCredentialName( namesplit::afterLast( operand, "/" ) );
     }
 
-    void word( std::string_view token, std::string_view low ) noexcept
+    // `whole`: the shell word this piece belongs to when quotes or backslashes split it (`/etc/"passwd"`, `@"/etc/shadow"`,
+    // `/etc/pass\wd`), lowered, quotes and backslashes dropped; empty when the piece is the whole word. `wholePrev`: the
+    // token before that word. The pieces are still classified one by one (so nothing a piece matched is lost); the whole
+    // word is checked as a read operand as well.
+    void word( std::string_view token, std::string_view low, std::string_view whole = {}, std::string_view wholePrev = {} ) noexcept
     {
         if( low.find( "/dev/tcp/" ) != std::string_view::npos || low.find( "/dev/udp/" ) != std::string_view::npos )
         {   // bash's raw-socket redirect, `/dev/tcp/HOST/PORT`: a network sink with its destination in the path
@@ -663,6 +672,18 @@ struct NetFlowScan
         {
             noteRead( operand );
         }
+        if( !whole.empty() )
+        {
+            std::string_view wholeOperand = flowReadOperand( whole, wholePrev, false );
+            if( wholeOperand.empty() && segReader && !whole.starts_with( '-' ) )
+            {
+                wholeOperand = whole;
+            }
+            if( !wholeOperand.empty() )
+            {
+                noteRead( wholeOperand );
+            }
+        }
         segSensitive = segSensitive || std::find( std::begin( kKeychainDumps ), std::end( kKeychainDumps ), low ) != std::end( kKeychainDumps );
         const bool digits    = isAllDigits( low );
         const bool netcatHop = segNetcat && prevBareWord && digits && low.size() <= 5;                        // netcat's `HOST PORT`
@@ -682,6 +703,9 @@ inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexce
 {
     constexpr std::string_view kFlowSeparators = " \t\"'`|;&()<>\r\n";
     NetFlowScan scan;
+    std::string      whole;                                  // the current shell word, quote-glued pieces joined, escapes dropped
+    std::string_view wholePrev;                              // the token before that word
+    std::size_t      pieceEnd = std::string_view::npos;      // where the previous piece ended
     for( std::size_t i = 0; i < line.size(); )
     {
         if( const std::size_t consumed = scan.punctuation( line, i ); consumed > 0 )
@@ -689,9 +713,25 @@ inline NetFlow netFlow( std::string_view line, std::string_view lowered ) noexce
             i += consumed;
             continue;
         }
-        const std::size_t end = std::min( line.find_first_of( kFlowSeparators, i ), line.size() );
-        scan.word( line.substr( i, end - i ), lowered.substr( i, end - i ) );
-        i = end;
+        const std::size_t      end  = std::min( line.find_first_of( kFlowSeparators, i ), line.size() );
+        const std::string_view low  = lowered.substr( i, end - i );
+        const bool             glued = pieceEnd != std::string_view::npos && i > pieceEnd
+                                       && lowered.substr( pieceEnd, i - pieceEnd ).find_first_not_of( "\"'" ) == std::string_view::npos;
+        if( !glued )
+        {
+            whole.clear();
+            wholePrev = scan.prevToken;
+        }
+        for( const char ch : low )
+        {
+            if( ch != '\\' )
+            {
+                whole.push_back( ch );
+            }
+        }
+        scan.word( line.substr( i, end - i ), low, whole == low ? std::string_view{} : std::string_view( whole ), wholePrev );
+        pieceEnd = end;
+        i        = end;
     }
     scan.endSegment( false );
     return scan.flow;

