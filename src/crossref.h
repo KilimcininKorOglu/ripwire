@@ -1419,6 +1419,7 @@ inline std::vector<IndexDefSite> whereisIndexDefSites( const IngestResult& ing, 
 // What the scan learned about the WORKING TREE under the root (the 2026-10-01 freshness fix). The answer used
 // to read committed trees only and still claimed complete= on a dirty checkout, so a just-added function read
 // hits="0" and a just-deleted one kept its HEAD lines. Now every path that differs from HEAD is read from disk.
+// The ORDER is load-bearing: computeWhereis reads `state <= Read` as "every HEAD row kept is the checkout's content".
 //   Clean     nothing under the root differs from HEAD — the committed scan IS the checkout (byte-identical output)
 //   Read      every differing path was read (or is gone); its rows are ref="worktree" and replace HEAD's
 //   Partial   some differing path could not be read; ITS HEAD rows stand and may be stale — complete= is withheld
@@ -1913,11 +1914,6 @@ struct WorktreeScan
     // What each disclosure leaves the overlay able to vouch for, indexed by DisclosureWhy.
     static constexpr WorktreeOverlay kStateAfter[] = { WorktreeOverlay::Unlisted, WorktreeOverlay::Partial, WorktreeOverlay::Partial };
     void disclose( DisclosureWhy why ) noexcept { state = kStateAfter[ std::size_t( why ) ]; }
-
-    // Whether HEAD's blob for `path` was superseded by its working copy (read here, or gone from disk).
-    bool replaces( std::string_view path ) const { return std::binary_search( replaced.begin(), replaced.end(), path ); }
-    // Whether every HEAD row the answer keeps is also the checkout's content — the overlay's half of complete=.
-    bool vouchesForHead() const noexcept { return state == WorktreeOverlay::Clean || state == WorktreeOverlay::Read; }
 };
 
 // Read the working copy of every path under the root that differs from HEAD and scan it for SYM. A row found
@@ -2062,7 +2058,7 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
         }
         for( const RawRow& r : rows )
         {
-            if( i == 0 && worktree.replaces( r.path ) )
+            if( i == 0 && std::binary_search( worktree.replaced.begin(), worktree.replaced.end(), r.path ) )
             {
                 continue;   // HEAD's blob for a path the working tree changed: the overlay's rows answer for it
             }
@@ -2094,7 +2090,8 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
 
     // T1: exhaustive-over-text iff every sha streamed clean AND no ref's tree listing was suspect. An empty
     // sha list (every scanned tree empty, or none) trivially streamed clean — anyEmptyTree covers that shape.
-    result.scanExhaustive = blobStats.exhaustiveOverText() && !anyEmptyTree && enumeration.refsDropped == 0 && worktree.vouchesForHead();
+    // The overlay's half: Clean or Read means every HEAD row kept is also the checkout's content (enum order).
+    result.scanExhaustive = blobStats.exhaustiveOverText() && !anyEmptyTree && enumeration.refsDropped == 0 && worktree.state <= WorktreeOverlay::Read;
     result.hits.insert( result.hits.end(), std::make_move_iterator( worktree.hits.begin() ), std::make_move_iterator( worktree.hits.end() ) );
 
     // §A7: HEAD's rows are the INDEX's answer, not the shape test's — before the sort, because "definitions
@@ -2103,7 +2100,7 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
 
     // The checkout first, then refs by name; within a group, SOURCE before test before docs (§P11.5, see this
     // function's header), then definitions before references, then path/line — whereHitBefore states it.
-    std::sort( result.hits.begin(), result.hits.end(), whereHitBefore );
+    std::sort( result.hits.begin(), result.hits.end(), []( const WhereHit& a, const WhereHit& b ) { return whereHitBefore( a, b ); } );
     return result;
 }
 
