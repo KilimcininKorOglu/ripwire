@@ -173,6 +173,8 @@ export async function a2(o: { svc: Svc }) { return await o.svc.g<number>(1); }
 export function a4() { return f<number>(1); }
 export async function a5() { return await f<Map<string, Array<Record<string, number>>>>(1); }
 export async function a6() { const v = await pending; return v; }
+export async function a7() { return !await f<number>(1); }
+export async function a8() { return await await f<number>(1); }
 EOF
     cat >"$D/override.$ext" <<'EOF'
 export const parseBody = async <T>(r: { json(): Promise<unknown> }): Promise<T> => (await r.json()) as T;
@@ -197,7 +199,8 @@ export function u4() { return -fw<number>(1); }
 export function u5(o: { q: Q }) { return !o.q.fm<number>(1); }
 EOF
     # NEGATIVES the await/unary patterns must not turn into calls: a comparison chain with and without parentheses,
-    # an instantiation expression (type arguments, no call) and a name used only as a type argument.
+    # an instantiation expression (type arguments, no call), a name used only as a type argument, and a bare name under
+    # `!`, `typeof`, `await` or `-` with no call at all (n6, the near miss a pattern without its call_expression would take).
     cat >"$D/negatives.$ext" <<'EOF'
 export function na() { return 1; }
 export function nb() { return 2; }
@@ -210,11 +213,12 @@ export async function n2() { return await na < nb > nc; }
 export async function n3() { return await nd<number>; }
 export async function n4() { return await ne<typeof nf>(1); }
 export function n5() { return !(na < nb) > (nc); }
+export async function n6() { return !na || typeof nb === "function" || (await nc) === 3 || -nd; }
 EOF
     rowsOf(){ "$BIN" "$D" --no-cache --callers="$1" --limit=100 2>/dev/null | grep -oE '<s [^>]*n="[^"]*"' | grep -oE 'n="[^"]*"' | sed 's/n="//;s/"$//' | sort | tr '\n' ' ' | sed 's/ $//'; }
     got="$( rowsOf f )"
-    [ "$got" = "a1 a4 a5" ] && ok "$ext: --callers=f is a1 a4 a5 (await f<T>(), the plain f<T>() control, nested type arguments)" \
-                            || no "$ext: --callers=f got [$got], want [a1 a4 a5] — an \`await f<T>(x)\` site is no reference"
+    [ "$got" = "a1 a4 a5 a7 a8" ] && ok "$ext: --callers=f is a1 a4 a5 a7 a8 (await f<T>(), the plain f<T>() control, nested type arguments, !await and await await)" \
+                                  || no "$ext: --callers=f got [$got], want [a1 a4 a5 a7 a8] — an \`await f<T>(x)\` site is no reference"
     got="$( rowsOf g )"
     [ "$got" = "a2" ] && ok "$ext: --callers=g is a2 (await o.svc.g<T>(), the member form)" \
                       || no "$ext: --callers=g got [$got], want [a2] — the member form of await-with-type-arguments is no reference"

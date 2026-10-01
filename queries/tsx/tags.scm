@@ -169,6 +169,30 @@
     argument: (member_expression
       property: (private_property_identifier) @name))) @reference.call
 
+; One level deeper, the two stacked forms real code writes: `!await f<T>(x)` (the call's function: is
+; unary(await f)) and `await await f<T>(x)` (await(await f)). Deeper stacks stay unextracted (a disclosed floor).
+(call_expression
+  function: (unary_expression
+    argument: (await_expression
+      (identifier) @name))) @reference.call
+
+(call_expression
+  function: (unary_expression
+    argument: (await_expression
+      (member_expression
+        property: (property_identifier) @name)))) @reference.call
+
+(call_expression
+  function: (await_expression
+    (await_expression
+      (identifier) @name))) @reference.call
+
+(call_expression
+  function: (await_expression
+    (await_expression
+      (member_expression
+        property: (property_identifier) @name)))) @reference.call
+
 (new_expression
   constructor: (identifier) @name) @reference.call
 

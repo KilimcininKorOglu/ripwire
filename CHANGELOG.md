@@ -272,7 +272,9 @@ there, so the site was not a reference at all. It drew no edge and was counted i
 `.cts`, `.tsx` and Astro frontmatter. `await f(x)` without type arguments was already found. On hono, the
 method-override middleware is now a caller of `parseBody`
 (`await parseBody<Record<string, string>>(c.req)`). The unary operators bind the same way: `!f<T>(x)`, `typeof f<T>(x)`,
-`void f<T>(x)` and `-f<T>(x)` parse as `(!f)<T>(x)` and are now call references in the same three forms. A comparison
+`void f<T>(x)` and `-f<T>(x)` parse as `(!f)<T>(x)` and are now call references in the same three forms, as are the
+stacked `!await f<T>(x)` and `await await f<T>(x)`. Deeper stacks, and a parenthesized callee `(f)(x)` (with or
+without type arguments, an older gap), are still not extracted. A comparison
 chain (`await (a < b) > (c)`), an instantiation expression without a call (`await f<T>`) and a type argument
 (`f<typeof g>(1)`) still mint no call. `kParserVer` moves, so a TypeScript cache is re-indexed once.
 Gate: `tsshapecheck` §7, in `.ts` and `.tsx`.

@@ -301,7 +301,7 @@ constexpr std::uint32_t kParserVer    = 131;          // bump on any grammar/.sc
                                                       //   capture `await f<T>(x)`, which tree-sitter-typescript parses as `(await f)<T>(x)` — a call
                                                       //   whose function: is the await_expression — as a call reference (bare, member and #private
                                                       //   forms), and the same quirk under a unary operator (`!f<T>(x)`, typeof, void, unary minus: the call's
-                                                      //   function: is the unary_expression; review round, same 131). Those sites were no reference
+                                                      //   function: is the unary_expression; plus `!await f<T>(x)` and `await await f<T>(x)`; review round, same 131). Those sites were no reference
                                                       //   at all before, so a TS/TSX cache written at 129 lacks
                                                       //   them. 130 is left to a language lane that reserved it; the train renumbers on a collision.
                                                       //   New records, same layout: kCacheVersion stays 27; kQSnapCacheScheme unchanged.
