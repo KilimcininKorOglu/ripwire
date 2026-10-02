@@ -16,6 +16,33 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 ## [Unreleased]
 
 
+### Changed — data Sections no longer crowd code out of the default map (#339 F1): a code-first row pick, disclosed
+
+A data file of a few hundred keys or headings indexes as `SymKind::Section` rows with no call edges. Their rank is their
+share of the teleport prior, and priorwt's x1.7 specific-name boost fires on data names (`database_url_12`, "Installation
+step 12 details"), so they pushed called code out of the top-K the map emits: on the gate's fixture (eight Python functions
+plus one data file), 1 of 8 code rows survived at K=200 beside 200 long-named markdown headings, 220 YAML keys or 220 JSON
+keys, and 7/8 and 1/8 beside a #339 Rails `db/schema.rb` of 20 and 40 tables. The default map now picks its rows
+**code-first**: while the rank-order top-K keeps a data Section and leaves a non-Section row out, the lowest-ranked kept
+Section is swapped for the highest-ranked excluded non-Section row; survivors keep rank order. The rank vector and every
+`k=` are unchanged, and a map whose top-K left no code row out is byte-identical (django, webpack and this repository at
+`--top-k=16`; `test/golden.xml`). Scope: the plain map at the default `--rank-by` with no payload verb (XML, `--json`,
+`--html`, `--max-tokens`), MCP `analyze` on a clean working set and MCP `rank_by=pagerank`. `--tree`, `--query`,
+`--map-diff`, churn, authority/hub/rrf and the `--expand`/`--outline`/`--pack-signatures`/`--pack-top-n` ride-along maps keep the rank-order cut.
+A map that swapped carries `data_sections_cut="N"` (the swaps) and `next="--graph-query='kind(all,sec)' --offset=M
+--limit=K"`, which pages the Sections past the M still shown, the swapped ones first; both are defined in the full and
+compact legends and `--help=all`. This repository's own default map swaps its one `sec` row (`data_sections_cut="1"`).
+Gate: `test/mapdatasectioncheck.sh` (8/8 code rows on 40 fixture cells x 6 surfaces and on the 12 S1 cells of a #339
+build; red on `a5229aca`).
+
+Pre-registered (docs/EVALS.md "Map data Sections never crowd code out of the default map"), the registered first arm —
+a Section teleport prior x0.1 that made every code row outrank every Section no call reaches — passed every gate (I2
+read at the emitted 4-dp precision and Gate S with two non-ranking fields masked, both decided after A's run) and
+**failed** the registered `--eval` margin: on code-seeded commits of three corpora its `map`-column recall@20 fell
+0.39 pp, 95% CI [−1.07, +0.07] pp, past the −1.0 pp bound, and outside the range of 20 matched placebos. By the
+registered rule this release ships the second arm, which leaves the ranking alone. Numbers and losses are in EVALS.
+
+
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
 ripwire measured none of its own memory, so a large tree (#350: a non-git home directory, 67 GB) could grow it until

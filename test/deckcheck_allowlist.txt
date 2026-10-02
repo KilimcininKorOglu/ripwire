@@ -130,3 +130,5 @@
 --is-inside-work-tree	git's own rev-parse option ("git rev-parse --is-inside-work-tree"), quoted in the CHANGELOG entry for the nudge-hook bare-repo fix (2026-09-25) as the check whose exit-status-only reading missed the bare/`.git`-dir `false` case — not a ripwire flag
 --test	Node's own test-runner flag ("node --test <file>"), quoted in README.md and the CHANGELOG where --test-gate/--affected derive that command for a node:test file (#60) — not a ripwire flag
 --experimental-strip-types	Node's own type-stripping flag ("node --experimental-strip-types --test <file>"), quoted in README.md and the CHANGELOG as the form derived for .ts tests where engines.node admits Node below 22.18 (#60) — not a ripwire flag
+--numstat	git's own flag ("git apply --numstat") quoted in docs/EVALS.md's map-data-Sections registration, which proves the MEAS patch deletes nothing
+--tag	bench/substitution_report.py's own option ("via --tag"), quoted in docs/EVALS.md's map-data-Sections registration (the per-repo FIND readout), not a ripwire flag
