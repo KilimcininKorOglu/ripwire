@@ -405,7 +405,7 @@ then sits above every number a branch build of unreleased work has used, so no c
 release's), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=b5c64a12f0346e6c entries=771`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=66409821069cf5cb entries=775`.
 
 ### Fixed — test infrastructure: a gate killed mid-run no longer leaves its harness spinning (expandrangecheck, diagnoticecheck)
 
