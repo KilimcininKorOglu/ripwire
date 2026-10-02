@@ -96,44 +96,41 @@ inline void editCheckBlankComments( std::string& text )
     }
 }
 
+// One file's comment-blanked text. `whole` is false when the file could not be opened or its read stopped on an error:
+// the text is then empty or partial, so a signature read from it proves nothing (editCheckSignatureOf discloses it).
+struct EditCheckFileText
+{
+    std::uint32_t fileId;
+    std::string   body;
+    bool          whole;
+};
+
 // The comment-blanked text of the files one answer reads, each read once. The preview's spliced file is read from memory.
 class EditCheckSources
 {
 public:
     EditCheckSources( const IngestResult& input, const EditCheckSpliced& splicedFile ) : ing( input ), spliced( splicedFile ) {}
 
-    const std::string& text( std::uint32_t fileId )
+    const EditCheckFileText& text( std::uint32_t fileId )
     {
-        for( const auto& [ id, body ] : files )
+        for( const EditCheckFileText& f : files )
         {
-            if( id == fileId )
+            if( f.fileId == fileId )
             {
-                return body;
+                return f;
             }
         }
-        auto [ body, whole ] = read( fileId );
-        files.emplace_back( fileId, std::move( body ) );
-        if( !whole )
-        {
-            unreadable.push_back( fileId );
-        }
-        editCheckBlankComments( files.back().second );
-        return files.back().second;
-    }
-
-    // the file could not be opened, or its read stopped on an error: its text is empty or partial, so a signature read
-    // from it proves nothing — and an unread declaration may carry a default (editCheckSignatureOf discloses it)
-    bool unread( std::uint32_t fileId ) const
-    {
-        return std::find( unreadable.begin(), unreadable.end(), fileId ) != unreadable.end();
+        files.push_back( read( fileId ) );
+        editCheckBlankComments( files.back().body );
+        return files.back();
     }
 
 private:
-    std::pair<std::string, bool> read( std::uint32_t fileId ) const
+    EditCheckFileText read( std::uint32_t fileId ) const
     {
         if( spliced.engaged && spliced.fileId == fileId )
         {
-            return { std::string( spliced.bytes ), true };
+            return { fileId, std::string( spliced.bytes ), true };
         }
         std::string body;
         OwnedFile   in = openOwnedFile( diskPath( ing, fileId ).c_str(), "rb" );
@@ -143,14 +140,12 @@ private:
             body.append( buf, n );
         }
         const bool whole = in && std::ferror( in.file ) == 0;
-        return { std::move( body ), whole };
+        return { fileId, std::move( body ), whole };
     }
 
-    const IngestResult&                                ing;
-    EditCheckSpliced                                   spliced;
-    std::deque<std::pair<std::uint32_t, std::string>>  files;        // a deque: a reference text() handed out stays valid
-                                                                     // while later files are appended
-    std::vector<std::uint32_t>                         unreadable;   // the files read() could not read whole
+    const IngestResult&           ing;
+    EditCheckSpliced              spliced;
+    std::deque<EditCheckFileText> files;   // a deque: a reference text() handed out stays valid while later files are appended
 };
 
 // ── one parameter's type ──────────────────────────────────────────────────────────────────────────────────────
@@ -667,20 +662,19 @@ struct EditCheckSignature
     {
         UnreadableFile,   // the file could not be opened, or its read stopped on an error
     };
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // one reason: unproven, and it may carry a default
     {
-        switch( why )
-        {
-            case DisclosureWhy::UnreadableFile: ok = false; mayDefault = true; break;
-        }
+        ok         = false;
+        mayDefault = true;
     }
 };
 
 inline EditCheckSignature editCheckSignatureOf( EditCheckSources& sources, const Symbol& s )
 {
-    EditCheckSignature     sig{};
-    const std::string&     file  = sources.text( s.fileId );
-    if( sources.unread( s.fileId ) )
+    EditCheckSignature       sig{};
+    const EditCheckFileText& source = sources.text( s.fileId );
+    const std::string&       file   = source.body;
+    if( !source.whole )
     {
         DISCLOSE( sig, EditCheckSignature::DisclosureWhy::UnreadableFile, "edit-check: a C/C++ source could not be read whole — its signature is unproven and counted by defaults_untied=" );
         return sig;
