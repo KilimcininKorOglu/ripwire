@@ -1326,7 +1326,7 @@ $ ./build/ripwire . --grep=DEGRADED_PATH_ALERT --not=test --grep-scope=file
 
 **Answers:** SPAN TIERS: which tree-sitter span a hit must sit in — code (default) or any (exhaustive) SPAN TIERS: which tree-sitter span a hit must sit in to print.
 
-code (default) serves the CODE tier when any hit is code, and otherwise comment AND string TOGETHER (tier= "comment+string"), disclosing what it held back (suppressed_comment=/suppressed_string=); a pattern living only in prose is still answered, never silently emptied. When every code hit is a use of the literal (a test/doc file, or a shell/YAML/TOML/JSON file) and a source file holds it as a string, the string tier is served WITH code (tier= "code+string"; comments stay held back). any turns tiering off entirely -- the exhaustive view. Hit files are parsed on demand under a fixed budget; tier_budget= says so when it stops, and hits it never classified are emitted, never suppressed.
+code (default) serves the CODE tier when any hit is code, and otherwise comment AND string TOGETHER (tier= "comment+string"), disclosing what it held back (suppressed_comment=/suppressed_string=); a pattern living only in prose is still answered, never silently emptied. When every code hit is a use of the literal (a test/doc file, or a shell/YAML/TOML/JSON file) and source code (not one of those) holds it as a string, the string tier is served WITH code (tier="code+string"; comments stay held back). any turns tiering off entirely -- the exhaustive view. Hit files are parsed on demand under a fixed budget; tier_budget= says so when it stops, and hits it never classified are emitted, never suppressed.
 
 **Try it**
 
@@ -4398,7 +4398,7 @@ _The session legend dictionary the MCP server serves as ripwire://legend-dict/fu
 
 ```
 $ ./build/ripwire . --legend-dict
-ripwire legend dictionary ripwire.dict/v1 dictv=7ff221e92bdd51d8 entries=753
+ripwire legend dictionary ripwire.dict/v1 dictv=45f293490c5f1fa4 entries=753
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)

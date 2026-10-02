@@ -549,6 +549,22 @@ if [ -z "$( attr tier "$LR_OUT" )" ] && [ "$( attr suppressed_string "$LR_OUT" )
 else
     no "(12e) the lift fired with a source code hit present: tier=$( attr tier "$LR_OUT" ) suppressed_string=$( attr suppressed_string "$LR_OUT" )"
 fi
+# (12g) BOTH halves mean the same "source code" (review of this lane, item 3): a STRING in a JSON or shell file under a
+# source path is not "a source file holds it as a string", any more than a bare word there is a code hit. With only
+# such strings the lift must not fire and the answer is main's: code tier, the string held back. RED at 6ef65b15.
+LN="$TMP/literalneg"
+mkdir -p "$LN/regress" "$LN/src"
+printf 'tmux set -g LNTOKEN-escape-time 0\n'         >"$LN/regress/keys.sh"
+printf '{"LNTOKEN-escape-time": 500}\n'                >"$LN/src/defaults.json"
+printf 'echo "LNTOKEN-escape-time"\n'                  >"$LN/src/tool.sh"
+LN_OUT="$( "$BIN" "$LN" --no-cache --grep=LNTOKEN-escape-time 2>/dev/null )"
+if [ -z "$( attr tier "$LN_OUT" )" ] && [ -n "$( attr suppressed_string "$LN_OUT" )" ]; then
+    ok "(12g) strings only in JSON/shell files under src/ do not lift: code tier, suppressed_string=$( attr suppressed_string "$LN_OUT" )"
+else
+    no "(12g) a JSON/shell string under src/ lifted the string tier: tier=$( attr tier "$LN_OUT" ) suppressed_string=$( attr suppressed_string "$LN_OUT" )"
+    printf '%s\n' "$LN_OUT" | grep -o '<grep [^>]*>'
+fi
+
 # (12f) the MCP grep twin lifts the same rows (one collection, one decision).
 LT_MCP="$( printf '%s\n%s\n%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \

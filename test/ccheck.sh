@@ -276,6 +276,47 @@ printf '%s' "$EN_CPP" | grep -q 'sym="cmd_split_exec" chain="1"' \
     && ok "(e) the real 'enum cmd_retval { … }' definition is unchanged (t=\"struct\", its own line)" \
     || no "(e) the bodied enum definition moved"
 
+# (f) the body-less specifier mints NO definition at all (review rv-answer-honesty-067 item 1). Keeping it as a small
+# def of its own sat in the function's return-type position, wholly before the name — extentsuspect.h's R3 derailed-
+# parse signature — so clean functions read extent_suspect="head" and --hotspots stopped ranking them (tmux: 0 -> 206
+# flagged rows, extent_suspect_files 80, ranked 241 -> 206). It is a type USE: no def, no extent flag, one cmd_retval.
+# The C++ sibling is a body-less `class Widget` in a return type (the bare class pattern); struct/union need a body
+# or a declaration parent in the tags queries, so they never reach this path. RED at 6ef65b15.
+cat >"$EN/cpp/w.cpp" <<'EOF'
+class Widget { public: int x; };
+static int wh(int a) { return a; }
+
+class Widget *
+make_widget(int a)
+{
+	wh(a);
+	return nullptr;
+}
+EOF
+EN_MAP="$( "$BIN" "$EN" --no-cache --top-k=100000 2>/dev/null )"
+printf '%s' "$EN_MAP" | grep -q 'extent_suspect=' \
+    && no "(f) a clean 'static enum X⏎fn(' / 'class W *fn(' file carries extent_suspect: $( printf '%s' "$EN_MAP" | grep -o '<s [^>]*extent_suspect[^>]*>' | head -3 | tr '\n' ' ' )" \
+    || ok "(f) no extent_suspect on the enum/class return-type and enum-parameter functions"
+"$BIN" "$EN" --no-cache --skipped 2>/dev/null | grep -q 'extent_suspect_files=' \
+    && no "(f2) --skipped names extent_suspect_files on the clean fixture" \
+    || ok "(f2) --skipped carries no extent_suspect_files"
+EN_CR="$( printf '%s' "$EN_MAP" | grep -o '<s t="[a-z]*" n="cmd_retval"[^>]*>' )"
+if [ -n "$EN_CR" ] && ! printf '%s' "$EN_CR" | grep -q 'overloads='; then
+    ok "(f3) cmd_retval is one definition per file (no overloads=) — the return-type uses mint none"
+else
+    no "(f3) the return-type specifier still mints a definition: $EN_CR"
+fi
+printf '%s' "$EN_MAP" | grep -o '<s t="[a-z]*" n="Widget"[^>]*>' | grep -q 'overloads=' \
+    && no "(f4) C++ 'class Widget *make_widget(' still mints a second Widget definition" \
+    || ok "(f4) C++ body-less class in a return type mints no definition"
+if command -v git >/dev/null 2>&1; then
+    git -C "$EN" init -q . && git -C "$EN" -c user.email=t@t -c user.name=t add -A && git -C "$EN" -c user.email=t@t -c user.name=t commit -qm base
+    EN_HOT="$( "$BIN" "$EN" --no-cache --hotspots 2>/dev/null | grep -o '<hotspots [^>]*>' )"
+    printf '%s' "$EN_HOT" | grep -q 'unranked_extent_suspect=' \
+        && no "(f5) --hotspots withholds files as extent-suspect: $EN_HOT" \
+        || ok "(f5) --hotspots ranks every file (no unranked_extent_suspect)"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 echo
 if [ "$fail" -eq 0 ]; then

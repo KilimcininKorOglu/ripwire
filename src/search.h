@@ -2125,8 +2125,8 @@ inline bool isBareWordCodePath( std::string_view p )
 }
 
 // The span-tier LIFT (grepApplySpanTiers): does no CLASSIFIED code-tier hit sit in source code, while a
-// classified string-tier hit sits in a source-tier file? "Source code" = filter.h's PathTier::Source and not a
-// bare-word file above. Unclassified hits never vote, the same rule the tier election itself follows.
+// classified string-tier hit sits in source code? "Source code" = filter.h's PathTier::Source and not a bare-word
+// file above, for BOTH halves. Unclassified hits never vote, the same rule the tier election itself follows.
 inline bool grepLiteralLiftsStrings( const IngestResult& ing, const std::vector<GrepRawHit>& raw, const std::vector<std::uint8_t>& hitTier )
 {
     EXPECTS( hitTier.size() == raw.size(), "one tier byte per raw hit" );
@@ -2139,7 +2139,9 @@ inline bool grepLiteralLiftsStrings( const IngestResult& ing, const std::vector<
         const bool          isSource = f < tierOfFile.size() && tierOfFile[f] == std::uint8_t( PathTier::Source );
         if( hitTier[h] == std::uint8_t( SpanTier::String ) )
         {
-            sourceString = sourceString || isSource;
+            // the SAME "source code" both halves mean: a string in a shell/YAML/TOML/JSON file under a source path is not
+            // "a source file holds it as a string", any more than a bare word there is a code hit (review item 3)
+            sourceString = sourceString || ( isSource && !isBareWordCodePath( rootRelPath( ing, f ) ) );
         }
         else if( hitTier[h] == std::uint8_t( SpanTier::Code ) && isSource && f != lastCodeFile )
         {
@@ -2257,7 +2259,7 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
     {
         // The literal question (comparison table tmux-16 / textual-16, 2026-09-30): every code hit is a USAGE of
         // the literal — a test/doc file, or a shell/YAML/TOML/JSON file where a bare word parses as code — while
-        // a source file holds it as a string. That string is the answer ("which code reads escape-time"), so it
+        // source code holds it as a string. That string is the answer ("which code reads escape-time"), so it
         // is served beside the code tier instead of riding as suppressed_string=; comments stay held back.
         serveMask          = std::uint8_t( ( 1u << std::size_t( SpanTier::Code ) ) | ( 1u << std::size_t( SpanTier::String ) ) );
         report.emittedTier = "code+string";

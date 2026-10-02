@@ -135,9 +135,9 @@ EOF
 # (graphlegend.h kDeclinedCallsTestGateLegend, 186 B, not the 620 B shared one) plus the gate sentence (143 B) that rides
 # only a graph where the builtin-method gate declined a call. Measured on this fixture: 3305 -> 3634 B; 3730 leaves ~95 B.
 # RE-PINNED 3730 -> 3930 (lane/answer-honesty-067, comparison table hono-20/textual-20). ONE new FACT, gated on
-# must_run=N being on the root (it rides only when the must-run tier splits the <t> rows, as it does over src/model.h):
-# testmap.h kMustRunLegend, 196 B, cut from a 256 B first draft. Measured on this fixture: 3634 -> 3830 B; 3930 leaves
-# ~100 B — the same posture as every pin above.
+# run_first=N being on the root (it rides only when the run-first tier splits the <t> rows, as it does over src/model.h):
+# testmap.h kRunFirstLegend, 237 B (renamed from must_run= in review, with the not-a-skip-list reading). Measured on this fixture: 3634 -> 3871 B; 3930 leaves
+# ~59 B — the same posture as every pin above.
 if [ "$legend" -le 3930 ]; then
     ok "(a) --test-gate legend is $legend B (<= 3930 B budget; total=$total payload=$payload)"
 else

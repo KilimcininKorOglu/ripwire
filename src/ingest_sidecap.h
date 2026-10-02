@@ -1953,9 +1953,13 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             // ADOPTED the enclosing function_definition, whose body it sits outside of: the specifier took the WHOLE
             // function's span, so --at chained `struct cmd_retval` around the function, --grep labelled its hits
             // in="cmd_retval" and its calls were attributed to a `struct box_lines` caller (comparison table tmux-07/15,
-            // test/ccheck.sh). The adoption is for a function DECLARATOR; a type specifier never adopts a body owner and
-            // keeps its own node (the declaration-wrapper rule at a scope stop is unchanged).
+            // test/ccheck.sh). The adoption is for a function DECLARATOR. A type specifier whose climb reaches a body owner
+            // it sits outside of is a type USE in that function's signature, not a definition, so it mints NO def: keeping
+            // it as a small def of its own put a span in the return-type position wholly before the name — extentsuspect.h
+            // R3's derailed-parse signature — and flagged clean functions extent_suspect="head" (review of this lane,
+            // ccheck arm (f)). The declaration-wrapper rule at a scope stop is unchanged (`enum E : int;`, a prototype).
             const bool bodylessTypeSpec = isCFamilyTypeSpecifier( le.lang, roleNode );
+            bool       typeUseInSignature = false;
             if( ts_node_is_null( body ) && kind != SymKind::Var && kind != SymKind::Field && le.lang != Lang::Elixir )
             {
                 TSNode child = roleNode;
@@ -2001,12 +2005,18 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     const TSNode pb = fieldChild( p, NodeField::Body );
                     if( !ts_node_is_null( pb ) )
                     {
-                        if( !spanContains( pb, roleNode ) && !bodylessTypeSpec ) { defNode = p; body = pb; }
+                        const bool outsideBody = !spanContains( pb, roleNode );
+                        if( outsideBody && !bodylessTypeSpec ) { defNode = p; body = pb; }
+                        typeUseInSignature = outsideBody && bodylessTypeSpec;
                         break;
                     }
                     child = p;
                     p     = ts_node_parent( p );
                 }
+            }
+            if( typeUseInSignature )
+            {
+                continue;   // a body-less C/C++ specifier in a function's signature: a type use, never a definition
             }
 
             // ObjC/Kotlin body-field fallback for the grammars that expose a body as an unnamed CHILD, not a
