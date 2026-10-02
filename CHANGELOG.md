@@ -15,6 +15,17 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — test infrastructure: a gate killed mid-run no longer leaves its harness spinning (expandrangecheck, diagnoticecheck)
+
+`slicebody_harness` (test/expandrangecheck.sh) and `diagnotice_asan` (test/diagnoticecheck.sh) were found re-parented to
+launchd at ~60% CPU for hours, three times in two days. Cause, sampled live: an ASan-built program can hang on macOS
+before `main()` -- the sanitizer runtime's own init re-enters its allocator through dyld and spins on its own spin lock
+in `sched_yield` -- so no check inside the harness could ever run, and a gate that merely waited in the foreground
+left it behind when a suite timeout killed the gate. `scripts/gatebound.sh` now runs every harness under a perl
+`alarm` cap (survives SIGKILL) in the background, with the gate's EXIT/TERM/INT/HUP traps killing it; both harnesses
+also arm an `alarm` of their own, and a sanitized harness that will not start is a SKIP, like one that will not link.
+`test/pargatescheck.sh` arm (O) stops each gate mid-harness (TERM and KILL) and asserts no harness survives.
+
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
