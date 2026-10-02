@@ -2692,7 +2692,7 @@ This is the part to wire into a script.
 | Code | Meaning |
 | --- | --- |
 | 0 | The command completed. |
-| 1 | The command refused the request. A refusal names the reason on stderr. |
+| 1 | The command refused the request. A refusal names the reason on stderr. When `--callers`, `--callees`, `--uses`, `--impact` or `--path` refuse a selector that matches no indexed definition, they also print an answer on stdout: the verb's element with `found="0"` and the name to retry with. |
 | 2 | A policy gate fired: `--arch` found a layering violation, `--scan-skill` found a CRITICAL, `--quality-delta` found new debt. |
 | 3 | The output exceeded the token budget that you set. |
 | 4 | `--test-gate` found an open obligation. |
@@ -2817,7 +2817,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 231 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 233 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.

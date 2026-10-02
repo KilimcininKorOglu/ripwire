@@ -242,6 +242,13 @@ read at the emitted 4-dp precision and Gate S with two non-ranking fields masked
 0.39 pp, 95% CI [−1.07, +0.07] pp, past the −1.0 pp bound, and outside the range of 20 matched placebos. By the
 registered rule this release ships the second arm, which leaves the ranking alone. Numbers and losses are in EVALS.
 
+### Changed — a not-found refusal's stdout is no longer empty (compatibility)
+
+`--callers`, `--callees`, `--uses`, `--impact` and `--path` still exit 1 when the selector matches no indexed
+definition, but stdout now carries a `found="0"` answer instead of nothing. A script that detected a miss with
+`[ -z "$(ripwire … --callers=X)" ]` must test the exit status instead. Tools that count stdout tokens see about 100
+tokens on a miss instead of 0.
+
 ### Changed — `ripwire-quality-bar` gains a bounded debt fix loop
 
 A new section drives paying down EXISTING debt: pick the top `--quality-panel=strict` row, write the test first when
@@ -371,6 +378,64 @@ logger package spelled as one word (structlog, logfire, logbook, loguru) or log/
 two-letter prefix counts (so clog, flog and clogging do too). Longer English words that end in "log" (catalog,
 dialog, backlog, analog, changelog), blog and
 technology still log nothing. Still a miss: a logger behind a longer one-word prefix (`auditlog`).
+
+### Fixed — `--whereis` answers for the checkout, and a not-found refusal also answers on stdout
+
+`--whereis` scanned committed trees only (HEAD and the local branches). On a checkout with uncommitted changes it
+still printed `complete="1"` and a bare `at=`: a function the edit had just added read `hits="0"`, and one it had
+renamed or deleted was listed at its old HEAD lines. `--callers` on the same tree saw the edit. Every path under the
+root that differs from HEAD (modified, staged, deleted, or untracked and not ignored) is now read from the working
+tree. Its rows say `ref="worktree"` (`tip=` and `date=` name the HEAD commit it overlays) and replace HEAD's rows for
+that path, so on-head=, hits= and the index-backed `head_labels=` count the checkout (on-head="0" there means the
+checkout lacks the name, which HEAD's commit may still hold). The stamp gains `+dirty`, and
+the root says `worktree="read"`. A changed path that cannot be read (permission, over the 2 MB blob ceiling, a name
+git quotes, a directory such as an untracked nested repository or a submodule, or more than 8192 changed paths) keeps
+its HEAD rows, and the root says `worktree="partial"`. A changed path beyond a symbolic link to a directory is not in
+the checkout, as git reads it, and is never read through the link, so a file outside the root never answers. When git
+cannot list the changes, the root says `worktree="unlisted"`. Neither claims `complete=`. Other refs are still read
+as their committed trees. A clean checkout's answer is byte-identical. The MCP `whereis` tool shares the code. Both
+legends define `worktree=` and print it only when the root carries it. The full legend's sentence "at= is sha-only
+here (never +dirty)" is replaced. Gates: `test/completecheck.sh` §18 (add, rename, delete, deleted file, untracked
+file, the no-stale-row invariant, MCP twin, an unreadable changed path) and `test/gitstampcheck.sh` (the documented
+whereis exception is closed).
+
+With `--with-history`, a name that HEAD's commit still holds but that only the uncommitted working tree removed gets
+`<fate v="uncommitted">`. It used to get the history oracle's `never`, which says the repository never had the name.
+On a zero over a dirty checkout, `--whereis` and its MCP twin name the working tree's rename as
+`<selector-note r="renamed" retry=…>`. That note replaces the spelling near-miss.
+
+`--whereis=Class.method` and `--whereis=Class#method` searched that spelling as a literal, and no tree spells a
+method's definition that way, so they answered `hits="0" on-head="0" complete="1"` with no note. When the index defines
+a symbol named by the last segment, such an answer now carries `<selector-note r="dotted-selector" spec= retry=>`.
+Its `retry=` is that bare method name, and the answer claims no `complete=`. A dotted literal whose last segment the
+index does not define, such as `setup.py` or `os.path`, stays an ordinary literal search with its `complete=`. The full
+legend names the reasons. Gate: `test/completecheck.sh` §18k and §18u.
+
+A selector that matches no indexed definition is still a refusal (exit 1) on `--callers`, `--callees`, `--uses`,
+`--impact` and `--path`, as README §6.2 and the `--callers` example in docs/COMMANDS.md document. The refusal now also
+prints an answer on stdout, so an agent that reads stdout gets an answer instead of nothing. The answer is the verb's
+own element with the selector echoed, `found="0"`, and `near=` (the name to retry with), plus `missing="from|to|both"` on
+`--path`. Under `--json` it is one JSON object. Both legends define it.
+
+When the working tree renamed the selector, the rename is offered first. A rename needs three things:
+- a definition-shaped line naming the old name in a changed file's HEAD copy that the working copy no longer contains;
+- the new name absent from that HEAD copy;
+- the two names sharing most of their identifier words.
+
+A mention alone (an import, a call or a comment) is not a rename. In that case
+`near_renamed="1"` is set, and stderr gains "(renamed in the working tree: did you mean 'X'?)" ahead of the spelling
+near-miss. `line_trim` → `trim_line` used to get a suggestion of `line_type`. stderr is otherwise unchanged.
+
+The MCP twins `find_referencing_symbols`, `find_symbol`, `uses`, `impact` and `path_between` keep their -32602
+refusal and carry the same document in `error.data.answer`. A `batch` item's not-found `err=` names the rename the
+same way.
+
+Gates: `test/completecheck.sh` §18j, §18l, §18m, §18o, §18p, §18q, §18r, §18s, §18t, §18v and §18w.
+
+`--whereis` orders a test-local definition after the production definition of the same name when the answer holds
+both, and marks it `test_local="1"`. A test-local definition is one in a test scope such as Rust `#[cfg(test)]`, or one under a
+test, bench or fixture path (`test/`, `bench/`, `fixtures/`, `testdata/` and the test-file name patterns). Nothing is dropped, and an answer with only one kind is unchanged. Gate: `test/completecheck.sh`
+§18n.
 
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
 

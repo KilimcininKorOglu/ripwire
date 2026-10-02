@@ -1693,6 +1693,24 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             { return mcprefuse::notFound( getIndex( path ).ing, "symbol", spelling, mcprefuse::notFoundHintFor( name, "symbol" ) ); };
             const auto notFoundKind = [ & ]( std::string_view noun, std::string_view spelling ) -> std::string
             { return mcprefuse::notFound( getIndex( path ).ing, noun, spelling ); };
+            // Fix list #2 (2026-10-01), the CLI twin's parity: a not-found keeps its -32602 refusal and ALSO carries the
+            // answer document the CLI prints on stdout (selectorrefuse.h writeNotFoundAnswer) in error.data.answer, with a
+            // working-tree rename offered first in both the message and the document. `msg` is the verb's own refusal
+            // sentence; the rename clause goes right after its quoted echo. The document's echo is cappedEcho'd like the
+            // message's, so a 400 KB selector cannot mint a 400 KB frame (mcpw3fixcheck NIT [symbol]).
+            const auto notFoundAnswered = [ & ]( std::string msg, NotFoundAnswer answer, bool json ) -> std::string
+            {
+                msg = withRenameClause( std::move( msg ), answer.near, answer.missing );   // the batch arm's rule too
+                std::string doc = captureXml( [ & ]( std::FILE* f ) { writeNotFoundAnswer( f, answer, json ); } );
+                while( !doc.empty() && doc.back() == '\n' ) { doc.pop_back(); }
+                return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":-32602,\"message\":\""
+                     + mcpdetail::jsonEscape( msg + memoryStopSuffix( msg ) ) + "\",\"data\":{\"answer\":\"" + mcpdetail::jsonEscape( doc ) + "\"}}}";
+            };
+            const auto notFoundNearOf = [ & ]( std::string_view spelling ) -> NotFoundNear
+            {
+                const IngestResult& nIng = getIndex( path ).ing;
+                return notFoundNear( nIng, spelling, nIng.realPaths.empty() ? path : std::string() );
+            };
 
             // success envelope for an edit verb: the JSON payload as text content + the fresh _index stamp
             // (the index was just invalidated, so indexStamp() rebuilds and reports the NEW post-edit state).
@@ -2147,7 +2165,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     resp = pagedResult( [ & ]( McpPageArgs pg )
                     {
                         const std::string j = symbolQueryJson( path, symbol, name == "find_referencing_symbols", pg );
-                        return j.empty() ? errResultMsg( -32602, notFoundSym( symbol ) ) : textResult( j );
+                        // Review M5: both twins answer a miss — find_referencing_symbols is --callers, find_symbol --callees.
+                        return j.empty() ? notFoundAnswered( notFoundSym( symbol ),
+                                                             NotFoundAnswer{ name == "find_referencing_symbols" ? "callers" : "callees",
+                                                                             { { "of", mcprefuse::cappedEcho( symbol ) } }, {}, notFoundNearOf( symbol ) }, true )
+                                         : textResult( j );
                     } );
                 }
                 else if( name == "grep" && !path.empty() && !pattern.empty() )
@@ -2386,7 +2408,8 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         {
                             return errResult( -32603, "internal error: the impact answer buffer lost bytes — no answer served" );
                         }
-                        return answer->empty() ? errResultMsg( -32602, notFoundSym( symbol ) ) : textResult( *answer );
+                        return answer->empty() ? notFoundAnswered( notFoundSym( symbol ), NotFoundAnswer{ "impact", { { "of", mcprefuse::cappedEcho( symbol ) } }, {}, notFoundNearOf( symbol ) }, false )
+                                               : textResult( *answer );
                     } );
                 }
                 else if( name == "uses" && !path.empty() && !symbol.empty() )
@@ -2402,7 +2425,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                                                  return answer ? textResult( *answer )   // count="0" stays a valid answer
                                                                : errResult( -32603, "internal error: the uses answer buffer lost bytes — no answer served" );
                                              } )
-                                           : errResultMsg( -32602, refusal );
+                                           : usesRefusalIsNotFound( refusal )
+                                               ? notFoundAnswered( refusal, NotFoundAnswer{ "uses", { { "of", mcprefuse::cappedEcho( symbol ) } }, {}, notFoundNearOf( symbol ) }, false )
+                                               : errResultMsg( -32602, refusal );   // review M5: a not-found answers like --uses
                 }
                 else if( name == "affected" && !path.empty() && !files.empty() )
                 {
@@ -2440,8 +2465,17 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 else if( name == "path_between" && !path.empty() && !from.empty() && !to.empty() )
                 {
                     const std::optional<std::string> answer = pathText( path, from, to );
+                    const auto pathNotFound = [ & ]
+                    {
+                        const IngestResult& pIng    = getIndex( path ).ing;
+                        const bool          fromBad = resolveAllByNameQualified( pIng, from ).empty();
+                        const bool          toBad   = resolveAllByNameQualified( pIng, to ).empty();
+                        return notFoundAnswered( pathEndpointRefusal( pIng, from, to ),
+                                                 NotFoundAnswer{ "path", { { "from", mcprefuse::cappedEcho( from ) }, { "to", mcprefuse::cappedEcho( to ) } },
+                                                                 fromBad && toBad ? "both" : fromBad ? "from" : "to", notFoundNearOf( fromBad ? from : to ) }, false );
+                    };
                     resp = !answer        ? errResult( -32603, "internal error: the path_between answer buffer lost bytes — no answer served" )
-                         : answer->empty() ? errResultMsg( -32602, pathEndpointRefusal( getIndex( path ).ing, from, to ) )
+                         : answer->empty() ? pathNotFound()
                                            : textResult( *answer );
                 }
                 // `connect` — symbols as a JSON string array (the schema form) or a comma-string (lenient);

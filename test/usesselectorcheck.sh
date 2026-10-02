@@ -407,8 +407,11 @@ for spec in "declinefix Widget::run" "rustqualfix Gadget::spin"; do
 done
 
 # control: a WRONG scope still refuses — the scope tier never falls back to the bare-name union, and neither may the fix
+# 2026-10-01 (fix list #2): a refusal now also prints the not-found ANSWER on stdout (found="0", no rows), so "nothing on
+# stdout" became "no use-site row on stdout" — the property this control guards is the absent bare-name union.
 OUT="$( fx declinefix --uses=Nope::ctwin )"; RC=$?
-[ "$RC" = 1 ] && [ -z "$OUT" ] && ok "(f) control: --uses=Nope::ctwin refuses (exit 1, nothing on stdout)" \
+[ "$RC" = 1 ] && ! printf '%s' "$OUT" | sed 's/<!--.*-->//' | grep -q '<u ' && printf '%s' "$OUT" | grep -q 'found="0"' \
+    && ok "(f) control: --uses=Nope::ctwin refuses (exit 1, the found=\"0\" answer, no use-site row)" \
     || no "(f) control: --uses=Nope::ctwin exit $RC — a wrong scope must refuse, never answer the bare-name union"
 
 # determinism and well-formedness on a "::" selector

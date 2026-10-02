@@ -795,7 +795,7 @@ Artifact written:
 **exit code: 1**
 
 `````
-(empty)
+<!-- ripwire callers: NOT FOUND, an answer and a refusal at once. found=0: no indexed definition matched the selector echoed on this element, so nothing was listed or counted. Zero means none found, not none exists: an unindexed file, a typo or an uncommitted rename can each hide the definition. near=: the indexed name to retry with; near_renamed=1: the working tree renamed the selector to it (a DEFINITION of the selector left a changed file that now defines near=; a mere mention is not a rename). On the CLI the exit status stays 1, a refusal, and stderr carries the same diagnosis; over MCP this document rides the refusal's error data. --><callers of="DoesNotExist" found="0"/>
 `````
 
 stderr:

@@ -748,7 +748,7 @@ _Unknown-symbol REFUSAL shape (exit 1) with a did-you-mean from real edit distan
 
 ```
 $ ./build/ripwire . --callers=DoesNotExist
-(empty)
+<!-- ripwire callers: NOT FOUND, an answer and a refusal at once. found=0: no indexed definition matched the selector echoed on this element, so nothing was listed or counted. Zero means none found, not none exists: an unindexed file, a typo or an uncommitted rename can each hide the definition. near=: the indexed name to retry with; near_renamed=1: the working tree renamed the selector to it (a DEFINITION of the selector left a changed file that now defines near=; a mere mention is not a rename). On the CLI the exit status stays 1, a refusal, and stderr carries the same diagnosis; over MCP this document rides the refusal's error data. --><callers of="DoesNotExist" found="0"/>
 ```
 
 **Shaped by:** `--no-route`, `--callees`, `--uses`, `--impact`, `--expand`, `--edit-check`, `--slice-flow`, `--at`
@@ -3546,7 +3546,7 @@ $ ./build/ripwire . --stray-content=main --abi
 
 **Answers:** find which branch's tree defines or mentions SYM, HEAD first which REF's tree defines or mentions SYM — HEAD first, then every local branch, with on-head="0" naming the case the verb exists for: content that lives only on a branch.
 
-Each distinct blob is read ONCE (content-addressed), so N branches cost ~one tree. kind="def" on a HEAD row is the PARSED index's answer (head_labels="index"); on a REF row it is a LEXICAL heuristic — ref blobs are raw text, never ingested, so a doc quoting a signature still reads as a definition. head_labels="lexical" ⇒ HEAD fell back to that heuristic too (no indexed def of the name, or a working tree that drifted from HEAD). refs_scanned= is the SCAN denominator (refs read besides HEAD), not a matched count. Read-only; single-root only. LIMITS: a TREE scan finds only what some ref STILL carries, so hits="0" alone cannot tell a name this repo never had from one it deleted, and content dropped by every tree is invisible. Add --with-history: a <fate> row then says v="never" or v="removed" with the commit, date and file that removed it. Remote-tracking refs are excluded (they mirror local ones); refs are capped, narrow with --stray-content=SUBSTR.
+Each distinct blob is read ONCE (content-addressed), so N branches cost ~one tree. kind="def" on a HEAD row is the PARSED index's answer (head_labels="index"); on a REF row it is a LEXICAL heuristic — ref blobs are raw text, never ingested, so a doc quoting a signature still reads as a definition. head_labels="lexical" ⇒ HEAD fell back to that heuristic too (no indexed def of the name, or a working tree that drifted from HEAD). refs_scanned= is the SCAN denominator (refs read besides HEAD), not a matched count. Read-only; single-root only. A checkout that differs from HEAD is read from disk: each changed path's rows say ref="worktree" and replace HEAD's, at= gains +dirty, and worktree= says whether every one was read. LIMITS: a TREE scan finds only what some ref STILL carries, so hits="0" alone cannot tell a name this repo never had from one it deleted, and content dropped by every tree is invisible. Add --with-history: a <fate> row then says v="never" or v="removed" with the commit, date and file that removed it. Remote-tracking refs are excluded (they mirror local ones); refs are capped, narrow with --stray-content=SUBSTR.
 
 **Try it**
 
