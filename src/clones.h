@@ -189,12 +189,18 @@ enum class CodeTokenKind : std::uint8_t { Identifier, Keyword, Number, String, P
 // string early and the bytes up to the next quote scan as code (a disclosed floor of the one consumer, graph.h
 // identifierTokenCountExceeds, in the direction that keeps an edge). An f-string's `{…}` is string content here.
 //
+// slashComments (CodeScanOptions): ON (every C-family consumer, and the default) drops `//`-to-EOL and `/* … */` as
+// comments. OFF keeps them as punctuation, because in Python `//` is floor division: `n = total // 2; kind = Pool` must
+// not lose the rest of its line (commenttokencheck arm P). The one consumer that turns it off is the same graph.h count,
+// for the `#`-comment languages.
+//
 // `sink( std::string_view token, CodeTokenKind kind )` is called once per token, in source order.
 struct CodeScanOptions
 {
     bool stripHashComments       = false;   // `#` to EOL is a comment (usesHashLineComments)
     bool munchMultiByteOperators = false;   // longest match from kMultiByteOperators (the --readability shape)
     bool singleQuoteStrings      = false;   // `'` opens a string literal, not a char literal (Python, Ruby, the JS family)
+    bool slashComments           = true;    // `//` to EOL and `/* … */` are comments (off: Python's `//` is floor division)
 };
 
 template<typename Sink>
@@ -230,7 +236,7 @@ inline void scanCodeTokens( const std::string& src, std::size_t a, std::size_t b
             ++i;
             continue;
         }
-        if( c == '/' && i + 1 < n && src[i + 1] == '/' )
+        if( options.slashComments && c == '/' && i + 1 < n && src[i + 1] == '/' )
         {
             i += 2;
             while( i < n && src[i] != '\n' )
@@ -239,7 +245,7 @@ inline void scanCodeTokens( const std::string& src, std::size_t a, std::size_t b
             }
             continue;
         }
-        if( c == '/' && i + 1 < n && src[i + 1] == '*' )
+        if( options.slashComments && c == '/' && i + 1 < n && src[i + 1] == '*' )
         {
             i += 2;
             while( i + 1 < n && !( src[i] == '*' && src[i + 1] == '/' ) )

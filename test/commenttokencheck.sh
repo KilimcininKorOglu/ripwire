@@ -31,6 +31,8 @@
 #       `p: "PStr"` is the same shape (the first cut of this fix scanned every string as prose and lost that edge)
 #   (O) ANY OTHER STRING IS PROSE, must decline: an `__all__` tuple entry, a list literal entry (`[` after `=` is no
 #       subscript), `return "Pool"`, a call argument `print("Pool")`
+#   (P) `//` IS FLOOR DIVISION IN PYTHON, must keep: `n = total // 2; kind = Pool` — the C-family `//`-to-EOL comment rule
+#       does not apply to a `#`-comment language, so the rest of the line stays code
 #   (K) INTERPOLATIONS ARE CODE: Python `f"{run()}"` and JS `${run()}` keep their call edge to run (tree-sitter reads
 #       the interpolation as code; nothing here strips it)
 #   (L) OTHER COMMENT FAMILIES make no call edge: C++ `//` and `/* */`, Lua `--` and `--[[ ]]`, Ruby `#` and
@@ -216,6 +218,14 @@ def shout():
     print("Pool")
 PY
 expect_declined "(O4) call argument" "$TMP/py_O4"
+
+echo "=== (P) Python's // is floor division, not a comment: the code after it on the line counts ==="
+pyfix P <<'PY'
+def half(total, make):
+    n = total // 2; kind = Pool
+    return make(n, kind)
+PY
+expect_kept "(P) n = total // 2; kind = Pool — the mention after // stays code" "$TMP/py_P"
 
 # ── (K) interpolations are code ────────────────────────────────────────────────────────────────────────────────
 echo "=== (K) a call inside an f-string / template-literal interpolation keeps its edge ==="

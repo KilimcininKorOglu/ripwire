@@ -2282,8 +2282,10 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 // and `Optional["Pool"]` / `Dict[str, "Pool"]` (directly inside a `[ … ]` that follows a name or a `]`). Those are scanned
 // for identifier runs as the whole file once was (arm N; builtinbindcheck arm T's `p: "PStr"`). A docstring follows its
 // `:` on the NEXT line, an `__all__` tuple sits in `( … )`, a list literal's `[` follows `=`, and a call argument follows
-// `(`, so each stays prose (arm O). Still errs toward keeping the edge: an unreadable file admits; a dict literal's
-// `"k": "Pool"` and a lambda's `: "Pool"` read as annotations; a quote inside a triple-quoted string re-opens code scanning
+// `(`, so each stays prose (arm O). In a `#`-comment language `//` is floor division, not a comment, so the scanner keeps
+// `//` and `/* */` as punctuation there and `n = total // 2; kind = Pool` keeps the rest of its line (arm P). Still errs
+// toward keeping the edge: an unreadable file admits; a dict literal's `"k": "Pool"`, a lambda's `: "Pool"` and a dict
+// lookup's `d["Pool"]` read as annotations or subscripts; a quote inside a triple-quoted string re-opens code scanning
 // until the next quote; an f-string's interpolated expression is string content here (the call edge it makes is
 // tree-sitter's and unaffected, arm K). The gate caches one file's bytes (its calls arrive file by file).
 inline std::size_t identifierRunCount( std::string_view text, std::string_view name ) noexcept
@@ -2310,7 +2312,7 @@ inline bool identifierTokenCountExceeds( const std::string& text, std::string_vi
     std::vector<char> brackets;             // the open brackets: 's' = a subscript `[`, 'o' = any other
     scanCodeTokens( text, 0, text.size(),
                     CodeScanOptions{ .stripHashComments = usesHashLineComments( lang ), .munchMultiByteOperators = true,   // `->` is one token
-                                     .singleQuoteStrings = usesSingleQuoteStrings( lang ) },
+                                     .singleQuoteStrings = usesSingleQuoteStrings( lang ), .slashComments = !usesHashLineComments( lang ) },
                     [ & ]( std::string_view token, CodeTokenKind kind )
                     {
                         if( kind == CodeTokenKind::Identifier || kind == CodeTokenKind::Keyword )
