@@ -23,7 +23,7 @@
 #include "pincensus.h"           // eval-only per-call-site decision census (--pin-census); inert unless armed
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
 #include "infra/sortutil.h"      // radix edge sorting for large integer-key graph edge lists
-#include "infra/namesplit.h"     // isIdentChar — BuiltinMethodGate::namedBeyondDefinition's identifier-token scan
+#include "clones.h"              // scanCodeTokens / CodeScanOptions — BuiltinMethodGate::namedBeyondDefinition's code-token count
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 
@@ -2272,23 +2272,23 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 // THE SAME-FILE ANNOTATION RULE (BuiltinMethodGate::fileNames, byReferenceOnly). Python records no annotation as a binding
 // or reference, so `def f( p: Pool )`, `x: Pool = …`, `"Pool"`, `Optional[Pool]`, `isinstance( o, Pool )` and `-> Pool`
 // leave fileRefClasses empty in the file that DEFINES Pool. A class the file defines still counts there when its name
-// occurs as an identifier token more often than the file defines a class of that name: a `class Pool:` line (and the
-// module-level name Python binds for it) is one token per definition, and any other occurrence — including a comment or a
-// docstring — is evidence. Errs toward keeping the edge: an unreadable file admits, and prose counts, so the gate removes
-// less there, never more. The gate caches one file's bytes (its calls arrive file by file). Stops at limit + 1.
-inline bool identifierTokenCountExceeds( std::string_view text, std::string_view name, std::size_t limit ) noexcept
+// occurs as a CODE token more often than the file defines a class of that name: a `class Pool:` line (and the
+// module-level name Python binds for it) is one token per definition, and any other code occurrence is evidence. The
+// tokens come from the house code scanner (clones.h scanCodeTokens), so a `# Pool` comment, a docstring and a `'Pool warm'`
+// or `"Pool"` string are NOT evidence (test/commenttokencheck.sh A-E: each bound a json dict's `data.get` to Pool.get when
+// the count ran over every identifier byte run in the file). Still errs toward keeping the edge: an unreadable file admits,
+// and the scanner's own floors fall that way — a quote inside a triple-quoted string re-opens code scanning until the next
+// quote, and an f-string's interpolated expression is string content here (the call edge it makes is tree-sitter's and
+// unaffected, arm K). The gate caches one file's bytes (its calls arrive file by file).
+inline bool identifierTokenCountExceeds( const std::string& text, std::string_view name, std::size_t limit, Lang lang )
 {
-    std::size_t tokens   = 0;
-    std::size_t runStart = 0;
-    for( std::size_t at = 0; at <= text.size() && tokens <= limit; ++at )
-    {
-        if( at < text.size() && namesplit::isIdentChar( text[ at ] ) )
-        {
-            continue;
-        }
-        tokens  += ( text.substr( runStart, at - runStart ) == name ) ? 1u : 0u;
-        runStart = at + 1;
-    }
+    std::size_t tokens = 0;
+    scanCodeTokens( text, 0, text.size(),
+                    CodeScanOptions{ .stripHashComments = usesHashLineComments( lang ), .munchMultiByteOperators = false, .singleQuoteStrings = usesSingleQuoteStrings( lang ) },
+                    [ & ]( std::string_view token, CodeTokenKind kind )
+                    {
+                        tokens += ( ( kind == CodeTokenKind::Identifier || kind == CodeTokenKind::Keyword ) && token == name ) ? 1u : 0u;
+                    } );
     return tokens > limit;
 }
 
@@ -2434,9 +2434,19 @@ struct BuiltinMethodGate
         {
             return true;
         }
-        const auto defs = std::ranges::count_if( containersByFile[ fileId ], [ & ]( NodeId t )
-                                                 { return isClassLike( ing.symbols[ t ] ) && ing.symbols[ t ].name == className[ k ]; } );
-        return identifierTokenCountExceeds( *text, className[ k ], static_cast<std::size_t>( defs ) );
+        // The class's own language decides the scan's comment and string shapes; a file with no definition of the class
+        // (k reached through the cone) takes its first container's, and an empty file scans as C-family (nothing to count).
+        std::size_t defs = 0;
+        Lang        lang = containersByFile[ fileId ].empty() ? Lang::Unknown : ing.symbols[ containersByFile[ fileId ].front() ].lang;
+        for( const NodeId t : containersByFile[ fileId ] )
+        {
+            if( isClassLike( ing.symbols[ t ] ) && ing.symbols[ t ].name == className[ k ] )
+            {
+                ++defs;
+                lang = ing.symbols[ t ].lang;
+            }
+        }
+        return identifierTokenCountExceeds( *text, className[ k ], defs, lang );
     }
 
     // Python: is the receiver of `x.m()` a MODULE whose file holds `target`? See the struct comment for the three shapes.

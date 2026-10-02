@@ -305,6 +305,24 @@ a branch build of unreleased work has used, so no cache such a build wrote is re
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
 cached quality snapshot is recomputed. The session legend dictionary is `dictv=b5c64a12f0346e6c entries=771`.
 
+### Fixed — a class named only in a comment, docstring or string no longer admits a same-file builtin-named call to its method
+
+The builtin-method name gate admits a Python `x.get( k )` to a same-file `Pool.get` when the defining file names `Pool`
+beyond its `class` line, because Python records no annotation as a binding and `def f( p: Pool )` must count. That count
+was an identifier scan over every byte of the file, so `# Pool is the cache`, a docstring reading ``:class:`Pool` `` and a
+`logging.info( 'Pool warm' )` message each counted exactly like an annotation, and `data.get( "repos" )` on a json dict bound
+to `Pool.get` — a caller row, an `--impact` hop and a `tested=` claim with no call behind it. The count now runs over the
+house code scanner (`scanCodeTokens`), which drops `#` comments and `"…"` strings and, for this consumer, `'…'` strings too
+(a new `CodeScanOptions` spelling; every `--clones` / `--readability` call site keeps its bytes), so only a token the parser
+would read as code counts. Such a call is declined and counted (`declined_calls=`), as the gate declines every other
+unevidenced call. Floors, both in the direction that keeps an edge: a quote character inside a triple-quoted string
+re-opens code scanning until the next quote, and an f-string's interpolated expression is string content for this count
+(the call edge it makes is tree-sitter's and unchanged). Not changed: the comment and docstring text never made a call edge
+of its own in any language (tree-sitter reads no call in a comment), and a call on a receiver of unknown type whose name is
+NOT in the builtin table (`self._observer.start()` beside an in-repo `start`) still binds by name — that is the resolver's
+stated name-based floor, not this gate. Gate: `test/commenttokencheck.sh` (arms A–E red before; F–I near misses; J the
+annotation control; K interpolations; L the C++/Lua/Ruby/JS comment families; M determinism).
+
 ### Fixed — crashsweepcheck and hazardpatterncheck no longer depend on the size of `src/`
 
 Both gates run their static rules with `--match` over `src/`, and refused a scan the engine capped at its 5000-hit budget.
