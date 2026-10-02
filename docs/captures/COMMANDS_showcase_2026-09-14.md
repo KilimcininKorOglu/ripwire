@@ -795,7 +795,7 @@ Artifact written:
 **exit code: 1**
 
 `````
-(empty)
+<!-- ripwire callers: NOT FOUND, an answer and a refusal at once. found=0: no indexed definition matched the selector echoed on this element, so nothing was listed or counted. Zero means none found, not none exists: an unindexed file, a typo or an uncommitted rename can each hide the definition. near=: the indexed name to retry with; near_renamed=1: the working tree renamed the selector to it (a DEFINITION of the selector left a changed file that now defines near=; a mere mention is not a rename). On the CLI the exit status stays 1, a refusal, and stderr carries the same diagnosis; over MCP this document rides the refusal's error data. --><callers of="DoesNotExist" found="0"/>
 `````
 
 stderr:
@@ -5351,7 +5351,7 @@ ripwire: --run-timeout=SECONDS modifies --run-trace — pass it too (e.g. ripwir
 *The session legend dictionary the MCP server serves as ripwire://legend-dict/full — one definition per line, headed by its dictv= version; no corpus needed. =roster lists the completeness attributes it defines.*
 
 `````
-ripwire legend dictionary ripwire.dict/v1 dictv=0e543e1e6a3fe37d entries=750
+ripwire legend dictionary ripwire.dict/v1 dictv=b5c64a12f0346e6c entries=771
 <about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
 schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
 window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)
@@ -5381,7 +5381,7 @@ ripwire.impact/v1 <impact>: transitive blast radius of of=: <s t= n= p=> reach s
 ripwire.path/v1 <path>: one DIRECTED call path from= to to=, each <s t= n= p=> a hop; reachable=0 hops=0 when none
 ripwire.connect/v1 <connect>: minimal joining subgraph: <g> groups, <t> terminals, <s connects=> joins, <e f= t=> edges, <unconnected>
 ripwire.at/v1 <at>: enclosing-definition chain at p=:l=: sym= innermost, chain= outermost-first, <s n= t= l= el=> spans
-… [721 more display lines; full output is 73872 bytes on 751 raw line(s)]
+… [742 more display lines; full output is 76341 bytes on 772 raw line(s)]
 `````
 
 ## `./build/ripwire . --lint --lint-select=cache-`

@@ -110,6 +110,23 @@ inline const char* macroRoleAttr( rw::SymKind k ) noexcept
 using rw::CallHierarchyRows;
 using rw::HopTestedPartition;
 
+// The not-found refusal of the ANSWERING verbs (--callers/--callees/--uses/--impact/--path), in one shape: stderr
+// names the miss (a working-tree rename first, then the shared fault clause), stdout carries the answer document
+// (selectorrefuse.h writeNotFoundAnswer), and the exit stays 1, the documented refusal (README §6.2). The rename
+// probe reads git, so it runs on a single-root index only; a workspace gets the spelling near-miss alone.
+inline std::string notFoundGitRoot( const rw::IngestResult& ing, const rw::Config& cfg )
+{
+    return ing.realPaths.empty() && cfg.roots.size() == 1 ? std::string( cfg.roots[0] ) : std::string();
+}
+
+inline int refuseNotFoundWithAnswer( const rw::IngestResult& ing, const rw::Config& cfg, const rw::NotFoundAnswer& answer,
+                                     std::string_view prefix, std::string_view spec, std::string_view retryForm )
+{
+    rw::emitTo( stderr, "{}{}{}{}\n", prefix, spec, rw::notFoundRenameClause( answer.near ), rw::selectorFaultClause( ing, spec, retryForm ) );
+    rw::writeNotFoundAnswer( stdout, answer, cfg.json );
+    return 1;
+}
+
 std::optional<int> runCallHierarchy( const MainDispatch& d )
 {
     using namespace rw;
@@ -136,9 +153,9 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         if( matches.empty() )
         {
             const std::string verb = std::string( wantCallers ? "--callers" : "--callees" );   // one arm, two spellings
-            rw::emitTo( stderr, "{}\n", selectorNotFoundMessage( ing, "ripwire: " + verb + " symbol not found: ",
-                                                                   sym, verb + "=" ).c_str() );   // §B4.2 shared refusal
-            return 1;
+            return refuseNotFoundWithAnswer( ing, cfg, rw::NotFoundAnswer{ wantCallers ? "callers" : "callees", { { "of", std::string( sym ) } }, {},
+                                                                           rw::notFoundNear( ing, sym, notFoundGitRoot( ing, cfg ) ) },
+                                             "ripwire: " + verb + " symbol not found: ", sym, verb + "=" );   // §B4.2 shared refusal
         }
         const std::vector<NodeId>& result = chRows.rows;
 
@@ -588,11 +605,11 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
 // §B4.2: that MESSAGE now lives in selectorrefuse.h and every SYM-taking verb speaks it — this arm is what
 // it was generalized FROM, so what stays here is only the exit code. The wording is unchanged (a file-list
 // cap with an explicit remainder is the one addition, shared by all six arms).
-inline int refuseUsesFileQualifier( const rw::IngestResult& ing, std::string_view sym, const UsesSelector& )
+inline int refuseUsesFileQualifier( const rw::IngestResult& ing, const rw::Config& cfg, std::string_view sym )
 {
-    rw::emitTo( stderr, "{}\n", rw::selectorNotFoundMessage( ing, "ripwire: --uses symbol not found: ",
-                                                                sym, "--uses=" ).c_str() );
-    return 1;
+    return refuseNotFoundWithAnswer( ing, cfg, rw::NotFoundAnswer{ "uses", { { "of", std::string( sym ) } }, {},
+                                                                   rw::notFoundNear( ing, sym, notFoundGitRoot( ing, cfg ) ) },
+                                     "ripwire: --uses symbol not found: ", sym, "--uses=" );
 }
 
 // §P8 G1 — --uses was the one verb that disclosed NOTHING: it accepted --limit/--offset, ignored both, and
@@ -660,7 +677,7 @@ std::optional<int> runUses( const MainDispatch& d )
         // three siblings all refuse it, and so does this one now.
         if( defs.empty() && sel.fileQualified )
         {
-            return refuseUsesFileQualifier( ing, sym, sel );
+            return refuseUsesFileQualifier( ing, cfg, sym );
         }
 
         // r27-emitters T3 / §P10.2: external="1" is a real answer, a typo is not — distinguished by the
@@ -670,8 +687,10 @@ std::optional<int> runUses( const MainDispatch& d )
         // made defs wrongly empty for a selector that DID resolve).
         if( defs.empty() && sites.empty() )
         {
-            rw::emitTo( stderr, "{}\n", withDidYouMean( ing, sel.suggestName,
-                          "ripwire: --uses selector matched no indexed definition: " + std::string( sym ) ).c_str() );
+            const rw::NotFoundNear near = rw::notFoundNear( ing, sel.suggestName, notFoundGitRoot( ing, cfg ) );
+            const std::string      msg  = "ripwire: --uses selector matched no indexed definition: " + std::string( sym ) + rw::notFoundRenameClause( near );
+            rw::emitTo( stderr, "{}\n", near.renamed ? msg : withDidYouMean( ing, sel.suggestName, msg ) );
+            rw::writeNotFoundAnswer( stdout, rw::NotFoundAnswer{ "uses", { { "of", std::string( sym ) } }, {}, near }, cfg.json );
             return 1;
         }
 
@@ -2079,9 +2098,10 @@ std::optional<int> runPath( const MainDispatch& d )
             // grammar, so the endpoint that missed gets the shared diagnosis (unindexed path vs wrong file half
             // vs unknown name) instead of a near-miss on the name half alone.
             const std::string_view missing = srcDefs.empty() ? srcN : dstN;
-            rw::emitTo( stderr, "{}\n", selectorNotFoundMessage( ing, "ripwire: --path endpoint not found: ",
-                                                                  missing, "--path=" ).c_str() );
-            return 1;
+            return refuseNotFoundWithAnswer( ing, cfg, rw::NotFoundAnswer{ "path", { { "from", std::string( srcN ) }, { "to", std::string( dstN ) } },
+                                                                           srcDefs.empty() && dstDefs.empty() ? "both" : srcDefs.empty() ? "from" : "to",
+                                                                           rw::notFoundNear( ing, missing, notFoundGitRoot( ing, cfg ) ) },
+                                             "ripwire: --path endpoint not found: ", missing, "--path=" );
         }
 
         const std::vector<NodeId> path    = rw::shortestPathAny( g, srcDefs, dstDefs );   // ONE BFS over every def pair
@@ -2394,9 +2414,9 @@ std::optional<int> runImpact( const MainDispatch& d )
         const std::vector<NodeId> seeds          = resolveAllByNameQualified( ing, cfg.impactSym, &imUnprovenDefs );
         if( seeds.empty() )
         {
-            rw::emitTo( stderr, "{}\n", selectorNotFoundMessage( ing, "ripwire: --impact symbol not found: ",
-                                                                   cfg.impactSym, "--impact=" ).c_str() );   // §B4.2
-            return 1;
+            return refuseNotFoundWithAnswer( ing, cfg, rw::NotFoundAnswer{ "impact", { { "of", std::string( cfg.impactSym ) } }, {},
+                                                                           rw::notFoundNear( ing, cfg.impactSym, notFoundGitRoot( ing, cfg ) ) },
+                                             "ripwire: --impact symbol not found: ", cfg.impactSym, "--impact=" );   // §B4.2
         }
         // 0.6.5: the SAME walk, keeping each node's hop depth — the rows' d= and the root's by_depth=.
         std::vector<std::uint32_t>       imDepth;

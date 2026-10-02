@@ -1616,7 +1616,14 @@ std::optional<int> runCrossRef( const MainDispatch& d )
         // The tree zero stays an answer; the near-miss only says WHICH zero it is (a name this repo never
         // had, or a keystroke away from one it has). Computed only on the zero, so a real hit list is
         // byte-identical.
-        if( result.hits.empty() )
+        // Review M3/M7: the dotted note fires only for a method the index defines, and on a zero over a dirty checkout
+        // the working tree's rename of the name is offered ahead of (instead of) a spelling neighbour.
+        result.dottedRetry = crossref::whereisDottedRetryOf( d.ing, whereisSel );
+        if( result.hits.empty() && result.worktree != crossref::WorktreeOverlay::Clean )
+        {
+            result.renamedTo = crossref::worktreeRenameOf( d.ing, whereisSel, root );
+        }
+        if( result.hits.empty() && result.renamedTo.empty() )
         {
             result.nearMiss = didYouMean( d.ing, whereisSel );
         }

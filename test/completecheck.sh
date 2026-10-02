@@ -31,6 +31,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"   # §18 builds throwaway git repos: no inherited GIT_DIR / GIT_WORK_TREE may steer them
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative RIPWIRE_BIN
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
@@ -359,6 +360,358 @@ if grep -o '<grep [^>]*>' "$UG/warm.xml" | grep -q ' hits="2".* complete="1"'; t
 else
     no "grep (17 control): the readable fixture did not claim complete over 2 hits — the arm is void: $( grep -o '<grep [^>]*>' "$UG/warm.xml" )"
 fi
+
+# ── 18) whereis on a DIRTY checkout: the working tree is read, or the claim is withheld ───────────────
+# The comparison-table repros (2026-10-01): --whereis scanned committed trees only, so on a dirty checkout it
+# answered hits="0" complete="1" for a function the edit had just added, and listed a renamed or deleted
+# function at its old HEAD lines, also complete="1", with a bare at= (no +dirty). --callers on the same tree
+# saw the edit. Now every path under the root that differs from HEAD (modified, staged, deleted or untracked)
+# is read from disk: its rows say ref="worktree" and replace HEAD's rows for that path, at= gains +dirty and
+# the root says worktree="read". A changed path that cannot be read keeps its HEAD rows, says
+# worktree="partial" and withholds complete=. A clean checkout answers byte-for-byte as before.
+WT="$TMP/wtrepo"; mkdir -p "$WT/src"
+cat >"$WT/src/main.c" <<'EOF'
+int zqKeep( int x ) { return x + 1; }
+int zqOldName( int x ) { return x * 2; }
+int zqDoomed( void ) { return 3; }
+int zqUser( void ) { return zqKeep( 1 ) + zqOldName( 2 ) + zqDoomed(); }
+EOF
+cat >"$WT/src/other.c" <<'EOF'
+int zqOther( void ) { return 4; }
+EOF
+cat >"$WT/src/gone.c" <<'EOF'
+int zqGone( void ) { return 5; }
+EOF
+( cd "$WT" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+WSHA="$( git -C "$WT" rev-parse --short=9 HEAD 2>/dev/null )"
+wroot(){ grep -o '<whereis [^>]*>' | head -1; }
+wwhere(){ "$BIN" "$WT" --whereis="$1" --no-cache "${@:2}" 2>/dev/null; }
+
+# 18a) control: the clean checkout claims, with a bare at= and no worktree= — the pre-fix shape, unchanged
+W0="$( wwhere zqOldName | wroot )"
+{ printf '%s' "$W0" | grep -q " at=\"$WSHA\" complete=\"1\"" && ! printf '%s' "$W0" | grep -q 'worktree='; } \
+    && ok 'whereis (18a control): a clean checkout claims complete="1" with a bare at= and no worktree=' \
+    || no "whereis (18a control): the clean shape changed: $W0"
+
+# the edit: add a function, rename one, delete one, delete a whole tracked file, add an untracked file
+cat >"$WT/src/main.c" <<'EOF'
+int zqKeep( int x ) { return x + 1; }
+int zqNewName( int x ) { return x * 2; }
+int zqFresh( void ) { return 6; }
+int zqUser( void ) { return zqKeep( 1 ) + zqNewName( 2 ) + zqFresh(); }
+EOF
+rm -f "$WT/src/gone.c"
+printf 'int zqUntracked( void ) { return 7; }\n' >"$WT/src/new.c"
+
+# 18b) a function the edit ADDED is found, as a worktree definition, and the stamp says the tree is dirty
+W1="$( wwhere zqFresh )"; W1R="$( printf '%s' "$W1" | wroot )"
+{ printf '%s' "$W1" | grep -q '<hit ref="worktree" [^>]*p="src/main.c" l="3" kind="def"' \
+  && printf '%s' "$W1R" | grep -q " at=\"$WSHA+dirty\" worktree=\"read\"" && printf '%s' "$W1R" | grep -q ' on-head="1"'; } \
+    && ok 'whereis (18b): a function added in the working tree is found (ref="worktree" kind="def"), at= says +dirty, worktree="read"' \
+    || { no 'whereis (18b): a function the working tree added is still invisible (the stale-and-silent answer)'; printf '%s\n' "$W1R"; }
+
+# 18c) a RENAMED-away name no longer lists its old HEAD line; the new name is found
+W2R="$( wwhere zqOldName | wroot )"; W2="$( wwhere zqOldName )"
+{ printf '%s' "$W2R" | grep -q ' hits="0"' && ! printf '%s' "$W2" | grep -q '<hit ref="HEAD"'; } \
+    && ok 'whereis (18c): a name the working tree renamed away lists no stale HEAD row (hits="0")' \
+    || { no 'whereis (18c): the renamed-away name still lists its old HEAD lines'; printf '%s\n' "$W2R"; }
+wwhere zqNewName | grep -q '<hit ref="worktree" [^>]*p="src/main.c" l="2" kind="def"' \
+    && ok 'whereis (18c): the rename target is found in the working tree' \
+    || no 'whereis (18c): the rename target is not found'
+
+# 18d) a DELETED definition, and a whole deleted tracked file, drop out
+for s in zqDoomed zqGone; do
+    W3R="$( wwhere "$s" | wroot )"
+    printf '%s' "$W3R" | grep -q ' hits="0"' \
+        && ok "whereis (18d): $s, deleted in the working tree, has no rows" \
+        || { no "whereis (18d): $s, deleted in the working tree, still has rows"; printf '%s\n' "$W3R"; }
+done
+
+# 18e) an UNTRACKED file is part of the checkout; an untouched path keeps its HEAD row
+wwhere zqUntracked | grep -q '<hit ref="worktree" [^>]*p="src/new.c" l="1" kind="def"' \
+    && ok 'whereis (18e): a definition in an untracked file is found' \
+    || no 'whereis (18e): a definition in an untracked file is invisible'
+wwhere zqOther | grep -q '<hit ref="HEAD" [^>]*p="src/other.c" l="1" kind="def"' \
+    && ok 'whereis (18e): a path the edit did not touch still answers from HEAD (ref="HEAD")' \
+    || no 'whereis (18e): an untouched path lost its HEAD row'
+
+# 18f) the INVARIANT: no complete="1" answer carries a HEAD row for a path that differs from HEAD
+CHANGED="$( git -C "$WT" diff --name-only HEAD; git -C "$WT" ls-files --others --exclude-standard )"
+bad=0
+for s in zqKeep zqFresh zqOldName zqNewName zqDoomed zqGone zqUntracked zqOther zqUser; do
+    out="$( wwhere "$s" )"
+    printf '%s' "$out" | wroot | grep -q 'complete="1"' || continue
+    for p in $CHANGED; do
+        printf '%s' "$out" | grep -q "<hit ref=\"HEAD\" [^>]*p=\"$p\"" && { bad=1; no "whereis (18f): $s claims complete=\"1\" beside a stale HEAD row for changed $p"; }
+    done
+done
+[ $bad -eq 0 ] && ok 'whereis (18f): no complete="1" answer carries a HEAD row for a path the working tree changed'
+
+# 18g) the twin: MCP whereis reads the same working tree, row for row
+if command -v python3 >/dev/null 2>&1; then
+    M1="$( python3 - "$BIN" "$WT" <<'PY'
+import json, subprocess, sys
+msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
+         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "whereis", "arguments": { "path": sys.argv[2], "symbol": "zqFresh" } } } ]
+p = subprocess.run( [ sys.argv[1], "--mcp" ], input = "".join( json.dumps( m ) + "\n" for m in msgs ), capture_output = True, text = True, timeout = 300 )
+d = json.loads( [ l for l in p.stdout.splitlines() if l.strip() ][ -1 ] )
+print( d.get( "result", {} ).get( "content", [ {} ] )[ 0 ].get( "text", "" ) )
+PY
+)"
+    C1H="$( printf '%s' "$W1" | grep -o '<hit [^>]*/>' )"; M1H="$( printf '%s' "$M1" | grep -o '<hit [^>]*/>' )"
+    { [ -n "$C1H" ] && [ "$C1H" = "$M1H" ] && printf '%s' "$M1" | wroot | grep -q " at=\"$WSHA+dirty\" worktree=\"read\""; } \
+        && ok 'whereis (18g): the MCP twin serves the same worktree rows, +dirty stamp and worktree="read"' \
+        || { no 'whereis (18g): the MCP twin disagrees with the CLI on a dirty checkout'; printf '%s\n' "$M1" | wroot; }
+fi
+
+# 18h) the legend defines worktree= wherever it rides, in both dialects
+grep -q 'worktree=read|partial|unlisted' <<<"$W1" \
+    && ok 'whereis (18h): the compact legend defines worktree=' || no 'whereis (18h): worktree= rides with no compact definition'
+wwhere zqFresh --legend=full | grep -q 'WORKTREE: worktree=' \
+    && ok 'whereis (18h): the full legend defines worktree=' || no 'whereis (18h): worktree= rides with no full-legend definition'
+
+# 18i) MUTATION: a changed path that cannot be READ keeps its HEAD rows, says partial, and never claims
+chmod 000 "$WT/src/main.c"
+if cat "$WT/src/main.c" >/dev/null 2>&1; then
+    printf '  SKIP  18i: chmod 000 does not stop this user reading the file (root?) — the arm cannot plant its fault\n'
+else
+    W4R="$( wwhere zqKeep | wroot )"
+    { printf '%s' "$W4R" | grep -q ' worktree="partial"' && ! printf '%s' "$W4R" | grep -q 'complete='; } \
+        && ok 'whereis (18i): an unreadable changed path says worktree="partial" and withholds complete=' \
+        || { no 'whereis (18i): an unreadable changed path still claims a complete answer'; printf '%s\n' "$W4R"; }
+fi
+chmod 644 "$WT/src/main.c"
+
+# 18j) "none found" is an ANSWER on whereis (rc 0, a document) and stays the documented REFUSAL on callers
+# (README §6.2: 1 = refused; docs/COMMANDS.md --callers "Unknown-symbol REFUSAL shape (exit 1)").
+"$BIN" "$WT" --whereis=zqDoomed --no-cache >"$TMP/wt0.xml" 2>/dev/null; rc=$?
+{ [ $rc -eq 0 ] && wroot <"$TMP/wt0.xml" | grep -q ' hits="0"'; } \
+    && ok 'whereis (18j): a name the working tree deleted answers rc 0 with a hits="0" document' \
+    || no "whereis (18j): the deleted name did not answer as a document (rc=$rc)"
+"$BIN" "$WT" --callers=zqDoomed --no-cache >"$TMP/wt0c.xml" 2>"$TMP/wt0c.err"; rc=$?
+{ [ $rc -eq 1 ] && grep -q 'not found' "$TMP/wt0c.err"; } \
+    && ok 'callers (18j): the same name is still the documented refusal (exit 1, stderr names it)' \
+    || no "callers (18j): the unknown-symbol contract moved (rc=$rc)"
+
+# 18l) ...and the refusal now ALSO answers on stdout (fix list #2): the verb's own root, the selector echoed, found="0",
+# the legend defining it — so an agent reading stdout gets an answer, not nothing. Exit 1 is unchanged.
+for v in callers callees uses impact; do
+    "$BIN" "$WT" --$v=zqDoomed --no-cache >"$TMP/nf.xml" 2>/dev/null; rc=$?
+    { [ $rc -eq 1 ] && grep -q "<$v [^>]*of=\"zqDoomed\" found=\"0\"" "$TMP/nf.xml" && grep -q 'found=0: ' "$TMP/nf.xml" \
+      && { ! command -v xmllint >/dev/null 2>&1 || xmllint --noout "$TMP/nf.xml" 2>/dev/null; }; } \
+        && ok "$v (18l): not found answers on stdout (<$v of= found=\"0\">, legend-defined, well-formed) and still exits 1" \
+        || { no "$v (18l): not found printed no answer document (rc=$rc)"; head -c 300 "$TMP/nf.xml"; echo; }
+done
+"$BIN" "$WT" --path=zqUser,zqDoomed --no-cache >"$TMP/nf.xml" 2>/dev/null; rc=$?
+{ [ $rc -eq 1 ] && grep -q '<path [^>]*from="zqUser" to="zqDoomed" found="0" missing="to"' "$TMP/nf.xml"; } \
+    && ok 'path (18l): an endpoint that matched nothing answers <path from= to= found="0" missing="to"> and exits 1' \
+    || { no "path (18l): no answer document (rc=$rc)"; head -c 300 "$TMP/nf.xml"; echo; }
+"$BIN" "$WT" --callers=zqDoomed --json --no-cache 2>/dev/null \
+    | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); sys.exit(0 if d.get("of")=="zqDoomed" and d.get("found")==0 else 1)' 2>/dev/null \
+    && ok 'callers (18l): under --json the not-found answer is one JSON object with found:0' \
+    || no 'callers (18l): --json not-found printed no JSON answer'
+
+# 18m) the near-miss ranks a WORKING-TREE RENAME first: zqOldName became zqNewName in the working tree, so the answer
+# offers zqNewName (near_renamed="1"), and stderr names the rename before any spelling near-miss.
+"$BIN" "$WT" --callers=zqOldName --no-cache >"$TMP/rn.xml" 2>"$TMP/rn.err"; rc=$?
+{ [ $rc -eq 1 ] && grep -q 'near="zqNewName" near_renamed="1"' "$TMP/rn.xml" \
+  && grep -q "symbol not found: zqOldName (renamed in the working tree: did you mean 'zqNewName'?)" "$TMP/rn.err"; } \
+    && ok 'callers (18m): a name the working tree renamed offers the new name first (near_renamed="1", stderr says renamed)' \
+    || { no 'callers (18m): the rename is not offered first'; cat "$TMP/rn.err"; head -c 400 "$TMP/rn.xml"; echo; }
+"$BIN" "$WT" --callers=zqNoSuchNameAtAll --no-cache >"$TMP/rn0.xml" 2>/dev/null
+grep -q 'near_renamed' "$TMP/rn0.xml" \
+    && no 'callers (18m): a name no file ever had was offered as a rename' \
+    || ok 'callers (18m): a name no file ever had gets no rename claim'
+
+# 18n) fix list #9: a TEST-LOCAL definition (a test file's own `def helper`, hono-05's `const serveStatic =`) is
+# ordered after the production definition when both exist, and marked test_local="1"; nothing is dropped. An answer
+# with only one kind keeps its bytes.
+TL="$TMP/testlocal"; mkdir -p "$TL/pkg" "$TL/tests"
+printf 'def helper( x ):\n    return x\n' >"$TL/pkg/lib.py"
+printf 'from pkg.lib import helper as real\n\ndef helper( x ):\n    return real( x )\n\ndef only_in_test():\n    return helper( 1 )\n' >"$TL/tests/test_lib.py"
+( cd "$TL" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+TLO="$( "$BIN" "$TL" --whereis=helper --no-cache 2>/dev/null )"
+FIRSTDEF="$( printf '%s' "$TLO" | grep -o '<hit [^>]*kind="def"[^>]*>' | head -1 )"
+TESTDEF="$( printf '%s' "$TLO" | grep -o '<hit [^>]*p="tests/test_lib.py" l="3" kind="def"[^>]*>' )"
+{ printf '%s' "$FIRSTDEF" | grep -q 'p="pkg/lib.py" l="1" kind="def" t=' && printf '%s' "$TESTDEF" | grep -q 'kind="def" test_local="1"' \
+  && [ "$( printf '%s' "$TLO" | sed 's/<!--.*-->//' | grep -o '<hit ' | wc -l | tr -d ' ' )" = "$( printf '%s' "$TLO" | grep -o ' hits="[0-9]*"' | grep -o '[0-9]*' )" ]; } \
+    && ok 'whereis (18n): the production def leads; the test-local def is marked test_local="1" and kept (every hit printed)' \
+    || { no 'whereis (18n): a test-local definition is not demoted beside the production one'; printf '%s\n' "$TLO" | sed 's/<!--.*-->//' | head -c 900; echo; }
+printf '%s' "$TLO" | grep -q 'TEST-LOCAL: \|test_local=1: ' \
+    && ok 'whereis (18n): test_local= is defined in the legend where it rides' || no 'whereis (18n): test_local= rides undefined'
+"$BIN" "$TL" --whereis=only_in_test --no-cache 2>/dev/null | grep -q 'test_local' \
+    && no 'whereis (18n): an answer with only test definitions grew test_local=' \
+    || ok 'whereis (18n): an answer with one kind of definition carries no test_local= (bytes unchanged)'
+
+# 18n, the ORDER half: a test-scope def in a source file whose path sorts first (src/a.rs) used to lead the answer;
+# the production def (src/z.rs) now does.
+TR="$TMP/testscope"; mkdir -p "$TR/src"
+printf '#[cfg(test)]\nmod tests {\n    fn helper() -> i32 { 2 }\n    #[test]\n    fn t() { assert_eq!(helper(), 2); }\n}\n' >"$TR/src/a.rs"
+printf 'pub fn helper() -> i32 { 1 }\n' >"$TR/src/z.rs"
+( cd "$TR" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+TRF="$( "$BIN" "$TR" --whereis=helper --no-cache 2>/dev/null | sed 's/<!--.*-->//' | grep -o '<hit [^>]*kind="def"[^>]*>' )"
+{ printf '%s\n' "$TRF" | head -1 | grep -q 'p="src/z.rs" l="1" kind="def" t=' && printf '%s\n' "$TRF" | sed -n 2p | grep -q 'p="src/a.rs" l="3" kind="def" test_local="1"'; } \
+    && ok 'whereis (18n): a test-scope def in a source file sorts after the production def (test_local="1")' \
+    || { no 'whereis (18n): a test-scope def still leads the production def'; printf '%s\n' "$TRF"; }
+
+# 18o) the MCP twins keep their -32602 refusal and carry the same answer document in error.data.answer
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$BIN" "$WT" <<'PY' && ok 'MCP (18o): all five twins (find_referencing_symbols, find_symbol, uses, impact, path_between) refuse -32602 AND carry the answer; batch names the rename' \
+                               || no 'MCP (18o): the twins do not carry the not-found answer'
+import json, subprocess, sys
+BIN, WT = sys.argv[1], sys.argv[2]
+calls = [ ( "find_referencing_symbols", { "path": WT, "symbol": "zqOldName" }, '"found":0', '"near":"zqNewName"' ),
+          ( "find_symbol", { "path": WT, "symbol": "zqOldName" }, '"found":0', '"near":"zqNewName"' ),
+          ( "uses", { "path": WT, "symbol": "zqOldName" }, 'found="0"', 'near="zqNewName" near_renamed="1"' ),
+          ( "impact", { "path": WT, "symbol": "zqDoomed" }, 'found="0"', 'of="zqDoomed"' ),
+          ( "path_between", { "path": WT, "from": "zqUser", "to": "zqDoomed" }, 'found="0"', 'missing="to"' ),
+          ( "path_between", { "path": WT, "from": "zqNope1", "to": "zqNope2" }, 'found="0"', 'missing="both"' ) ]
+msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" } ] + [
+    { "jsonrpc": "2.0", "id": 10 + i, "method": "tools/call", "params": { "name": n, "arguments": a } } for i, ( n, a, _, _ ) in enumerate( calls ) ]
+p = subprocess.run( [ BIN, "--mcp" ], input = "".join( json.dumps( m ) + "\n" for m in msgs ), capture_output = True, text = True, timeout = 300 )
+byId = {}
+for line in p.stdout.splitlines():
+    try:
+        d = json.loads( line )
+    except ValueError:
+        continue
+    byId[ d.get( "id" ) ] = d
+bad = 0
+for i, ( n, a, want1, want2 ) in enumerate( calls ):
+    d = byId.get( 10 + i, {} )
+    e = d.get( "error", {} )
+    ans = e.get( "data", {} ).get( "answer", "" )
+    if e.get( "code" ) != -32602 or want1 not in ans or want2 not in ans:
+        print( "  MCP %s: %s" % ( n, json.dumps( d )[ :300 ] ) ); bad = 1
+for k in ( 10, 11, 12 ):
+    rn = byId.get( k, {} ).get( "error", {} ).get( "message", "" )
+    if "renamed in the working tree: did you mean 'zqNewName'" not in rn:
+        print( "  MCP rename clause missing (id %d): %s" % ( k, rn ) ); bad = 1
+# the batch arm (review M6): each answering sub-verb's err= names the rename first
+bq = [ { "verb": v, "symbol": "zqOldName" } for v in ( "callers", "callees", "impact", "uses" ) ]
+pb = subprocess.run( [ BIN, "--mcp" ], input = json.dumps( msgs[ 0 ] ) + "\n" + json.dumps(
+    { "jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": { "name": "batch", "arguments": { "path": WT, "queries": bq } } } ) + "\n",
+    capture_output = True, text = True, timeout = 300 )
+bt = ""
+for line in pb.stdout.splitlines():
+    try:
+        d = json.loads( line )
+    except ValueError:
+        continue
+    if d.get( "id" ) == 99:
+        bt = d.get( "result", {} ).get( "content", [ {} ] )[ 0 ].get( "text", "" )
+if bt.count( "renamed in the working tree: did you mean &apos;zqNewName&apos;" ) != 4:
+    print( "  MCP batch: not every not-found item names the rename: " + bt[ :400 ] ); bad = 1
+sys.exit( bad )
+PY
+fi
+# ── review round (rv-fresh-067) ────────────────────────────────────────────────────────────────────────────────
+# 18p) M1: near_renamed needs a DEFINITION of the name to have LEFT a changed file. Two negatives that the first cut
+# called renames: an external name still imported and called beside an unrelated new def, and a name only a HEAD
+# comment ever mentioned. Both must fall back to the spelling near-miss with no near_renamed.
+RF="$TMP/renamefp"; mkdir -p "$RF/a" "$RF/b"
+printf 'from lib import parse_config\n\ndef run():\n    return parse_config("x")\n' >"$RF/a/app.py"
+printf '# TODO: retire old_fetch_user once the cache lands\ndef get_user():\n    return 1\n' >"$RF/b/svc.py"
+for d in a b; do ( cd "$RF/$d" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1; done
+printf 'from lib import parse_config\n\ndef run():\n    return parse_config("x")\n\ndef config_parse_v2():\n    return 2\n' >"$RF/a/app.py"
+printf '# TODO: retire old_fetch_user once the cache lands\ndef get_user():\n    return 1\n\ndef fetch_user_old():\n    return 0\n' >"$RF/b/svc.py"
+for c in 'a parse_config' 'b old_fetch_user'; do
+    set -- $c
+    "$BIN" "$RF/$1" --callers="$2" --no-cache >"$TMP/rf.out" 2>"$TMP/rf.err"
+    { ! grep -q 'near_renamed' "$TMP/rf.out" && ! grep -q 'renamed in the working tree' "$TMP/rf.err"; } \
+        && ok "callers (18p): $2 — still mentioned, never a definition that left — is not offered as a rename" \
+        || { no "callers (18p): $2 was offered as a working-tree rename"; cat "$TMP/rf.err"; }
+done
+
+# 18q) M7: --whereis's own zero names the working tree's rename first (r="renamed"), not the spelling neighbour.
+WR="$( wwhere zqOldName | sed 's/<!--.*-->//' )"
+{ printf '%s' "$WR" | grep -q '<selector-note r="renamed" spec="zqOldName" retry="zqNewName"/>' && ! printf '%s' "$WR" | grep -q 'r="near-miss"'; } \
+    && ok 'whereis (18q): a renamed-away name offers the rename (r="renamed" retry="zqNewName"), not a spelling near-miss' \
+    || { no 'whereis (18q): the renamed-away zero does not name the rename'; printf '%s\n' "$WR"; }
+wwhere zqOldName --legend=full | grep -q 'renamed (the scan found nothing and the working tree' \
+    && ok 'whereis (18q): the full legend defines r="renamed"' || no 'whereis (18q): r="renamed" rides undefined'
+
+# 18r) M8: --with-history on a name only the WORKING TREE removed (HEAD's commit still holds it) is not "never".
+FA="$( "$BIN" "$WT" --whereis=zqDoomed --with-history --no-cache 2>/dev/null | sed 's/<!--.*-->//' )"
+{ printf '%s' "$FA" | grep -q '<fate sym="zqDoomed" v="uncommitted"' && ! printf '%s' "$FA" | grep -q 'v="never"'; } \
+    && ok 'whereis (18r): a name the working tree removed (HEAD still holds it) gets fate v="uncommitted", never "never"' \
+    || { no 'whereis (18r): the fate lane still reads a working-tree removal as a name this repo never had'; printf '%s\n' "$FA" | grep -o '<fate [^>]*>'; }
+"$BIN" "$WT" --whereis=zqNoSuchNameAtAll --with-history --no-cache 2>/dev/null | grep -q 'v="uncommitted"' \
+    && no 'whereis (18r): a name HEAD never held was called an uncommitted removal' \
+    || ok 'whereis (18r): a name HEAD never held keeps the history verdict (no v="uncommitted")'
+
+# 18s) M2: an untracked NESTED repository is a directory the overlay does not read — worktree="partial", no complete=.
+NR="$TMP/nested"; mkdir -p "$NR"; printf 'int outer_fn( void ) { return 0; }\n' >"$NR/a.c"
+( cd "$NR" && git init -q -b main . && git add -A && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed \
+  && mkdir inner && cd inner && git init -q -b main . && printf 'int nested_fn( void ) { return 1; }\n' >n.c && git add -A \
+  && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+NRR="$( "$BIN" "$NR" --whereis=nested_fn --no-cache 2>/dev/null | wroot )"
+{ printf '%s' "$NRR" | grep -q ' worktree="partial"' && ! printf '%s' "$NRR" | grep -q 'complete='; } \
+    && ok 'whereis (18s): an untracked nested repository is not read, so worktree="partial" and no complete=' \
+    || { no 'whereis (18s): an unread nested repository still claims a complete answer'; printf '%s\n' "$NRR"; }
+
+# 18t) S1: a changed path BEYOND a symlinked directory is not in the checkout (git: deleted); it is never read through
+# the link, so a file outside the root never answers.
+SL="$TMP/symparent"; mkdir -p "$SL/a" "$TMP/symout/a"; printf 'int inside_fn( void ) { return 1; }\n' >"$SL/a/b.c"
+( cd "$SL" && git init -q -b main . && git add -A && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+printf 'int outside_fn( void ) { return 2; }\n' >"$TMP/symout/a/b.c"; rm -rf "$SL/a"; ln -s "$TMP/symout/a" "$SL/a"
+SLR="$( "$BIN" "$SL" --whereis=outside_fn --no-cache 2>/dev/null )"
+{ printf '%s' "$SLR" | wroot | grep -q ' hits="0"' && ! printf '%s' "$SLR" | grep -q 'p="a/b.c"'; } \
+    && ok 'whereis (18t): a path beyond a symlinked directory is never read through the link (no row from outside the root)' \
+    || { no 'whereis (18t): the overlay read a file outside the root through a symlinked parent'; printf '%s\n' "$SLR" | sed 's/<!--.*-->//'; }
+
+# 18v) M4: both --path endpoints missing says missing="both", on the CLI and (18o) over MCP.
+"$BIN" "$WT" --path=zqNope1,zqNope2 --no-cache 2>/dev/null | grep -q '<path [^>]*from="zqNope1" to="zqNope2" found="0" missing="both"' \
+    && ok 'path (18v): both endpoints missing answers missing="both"' || no 'path (18v): both endpoints missing names only one'
+
+# 18w) S2: the test_local= legend names the path tiers the code uses (test, bench, fixture), and a bench/ def is marked.
+TB="$TMP/benchtl"; mkdir -p "$TB/src" "$TB/bench"
+printf 'int bench_helper( void ) { return 1; }\n' >"$TB/src/b.c"; printf 'int bench_helper( void ) { return 2; }\n' >"$TB/bench/b.c"
+( cd "$TB" && git init -q -b main . && git add -A && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+TBF="$( "$BIN" "$TB" --whereis=bench_helper --no-cache --legend=full 2>/dev/null )"
+{ printf '%s' "$TBF" | grep -q 'p="bench/b.c" l="1" kind="def" test_local="1"' && printf '%s' "$TBF" | grep -q 'under a test, bench or fixture path'; } \
+    && ok 'whereis (18w): a bench/ def is test_local="1" and the legend says test, bench or fixture path' \
+    || no 'whereis (18w): the test_local legend and the code disagree on bench/ and fixture paths'
+TBC="$( "$BIN" "$TB" --whereis=bench_helper --no-cache 2>/dev/null )"
+printf '%s' "$TBC" | grep -q 'test_local=1: a definition in a test scope or under a test/bench/fixture path' \
+    && ok 'whereis (18w): the compact legend says the same' || no 'whereis (18w): the compact test_local reading disagrees with the code'
+# 18k) a Class.method / Class#method selector is searched as a LITERAL, and no tree spells a method's definition
+# that way. It used to answer hits="0" on-head="0" complete="1" with no note — a zero shaped exactly like a name this
+# repo never had (the edit-check lane's finding). The zero now carries a selector-note r="dotted-selector" whose
+# retry= is the bare method name, and complete= is withheld: the scan did not answer the question the selector asked.
+mkdir -p "$TMP/dotted" && printf 'class Shape:\n    def area( self ):\n        return 1\n' >"$TMP/dotted/shape.py"
+( cd "$TMP/dotted" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+for sel in 'Shape.area' 'Shape#area'; do
+    D="$( "$BIN" "$TMP/dotted" --whereis="$sel" --no-cache 2>/dev/null )"; DR="$( printf '%s' "$D" | wroot )"
+    { printf '%s' "$D" | grep -q "<selector-note r=\"dotted-selector\" spec=\"$sel\" retry=\"area\"/>" \
+      && ! printf '%s' "$DR" | grep -q 'complete='; } \
+        && ok "whereis (18k): $sel says the dotted selector was searched literally (retry=\"area\") and claims no complete=" \
+        || { no "whereis (18k): $sel claims a measured zero for a selector it never resolved"; printf '%s\n' "$DR"; }
+done
+"$BIN" "$TMP/dotted" --whereis=area --no-cache 2>/dev/null | grep -q '<hit ref="HEAD" [^>]*p="shape.py" l="2" kind="def"' \
+    && ok 'whereis (18k): the offered retry (the bare name) finds the method definition' \
+    || no 'whereis (18k): the offered retry does not find the definition'
+"$BIN" "$TMP/dotted" --whereis=area --no-cache 2>/dev/null | grep -q 'dotted-selector' \
+    && no 'whereis (18k): a bare name grew a dotted-selector note' || ok 'whereis (18k): a bare name carries no dotted-selector note'
+
+# 18u) M3: a dotted LITERAL whose last segment the index does not define (a file name, a module path) is an ordinary
+# literal search: no dotted note, and its complete= stands. The method spelling (18k) keeps the note.
+printf 'Run setup.py first; see os.path docs.\n' >"$TMP/dotted/README.txt"
+( cd "$TMP/dotted" && git add -A && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm readme ) >/dev/null 2>&1
+for sel in setup.py os.path; do
+    LD="$( "$BIN" "$TMP/dotted" --whereis="$sel" --no-cache 2>/dev/null )"
+    { printf '%s' "$LD" | wroot | grep -q ' hits="1".* complete="1"' && ! printf '%s' "$LD" | grep -q 'dotted-selector"'; } \
+        && ok "whereis (18u): the literal $sel keeps hits=\"1\" complete=\"1\" and carries no dotted note" \
+        || { no "whereis (18u): the literal $sel was treated as a Class.method selector"; printf '%s' "$LD" | wroot; }
+done
+
+command -v xmllint >/dev/null 2>&1 && { printf '%s' "$W1" | xmllint --noout - 2>/dev/null \
+    && ok 'whereis (18): the dirty-checkout document is well-formed' || no 'whereis (18): the dirty-checkout document fails xmllint'; }
 
 [ $fail -eq 0 ] && printf 'completecheck: ALL PASS\n' || printf 'completecheck: FAILURES ABOVE\n'
 exit $fail

@@ -15,6 +15,15 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `Class.method` and `Class#method` are selectors wherever `Class::method` is
+
+Agents and documentation name a method `Class.method` (Python, JS, Java) or `Class#method` (Ruby, JSDoc), and every
+symbol-taking verb (`--callers`, `--callees`, `--impact`, `--uses`, `--edit-check`, `--expand`, …) answered "symbol not
+found" while `Class::method` resolved. When no other spelling matches, a selector with no `:` or `/` now has each `.` and
+`#` read as `::` and goes through the existing `Scope::name` tier, so it resolves exactly where the `::` spelling does
+(a namespace-qualified `ns.Class.method` does not, as `ns::Class::method` does not). Several matches are disclosed as
+usual (`defs=N`, or `--edit-check`'s refusal). A selector that resolved before resolves identically. `--whereis` is a
+lexical scan of every ref and is unchanged. Gate: `test/selectorscopecheck.sh` arms (i)-(m).
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
@@ -207,6 +216,39 @@ corpora, with this repository's `--report` totals unchanged. `kParserVer` 129 in
 inheritance records; 99 dropped a computed superclass's stray receiver ref); the record layout is unchanged, and
 the `quality.h` mirror and `test/qschemetrip.hash` move with it.
 
+### Changed — data Sections no longer crowd code out of the default map (#339 F1): a code-first row pick, disclosed
+
+A data file of a few hundred keys or headings indexes as `SymKind::Section` rows with no call edges. Their rank is their
+share of the teleport prior, and priorwt's x1.7 specific-name boost fires on data names (`database_url_12`, "Installation
+step 12 details"), so they pushed called code out of the top-K the map emits: on the gate's fixture (eight Python functions
+plus one data file), 1 of 8 code rows survived at K=200 beside 200 long-named markdown headings, 220 YAML keys or 220 JSON
+keys, and 7/8 and 1/8 beside a #339 Rails `db/schema.rb` of 20 and 40 tables. The default map now picks its rows
+**code-first**: while the rank-order top-K keeps a data Section and leaves a non-Section row out, the lowest-ranked kept
+Section is swapped for the highest-ranked excluded non-Section row; survivors keep rank order. The rank vector and every
+`k=` are unchanged, and a map whose top-K left no code row out is byte-identical (django, webpack and this repository at
+`--top-k=16`; `test/golden.xml`). Scope: the plain map at the default `--rank-by` with no payload verb (XML, `--json`,
+`--html`, `--max-tokens`), MCP `analyze` on a clean working set and MCP `rank_by=pagerank`. `--tree`, `--query`,
+`--map-diff`, churn, authority/hub/rrf and the `--expand`/`--outline`/`--pack-signatures`/`--pack-top-n` ride-along maps keep the rank-order cut.
+A map that swapped carries `data_sections_cut="N"` (the swaps) and `next="--graph-query='kind(all,sec)' --offset=M
+--limit=K"`, which pages the Sections past the M still shown, the swapped ones first; both are defined in the full and
+compact legends and `--help=all`. This repository's own default map swaps its one `sec` row (`data_sections_cut="1"`).
+Gate: `test/mapdatasectioncheck.sh` (8/8 code rows on 40 fixture cells x 6 surfaces and on the 12 S1 cells of a #339
+build; red on `a5229aca`).
+
+Pre-registered (docs/EVALS.md "Map data Sections never crowd code out of the default map"), the registered first arm —
+a Section teleport prior x0.1 that made every code row outrank every Section no call reaches — passed every gate (I2
+read at the emitted 4-dp precision and Gate S with two non-ranking fields masked, both decided after A's run) and
+**failed** the registered `--eval` margin: on code-seeded commits of three corpora its `map`-column recall@20 fell
+0.39 pp, 95% CI [−1.07, +0.07] pp, past the −1.0 pp bound, and outside the range of 20 matched placebos. By the
+registered rule this release ships the second arm, which leaves the ranking alone. Numbers and losses are in EVALS.
+
+### Changed — a not-found refusal's stdout is no longer empty (compatibility)
+
+`--callers`, `--callees`, `--uses`, `--impact` and `--path` still exit 1 when the selector matches no indexed
+definition, but stdout now carries a `found="0"` answer instead of nothing. A script that detected a miss with
+`[ -z "$(ripwire … --callers=X)" ]` must test the exit status instead. Tools that count stdout tokens see about 100
+tokens on a miss instead of 0.
+
 ### Changed — `ripwire-quality-bar` gains a bounded debt fix loop
 
 A new section drives paying down EXISTING debt: pick the top `--quality-panel=strict` row, write the test first when
@@ -257,10 +299,54 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 124 → 129 (the function-literal fix takes 128; #338 and #325 take one more), `kCacheVersion` 25 → 27
+`kParserVer` 124 → 132 (the function-literal fix takes 128; #338 and #325 take 129; 132 then sits above every number
+a branch build of unreleased work has used, so no cache such a build wrote is read as this release's), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=b5c64a12f0346e6c entries=771`.
+
+### Fixed — crashsweepcheck and hazardpatterncheck no longer depend on the size of `src/`
+
+Both gates run their static rules with `--match` over `src/`, and refused a scan the engine capped at its 5000-hit budget.
+The function-definition query crossed that budget as `src/` grew (5000+ once 0.6.7 lanes merged), so both went red for a
+reason unrelated to the rules. The scan now shards instead (`test/lib/shardmatch.py`): a capped whole-tree scan is
+re-run over path-ordered halves of the tree, recursively, until every shard answers uncapped; a single file that alone
+reaches the budget still fails the gate by name. A new arm (Z) proves completeness on a generated 6000-definition tree
+past the budget and, in crashsweepcheck, that a forced split returns the same rows as the whole-tree scan on `src/`. The
+engine's budget is unchanged.
+
+### Fixed — the handles an `--edit-check` ambiguity refusal prints name one contract each, and none is a declaration
+
+The refusal's "Qualify one contract:" list offered `file:name` for a header declaration. The `file:name` tier widens a
+header's declaration to the definitions it stands for, so `./lib.h:scale` was refused again with the same list. Each handle
+shown is now re-resolved before it is printed and must land on exactly its own contract; otherwise the canonical id, then the
+`@FILE:LINE` seed is tried, and a handle that still cannot be made unique is marked `[no selector names this contract alone]`
+and never used as the example. A declaration-only contract beside a definition is counted but never listed: a declaration has
+no call edges, so its own answer reads `callers="0"` while the definition holds the calls. A cwd-spelled file half that names
+one indexed file exactly (`./lib.cpp`, the form the tool prints) now means that file even when another path contains it
+(`./sub/lib.cpp`), for every verb that takes a `file:name` selector or an `@FILE:LINE` seed; a bare `lib.cpp` keeps the
+substring reading. A CLI handle holding a space is printed single-quoted. Gate: `test/editcheckdeclcheck.sh` arms (H), (J), (K).
+
+### Fixed — `--edit-check` on C/C++: a declaration and its definition are one contract, and the declaration's defaults count
+
+A header declaring `int scale( int x, int factor = 2 )` and a `.cpp` defining it were two "contracts" to `--edit-check`:
+the bare name was refused as ambiguous, and the definition's handle flagged every caller that relied on a default
+(`incompatible="3"` on three calls that all compile), because the arity test read only the definition's parameter list.
+A bodyless C/C++ declaration now stands for a definition when the name matches, the FULL scope chain matches (every
+enclosing namespace and class plus the declarator's written qualifier, so `outer::detail::f` never stands for
+`::detail::f`), the member's cv/ref qualifiers match, the definition's file is the declaration's or `#include`s it directly,
+the definition has external linkage (or shares the file), and the parameter-type lists are equal (names, default values and
+comments stripped, read from each signature's source text). Such a declaration's group folds into the definition's, so the
+bare name and the header's `file:name` answer about the definition, and a call passing between `params` minus that
+declaration's defaults and `params` arguments is never flagged. The root then carries `defaults_from="decl"`. Real
+overloads stay separate: each definition takes defaults only from the declaration that matches it. Anything unproven fails
+closed and keeps today's answer — including a scope opened or closed by a macro (`NS_BEGIN`, `QT_BEGIN_NAMESPACE`) and a
+qualified definition after `using namespace`, whose chains are unreadable; when such a declaration may carry a default (a
+transitive include, an unreadable scope chain or file, a signature past 16 KiB or one this reader cannot parse, such as a function-pointer parameter) and a caller is flagged, the root says so with
+`defaults_untied="N"`. Both attributes are defined in the full and compact legends. The fold applies to the post-hoc verb
+(CLI and MCP `edit_check`); the `--dry-run`/`new_body` preview keeps one contract per file. The test fixture's own
+`--edit-check=distance` (declared in `geometry.h`, defined in `geometry.cpp`) now answers instead of refusing.
+Gate: `test/editcheckdeclcheck.sh`.
 
 ### Fixed — `--scan-skill(s)`: quoting a sensitive path no longer hides its upload (sensitive-read-upload)
 
@@ -292,6 +378,64 @@ logger package spelled as one word (structlog, logfire, logbook, loguru) or log/
 two-letter prefix counts (so clog, flog and clogging do too). Longer English words that end in "log" (catalog,
 dialog, backlog, analog, changelog), blog and
 technology still log nothing. Still a miss: a logger behind a longer one-word prefix (`auditlog`).
+
+### Fixed — `--whereis` answers for the checkout, and a not-found refusal also answers on stdout
+
+`--whereis` scanned committed trees only (HEAD and the local branches). On a checkout with uncommitted changes it
+still printed `complete="1"` and a bare `at=`: a function the edit had just added read `hits="0"`, and one it had
+renamed or deleted was listed at its old HEAD lines. `--callers` on the same tree saw the edit. Every path under the
+root that differs from HEAD (modified, staged, deleted, or untracked and not ignored) is now read from the working
+tree. Its rows say `ref="worktree"` (`tip=` and `date=` name the HEAD commit it overlays) and replace HEAD's rows for
+that path, so on-head=, hits= and the index-backed `head_labels=` count the checkout (on-head="0" there means the
+checkout lacks the name, which HEAD's commit may still hold). The stamp gains `+dirty`, and
+the root says `worktree="read"`. A changed path that cannot be read (permission, over the 2 MB blob ceiling, a name
+git quotes, a directory such as an untracked nested repository or a submodule, or more than 8192 changed paths) keeps
+its HEAD rows, and the root says `worktree="partial"`. A changed path beyond a symbolic link to a directory is not in
+the checkout, as git reads it, and is never read through the link, so a file outside the root never answers. When git
+cannot list the changes, the root says `worktree="unlisted"`. Neither claims `complete=`. Other refs are still read
+as their committed trees. A clean checkout's answer is byte-identical. The MCP `whereis` tool shares the code. Both
+legends define `worktree=` and print it only when the root carries it. The full legend's sentence "at= is sha-only
+here (never +dirty)" is replaced. Gates: `test/completecheck.sh` §18 (add, rename, delete, deleted file, untracked
+file, the no-stale-row invariant, MCP twin, an unreadable changed path) and `test/gitstampcheck.sh` (the documented
+whereis exception is closed).
+
+With `--with-history`, a name that HEAD's commit still holds but that only the uncommitted working tree removed gets
+`<fate v="uncommitted">`. It used to get the history oracle's `never`, which says the repository never had the name.
+On a zero over a dirty checkout, `--whereis` and its MCP twin name the working tree's rename as
+`<selector-note r="renamed" retry=…>`. That note replaces the spelling near-miss.
+
+`--whereis=Class.method` and `--whereis=Class#method` searched that spelling as a literal, and no tree spells a
+method's definition that way, so they answered `hits="0" on-head="0" complete="1"` with no note. When the index defines
+a symbol named by the last segment, such an answer now carries `<selector-note r="dotted-selector" spec= retry=>`.
+Its `retry=` is that bare method name, and the answer claims no `complete=`. A dotted literal whose last segment the
+index does not define, such as `setup.py` or `os.path`, stays an ordinary literal search with its `complete=`. The full
+legend names the reasons. Gate: `test/completecheck.sh` §18k and §18u.
+
+A selector that matches no indexed definition is still a refusal (exit 1) on `--callers`, `--callees`, `--uses`,
+`--impact` and `--path`, as README §6.2 and the `--callers` example in docs/COMMANDS.md document. The refusal now also
+prints an answer on stdout, so an agent that reads stdout gets an answer instead of nothing. The answer is the verb's
+own element with the selector echoed, `found="0"`, and `near=` (the name to retry with), plus `missing="from|to|both"` on
+`--path`. Under `--json` it is one JSON object. Both legends define it.
+
+When the working tree renamed the selector, the rename is offered first. A rename needs three things:
+- a definition-shaped line naming the old name in a changed file's HEAD copy that the working copy no longer contains;
+- the new name absent from that HEAD copy;
+- the two names sharing most of their identifier words.
+
+A mention alone (an import, a call or a comment) is not a rename. In that case
+`near_renamed="1"` is set, and stderr gains "(renamed in the working tree: did you mean 'X'?)" ahead of the spelling
+near-miss. `line_trim` → `trim_line` used to get a suggestion of `line_type`. stderr is otherwise unchanged.
+
+The MCP twins `find_referencing_symbols`, `find_symbol`, `uses`, `impact` and `path_between` keep their -32602
+refusal and carry the same document in `error.data.answer`. A `batch` item's not-found `err=` names the rename the
+same way.
+
+Gates: `test/completecheck.sh` §18j, §18l, §18m, §18o, §18p, §18q, §18r, §18s, §18t, §18v and §18w.
+
+`--whereis` orders a test-local definition after the production definition of the same name when the answer holds
+both, and marks it `test_local="1"`. A test-local definition is one in a test scope such as Rust `#[cfg(test)]`, or one under a
+test, bench or fixture path (`test/`, `bench/`, `fixtures/`, `testdata/` and the test-file name patterns). Nothing is dropped, and an answer with only one kind is unchanged. Gate: `test/completecheck.sh`
+§18n.
 
 ### Fixed — review round on train 22: false gates, a stack overflow, silent cuts
 

@@ -447,7 +447,7 @@ inline std::string analyzeToString( const std::string& root, int topK, bool stab
                                     // W2-F: the map's convergence disclosure. The CLI map carries pr_iters= and
                                     // this one must too — "the clause landed at 3 of its 5 echo sites" is the
                                     // §B4 family, and mcpclidiffcheck is the gate that keeps the two surfaces one.
-                                    /*ann=*/rw::MapAnnotations{ .prDisclosure = ix.prDisclosure },
+                                    /*ann=*/rw::MapAnnotations{ .prDisclosure = ix.prDisclosure, .codeFirstRows = ix.isCleanWorkingSet },
                                     /*statsFirstScreen=*/true, anRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls ); } );
 }
 
@@ -514,7 +514,7 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
                                     ix.g.bindLabel.empty() ? nullptr : &ix.g.bindLabel,
                                     /*autoOrder=*/false, /*outEstTokens=*/nullptr,
                                     /*extraPayloadTokens=*/0,
-                                    /*ann=*/rw::MapAnnotations{ .rankByLabel = rankByLabel, .prDisclosure = disclosure },
+                                    /*ann=*/rw::MapAnnotations{ .rankByLabel = rankByLabel, .prDisclosure = disclosure, .codeFirstRows = rankByLabel == nullptr },   // pagerank: the map scope's code-first pick
                                     /*statsFirstScreen=*/true, rbRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls ); } );
 }
 
@@ -579,7 +579,14 @@ inline std::string whereisText( const std::string& root, const std::string& symb
     res.seedSpec = std::move( seedSpec );
     // The tree zero stays an answer; the near-miss only says WHICH zero it is. Computed only on the zero,
     // so a real hit list costs nothing and is byte-identical to before.
-    if( res.hits.empty() )
+    // Review M3/M7, the CLI twin's rule: the dotted note only for a method the index defines; on a zero over a dirty
+    // checkout the working tree's rename ahead of (instead of) a spelling neighbour.
+    res.dottedRetry = crossref::whereisDottedRetryOf( getIndex( root ).ing, sel );
+    if( res.hits.empty() && res.worktree != crossref::WorktreeOverlay::Clean )
+    {
+        res.renamedTo = crossref::worktreeRenameOf( getIndex( root ).ing, sel, root );
+    }
+    if( res.hits.empty() && res.renamedTo.empty() )
     {
         res.nearMiss = didYouMean( getIndex( root ).ing, sel );
     }
@@ -2828,6 +2835,15 @@ inline std::string qualifiedColonSelectorRefusal( const IngestResult& ing, const
          + "` for the narrowed answer";
 }
 
+// Review M5/M6: which usesSelectorRefusal sentences are a NOT-FOUND (no indexed definition, no indexed reference; or a
+// file:name / Scope::name spelling that names nothing) rather than a different refusal (several field owners, an
+// unserved language, a resolving "::" spelling the verb cannot narrow). Keyed on the shared sentence opener
+// mcprefuse::notFound writes, so the two cannot drift.
+inline bool usesRefusalIsNotFound( std::string_view refusal )
+{
+    return refusal.rfind( "symbol not found: ", 0 ) == 0;
+}
+
 inline std::string usesSelectorRefusal( const IngestResult& ing, const std::string& symbol )
 {
     if( !symbol.empty() && symbol.front() == '@' )
@@ -4244,7 +4260,8 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
                                                         mcprefuse::notFoundHintFor( "edit_check", "symbol" ) ) };
     }
 
-    const std::vector<EditCheckGroup> groups = editCheckGroups( ing, g, matches );
+    // the CLI's rule: the declaration/definition fold for the post-hoc answer, one group per (file, scope) for new_body
+    const std::vector<EditCheckGroup> groups = editCheckGroups( ing, g, matches, /*foldDecls=*/newBody.empty() );
     if( groups.size() > 1 )
     {
         return EditCheckReply { {}, editCheckAmbiguousMessage( symbol, groups, "symbol=", matches.size() ) };
@@ -5189,8 +5206,19 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
     // §B6 M8 + verifier N7: the not-found refusals echo the spelling, carry a near-miss AND carry the verb's
     // trailing guidance clause — this arm dropped that clause on three verbs while the live arm kept it (one
     // condition, two lengths). All three halves now come from mcprefusal.h, keyed by the verb.
+    // Review M6: a batch item's not-found names the working tree's rename first, by the live arm's own insertion rule
+    // (selectorrefuse.h withRenameClause) — the batch err= served the very did-you-mean fix list #2 removed.
+    const auto renameNearOf = [ & ]( std::string_view spelling ) -> NotFoundNear
+    {
+        const IngestResult& bIng = getIndex( root ).ing;
+        return notFoundNear( bIng, spelling, bIng.realPaths.empty() ? root : std::string() );
+    };
     const auto symbolMissing = [ & ]( std::string_view verb, std::string_view spelling ) -> std::string
-    { return mcprefuse::notFound( getIndex( root ).ing, "symbol", spelling, mcprefuse::notFoundHintFor( verb, "symbol" ) ); };
+    {
+        std::string msg = mcprefuse::notFound( getIndex( root ).ing, "symbol", spelling, mcprefuse::notFoundHintFor( verb, "symbol" ) );
+        const bool  answering = verb == "find_symbol" || verb == "find_referencing_symbols" || verb == "impact";
+        return answering ? withRenameClause( std::move( msg ), renameNearOf( spelling ) ) : msg;
+    };
 
     // Verifier N2/N8: the paging window, validated ONCE for the two sub-verbs that consume it.
     const McpPageParse pageParse = mcpPageArgs( obj );
@@ -5316,7 +5344,7 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         // V2-1: refuse a qualified spelling whose bare name IS defined (shared guard, see usesSelectorRefusal).
         if( const std::string refusal = usesSelectorRefusal( getIndex( root ).ing, symbol ); !refusal.empty() )
         {
-            return bad( refusal );
+            return bad( usesRefusalIsNotFound( refusal ) ? withRenameClause( refusal, renameNearOf( symbol ) ) : refusal );
         }
         std::optional<std::string> usesAnswer = usesText( root, symbol, pageParse.page );   // LB-G: the batch arm honors the SAME window (the impact precedent)
         if( !usesAnswer )
@@ -5408,7 +5436,9 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         r.payload = std::move( *pathAnswer );
         if( r.payload.empty() )
         {
-            return bad( pathEndpointRefusal( getIndex( root ).ing, from, to ) );
+            const IngestResult& pIng    = getIndex( root ).ing;
+            const bool          fromBad = resolveAllByNameQualified( pIng, from ).empty();
+            return bad( withRenameClause( pathEndpointRefusal( pIng, from, to ), renameNearOf( fromBad ? from : to ), fromBad ? "from" : "to" ) );
         }
     }
     else if( r.verb == "exemplar" )

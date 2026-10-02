@@ -212,6 +212,8 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
                                        // its own "<!-- ripwire "-prefixed comment, already covered by that row above.
     "<!-- r:root=",                    // the map header's terse spelling of the same block
     "<!-- pr_iters=",                  // the PageRank convergence block on map-family roots
+    "<!-- data_sections_cut=",         // the map scope's Section-cut clause (serialize.h kDataSectionsCutLegend); the
+                                       // completeness table's data_sections_cut row restates it
     "<!-- at= is the git commit",      // the churn/quality provenance block
     "<!-- in=DIR: ",                   // C1-b's scoped-block clause (serialize.h kRecentScopeLegendOpen/Close). Without
                                        // this row the ~640 B prose survived BESIDE the compact terms that restate it,
@@ -400,6 +402,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // compact PageRank root undefined (--impact is an (L) loop verb, which is why its reading is this short).
     // pr_converged="0" rides only a ranking that stopped at the iteration cap.
     { "pr_iters",          "pr_iters=N: PageRank iterations" },
+    // The map scope's code-first pick (serialize.h codeFirstKeep): the Sections it swapped out. Present-only.
+    { "data_sections_cut", "data_sections_cut=N: N data Sections (headings, data keys) swapped out of this top-K for lower-ranked code rows; next= pages them first" },
     { "pr_converged",      "pr_converged=0: iteration cap hit before convergence" },
     // Form-conditional map roots whose clauses (kRankByDisclosure, kChurnRankLegend, --around's seed block) are prose.
     // window= and defs= are ELEMENT-qualified: --hotspots carries window= and --callers defs=, each meaning something else.
@@ -658,6 +662,9 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // edit-check: src/editcheck.h (the <edit-check> root emit)
     { "defs", "defs=N: overloads at this site (same file, scope, name) folded into one contract; params compared by MAX", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     { "shown_unflagged", "shown_unflagged=N: unflagged callers on this page; flagged ones always print, total= counts unflagged only", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
+    // 2026-10-01: present-only — rides only a C/C++ definition whose declaration's defaults widened its accepted arity
+    { "defaults_from", "defaults_from=decl: a C/C++ declaration of this definition (same types) has defaults; calls within them are never flagged", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
+    { "defaults_untied", "defaults_untied=N: N same-name C/C++ declarations with possible defaults could not be tied (not applied); a flag may be one", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     // exemplar: src/verbs_for.h + src/exemplar.h selectExemplar/pickWinnerOfKind
     { "candidates", "candidates=N: instances of kind= under the ccx ceiling the pick was ranked from", false, "exemplar", MapHeaderRead::No, {}, "exemplar" },
     { "low_confidence", "low_confidence=1: weak task-to-kind match, fell back to fn; pass a kind (fn|method|class...) instead", false, "exemplar", MapHeaderRead::No, {}, "exemplar" },
@@ -884,6 +891,27 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "hits", "hits=N: occurrences in HEAD plus every scanned local ref's full tree (the total rows)", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "on-head", "on-head=1|0: whether HEAD's tree holds it; 0 beside hits = it lives only on a branch", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "head_labels", "head_labels=index: HEAD kind= from the parsed index; lexical: text heuristic (non-HEAD rows always are)", false, "whereis", MapHeaderRead::No, {}, "whereis" },
+    // 2026-10-01 (selectorrefuse.h writeNotFoundAnswer): the not-found ANSWER the five answering verbs print beside exit 1.
+    { "found", "found=0: no indexed definition matched the selector, nothing listed or counted (zero = none found, not none exists); exit stays 1", false, "callers", MapHeaderRead::No, {}, "callers" },
+    { "near", "near=: the indexed name to retry with", false, "callers", MapHeaderRead::No, {}, "callers" },
+    { "near_renamed", "near_renamed=1: a definition of the selector left a changed file that now defines near= (a rename, not a mention)", false, "callers", MapHeaderRead::No, {}, "callers" },
+    { "found", "found=0: no indexed definition matched the selector, nothing listed or counted (zero = none found, not none exists); exit stays 1", false, "callees", MapHeaderRead::No, {}, "callees" },
+    { "near", "near=: the indexed name to retry with", false, "callees", MapHeaderRead::No, {}, "callees" },
+    { "near_renamed", "near_renamed=1: a definition of the selector left a changed file that now defines near= (a rename, not a mention)", false, "callees", MapHeaderRead::No, {}, "callees" },
+    { "found", "found=0: no indexed definition matched the selector, nothing listed or counted (zero = none found, not none exists); exit stays 1", false, "uses", MapHeaderRead::No, {}, "uses" },
+    { "near", "near=: the indexed name to retry with", false, "uses", MapHeaderRead::No, {}, "uses" },
+    { "near_renamed", "near_renamed=1: a definition of the selector left a changed file that now defines near= (a rename, not a mention)", false, "uses", MapHeaderRead::No, {}, "uses" },
+    { "found", "found=0: no indexed definition matched the selector, nothing listed or counted (zero = none found, not none exists); exit stays 1", false, "impact", MapHeaderRead::No, {}, "impact" },
+    { "near", "near=: the indexed name to retry with", false, "impact", MapHeaderRead::No, {}, "impact" },
+    { "near_renamed", "near_renamed=1: a definition of the selector left a changed file that now defines near= (a rename, not a mention)", false, "impact", MapHeaderRead::No, {}, "impact" },
+    { "found", "found=0: no indexed definition matched the selector, nothing listed or counted (zero = none found, not none exists); exit stays 1", false, "path", MapHeaderRead::No, {}, "path" },
+    { "near", "near=: the indexed name to retry with", false, "path", MapHeaderRead::No, {}, "path" },
+    { "near_renamed", "near_renamed=1: a definition of the selector left a changed file that now defines near= (a rename, not a mention)", false, "path", MapHeaderRead::No, {}, "path" },
+    { "missing", "missing=from|to|both: the endpoint(s) that matched nothing; near= retries the first", false, "path", MapHeaderRead::No, {}, "path" },
+    // 2026-10-01 (crossref.h demoteTestLocalDefs): present only when an answer holds production AND test-local defs.
+    { "test_local", "hit test_local=1: a definition in a test scope or under a test/bench/fixture path, ordered after the production definitions (only when both exist; nothing dropped)", true, "hit", MapHeaderRead::No, {}, "whereis" },
+    // 2026-10-01 freshness fix (crossref.h scanWorktree): present only on a checkout that differs from HEAD.
+    { "worktree", "worktree=read|partial|unlisted: the checkout differs from HEAD (at= +dirty); each changed path is read from disk as ref=\"worktree\" rows replacing HEAD's, and on-head=/hits=/head_labels= count them; on-head= then reads the checkout, not HEAD's commit; partial = some changed path unreadable or a directory (nested repo, submodule), its HEAD rows may be stale; unlisted = git could not list the changes; either withholds complete=", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "hits", "more hits=N: rows after this page; page on with offset=next_offset", true, "more", MapHeaderRead::No, {}, "whereis" },
     // the GREY ZONE of the same sweep: attributes the compact prose named in passing ("in/out, cx/ccx", "<g> groups") but never
     // DEFINED as name= — legendcoveragecheck's default rows hold the definitional predicate, so each gets its reading here.

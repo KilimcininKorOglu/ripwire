@@ -11,10 +11,9 @@
 #     --cochange / --owners (added 2026-07-28, §P8: the last two unanchored pure-git verbs) /
 #     --pr-context / --test-gate / --edit-check=SYM / --whereis=SYM / --stray-content --plan (landing-plan,
 #     alongside its pre-existing head=) — the 9-hex prefix matches `git rev-parse --short=9 HEAD` exactly
-#   - dirty tree (an uncommitted tracked-file edit): every one of those gains "+dirty", SAME sha prefix,
-#     EXCEPT --whereis, which is documented (excluded-file exception, sha-only) to stay bare-sha — this
-#     pins that deliberate gap rather than letting it silently drift into "accidentally fixed" or "spread
-#     further"
+#   - dirty tree (an uncommitted tracked-file edit): every one of those gains "+dirty", SAME sha prefix —
+#     --whereis included since 2026-10-01: it used to stay bare-sha (a tree scan of committed blobs), and
+#     that documented gap is now closed, because --whereis reads the working copy of every changed path
 #   - non-git directory: at= is OMITTED entirely on --doctor and --doc-drift (never at="none")
 #   - the bare default map (`ripwire <dir>`, no verb) never grows an at= and never shells out to git —
 #     `<r>` stays byte-for-byte `<r>` on BOTH a git and a non-git root
@@ -128,14 +127,15 @@ check_dirty "pr-context"    --pr-context
 check_dirty "test-gate"     --test-gate
 check_dirty "edit-check"    --edit-check=classify
 
-# whereis is the documented EXCEPTION (crossref.h is another agent's file; the exception rule only permits
-# adding the bare at= attribute, not a dirty check that needs `root` threaded through too) — pin that it
-# STAYS bare-sha even on a dirty tree, so the gap is a recorded decision, not a silent drift either way.
+# whereis WAS the documented exception (sha-only: it scanned committed trees and never the working tree, so a
+# dirty checkout got a stale answer under a clean-looking stamp — the 2026-10-01 comparison table's freshness
+# rows). It now reads the working copy of every changed path, so its stamp says +dirty like every other verb's,
+# and the root names the overlay (worktree="read"). completecheck.sh §18 holds the answer itself.
 out="$( "$BIN" "$R" --whereis=classify --no-cache 2>/dev/null )"
 case "$out" in
-    *"at=\"$SHA9\""*)       ok "whereis: at=\"$SHA9\" stays sha-only on a dirty tree (documented gap)" ;;
-    *"at=\"$SHA9+dirty\""*) no "whereis: gained +dirty — update this gate's documented-gap comment if intentional" ;;
-    *)                      no "whereis: at= missing entirely" ;;
+    *"at=\"$SHA9+dirty\" worktree=\"read\""*) ok "whereis: at=\"$SHA9+dirty\" worktree=\"read\" on a dirty tree (the working copy was read)" ;;
+    *"at=\"$SHA9\""*)       no "whereis: at= stayed sha-only on a dirty tree — the answer would be a stale committed scan" ;;
+    *)                      no "whereis: at= missing, or +dirty without worktree=\"read\""; echo "$out" | grep -o '<whereis [^>]*>' | head -1 ;;
 esac
 
 # an untracked file ALSO counts as dirty (mergescout.h's own `git status --porcelain` precedent, no --uno)
