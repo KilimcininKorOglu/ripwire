@@ -26,6 +26,11 @@
 #   (H) NEAR MISS, must keep: `s = "a\"b"` then `kind = Pool` — an escaped quote does not close the string early
 #   (I) NEAR MISS, must keep: `s = 'it"s'` then `kind = Pool` — a `"` inside a `'…'` string opens nothing
 #   (J) CONTROL, must keep: `def f( p: Pool )` in the same file (the annotation shape builtinbindcheck arm T pins)
+#   (N) A STRING IN ANNOTATION OR SUBSCRIPT POSITION IS A TYPE EXPRESSION, must keep: `-> "Pool"`, `Optional["Pool"]`,
+#       `x: "Pool" = …`, `Dict[str, "Pool"]` — Python forward references are strings, and builtinbindcheck arm T's
+#       `p: "PStr"` is the same shape (the first cut of this fix scanned every string as prose and lost that edge)
+#   (O) ANY OTHER STRING IS PROSE, must decline: an `__all__` tuple entry, a list literal entry (`[` after `=` is no
+#       subscript), `return "Pool"`, a call argument `print("Pool")`
 #   (K) INTERPOLATIONS ARE CODE: Python `f"{run()}"` and JS `${run()}` keep their call edge to run (tree-sitter reads
 #       the interpolation as code; nothing here strips it)
 #   (L) OTHER COMMENT FAMILIES make no call edge: C++ `//` and `/* */`, Lua `--` and `--[[ ]]`, Ruby `#` and
@@ -161,6 +166,56 @@ def typed(p: Pool):
 PY
 J="$TMP/py_J"
 expect_kept "(J) control: an annotation names the class" "$J"
+
+# ── (N)/(O) a string in annotation or subscript position is a type expression; any other string is prose ─────────
+echo "=== (N) a string forward-reference annotation names the class in code: the edge survives ==="
+pyfix N1 <<'PY'
+def ret(make) -> "Pool":
+    return make()
+PY
+expect_kept "(N1) -> \"Pool\" return annotation" "$TMP/py_N1"
+pyfix N2 <<'PY'
+from typing import Optional
+
+
+def opt(p: Optional["Pool"]):
+    return p
+PY
+expect_kept "(N2) Optional[\"Pool\"] subscript" "$TMP/py_N2"
+pyfix N3 <<'PY'
+def local(make):
+    x: "Pool" = make()
+    return x
+PY
+expect_kept "(N3) x: \"Pool\" = … annotated local" "$TMP/py_N3"
+pyfix N4 <<'PY'
+from typing import Dict
+
+
+def mapped(d: Dict[str, "Pool"]):
+    return d
+PY
+expect_kept "(N4) Dict[str, \"Pool\"] second subscript member" "$TMP/py_N4"
+
+echo "=== (O) a string anywhere else stays prose: a tuple, a list, a return value, a call argument ==="
+pyfix O1 <<'PY'
+__all__ = ("Pool", "load")
+PY
+expect_declined "(O1) __all__ tuple entry" "$TMP/py_O1"
+pyfix O2 <<'PY'
+NAMES = ["Pool"]
+PY
+expect_declined "(O2) list literal entry (the [ follows =, no subscript)" "$TMP/py_O2"
+pyfix O3 <<'PY'
+def name():
+    return "Pool"
+PY
+expect_declined "(O3) return \"Pool\"" "$TMP/py_O3"
+pyfix O4 <<'PY'
+def shout():
+    print("Pool")
+PY
+expect_declined "(O4) call argument" "$TMP/py_O4"
 
 # ── (K) interpolations are code ────────────────────────────────────────────────────────────────────────────────
 echo "=== (K) a call inside an f-string / template-literal interpolation keeps its edge ==="

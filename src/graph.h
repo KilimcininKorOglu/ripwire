@@ -24,6 +24,7 @@
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
 #include "infra/sortutil.h"      // radix edge sorting for large integer-key graph edge lists
 #include "clones.h"              // scanCodeTokens / CodeScanOptions — BuiltinMethodGate::namedBeyondDefinition's code-token count
+#include "infra/namesplit.h"     // isIdentChar — identifierRunCount, the identifier runs inside a string annotation
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 
@@ -2276,18 +2277,72 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 // module-level name Python binds for it) is one token per definition, and any other code occurrence is evidence. The
 // tokens come from the house code scanner (clones.h scanCodeTokens), so a `# Pool` comment, a docstring and a `'Pool warm'`
 // or `"Pool"` string are NOT evidence (test/commenttokencheck.sh A-E: each bound a json dict's `data.get` to Pool.get when
-// the count ran over every identifier byte run in the file). Still errs toward keeping the edge: an unreadable file admits,
-// and the scanner's own floors fall that way — a quote inside a triple-quoted string re-opens code scanning until the next
-// quote, and an f-string's interpolated expression is string content here (the call edge it makes is tree-sitter's and
-// unaffected, arm K). The gate caches one file's bytes (its calls arrive file by file).
+// the count ran over every identifier byte run in the file) — EXCEPT a string in annotation or subscript position, which
+// Python reads as a type expression: `p: "Pool"` and `x: "Pool" = …` (a `:` then the string on the same line), `-> "Pool"`,
+// and `Optional["Pool"]` / `Dict[str, "Pool"]` (directly inside a `[ … ]` that follows a name or a `]`). Those are scanned
+// for identifier runs as the whole file once was (arm N; builtinbindcheck arm T's `p: "PStr"`). A docstring follows its
+// `:` on the NEXT line, an `__all__` tuple sits in `( … )`, a list literal's `[` follows `=`, and a call argument follows
+// `(`, so each stays prose (arm O). Still errs toward keeping the edge: an unreadable file admits; a dict literal's
+// `"k": "Pool"` and a lambda's `: "Pool"` read as annotations; a quote inside a triple-quoted string re-opens code scanning
+// until the next quote; an f-string's interpolated expression is string content here (the call edge it makes is
+// tree-sitter's and unaffected, arm K). The gate caches one file's bytes (its calls arrive file by file).
+inline std::size_t identifierRunCount( std::string_view text, std::string_view name ) noexcept
+{
+    std::size_t runs     = 0;
+    std::size_t runStart = 0;
+    for( std::size_t at = 0; at <= text.size(); ++at )
+    {
+        if( at < text.size() && namesplit::isIdentChar( text[ at ] ) )
+        {
+            continue;
+        }
+        runs    += ( text.substr( runStart, at - runStart ) == name ) ? 1u : 0u;
+        runStart = at + 1;
+    }
+    return runs;
+}
+
 inline bool identifierTokenCountExceeds( const std::string& text, std::string_view name, std::size_t limit, Lang lang )
 {
-    std::size_t tokens = 0;
+    std::size_t       tokens = 0;
+    std::string_view  prev;                 // the previous token (empty before the first); every token is a view into `text`
+    CodeTokenKind     prevKind = CodeTokenKind::Punctuation;
+    std::vector<char> brackets;             // the open brackets: 's' = a subscript `[`, 'o' = any other
     scanCodeTokens( text, 0, text.size(),
-                    CodeScanOptions{ .stripHashComments = usesHashLineComments( lang ), .munchMultiByteOperators = false, .singleQuoteStrings = usesSingleQuoteStrings( lang ) },
+                    CodeScanOptions{ .stripHashComments = usesHashLineComments( lang ), .munchMultiByteOperators = true,   // `->` is one token
+                                     .singleQuoteStrings = usesSingleQuoteStrings( lang ) },
                     [ & ]( std::string_view token, CodeTokenKind kind )
                     {
-                        tokens += ( ( kind == CodeTokenKind::Identifier || kind == CodeTokenKind::Keyword ) && token == name ) ? 1u : 0u;
+                        if( kind == CodeTokenKind::Identifier || kind == CodeTokenKind::Keyword )
+                        {
+                            tokens += ( token == name ) ? 1u : 0u;
+                        }
+                        else if( kind == CodeTokenKind::String )
+                        {
+                            const std::size_t prevEnd    = prev.empty() ? 0 : std::size_t( prev.data() + prev.size() - text.data() );
+                            const std::size_t tokenStart = std::size_t( token.data() - text.data() );
+                            const bool        sameLine   = !prev.empty() && text.find( '\n', prevEnd ) >= tokenStart;
+                            const bool        annotation = sameLine && ( prev == ":" || prev == "->" );
+                            const bool        subscript  = !brackets.empty() && brackets.back() == 's' && ( prev == "[" || prev == "," );
+                            tokens += ( annotation || subscript ) ? identifierRunCount( token, name ) : 0u;
+                        }
+                        else if( kind == CodeTokenKind::Punctuation )
+                        {
+                            if( token == "(" || token == "{" )
+                            {
+                                brackets.push_back( 'o' );
+                            }
+                            else if( token == "[" )
+                            {
+                                brackets.push_back( ( prevKind == CodeTokenKind::Identifier || prev == "]" ) ? 's' : 'o' );
+                            }
+                            else if( ( token == ")" || token == "]" || token == "}" ) && !brackets.empty() )
+                            {
+                                brackets.pop_back();
+                            }
+                        }
+                        prev     = token;
+                        prevKind = kind;
                     } );
     return tokens > limit;
 }
