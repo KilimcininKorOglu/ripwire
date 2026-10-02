@@ -321,11 +321,17 @@ for d in 255 256 257; do
     bd_shape "$d"
     "$BIN" "$BD/$d" --deps    --no-cache > "$TMP/bd$d.dep"  2>/dev/null
     "$BIN" "$BD/$d" --skipped --no-cache > "$TMP/bd$d.skip" 2>/dev/null
-    e=$(grep -o '<inc ' "$TMP/bd$d.dep" | wc -l)
-    f=$(grep -c 'why="extract-partial"' "$TMP/bd$d.skip" || true)
+    # `wc -l` PADS ITS OUTPUT on BSD: on macOS `echo x | wc -l` prints "       1", on GNU it prints
+    # "1". Comparing that as a STRING reported `edge= 1 ... (want 1/0)` as a FAIL — the values were
+    # equal and the arm failed anyway, on 8 of the 24 release legs and nowhere else. Every other
+    # wc -l in this gate is compared with -eq, which evaluates in an arithmetic context and strips the
+    # padding for free; this one was the only string comparison, which is exactly why it was the only
+    # one that broke. Normalised here, and compared with -eq like its siblings.
+    e=$(grep -o '<inc ' "$TMP/bd$d.dep" | wc -l | tr -d '[:space:]')
+    f=$(grep -c 'why="extract-partial"' "$TMP/bd$d.skip" | tr -d '[:space:]' || true)
     # 255 and 256: the edge survives and nothing is announced. 257: the edge is gone AND announced.
     if [ "$d" -le 256 ]; then want_e=1; want_f=0; else want_e=0; want_f=1; fi
-    if [ "$e" != "$want_e" ] || [ "$f" != "$want_f" ]; then
+    if [ "$e" -ne "$want_e" ] || [ "$f" -ne "$want_f" ]; then
         BD_BAD=1
         no "depth bound at $d: edge=$e extract-partial=$f (want $want_e/$want_f) — the nesting bound is off by one against main"
     fi
