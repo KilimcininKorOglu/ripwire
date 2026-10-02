@@ -100,6 +100,53 @@ on both `--no-cache` and `--deps`. The new `test/importcapcheck.sh` pins the sha
 `#import` spellings, a macro include, guarded arms, both dead arms, the `#pragma`/`#error` gate, the import-role
 use-site half, cache round-trip, determinism) over a 14-edge fixture it builds itself.
 
+### Changed — `--affected` and `--test-gate` mark which tests to run first (`run_first=`)
+
+A tests-to-run answer listed every reaching test in evidence order (changed, partner, then `hops=` ascending), 80 to
+249 files on the comparison table's repositories, with nothing marking which rows carry the most direct evidence. The
+root now carries `run_first=N`: the first N test files are every changed, partner or `hops=1` row (the module's own
+tests and the tests that call it directly), or, when the list has none of those, the rows at its smallest `hops=`. It
+is a run order, not a skip list: the walk is name-based and its counts are floors, so the rest can still exercise the
+change. Nothing is dropped or reordered, and the attribute is absent when it would split nothing. It is defined in the full and compact legends and carried by `--affected` (and the
+MCP `affected` tool, which shares its renderer), `--test-gate` (XML and `--json`), and the edit receipt's
+`tests_to_run` companions. On hono, `--affected=src/utils/url.ts` gives `run_first="2"`: `src/utils/url.test.ts` and
+`src/hono.test.ts`. `test/testgatelegendbudgetcheck.sh`'s budget moves 3730 → 3930 B for the clause. Gate:
+`test/affectedcheck.sh` arms (7h)–(7o).
+
+### Fixed — C/C++: a body-less `enum X` in a function signature no longer poses as the function's encloser
+
+tmux writes `static enum cmd_retval` on one line and the function name on the next. The tags query indexes every named
+`enum` specifier, and the body-less one in a return or parameter type then took the whole enclosing function's span, so
+`--at` chained `struct cmd_retval` around the function, `--grep` labelled its hits `in="cmd_retval"`, and `--callers`
+named `struct box_lines` (from an `enum box_lines` parameter) as a caller. A body-less C/C++ enum, struct, union or class
+specifier now keeps its own span: on tmux, `--callers=options_get_number` lists 121 functions and no struct, and the
+four `"no current session"` hits name their functions. Such a specifier is a type use in the signature, so it no
+longer mints a definition either (no extra `overloads=` on the enum's name, and no `extent_suspect` flag on the function).
+`kParserVer` 129 → 130 (record values change for C/C++ only; `kCacheVersion` stays 27). Gate: `test/ccheck.sh`, the
+body-less type specifier arms.
+
+### Changed — `--callers`/`--callees` flag a name whose definitions are of different kinds (`cross_kind=`)
+
+A bare name can resolve to unrelated definitions: `getPath` was one free function in `src/utils/url.ts` and ten
+`protected getPath` methods of adapter classes. The rows union the callers of all of them, which `defs="11"`
+disclosed, but nothing said the definitions were not even the same kind of thing, so `createRequest` (it calls
+`this.getPath`) read as a caller of the utils function. The root now carries `cross_kind="fn:1,method:10"` (each kind
+with its definition count) whenever the definitions span two or more kinds, defined in the full and compact legends,
+on the XML, columnar and `--json` forms and on the MCP `find_symbol`/`find_referencing_symbols` twins. It is absent
+when every definition shares one kind, so overload sets keep their bytes. A `file:name` selector narrows to one
+definition. Gate: `test/callerscheck.sh` arm X.
+
+### Changed — `--grep` serves a source file's string literal when every code hit is only a use of it
+
+A literal question ("which code reads the option `escape-time`", "who reads `TEXTUAL_DRIVER`") is answered by a
+string literal in source: `"escape-time"` in an options table, `get_environ("TEXTUAL_DRIVER")`. The span tiers served
+the code tier whenever it held anything, so a test script's `set -g escape-time 0` or a changelog line outranked the
+answer, which rode only as `suppressed_string=N`. When no code hit sits in source code (every one is in a test, bench
+or doc file, or in a shell, YAML, TOML or JSON file, where a bare word parses as code) and source code holds the
+literal as a string (the same two exclusions apply to the string), the default answer now serves the string tier beside the code tier, labelled
+`tier="code+string"`; comments stay held back and counted. A code hit in source code keeps today's answer. The MCP
+`grep` tool makes the same choice. Gate: `test/greptiercheck.sh` arm (12).
+
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
 ripwire measured none of its own memory, so a large tree (#350: a non-git home directory, 67 GB) could grow it until

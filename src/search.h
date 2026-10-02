@@ -2107,6 +2107,54 @@ struct GrepTierReport
     }
 };
 
+// A file where a bare word parses as CODE although it is a command word, a key or a value: a shell script,
+// YAML, TOML, JSON. A literal's code-tier hit there is a use of it (`set -g escape-time 0`), the same reading a
+// doc-file hit gets from its path tier. Extension-keyed, like filter.h's pathTierOf.
+inline bool isBareWordCodePath( std::string_view p )
+{
+    const std::string ext = docparse::lowerExtOf( p );
+    for( const std::string_view e : { std::string_view( ".sh" ), std::string_view( ".bash" ), std::string_view( ".zsh" ), std::string_view( ".yaml" ),
+                                      std::string_view( ".yml" ), std::string_view( ".toml" ), std::string_view( ".json" ) } )
+    {
+        if( ext == e )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The span-tier LIFT (grepApplySpanTiers): does no CLASSIFIED code-tier hit sit in source code, while a
+// classified string-tier hit sits in source code? "Source code" = filter.h's PathTier::Source and not a bare-word
+// file above, for BOTH halves. Unclassified hits never vote, the same rule the tier election itself follows.
+inline bool grepLiteralLiftsStrings( const IngestResult& ing, const std::vector<GrepRawHit>& raw, const std::vector<std::uint8_t>& hitTier )
+{
+    EXPECTS( hitTier.size() == raw.size(), "one tier byte per raw hit" );
+    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, raw, []( const GrepRawHit& r ) { return r.fileId; } );
+    bool                            sourceString = false;
+    std::uint32_t                   lastCodeFile = UINT32_MAX;
+    for( std::size_t h = 0; h < raw.size(); ++h )
+    {
+        const std::uint32_t f        = raw[h].fileId;
+        const bool          isSource = f < tierOfFile.size() && tierOfFile[f] == std::uint8_t( PathTier::Source );
+        if( hitTier[h] == std::uint8_t( SpanTier::String ) )
+        {
+            // the SAME "source code" both halves mean: a string in a shell/YAML/TOML/JSON file under a source path is not
+            // "a source file holds it as a string", any more than a bare word there is a code hit (review item 3)
+            sourceString = sourceString || ( isSource && !isBareWordCodePath( rootRelPath( ing, f ) ) );
+        }
+        else if( hitTier[h] == std::uint8_t( SpanTier::Code ) && isSource && f != lastCodeFile )
+        {
+            lastCodeFile = f;
+            if( !isBareWordCodePath( rootRelPath( ing, f ) ) )
+            {
+                return false;   // a code hit in source code: the code tier answers, today's rule stands
+            }
+        }
+    }
+    return sourceString;
+}
+
 // Filters `collected.raw` order-preserving (already tier-then-path sorted — filtering never reorders), the
 // same post-filter shape as grepApplyBooleanTerms above, and runs AFTER it: tiering the survivors of a
 // boolean query is both cheaper and the only reading that matches what the answer will print.
@@ -2207,7 +2255,16 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
     // serves the one tier it has. The choice is made over the CLASSIFIED hits only — an unclassified hit
     // cannot vote for a tier nobody proved it belongs to, and it is emitted either way.
     std::uint8_t serveMask = 0;
-    if( tierHitCount[std::size_t( SpanTier::Code )] > 0 )
+    if( tierHitCount[std::size_t( SpanTier::Code )] > 0 && grepLiteralLiftsStrings( ing, collected.raw, hitTier ) )
+    {
+        // The literal question (comparison table tmux-16 / textual-16, 2026-09-30): every code hit is a USAGE of
+        // the literal — a test/doc file, or a shell/YAML/TOML/JSON file where a bare word parses as code — while
+        // source code holds it as a string. That string is the answer ("which code reads escape-time"), so it
+        // is served beside the code tier instead of riding as suppressed_string=; comments stay held back.
+        serveMask          = std::uint8_t( ( 1u << std::size_t( SpanTier::Code ) ) | ( 1u << std::size_t( SpanTier::String ) ) );
+        report.emittedTier = "code+string";
+    }
+    else if( tierHitCount[std::size_t( SpanTier::Code )] > 0 )
     {
         serveMask          = std::uint8_t( 1u << std::size_t( SpanTier::Code ) );
         report.emittedTier = "code";

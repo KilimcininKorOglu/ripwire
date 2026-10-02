@@ -38,6 +38,9 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   UPDATE_GOLDEN=1 (hash e355d7b821…1518a2). kParserVer 129 -> 132 for cache-key hygiene only (branch builds already ran
 #   at 129, 130 and 131; no extraction change); kCacheVersion stays 27, kQSnapCacheScheme stays 16; quality.h's
 #   kIngestParserVerMirror moves with it.
+# 2026-10-01, lane/answer-honesty-067: RE-DERIVED with UPDATE_GOLDEN=1 (hash ef157dad82…be6849a). kParserVer 129 -> 130 (a
+#   body-less C/C++ type specifier keeps its own span; record VALUES change, layout does not: kCacheVersion stays 27,
+#   kQSnapCacheScheme unchanged); quality.h's mirror moves with it. The train may renumber.
 # 2026-09-30, train 22 (qd-masking-stubs, fn-literal-bodies, #338 and #325 merged): RE-DERIVED ONCE on the merged tree
 #   with UPDATE_GOLDEN=1 (hash 5d82542872…4b49c3d3e). kParserVer 124 -> 129 (fn-literal's 128, then ONE bump for #338 and
 #   #325, whose PRs carried 125 and 98/99), kCacheVersion 25 -> 27 (fn-literal), kQSnapCacheScheme 15 -> 16 (qd-masking);

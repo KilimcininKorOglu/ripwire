@@ -79,7 +79,45 @@ struct CallHierarchyRows
     std::size_t         bodylessDefs  = 0;
     std::size_t         unprovenDefs  = 0;
     std::size_t         declinedCalls = 0;
+    std::string         crossKind;            // cross_kind= value ("fn:1,method:10"), "" unless defs span 2+ kinds
 };
+
+// cross_kind= (comparison table hono-07, 2026-09-30): a bare `getPath` resolved to ONE free function
+// (src/utils/url.ts) and TEN `protected getPath` methods of unrelated classes, and the rows unioned their callers
+// with nothing but defs="11" to say so — `createRequest` (which calls this.getPath) read as a caller of the utils
+// function. The union is the documented reading of defs=; what was missing is that the definitions are not even the
+// same KIND of thing. The value lists each kind with its def count, in SymKind order, and is empty (the attribute
+// absent) whenever every definition shares one kind, so a same-kind overload set keeps its bytes.
+inline std::string crossKindValue( const IngestResult& ing, const std::vector<NodeId>& matches )
+{
+    constexpr std::size_t kKinds = std::size_t( SymKind::ModuleScope ) + 1;
+    std::size_t           perKind[kKinds] = {};
+    std::size_t           distinct        = 0;
+    for( const NodeId m : matches )
+    {
+        if( m >= ing.symbols.size() )
+        {
+            continue;
+        }
+        const std::size_t k = std::size_t( ing.symbols[m].kind );
+        EXPECTS( k < kKinds, "SymKind's last enumerator is ModuleScope" );
+        distinct += perKind[k] == 0 ? 1 : 0;
+        ++perKind[k];
+    }
+    if( distinct < 2 )
+    {
+        return {};
+    }
+    std::string value;
+    for( std::size_t k = 0; k < kKinds; ++k )
+    {
+        if( perKind[k] > 0 )
+        {
+            value += ( value.empty() ? "" : "," ) + std::string( symTag( SymKind( k ) ) ) + ":" + std::to_string( perKind[k] );
+        }
+    }
+    return value;
+}
 
 // The ONE selector derivation for both callers emitters and their legend condition.
 // A declined call names no single definition: widen only a narrowed callers selector to
@@ -119,6 +157,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
     {
         return out;   // the caller owns the refusal: a CLI stderr line, or a JSON-RPC -32602
     }
+    out.crossKind = crossKindValue( ing, out.matches );
 
     std::vector<char> seen( ing.symbols.size(), 0 );
     for( const NodeId x : out.matches )
