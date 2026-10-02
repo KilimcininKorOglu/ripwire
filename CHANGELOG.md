@@ -303,7 +303,7 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 a branch build of unreleased work has used, so no cache such a build wrote is read as this release's), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=730e0dd36efe87d6 entries=753`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=b5c64a12f0346e6c entries=771`.
 
 ### Fixed — crashsweepcheck and hazardpatterncheck no longer depend on the size of `src/`
 

@@ -135,6 +135,7 @@
 "duprowcheck.sh": 1.5,
 "dynmapsimdcheck.sh": 36.4,
 "editcheckcheck.sh": 17.8,
+"editcheckdeclcheck.sh": 46.2,
 "editchecknotecheck.sh": 5.1,
 "edithandlehintcheck.sh": 3.0,
 "editpayloadbinarycheck.sh": 2.0,
