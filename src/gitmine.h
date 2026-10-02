@@ -226,9 +226,12 @@ inline std::string sinceNoBaselineRefusal( std::string_view value, const std::st
 // appends gitstamp::shallowRefHint's sentence (`shallowHint`; "" on a full clone keeps this refusal byte-identical).
 inline std::string sinceUnresolvedRefusal( std::string_view value, std::string_view shallowHint = {} )
 {
-    return "ripwire: --since='" + std::string( value ) + "' is neither a git revision nor a real calendar date — refusing "
-           "rather than measuring under a window nobody chose (a revision: HEAD~20, v1.2.0, a sha; a date: 2026-01-01, "
-           "'2 weeks ago', yesterday)" + std::string( shallowHint );
+    std::string out = "ripwire: --since='";
+    out += value;
+    out += "' is neither a git revision nor a real calendar date — refusing rather than measuring under a window nobody chose "
+           "(a revision: HEAD~20, v1.2.0, a sha; a date: 2026-01-01, '2 weeks ago', yesterday)";
+    out += shallowHint;
+    return out;
 }
 
 // popen a shell command and return its trimmed stdout ("" on any failure — never crashes). THE one copy of the
