@@ -15,16 +15,6 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Fixed — crashsweepcheck and hazardpatterncheck no longer depend on the size of `src/`
-
-Both gates run their static rules with `--match` over `src/`, and refused a scan the engine capped at its 5000-hit budget.
-The function-definition query crossed that budget as `src/` grew (5000+ once 0.6.7 lanes merged), so both went red for a
-reason unrelated to the rules. The scan now shards instead (`test/lib/shardmatch.py`): a capped whole-tree scan is
-re-run over path-ordered halves of the tree, recursively, until every shard answers uncapped; a single file that alone
-reaches the budget still fails the gate by name. A new arm (Z) proves completeness on a generated 6000-definition tree
-past the budget and, in crashsweepcheck, that a forced split returns the same rows as the whole-tree scan on `src/`. The
-engine's budget is unchanged.
-
 ### Added — `Class.method` and `Class#method` are selectors wherever `Class::method` is
 
 Agents and documentation name a method `Class.method` (Python, JS, Java) or `Class#method` (Ruby, JSDoc), and every
@@ -34,66 +24,6 @@ found" while `Class::method` resolved. When no other spelling matches, a selecto
 (a namespace-qualified `ns.Class.method` does not, as `ns::Class::method` does not). Several matches are disclosed as
 usual (`defs=N`, or `--edit-check`'s refusal). A selector that resolved before resolves identically. `--whereis` is a
 lexical scan of every ref and is unchanged. Gate: `test/selectorscopecheck.sh` arms (i)-(m).
-
-### Fixed — the handles an `--edit-check` ambiguity refusal prints name one contract each, and none is a declaration
-
-The refusal's "Qualify one contract:" list offered `file:name` for a header declaration. The `file:name` tier widens a
-header's declaration to the definitions it stands for, so `./lib.h:scale` was refused again with the same list. Each handle
-shown is now re-resolved before it is printed and must land on exactly its own contract; otherwise the canonical id, then the
-`@FILE:LINE` seed is tried, and a handle that still cannot be made unique is marked `[no selector names this contract alone]`
-and never used as the example. A declaration-only contract beside a definition is counted but never listed: a declaration has
-no call edges, so its own answer reads `callers="0"` while the definition holds the calls. A cwd-spelled file half that names
-one indexed file exactly (`./lib.cpp`, the form the tool prints) now means that file even when another path contains it
-(`./sub/lib.cpp`), for every verb that takes a `file:name` selector or an `@FILE:LINE` seed; a bare `lib.cpp` keeps the
-substring reading. A CLI handle holding a space is printed single-quoted. Gate: `test/editcheckdeclcheck.sh` arms (H), (J), (K).
-
-### Fixed — `--edit-check` on C/C++: a declaration and its definition are one contract, and the declaration's defaults count
-
-A header declaring `int scale( int x, int factor = 2 )` and a `.cpp` defining it were two "contracts" to `--edit-check`:
-the bare name was refused as ambiguous, and the definition's handle flagged every caller that relied on a default
-(`incompatible="3"` on three calls that all compile), because the arity test read only the definition's parameter list.
-A bodyless C/C++ declaration now stands for a definition when the name matches, the FULL scope chain matches (every
-enclosing namespace and class plus the declarator's written qualifier, so `outer::detail::f` never stands for
-`::detail::f`), the member's cv/ref qualifiers match, the definition's file is the declaration's or `#include`s it directly,
-the definition has external linkage (or shares the file), and the parameter-type lists are equal (names, default values and
-comments stripped, read from each signature's source text). Such a declaration's group folds into the definition's, so the
-bare name and the header's `file:name` answer about the definition, and a call passing between `params` minus that
-declaration's defaults and `params` arguments is never flagged. The root then carries `defaults_from="decl"`. Real
-overloads stay separate: each definition takes defaults only from the declaration that matches it. Anything unproven fails
-closed and keeps today's answer — including a scope opened or closed by a macro (`NS_BEGIN`, `QT_BEGIN_NAMESPACE`) and a
-qualified definition after `using namespace`, whose chains are unreadable; when such a declaration may carry a default (a
-transitive include, an unreadable scope chain, a signature past 16 KiB or one this reader cannot parse) and a caller is flagged, the root says so with
-`defaults_untied="N"`. Both attributes are defined in the full and compact legends. The fold applies to the post-hoc verb
-(CLI and MCP `edit_check`); the `--dry-run`/`new_body` preview keeps one contract per file. The test fixture's own
-`--edit-check=distance` (declared in `geometry.h`, defined in `geometry.cpp`) now answers instead of refusing. The session
-legend dictionary is `dictv=b643f81ab46e2af6 entries=752`. Gate: `test/editcheckdeclcheck.sh`.
-
-### Changed — data Sections no longer crowd code out of the default map (#339 F1): a code-first row pick, disclosed
-
-A data file of a few hundred keys or headings indexes as `SymKind::Section` rows with no call edges. Their rank is their
-share of the teleport prior, and priorwt's x1.7 specific-name boost fires on data names (`database_url_12`, "Installation
-step 12 details"), so they pushed called code out of the top-K the map emits: on the gate's fixture (eight Python functions
-plus one data file), 1 of 8 code rows survived at K=200 beside 200 long-named markdown headings, 220 YAML keys or 220 JSON
-keys, and 7/8 and 1/8 beside a #339 Rails `db/schema.rb` of 20 and 40 tables. The default map now picks its rows
-**code-first**: while the rank-order top-K keeps a data Section and leaves a non-Section row out, the lowest-ranked kept
-Section is swapped for the highest-ranked excluded non-Section row; survivors keep rank order. The rank vector and every
-`k=` are unchanged, and a map whose top-K left no code row out is byte-identical (django, webpack and this repository at
-`--top-k=16`; `test/golden.xml`). Scope: the plain map at the default `--rank-by` with no payload verb (XML, `--json`,
-`--html`, `--max-tokens`), MCP `analyze` on a clean working set and MCP `rank_by=pagerank`. `--tree`, `--query`,
-`--map-diff`, churn, authority/hub/rrf and the `--expand`/`--outline`/`--pack-signatures`/`--pack-top-n` ride-along maps keep the rank-order cut.
-A map that swapped carries `data_sections_cut="N"` (the swaps) and `next="--graph-query='kind(all,sec)' --offset=M
---limit=K"`, which pages the Sections past the M still shown, the swapped ones first; both are defined in the full and
-compact legends and `--help=all`. This repository's own default map swaps its one `sec` row (`data_sections_cut="1"`).
-Gate: `test/mapdatasectioncheck.sh` (8/8 code rows on 40 fixture cells x 6 surfaces and on the 12 S1 cells of a #339
-build; red on `a5229aca`).
-
-Pre-registered (docs/EVALS.md "Map data Sections never crowd code out of the default map"), the registered first arm —
-a Section teleport prior x0.1 that made every code row outrank every Section no call reaches — passed every gate (I2
-read at the emitted 4-dp precision and Gate S with two non-ranking fields masked, both decided after A's run) and
-**failed** the registered `--eval` margin: on code-seeded commits of three corpora its `map`-column recall@20 fell
-0.39 pp, 95% CI [−1.07, +0.07] pp, past the −1.0 pp bound, and outside the range of 20 matched placebos. By the
-registered rule this release ships the second arm, which leaves the ranking alone. Numbers and losses are in EVALS.
-
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
@@ -286,6 +216,32 @@ corpora, with this repository's `--report` totals unchanged. `kParserVer` 129 in
 inheritance records; 99 dropped a computed superclass's stray receiver ref); the record layout is unchanged, and
 the `quality.h` mirror and `test/qschemetrip.hash` move with it.
 
+### Changed — data Sections no longer crowd code out of the default map (#339 F1): a code-first row pick, disclosed
+
+A data file of a few hundred keys or headings indexes as `SymKind::Section` rows with no call edges. Their rank is their
+share of the teleport prior, and priorwt's x1.7 specific-name boost fires on data names (`database_url_12`, "Installation
+step 12 details"), so they pushed called code out of the top-K the map emits: on the gate's fixture (eight Python functions
+plus one data file), 1 of 8 code rows survived at K=200 beside 200 long-named markdown headings, 220 YAML keys or 220 JSON
+keys, and 7/8 and 1/8 beside a #339 Rails `db/schema.rb` of 20 and 40 tables. The default map now picks its rows
+**code-first**: while the rank-order top-K keeps a data Section and leaves a non-Section row out, the lowest-ranked kept
+Section is swapped for the highest-ranked excluded non-Section row; survivors keep rank order. The rank vector and every
+`k=` are unchanged, and a map whose top-K left no code row out is byte-identical (django, webpack and this repository at
+`--top-k=16`; `test/golden.xml`). Scope: the plain map at the default `--rank-by` with no payload verb (XML, `--json`,
+`--html`, `--max-tokens`), MCP `analyze` on a clean working set and MCP `rank_by=pagerank`. `--tree`, `--query`,
+`--map-diff`, churn, authority/hub/rrf and the `--expand`/`--outline`/`--pack-signatures`/`--pack-top-n` ride-along maps keep the rank-order cut.
+A map that swapped carries `data_sections_cut="N"` (the swaps) and `next="--graph-query='kind(all,sec)' --offset=M
+--limit=K"`, which pages the Sections past the M still shown, the swapped ones first; both are defined in the full and
+compact legends and `--help=all`. This repository's own default map swaps its one `sec` row (`data_sections_cut="1"`).
+Gate: `test/mapdatasectioncheck.sh` (8/8 code rows on 40 fixture cells x 6 surfaces and on the 12 S1 cells of a #339
+build; red on `a5229aca`).
+
+Pre-registered (docs/EVALS.md "Map data Sections never crowd code out of the default map"), the registered first arm —
+a Section teleport prior x0.1 that made every code row outrank every Section no call reaches — passed every gate (I2
+read at the emitted 4-dp precision and Gate S with two non-ranking fields masked, both decided after A's run) and
+**failed** the registered `--eval` margin: on code-seeded commits of three corpora its `map`-column recall@20 fell
+0.39 pp, 95% CI [−1.07, +0.07] pp, past the −1.0 pp bound, and outside the range of 20 matched placebos. By the
+registered rule this release ships the second arm, which leaves the ranking alone. Numbers and losses are in EVALS.
+
 ### Changed — `ripwire-quality-bar` gains a bounded debt fix loop
 
 A new section drives paying down EXISTING debt: pick the top `--quality-panel=strict` row, write the test first when
@@ -340,7 +296,50 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 a branch build of unreleased work has used, so no cache such a build wrote is read as this release's), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=730e0dd36efe87d6 entries=753`.
+
+### Fixed — crashsweepcheck and hazardpatterncheck no longer depend on the size of `src/`
+
+Both gates run their static rules with `--match` over `src/`, and refused a scan the engine capped at its 5000-hit budget.
+The function-definition query crossed that budget as `src/` grew (5000+ once 0.6.7 lanes merged), so both went red for a
+reason unrelated to the rules. The scan now shards instead (`test/lib/shardmatch.py`): a capped whole-tree scan is
+re-run over path-ordered halves of the tree, recursively, until every shard answers uncapped; a single file that alone
+reaches the budget still fails the gate by name. A new arm (Z) proves completeness on a generated 6000-definition tree
+past the budget and, in crashsweepcheck, that a forced split returns the same rows as the whole-tree scan on `src/`. The
+engine's budget is unchanged.
+
+### Fixed — the handles an `--edit-check` ambiguity refusal prints name one contract each, and none is a declaration
+
+The refusal's "Qualify one contract:" list offered `file:name` for a header declaration. The `file:name` tier widens a
+header's declaration to the definitions it stands for, so `./lib.h:scale` was refused again with the same list. Each handle
+shown is now re-resolved before it is printed and must land on exactly its own contract; otherwise the canonical id, then the
+`@FILE:LINE` seed is tried, and a handle that still cannot be made unique is marked `[no selector names this contract alone]`
+and never used as the example. A declaration-only contract beside a definition is counted but never listed: a declaration has
+no call edges, so its own answer reads `callers="0"` while the definition holds the calls. A cwd-spelled file half that names
+one indexed file exactly (`./lib.cpp`, the form the tool prints) now means that file even when another path contains it
+(`./sub/lib.cpp`), for every verb that takes a `file:name` selector or an `@FILE:LINE` seed; a bare `lib.cpp` keeps the
+substring reading. A CLI handle holding a space is printed single-quoted. Gate: `test/editcheckdeclcheck.sh` arms (H), (J), (K).
+
+### Fixed — `--edit-check` on C/C++: a declaration and its definition are one contract, and the declaration's defaults count
+
+A header declaring `int scale( int x, int factor = 2 )` and a `.cpp` defining it were two "contracts" to `--edit-check`:
+the bare name was refused as ambiguous, and the definition's handle flagged every caller that relied on a default
+(`incompatible="3"` on three calls that all compile), because the arity test read only the definition's parameter list.
+A bodyless C/C++ declaration now stands for a definition when the name matches, the FULL scope chain matches (every
+enclosing namespace and class plus the declarator's written qualifier, so `outer::detail::f` never stands for
+`::detail::f`), the member's cv/ref qualifiers match, the definition's file is the declaration's or `#include`s it directly,
+the definition has external linkage (or shares the file), and the parameter-type lists are equal (names, default values and
+comments stripped, read from each signature's source text). Such a declaration's group folds into the definition's, so the
+bare name and the header's `file:name` answer about the definition, and a call passing between `params` minus that
+declaration's defaults and `params` arguments is never flagged. The root then carries `defaults_from="decl"`. Real
+overloads stay separate: each definition takes defaults only from the declaration that matches it. Anything unproven fails
+closed and keeps today's answer — including a scope opened or closed by a macro (`NS_BEGIN`, `QT_BEGIN_NAMESPACE`) and a
+qualified definition after `using namespace`, whose chains are unreadable; when such a declaration may carry a default (a
+transitive include, an unreadable scope chain, a signature past 16 KiB or one this reader cannot parse) and a caller is flagged, the root says so with
+`defaults_untied="N"`. Both attributes are defined in the full and compact legends. The fold applies to the post-hoc verb
+(CLI and MCP `edit_check`); the `--dry-run`/`new_body` preview keeps one contract per file. The test fixture's own
+`--edit-check=distance` (declared in `geometry.h`, defined in `geometry.cpp`) now answers instead of refusing.
+Gate: `test/editcheckdeclcheck.sh`.
 
 ### Fixed — `--scan-skill(s)`: quoting a sensitive path no longer hides its upload (sensitive-read-upload)
 
