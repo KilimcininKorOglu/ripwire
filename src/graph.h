@@ -4897,6 +4897,20 @@ inline bool filePathContainsRootRel( const IngestResult& ing, std::uint32_t file
     return !tail.empty() && filePathContains( rel, tail );
 }
 
+// The one indexed file a cwd-spelled path names EXACTLY, or kNoFile — see preferExactFile for the rule and its scope.
+inline std::uint32_t exactRootRelFile( const IngestResult& ing, std::string_view needle ) noexcept
+{
+    const std::string_view tail = needle.empty() ? std::string_view{} : selectorRootTail( ing, needle );
+    for( std::uint32_t fileId = 0; !tail.empty() && fileId < std::uint32_t( ing.files.size() ); ++fileId )
+    {
+        if( rootRelPath( ing, fileId ) == tail )
+        {
+            return fileId;
+        }
+    }
+    return kNoFile;
+}
+
 // shared "name" | "file:name" spec splitter (X9(b)) — the ONE disambiguation rule --around/--lego/
 // --edit-check (via resolveFocus, single lowest-id pick) and --callers/--impact (via
 // resolveAllByNameQualified, every match) now both route through, so a same-named-across-files symbol
@@ -5000,6 +5014,14 @@ inline AtSeed resolveAtSeed( const IngestResult& ing, std::string_view spec )
         if( filePathContainsRootRel( ing, fileId, r.fileHalf ) )
         {
             r.fileMatches.push_back( fileId );
+        }
+    }
+    if( r.fileMatches.size() > 1 )
+    {   // the exact-file preference (preferExactFile): a cwd-spelled path naming one indexed file exactly is that file
+        const std::uint32_t exact = exactRootRelFile( ing, r.fileHalf );
+        if( std::find( r.fileMatches.begin(), r.fileMatches.end(), exact ) != r.fileMatches.end() )
+        {
+            r.fileMatches.assign( 1, exact );
         }
     }
     if( r.fileMatches.empty() )     { r.fault = AtFault::FileUnmatched;  return r; }
@@ -5749,6 +5771,46 @@ inline void declToDefFollowThrough( const IngestResult& ing, std::string_view fi
     std::sort( sel.begin(), sel.end() );   // NodeId order - the contract every caller of this already relies on
 }
 
+// THE DOTTED SCOPE TIER (2026-10-01). Agents and docs write a method as `Class.method` (Python, JS, Java, the
+// comparison tables) or `Class#method` (Ruby, JSDoc), and every SYM verb answered "symbol not found" for a method the
+// Scope::name tier resolves at once. Probed LAST, only when every other tier matched nothing, and only for a spec with
+// no ':' (a file:name or Scope::name spelling is never re-read) and no '/' (a path): each '.' and '#' becomes "::" and
+// the Scope::name tier answers with exactly its own match (so a dotted spelling resolves precisely where its `::`
+// spelling does, and a namespace-qualified one does not, as `ns::Class::method` does not). Purely additive: a spec that resolved before resolves identically, because this runs only on an empty result.
+// Several matches are returned as they are (the verbs' defs= discloses a union; --edit-check refuses and lists them).
+// `found` is what the earlier tiers matched, returned untouched unless it is empty.
+inline std::vector<NodeId> resolveAllByDottedScope( const IngestResult& ing, std::string_view spec, std::vector<NodeId> found )
+{
+    const bool dotted = spec.find_first_of( ".#" ) != std::string_view::npos && spec.find_first_of( ":/" ) == std::string_view::npos;
+    if( !found.empty() || !dotted )
+    {
+        return found;
+    }
+    std::string scoped;
+    for( const char c : spec )
+    {
+        scoped += ( c == '.' || c == '#' ) ? std::string_view( "::" ) : std::string_view( &c, 1 );
+    }
+    return resolveAllByScopeQualified( ing, scoped );
+}
+
+// THE EXACT-FILE PREFERENCE (2026-10-01). A file half is a path SUBSTRING, so `./lib.cpp:sc` also named
+// `./sub/lib.cpp`, and no spelling could pick the root file alone — the --edit-check refusal printed a handle that was
+// refused again. A file half spelled from the cwd (the root as typed, then the path — the form the tool prints) that
+// equals one indexed file's root-relative path EXACTLY names that file: when it holds a match, the matches in other files
+// are dropped. A bare `lib.cpp` (no root prefix) keeps the substring reading, and so does a cwd-spelled path whose exact
+// file holds no match, so a spelling that resolved before resolves the same unless it named one file exactly.
+inline std::vector<NodeId> preferExactFile( const IngestResult& ing, std::string_view file, std::vector<NodeId> found )
+{
+    const std::uint32_t exact   = exactRootRelFile( ing, file );
+    const auto          inExact = [ & ]( NodeId id ) { return ing.symbols[ id ].fileId == exact; };
+    if( std::any_of( found.begin(), found.end(), inExact ) && !std::all_of( found.begin(), found.end(), inExact ) )
+    {
+        found.erase( std::remove_if( found.begin(), found.end(), [ & ]( NodeId id ) { return !inExact( id ); } ), found.end() );
+    }
+    return found;
+}
+
 // `unprovenDefCountOut` (H1, optional): the residue declToDefFollowThrough dropped — see its contract. Zero
 // on every path that never reaches the widening (an @FILE:LINE seed, a canonical id, a Scope::name tier, a
 // bare name), so a reader never has to ask whether the number is stale.
@@ -5798,11 +5860,12 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
             out.push_back( s.id );
         }
     }
+    out = preferExactFile( ing, file, std::move( out ) );   // `./lib.cpp` names lib.cpp, not also sub/lib.cpp
 
     // #63: a header-qualified selector resolves to DECLARATIONS, which carry no call-graph edges.
     // Widen to the definitions they stand for. Full contract and its limits: declToDefFollowThrough above.
     declToDefFollowThrough( ing, file, name, out, unprovenDefCountOut );
-    return out;
+    return resolveAllByDottedScope( ing, spec, std::move( out ) );   // `Class.method` / `Class#method`, only when `out` is empty
 }
 
 // ─── MEMBER VARIABLES: `Owner.field` selection + per-site use resolution (the member-variable round, card A3) ─

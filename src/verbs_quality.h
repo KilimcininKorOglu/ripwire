@@ -2263,7 +2263,9 @@ std::optional<int> runEditCheck( const MainDispatch& d )
         return 1;
     }
 
-    const std::vector<EditCheckGroup> groups = editCheckGroups( ing, d.g, matches );
+    // the C/C++ declaration/definition fold is the post-hoc verb's (editcheck.h editCheckFoldDeclGroups); the preview
+    // below splices over ONE definition span, so it keeps one group per (file, scope) and refuses as before
+    const std::vector<EditCheckGroup> groups = editCheckGroups( ing, d.g, matches, /*foldDecls=*/!editPreviewRequested( cfg ) );
     if( groups.size() > 1 )
     {
         rw::emitTo( stderr, "ripwire: --edit-check: {}\n",

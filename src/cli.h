@@ -1332,6 +1332,8 @@ inline constexpr char kHelpHead[] =
         "                                 Scope::name         the sym= spelling edit-check and grep's in= rows print — matches the name\n"
         "                                                     under any scope whose ::-boundary SUFFIX is Scope (Box::lid, deep::Box::lid);\n"
         "                                                     a wrong scope refuses, it never falls back to the bare-name union\n"
+        "                                 Scope.name|Scope#name  the same match, dotted (Python/JS/Java) or Ruby-style; tried only\n"
+        "                                                     when no other spelling matched\n"
         "                               (START-END is 1-based within the def's OWN body — lines=\"lo-hi/total\" marks the slice\n"
         "                               partial; out-of-range clamps. FILE matches any path substring, like --callers/--lego.)\n"
         "                               EXACT-NAME DEFAULT (one token, one unambiguous match, no explicit --top-k): the ranked map\n"

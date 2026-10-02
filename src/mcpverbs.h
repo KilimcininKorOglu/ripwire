@@ -4244,7 +4244,8 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
                                                         mcprefuse::notFoundHintFor( "edit_check", "symbol" ) ) };
     }
 
-    const std::vector<EditCheckGroup> groups = editCheckGroups( ing, g, matches );
+    // the CLI's rule: the declaration/definition fold for the post-hoc answer, one group per (file, scope) for new_body
+    const std::vector<EditCheckGroup> groups = editCheckGroups( ing, g, matches, /*foldDecls=*/newBody.empty() );
     if( groups.size() > 1 )
     {
         return EditCheckReply { {}, editCheckAmbiguousMessage( symbol, groups, "symbol=", matches.size() ) };

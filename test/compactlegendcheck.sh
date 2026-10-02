@@ -498,9 +498,13 @@ probeFor()
 # code_not_flow_scanned=); the gate now runs under an empty HOME of its own, so the probe measures the same bytes everywhere.
 # RE-PINNED 2026-09-30 (review M5): 380 -> 530 (measured 518, hermetic HOME). The probe is a bare --scan-skills, whose answer
 # now names the directories it walked (dirs=) and whose legend defines it (+149 B); the value is in the root, not the legend.
+# PINNED 2026-10-01 (C/C++ declaration/definition fold): ripwire.edit-check/v1 610 (measured 595). The --edit-check=distance
+# probe used to be REFUSED — geometry.h declares distance and geometry.cpp defines it, and the verb counted the prototype and
+# its definition as two contracts — so the schema had no XML answer to pin. It now answers about the definition.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
+ripwire.edit-check/v1             610   595
 ripwire.map/v1                   910   892
 ripwire.map-diff/v1              900   885
 ripwire.pack-signatures/v1       770   759
