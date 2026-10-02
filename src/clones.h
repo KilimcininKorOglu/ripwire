@@ -140,10 +140,11 @@ inline constexpr std::uint32_t kHashLineCommentLangMask = langBit( Lang::Python 
 static_assert( kLangCount <= std::numeric_limits<decltype( kHashLineCommentLangMask )>::digits,
                "Lang outgrew a 32-bit mask — widen kHashLineCommentLangMask" );
 
-inline bool usesHashLineComments( Lang lang ) noexcept
-{
-    return ( ( kHashLineCommentLangMask >> std::uint32_t( lang ) ) & std::uint32_t( 1 ) ) != 0;
-}
+// Is `lang`'s bit set in a langBit mask? One shift and one AND, the form every mask predicate below shares (so the
+// second predicate did not land as a 29-token clone of the first, which --quality-delta named when it did).
+inline constexpr bool langInMask( std::uint32_t mask, Lang lang ) noexcept { return ( ( mask >> std::uint32_t( lang ) ) & std::uint32_t( 1 ) ) != 0; }
+
+inline bool usesHashLineComments( Lang lang ) noexcept { return langInMask( kHashLineCommentLangMask, lang ); }
 
 // Languages whose `'` opens a STRING literal (CodeScanOptions::singleQuoteStrings), not a char literal: the three the
 // builtin-method name gate has a table for (graph.h BuiltinMethodGate::tableFor), which is the one consumer that asks.
@@ -155,10 +156,7 @@ inline constexpr std::uint32_t kSingleQuoteStringLangMask = langBit( Lang::Pytho
 static_assert( kLangCount <= std::numeric_limits<decltype( kSingleQuoteStringLangMask )>::digits,
                "Lang outgrew a 32-bit mask — widen kSingleQuoteStringLangMask" );
 
-inline bool usesSingleQuoteStrings( Lang lang ) noexcept
-{
-    return ( ( kSingleQuoteStringLangMask >> std::uint32_t( lang ) ) & std::uint32_t( 1 ) ) != 0;
-}
+inline bool usesSingleQuoteStrings( Lang lang ) noexcept { return langInMask( kSingleQuoteStringLangMask, lang ); }
 
 // What the scanner decided a token IS. The consumer decides what to DO with that — normalize it away
 // (--clones) or keep it verbatim (--readability) — which is the whole reason the two are separable.
