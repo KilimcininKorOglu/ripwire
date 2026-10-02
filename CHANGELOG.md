@@ -15,6 +15,42 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — shallow-clone qualification reaches the composed surfaces, the unfetched-rev refusals and the empty windows
+
+0.6.6 put `shallow="1"` on the owners / hotspots / cochange roots of a depth-limited clone and a deepen hint on the
+pr-context and merge-scout unknown-ref refusals. Four surfaces that answer from the same history were left out
+(found on three depth-1 clones in the 0.6.6 command sweep; every item reproduced on the current base before the fix):
+
+- `--pr-context` embeds `<owners bf= share=>` and `<cochange window= commits=>` per changed file; `--situ`'s `[3] co-change`
+  line and the MCP `situational_awareness` twin carry the same window. On a shallow clone the pr-context root now carries
+  `shallow="1"` (the clause that defines it rides the envelope every form writes, and the compact dictionary already holds
+  the term), the situ window line carries `shallow="1"`, and the JSON twin carries `"shallow":true` beside
+  `cochange_window` — present only on a shallow clone, so every full-history answer is byte-identical. A multi-root run
+  probes each root for its own section.
+- `--quality-delta=HEAD~3`, `--dmm=HEAD~3` and `--since=HEAD~3` (every `--since` host: hotspots, cochange, rank-by=churn,
+  slice, and slice's no-baseline degrade) refused with "does not resolve" / "is neither a git revision" and nothing about
+  the likeliest cause. Each refusal now ends with the ONE probe-backed sentence the pr-context/merge-scout refusals
+  already print (`gitstamp::shallowRefHint`): "this is a shallow clone, so the ref may lie beyond the fetched history;
+  deepen it with git fetch --deepen=N, or git fetch --unshallow". On a full clone every refusal keeps its bytes; the
+  `--since` probe reads every workspace root. The shallow-boundary sentence (`--quality-delta=HEAD` on the boundary
+  commit) is unchanged — it is a different fact.
+- `--hotspots --since=REV` / `--cochange --since=REV` over a window that matched no commits returned their empty root before
+  the qualified emitter, with no `shallow=`. The empty-window root now carries `shallow="1"` and its legend clause exactly
+  as the ranked root does (both legend postures; still `commits="0"`, exit 0).
+
+### Added — MCP `grep` rows carry the matched text and a `fetch_body` handle (CLI parity)
+
+The MCP `grep` hit row was `{file, line, in}`: no matched text, so an agent re-read every file it had just searched, and
+no handle on the enclosing rows, so `fetch_body` had nothing to take (sweep item #9, all three repos). Each hit now carries
+`text` — the CLI hit's own CDATA, cut at the same 512-byte cap with `line_bytes` (the whole line's length) present exactly
+when the cap cut it — and each `enclosing` row carries `handle` (the CLI's `h=` under `--handles`, same identity and content
+pin, minted from the index's own byte hash) or `handle_omitted` with the CLI legend's reason (`ambiguous`, `non-code`,
+`unreadable`). The rule for which row may carry a handle is one function both surfaces read (`search.h`
+`grepEncHandleCandidate`). Keys are appended after the historic ones; the CLI `--grep` answer is byte-identical. The
+`tools/list` description names the new fields. Gate: `mcptwinclaimscheck` (D); `shallowhistorycheck` sections 7–9 cover
+the three items above.
+
+
 ### Added — `Class.method` and `Class#method` are selectors wherever `Class::method` is
 
 Agents and documentation name a method `Class.method` (Python, JS, Java) or `Class#method` (Ruby, JSDoc), and every

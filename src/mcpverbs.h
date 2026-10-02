@@ -832,8 +832,14 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
 // in-edge CSR the index already holds — zero new analysis, bounded by the page's own row cap. Row
 // semantics live in search.h's grepEnclosingRows (shared with the CLI emitter); this is serialization.
 // Returns "" or a leading-comma fragment the caller splices before its closing brace.
-inline std::string grepEnclosingJson( const IngestResult& ing, const Graph& g, std::span<const GrepHit> hits )
+// 0.6.7 (sweep #9): every row also carries `handle` — the fetch_body handle, the SAME identity and content pin the CLI's h=
+// under --handles mints (search.h grepEncHandleCandidate decides WHICH row may carry one; handleFor mints it from the index's
+// own byte hash) — or `handle_omitted` with the CLI legend's reason. Before this a grep answer named enclosing symbols that
+// fetch_body could not take, so the agent re-read every file it had just searched.
+inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHit> hits )
 {
+    const IngestResult&           ing     = ix.ing;
+    const Graph&                  g       = ix.g;
     const std::vector<GrepEncRow> encRows = grepEnclosingRows( ing, g, hits );
     if( encRows.empty() )
     {
@@ -856,6 +862,20 @@ inline std::string grepEnclosingJson( const IngestResult& ing, const Graph& g, s
         if( row.cx > 0 )
         {
             out += ",\"cx\":" + std::to_string( row.cx );
+        }
+        const char*  omitted = nullptr;
+        const NodeId id      = grepEncHandleCandidate( ing, row, omitted );
+        if( id == kNoNode )
+        {
+            out += std::string( ",\"handle_omitted\":\"" ) + omitted + "\"";
+        }
+        else if( const std::string handle = handleFor( ix, id ); handle.empty() )
+        {
+            out += ",\"handle_omitted\":\"unreadable\"";   // no content hash could be proven for that file
+        }
+        else
+        {
+            out += ",\"handle\":\"" + mcpdetail::jsonEscape( handle ) + "\"";
         }
         out += "}";
     }
@@ -1158,6 +1178,14 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
         {
             out += ",\"parse_degraded\":true";
         }
+        // 0.6.7 (sweep #9): the matched line itself — the CLI hit's own CDATA, cut at the same kGrepMatchedLineMaxBytes cap
+        // (grepEnrich applies it for both surfaces) and disclosed the same way: line_bytes is the WHOLE line's byte length,
+        // present only when the cap cut it. Appended after the historic keys, so key-order readers are untouched.
+        out += ",\"text\":\"" + mcpdetail::jsonEscape( h.text ) + "\"";
+        if( h.lineBytes != 0 )
+        {
+            out += ",\"line_bytes\":" + std::to_string( h.lineBytes );
+        }
         out += "}";
     }
     out += "]";
@@ -1171,7 +1199,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                         singleRootJ, rootPrefixJ );
     // R1 (the 2026-08-12 usage mine): the CLI <enc>/<suggest> twins, appended AFTER "hits" so the
     // historic key order three other gates read (files,total,shown,capped) is byte-untouched.
-    out += grepEnclosingJson( ing, ix.g, std::span<const GrepHit>( hits ) );
+    out += grepEnclosingJson( ix, std::span<const GrepHit>( hits ) );
     if( collected.raw.empty() )
     {
         out += grepSuggestJson( ing, pattern );
@@ -1316,7 +1344,8 @@ inline std::string declDefAndWindowJson( const SituationFacts& facts, PathRelFn 
              + std::to_string( dp.shared ) + "}";
     }
     return out + "],\"cochange_window\":\"" + mcpdetail::jsonEscape( facts.coWindow ) + "\",\"cochange_commits\":"
-         + std::to_string( facts.coCommits );
+         + std::to_string( facts.coCommits )
+         + ( facts.shallow ? ",\"shallow\":true" : "" );   // 0.6.7: the CLI [3] line's shallow="1" — present-only, the cochange twin's spelling
 }
 
 // C1 F-10 (2026-09-10): --situ joined cli.h's honorsPaging set (its blast-radius and co-change sections

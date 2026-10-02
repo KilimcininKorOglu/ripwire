@@ -55,16 +55,13 @@ public:
         {
             return {};
         }
-        if( row.defCount != 1 || row.ids.size() != 1 )
+        const char*      omitted = nullptr;
+        const rw::NodeId id      = rw::grepEncHandleCandidate( ing_, row, omitted );   // 0.6.7: the rule the MCP twin shares
+        if( id == rw::kNoNode )
         {
-            return " handle_omitted=\"ambiguous\"";
+            return std::string( " handle_omitted=\"" ) + omitted + "\"";
         }
-        const rw::NodeId id = row.ids.front();
         const rw::Symbol& s = ing_.symbols[id];
-        if( s.kind == rw::SymKind::Section )
-        {
-            return " handle_omitted=\"non-code\"";
-        }
         const std::uint64_t contentHash = hashFor( s.fileId );
         const std::string handle = rw::sourceHandleFor( ing_, g_, root_, id, contentHash );
         return handle.empty() ? " handle_omitted=\"unreadable\"" : " h=\"" + handle + "\"";

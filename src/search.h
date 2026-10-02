@@ -2266,6 +2266,33 @@ struct GrepEncRow
     std::uint32_t       cx          = 0; // max cx across ids (the decl carries 0; the def carries the number)
 };
 
+// The ONE rule for which enclosing row may carry a freshness-pinned handle (the CLI's h= under --handles, the MCP grep
+// twin's `handle`): exactly one editable definition. Returns that def's id, or kNoNode with `omitted` naming the reason in
+// the vocabulary the CLI legend defines — "ambiguous" (the name grouped several definitions), "non-code" (a document/data
+// section has no safe definition span). Minting itself stays with each surface (the CLI hashes the file it reads, the MCP
+// index holds its own byte hash), so a handle that cannot be proven is that surface's "unreadable".
+inline NodeId grepEncHandleCandidate( const IngestResult& ing, const GrepEncRow& row, const char*& omitted )
+{
+    omitted = nullptr;
+    if( row.defCount != 1 || row.ids.size() != 1 )
+    {
+        omitted = "ambiguous";
+        return kNoNode;
+    }
+    const NodeId id = row.ids.front();
+    if( id >= ing.symbols.size() )
+    {
+        omitted = "ambiguous";   // not an indexed definition at all — nothing a handle could pin
+        return kNoNode;
+    }
+    if( ing.symbols[id].kind == SymKind::Section )
+    {
+        omitted = "non-code";
+        return kNoNode;
+    }
+    return id;
+}
+
 template<class GraphT>
 inline std::vector<GrepEncRow> grepEnclosingRows( const IngestResult& ing, const GraphT& g, std::span<const GrepHit> hits )
 {
