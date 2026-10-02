@@ -305,6 +305,17 @@ a branch build of unreleased work has used, so no cache such a build wrote is re
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
 cached quality snapshot is recomputed. The session legend dictionary is `dictv=b5c64a12f0346e6c entries=771`.
 
+### Fixed — `--layout` and `--stray-content --abi` no longer wrap an unsigned index on a malformed member (G1)
+
+Three backward scans in `src/layout.h` were written `for( i = n; i-- > 0; )`, which wraps `i` to `SIZE_MAX` when the
+scan runs off the front: a trailing `)` that no `(` balances (`peelAttributeGroups`), a trailing `]` that no `[`
+balances (`peelExtents`), and a `#` with nothing but spaces between it and the start of a struct body
+(`atDirectiveStart`). The wrapped value was never used, so plain builds answered correctly, but the sanitizer build
+(`-fsanitize=integer`) aborted with exit 134. `--stray-content --abi` on this repository hit the first one, which
+turned `test/attrvocabcheck.sh` red under `asan/ripwire`. The three loops now count a cursor down to 1 and index
+`cursor - 1`, as `resolve.h` already does; output is byte-identical. Gate: `test/abicheck.sh` arm 11, one struct
+per loop through `--layout` plus the `--abi` path, which skips by name on a binary built without sanitizers.
+
 ### Fixed — crashsweepcheck and hazardpatterncheck no longer depend on the size of `src/`
 
 Both gates run their static rules with `--match` over `src/`, and refused a scan the engine capped at its 5000-hit budget.
