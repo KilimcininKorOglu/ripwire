@@ -296,7 +296,12 @@ constexpr std::uint32_t kCacheVersion = 27;           // 27: same record layout 
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 129;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 132;          // bump on any grammar/.scm/extraction change
+                                                      // 132 = 2026-10-02 (train 23): cache-key hygiene, not an extraction change. Every
+                                                      //   branch build of this train's work ran at 129, and unmerged branch builds already
+                                                      //   ran at 130 and 131 with different extraction; 132 is above all of them, so no
+                                                      //   cache one of those builds wrote is ever read as this build's. Same layout:
+                                                      //   kCacheVersion stays 27, kQSnapCacheScheme stays 16.
                                                       // 129 = 2026-09-30 (train 22): ONE bump past fn-literal's 128 for the two community
                                                       //   PRs that merge after it — #338 (RSpec described_class, its 125 note below) and #325
                                                       //   (Ruby inheritance edges, its note below). Each note keeps the number its PR carried.

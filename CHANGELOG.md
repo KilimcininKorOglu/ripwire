@@ -336,7 +336,8 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 124 → 129 (the function-literal fix takes 128; #338 and #325 take one more), `kCacheVersion` 25 → 27
+`kParserVer` 124 → 132 (the function-literal fix takes 128; #338 and #325 take 129; 132 then sits above every number
+a branch build of unreleased work has used, so no cache such a build wrote is read as this release's), `kCacheVersion` 25 → 27
 (the function-literal fix's record changes) and `kQSnapCacheScheme` 15 → 16 (the `--quality-delta` error-masking and
 placeholder changes). Every ingest cache written by an earlier build is refused and re-indexed once, and every
 cached quality snapshot is recomputed. The session legend dictionary is `dictv=0e543e1e6a3fe37d entries=750`.
