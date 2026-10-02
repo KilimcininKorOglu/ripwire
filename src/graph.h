@@ -2279,7 +2279,8 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 // or `"Pool"` string are NOT evidence (test/commenttokencheck.sh A-E: each bound a json dict's `data.get` to Pool.get when
 // the count ran over every identifier byte run in the file) — EXCEPT a string in annotation or subscript position, which
 // Python reads as a type expression: `p: "Pool"` and `x: "Pool" = …` (a `:` then the string on the same line), `-> "Pool"`,
-// and `Optional["Pool"]` / `Dict[str, "Pool"]` (directly inside a `[ … ]` that follows a name or a `]`). Those are scanned
+// `None | "Pool"` (a union member after `|`), and `Optional["Pool"]` / `Dict[str, "Pool"]` (directly inside a `[ … ]` that
+// follows a name or a `]`). Those are scanned
 // for identifier runs as the whole file once was (arm N; builtinbindcheck arm T's `p: "PStr"`). A docstring follows its
 // `:` on the NEXT line, an `__all__` tuple sits in `( … )`, a list literal's `[` follows `=`, and a call argument follows
 // `(`, so each stays prose (arm O). In a `#`-comment language `//` is floor division, not a comment, so the scanner keeps
@@ -2287,7 +2288,9 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 // toward keeping the edge: an unreadable file admits; a dict literal's `"k": "Pool"`, a lambda's `: "Pool"` and a dict
 // lookup's `d["Pool"]` read as annotations or subscripts; a quote inside a triple-quoted string re-opens code scanning
 // until the next quote; an f-string's interpolated expression is string content here (the call edge it makes is
-// tree-sitter's and unaffected, arm K). The gate caches one file's bytes (its calls arrive file by file).
+// tree-sitter's and unaffected, arm K). Floors the other way, disclosed: a string that is a type only by its callee's
+// convention — `cast("Pool", x)`, `TypeVar("T", bound="Pool")` — reads as a call argument and does not count. The gate caches
+// one file's bytes (its calls arrive file by file).
 inline std::size_t identifierRunCount( std::string_view text, std::string_view name ) noexcept
 {
     std::size_t runs     = 0;
@@ -2313,14 +2316,14 @@ struct StringTokenPosition
     CodeTokenKind     prevKind = CodeTokenKind::Punctuation;
     std::vector<char> brackets;                                // the open brackets: 's' = a subscript `[`, 'o' = any other
 
-    // A String token directly after `:` or `->` on the same line (`p: "X"`, `-> "X"`), or directly inside a subscript at
-    // its `[` or a `,` (`Name["X"]`, `Name[str, "X"]`): Python reads it as a type expression.
+    // A String token directly after `:`, `->` or `|` on the same line (`p: "X"`, `-> "X"`, `None | "X"`), or directly inside a
+    // subscript at its `[` or a `,` (`Name["X"]`, `Name[str, "X"]`): Python reads it as a type expression.
     [[nodiscard]] bool isTypeExpression( std::string_view token ) const noexcept
     {
         const std::size_t prevEnd    = prev.empty() ? 0 : std::size_t( prev.data() + prev.size() - text.data() );
         const std::size_t tokenStart = std::size_t( token.data() - text.data() );
         const bool        sameLine   = !prev.empty() && text.find( '\n', prevEnd ) >= tokenStart;
-        const bool        annotation = sameLine && ( prev == ":" || prev == "->" );
+        const bool        annotation = sameLine && ( prev == ":" || prev == "->" || prev == "|" );
         const bool        subscript  = !brackets.empty() && brackets.back() == 's' && ( prev == "[" || prev == "," );
         return annotation || subscript;
     }

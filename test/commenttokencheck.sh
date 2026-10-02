@@ -27,8 +27,10 @@
 #   (I) NEAR MISS, must keep: `s = 'it"s'` then `kind = Pool` — a `"` inside a `'…'` string opens nothing
 #   (J) CONTROL, must keep: `def f( p: Pool )` in the same file (the annotation shape builtinbindcheck arm T pins)
 #   (N) A STRING IN ANNOTATION OR SUBSCRIPT POSITION IS A TYPE EXPRESSION, must keep: `-> "Pool"`, `Optional["Pool"]`,
-#       `x: "Pool" = …`, `Dict[str, "Pool"]` — Python forward references are strings, and builtinbindcheck arm T's
-#       `p: "PStr"` is the same shape (the first cut of this fix scanned every string as prose and lost that edge)
+#       `x: "Pool" = …`, `Dict[str, "Pool"]`, `None | "Pool"` — Python forward references are strings, and builtinbindcheck
+#       arm T's `p: "PStr"` is the same shape (the first cut of this fix scanned every string as prose and lost that edge).
+#       Disclosed floors, NOT gated: `cast("Pool", x)` and `TypeVar("T", bound="Pool")` are types only by their callee's
+#       convention and read as call arguments (declined)
 #   (O) ANY OTHER STRING IS PROSE, must decline: an `__all__` tuple entry, a list literal entry (`[` after `=` is no
 #       subscript), `return "Pool"`, a call argument `print("Pool")`
 #   (P) `//` IS FLOOR DIVISION IN PYTHON, must keep: `n = total // 2; kind = Pool` — the C-family `//`-to-EOL comment rule
@@ -198,6 +200,11 @@ def mapped(d: Dict[str, "Pool"]):
     return d
 PY
 expect_kept "(N4) Dict[str, \"Pool\"] second subscript member" "$TMP/py_N4"
+pyfix N5 <<'PY'
+def union(p: None | "Pool"):
+    return p
+PY
+expect_kept "(N5) None | \"Pool\" union member" "$TMP/py_N5"
 
 echo "=== (O) a string anywhere else stays prose: a tuple, a list, a return value, a call argument ==="
 pyfix O1 <<'PY'

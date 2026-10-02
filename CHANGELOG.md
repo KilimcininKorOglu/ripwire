@@ -316,19 +316,21 @@ house code scanner (`scanCodeTokens`), which drops `#` comments and `"…"` stri
 (a new `CodeScanOptions` spelling; every `--clones` / `--readability` call site keeps its bytes), so only a token the parser
 would read as code counts. A string in annotation or subscript position is a type expression, not prose, and counts
 exactly as the unquoted spelling does — Python forward references are strings: `p: "Pool"` and `x: "Pool" = …` (a `:`
-then the string on the same line), `-> "Pool"`, and `Optional["Pool"]` / `Dict[str, "Pool"]` (directly inside a `[ … ]`
-that follows a name or a `]`). A docstring (its `:` ends the previous line), an `__all__` tuple entry, a list literal entry,
+then the string on the same line), `-> "Pool"`, `None | "Pool"` (a union member after `|`), and `Optional["Pool"]` /
+`Dict[str, "Pool"]` (directly inside a `[ … ]` that follows a name or a `]`). A docstring (its `:` ends the previous line), an `__all__` tuple entry, a list literal entry,
 a `return "Pool"` and a call argument stay prose. In the `#`-comment languages `//` is floor division, not a comment, so
 `n = total // 2; kind = Pool` keeps the rest of its line. Such a call is declined and counted (`declined_calls=`), as the
-gate declines every other unevidenced call. Floors, all in the direction that keeps an edge: a dict literal's
-`"k": "Pool"`, a lambda's `: "Pool"` and a dict lookup's `d["Pool"]` count as annotation or subscript strings; a quote
-character inside a triple-quoted string re-opens code scanning until the next quote; and an f-string's interpolated
-expression is string content for this count (the call edge it makes is tree-sitter's and unchanged). Not changed: the comment and docstring text never made a call edge
+gate declines every other unevidenced call. Floors in the direction that keeps an edge: a dict literal's `"k": "Pool"`,
+a lambda's `: "Pool"` and a dict lookup's `d["Pool"]` count as annotation or subscript strings; a quote character inside a
+triple-quoted string re-opens code scanning until the next quote; and an f-string's interpolated expression is string
+content for this count (the call edge it makes is tree-sitter's and unchanged). Floors in the other direction: a string
+that is a type only by its callee's convention — `cast("Pool", x)`, `TypeVar("T", bound="Pool")` — reads as a call
+argument and does not count, so a class named nowhere else beyond its `class` line is still declined there. Not changed: the comment and docstring text never made a call edge
 of its own in any language (tree-sitter reads no call in a comment), and a call on a receiver of unknown type whose name is
 NOT in the builtin table (`self._observer.start()` beside an in-repo `start`) still binds by name — that is the resolver's
 stated name-based floor, not this gate. Gate: `test/commenttokencheck.sh` (arms A–E red before; F–I near misses; J the
 annotation control; K interpolations; L the C++/Lua/Ruby/JS comment families; M determinism; N annotation and subscript
-strings keep the edge; O every other string is prose; P Python's `//` is not a comment).
+strings keep the edge, N5 the `|` union member; O every other string is prose; P Python's `//` is not a comment).
 
 ### Fixed — crashsweepcheck and hazardpatterncheck no longer depend on the size of `src/`
 
