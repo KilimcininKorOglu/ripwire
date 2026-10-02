@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-02, train 24 (recall, answer-honesty, #368, contrib-checklist, hygiene-orphans, readme-terminality merged):
+#   RE-DERIVED ONCE on the merged tree with UPDATE_GOLDEN=1 (hash a7f2ec25d4…9388db). kParserVer 132 -> 133: above the two
+#   merged lanes' extraction changes (130 body-less C/C++ type specifier span; 131 TS/TSX await/unary type-argument
+#   calls) and train 23's 132; kCacheVersion stays 27, kQSnapCacheScheme stays 16; quality.h's kIngestParserVerMirror
+#   moves with it.
 # 2026-10-02, train 23 (map data sections + edit-check pairing merged): RE-DERIVED ONCE on the merged tree with
 #   UPDATE_GOLDEN=1 (hash e355d7b821…1518a2). kParserVer 129 -> 132 for cache-key hygiene only (branch builds already ran
 #   at 129, 130 and 131; no extraction change); kCacheVersion stays 27, kQSnapCacheScheme stays 16; quality.h's
