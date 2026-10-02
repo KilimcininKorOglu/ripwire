@@ -15,6 +15,16 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — crashsweepcheck and hazardpatterncheck no longer depend on the size of `src/`
+
+Both gates run their static rules with `--match` over `src/`, and refused a scan the engine capped at its 5000-hit budget.
+The function-definition query crossed that budget as `src/` grew (5000+ once 0.6.7 lanes merged), so both went red for a
+reason unrelated to the rules. The scan now shards instead (`test/lib/shardmatch.py`): a capped whole-tree scan is
+re-run over path-ordered halves of the tree, recursively, until every shard answers uncapped; a single file that alone
+reaches the budget still fails the gate by name. A new arm (Z) proves completeness on a generated 6000-definition tree
+past the budget and, in crashsweepcheck, that a forced split returns the same rows as the whole-tree scan on `src/`. The
+engine's budget is unchanged.
+
 ### Added — `Class.method` and `Class#method` are selectors wherever `Class::method` is
 
 Agents and documentation name a method `Class.method` (Python, JS, Java) or `Class#method` (Ruby, JSDoc), and every
