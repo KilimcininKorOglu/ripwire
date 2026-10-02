@@ -2099,7 +2099,7 @@ std::optional<int> runPath( const MainDispatch& d )
             // vs unknown name) instead of a near-miss on the name half alone.
             const std::string_view missing = srcDefs.empty() ? srcN : dstN;
             return refuseNotFoundWithAnswer( ing, cfg, rw::NotFoundAnswer{ "path", { { "from", std::string( srcN ) }, { "to", std::string( dstN ) } },
-                                                                           srcDefs.empty() ? "from" : "to",
+                                                                           srcDefs.empty() && dstDefs.empty() ? "both" : srcDefs.empty() ? "from" : "to",
                                                                            rw::notFoundNear( ing, missing, notFoundGitRoot( ing, cfg ) ) },
                                              "ripwire: --path endpoint not found: ", missing, "--path=" );
         }

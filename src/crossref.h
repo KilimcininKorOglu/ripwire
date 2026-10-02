@@ -1443,6 +1443,9 @@ struct WhereResult
     std::string           filter;             // H14/M6: the --stray-filter SUBSTR this scan was narrowed by ("" = none)
     std::vector<WhereHit> hits;
     WorktreeOverlay       worktree = WorktreeOverlay::Clean;   // what the overlay did (worktree= on the root, +dirty on at=)
+    bool                  headHolds = false;   // HEAD's COMMITTED tree holds SYM (on-head= reads the CHECKOUT on a dirty tree)
+    std::string           dottedRetry;         // a Class.method spelling whose method the INDEX defines: the bare name (caller-set)
+    std::string           renamedTo;           // the working tree renamed SYM to this definition (caller-set, on a zero)
 
     // T1 (completeness claims): true iff the scan PROVABLY covered every text blob of every scanned ref's
     // full tree — no missing/oversized/short-read blob, the batch served every sha, and no ref's tree
@@ -1819,9 +1822,27 @@ enum class WorktreeCopy : std::uint8_t
 {
     Text,      // read: scan it, and it REPLACES HEAD's blob for this path
     Gone,      // absent from disk (deleted): no rows, and HEAD's rows for it are dropped
-    NotText,   // binary, a directory (a submodule) or another non-file: no text symbol can occur, HEAD's rows dropped
-    Unread,    // exists but could not be read (permission, oversized, a git-quoted name): HEAD's rows STAND
+    NotText,   // binary, or a non-file that is not a directory (a FIFO, a socket): no text symbol can occur, HEAD's rows dropped
+    Unread,    // exists but could not be read (permission, oversized, a git-quoted name), or a DIRECTORY — an untracked
+               // nested repository or a submodule, whose files are another repository's and are not read here: HEAD's
+               // rows STAND and the answer is worktree="partial", never a complete claim over files it never opened
 };
+
+// Whether a PARENT component of `relPath` is a symbolic link. A path beyond one is not in the working tree at all
+// (git: "beyond a symbolic link" — it lists the tracked path as deleted and the link itself as untracked), so the
+// overlay treats it as gone; reading through it would answer with a file outside the root.
+inline bool beyondSymlinkedDir( const std::string& root, const std::string& relPath )
+{
+    std::error_code ec;
+    for( std::size_t slash = relPath.find( '/' ); slash != std::string::npos; slash = relPath.find( '/', slash + 1 ) )
+    {
+        if( std::filesystem::symlink_status( std::filesystem::path( root ) / relPath.substr( 0, slash ), ec ).type() == std::filesystem::file_type::symlink )
+        {
+            return true;
+        }
+    }
+    return false;
+}
 
 // The bytes git would store for this path: a regular file's contents, or a symbolic link's target text (git
 // stores the link, not what it points at). Mirrors streamBlobs' rules: over kMaxBlobBytes is UNREAD (it could
@@ -1833,8 +1854,13 @@ inline WorktreeCopy readWorktreeCopy( const std::string& root, const std::string
     {
         return WorktreeCopy::Unread;   // git quoted a byte it would not print raw — this spelling is not the file's name
     }
-    const std::filesystem::path p = std::filesystem::path( root ) / relPath;
+    const std::string trimmed = relPath.back() == '/' ? relPath.substr( 0, relPath.size() - 1 ) : relPath;
+    if( beyondSymlinkedDir( root, trimmed ) )
+    {
+        return WorktreeCopy::Gone;   // review S1: never read through the link to a file outside the root
+    }
     std::error_code             ec;
+    const std::filesystem::path p  = std::filesystem::path( root ) / trimmed;
     const auto                  st = std::filesystem::symlink_status( p, ec );
     if( st.type() == std::filesystem::file_type::not_found )
     {
@@ -1853,6 +1879,10 @@ inline WorktreeCopy readWorktreeCopy( const std::string& root, const std::string
         }
         bytes = target.string();
         return WorktreeCopy::Text;
+    }
+    if( st.type() == std::filesystem::file_type::directory )
+    {
+        return WorktreeCopy::Unread;   // a nested repository (`inner/` in the untracked listing) or a submodule: not read
     }
     if( st.type() != std::filesystem::file_type::regular )
     {
@@ -2043,8 +2073,51 @@ inline std::vector<RenameCandidate> renameCandidatesOf( const IngestResult& ing,
     return candidates;
 }
 
+// Whether a DEFINITION of `name` left this file: HEAD's copy has a definition-shaped line naming it (the same lexical
+// test every whereis row uses) that the working copy no longer contains verbatim. A mention alone (an import, a call,
+// a comment) is not a rename, and neither is a definition-shaped line the working copy still carries — the review's
+// two false positives (an external name still imported and called; a name only a TODO comment ever mentioned).
+inline bool definitionLeftCopy( std::string_view headCopy, std::string_view workCopy, std::string_view name )
+{
+    std::vector<WhereHit> rows;
+    scanBlobForSymbol( headCopy, name, RefInfo{}, std::string(), rows );
+    std::vector<std::string_view> workLines;
+    for( std::string_view line : splitLines( workCopy ) )
+    {
+        const std::size_t a = line.find_first_not_of( " \t\r" );
+        workLines.push_back( a == std::string_view::npos ? std::string_view{} : line.substr( a, line.find_last_not_of( " \t\r" ) + 1 - a ) );
+    }
+    std::sort( workLines.begin(), workLines.end(), sortutil::svLess );
+    return std::any_of( rows.begin(), rows.end(), [ & ]( const WhereHit& row )
+                        { return row.isDef && !std::binary_search( workLines.begin(), workLines.end(), std::string_view( row.text ), sortutil::svLess ); } );
+}
+
+// One changed file's rename evidence, gathered once: its HEAD copy, and whether a definition of the missing name
+// left it (definitionLeftCopy against the working copy; a file gone from disk lost every line).
+struct RenameEvidence
+{
+    std::string path;
+    std::string headCopy;
+    bool        definitionLeft = false;
+};
+
+inline RenameEvidence renameEvidenceOf( const std::string& root, const std::string& path, std::string_view missing )
+{
+    RenameEvidence ev{ path, {}, false };
+    if( path.front() == '"' )
+    {
+        return ev;   // a git-quoted spelling is not the path's name: no evidence either way
+    }
+    ev.headCopy = gitCapture( root, "show " + shSingleQuote( "HEAD:./" + path ) + " 2>/dev/null" );
+    std::string        work;
+    const WorktreeCopy copy = readWorktreeCopy( root, path, work );
+    ev.definitionLeft       = ( copy == WorktreeCopy::Text || copy == WorktreeCopy::Gone ) && definitionLeftCopy( ev.headCopy, work, missing );
+    return ev;
+}
+
 // The definition the working tree most likely renamed `missing` to, or "" when the evidence names none: the best
-// candidate whose changed file's HEAD copy holds `missing` as a whole word and does NOT hold the candidate's name.
+// candidate in a changed file from which a DEFINITION of `missing` left (definitionLeftCopy), and whose HEAD copy does
+// NOT hold the candidate's own name (it is new there).
 inline std::string worktreeRenameOf( const IngestResult& ing, std::string_view missing, const std::string& root )
 {
     if( missing.empty() || identWordsOf( missing ).empty() || !quality::gitRepoHasHistory( root ) )
@@ -2056,22 +2129,20 @@ inline std::string worktreeRenameOf( const IngestResult& ing, std::string_view m
     {
         return {};
     }
-    std::vector<std::pair<std::string, std::string>> headCopies;   // path → its HEAD copy, read at most once
+    std::vector<RenameEvidence> probed;   // one evidence record per changed file, read at most once
     for( const RenameCandidate& c : renameCandidatesOf( ing, missing, changed.lines, root ) )
     {
-        auto copy = std::find_if( headCopies.begin(), headCopies.end(), [ & ]( const auto& h ) { return h.first == c.path; } );
-        if( copy == headCopies.end() && headCopies.size() >= kMaxRenameProbeFiles )
+        auto ev = std::find_if( probed.begin(), probed.end(), [ & ]( const RenameEvidence& e ) { return e.path == c.path; } );
+        if( ev == probed.end() && probed.size() >= kMaxRenameProbeFiles )
         {
             break;
         }
-        if( copy == headCopies.end() )
+        if( ev == probed.end() )
         {
-            // A git-quoted spelling ("…") is not the path's name: its HEAD copy reads as empty, which proves nothing.
-            const bool quoted = c.path.front() == '"';
-            headCopies.emplace_back( c.path, quoted ? std::string() : gitCapture( root, "show " + shSingleQuote( "HEAD:./" + c.path ) + " 2>/dev/null" ) );
-            copy = std::prev( headCopies.end() );
+            probed.push_back( renameEvidenceOf( root, c.path, missing ) );
+            ev = std::prev( probed.end() );
         }
-        if( hasWholeWord( copy->second, missing ) && !hasWholeWord( copy->second, c.name ) )
+        if( ev->definitionLeft && !hasWholeWord( ev->headCopy, c.name ) )
         {
             return std::string( c.name );
         }
@@ -2183,8 +2254,10 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
     result.worktree       = worktree.state;
     result.onHead         = worktree.mentions;
 
-    // blob sha → every (ref index, path) that points at it, in a deterministic order.
-    struct Site { std::uint32_t refIndex; std::string path; };
+    // blob sha → every (ref index, path) that points at it, in a deterministic order. `replaced`: HEAD's blob for a
+    // path the working tree changed — it prints no row (the overlay answers for that path), but it is still read for
+    // ONE fact the fate lane needs: whether HEAD's COMMITTED tree holds the name (headHolds; review M8).
+    struct Site { std::uint32_t refIndex; std::string path; bool replaced; };
     bool anyEmptyTree = false;   // T1: a zero-row ls-tree could be a FAILED listing — it forfeits complete=
     gtl::btree_map<std::string, std::vector<Site>> sites;
     for( std::uint32_t i = 0; i < refs.size(); ++i )
@@ -2196,11 +2269,7 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
         }
         for( const RawRow& r : rows )
         {
-            if( i == 0 && std::binary_search( worktree.replaced.begin(), worktree.replaced.end(), r.path ) )
-            {
-                continue;   // HEAD's blob for a path the working tree changed: the overlay's rows answer for it
-            }
-            sites[ r.bSha ].push_back( Site{ i, r.path } );
+            sites[ r.bSha ].push_back( Site{ i, r.path, i == 0 && std::binary_search( worktree.replaced.begin(), worktree.replaced.end(), r.path ) } );
         }
     }
 
@@ -2221,9 +2290,13 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
 }
         for( const Site& s : it->second )
         {
-            if( refs[ s.refIndex ].name == "HEAD" ) { result.onHead = true;
-}
-            scanBlobForSymbol( bytes, sym, refs[ s.refIndex ], s.path, result.hits );
+            const bool head   = refs[ s.refIndex ].name == "HEAD";
+            result.headHolds  = result.headHolds || ( head && ( !s.replaced || hasWholeWord( bytes, sym ) ) );
+            result.onHead     = result.onHead || ( head && !s.replaced );
+            if( !s.replaced )
+            {
+                scanBlobForSymbol( bytes, sym, refs[ s.refIndex ], s.path, result.hits );
+            }
         } }, &blobStats );
 
     // T1: exhaustive-over-text iff every sha streamed clean AND no ref's tree listing was suspect. An empty
@@ -2623,6 +2696,22 @@ inline std::string_view whereisDottedNameOf( std::string_view spec )
     return spec.substr( spec.find_last_of( ".#" ) + 1 );
 }
 
+// The dotted-selector retry for `spec`, or "" when the note must not fire: a dotted spelling whose LAST SEGMENT the
+// INDEX defines (so the offered retry finds a definition). `setup.py`, `os.path`, `README.txt` are literals a reader
+// may legitimately ask this "defines or mentions" verb about, and their literal scan keeps its complete= (review M3).
+// Once the shared dotted-scope resolver lands (graph.h resolveAllByDottedScope), this should ask it instead.
+inline std::string whereisDottedRetryOf( const IngestResult& ing, std::string_view spec )
+{
+    if( !whereisSpecIsDotted( spec ) )
+    {
+        return {};
+    }
+    const std::string_view method = whereisDottedNameOf( spec );
+    const bool defined = std::any_of( ing.symbols.begin(), ing.symbols.end(),
+                                      [ & ]( const Symbol& s ) { return s.kind != SymKind::Section && s.name == method; } );
+    return defined ? std::string( method ) : std::string();
+}
+
 // The legend's CONDITIONAL tail: each paragraph rides only an answer that carries what it defines, so a plain
 // answer pays no bytes for the with_history lane, test-local rows or the worktree overlay. Split out of
 // writeWhereisPage so the page writer stays a page writer.
@@ -2639,8 +2728,9 @@ inline void writeWhereisLegendTail( std::FILE* out, const WhereResult& res )
     // test_local= rides only an answer that holds both kinds of definition (demoteTestLocalDefs), and so does its reading.
     if( std::any_of( res.hits.begin(), res.hits.end(), []( const WhereHit& h ) { return h.testLocal; } ) )
     {
-        rw::emitRaw( out, "TEST-LOCAL: test_local=\"1\" on a kind=\"def\" row marks a definition in a test file or a test scope "
-                           "(the index's test lens; on a lexical row, a test-tier path). It appears only when the same answer also "
+        rw::emitRaw( out, "TEST-LOCAL: test_local=\"1\" on a kind=\"def\" row marks a definition in a test scope (the index's test lens) "
+                           "or under a test, bench or fixture path (test/, bench/, benches/, fixture/, fixtures/, testdata/ and the "
+                           "test-file name patterns), on any row. It appears only when the same answer also "
                            "holds a production definition, and those rows are ordered after the production definitions and before "
                            "the references of their tier. Nothing is dropped. " );
     }
@@ -2652,17 +2742,21 @@ inline void writeWhereisLegendTail( std::FILE* out, const WhereResult& res )
                            "untracked and not ignored) is read from the working tree instead: its rows say ref=\"worktree\" (tip= "
                            "and date= name the HEAD commit it overlays) and REPLACE HEAD's rows for that path, so a definition the "
                            "edit added is listed and one it deleted or renamed is not. HEAD's rows stand only for paths the working "
-                           "tree left alone. on-head=, hits= and head_labels= count the checkout: HEAD plus those rows. worktree=read: "
-                           "every differing path was read, and complete= keeps its meaning over the checkout. worktree=partial: some "
-                           "differing path could not be read (permission, over the 2 MB ceiling, a name git had to quote, or more "
-                           "changed paths than one answer reads), so its HEAD rows stand and may be stale. worktree=unlisted: git "
+                           "tree left alone. On such an answer on-head=, hits= and head_labels= read the CHECKOUT, HEAD plus those rows, not "
+                           "HEAD's commit alone: on-head=\"0\" there means the checkout lacks the name, which HEAD's commit may still "
+                           "hold. A path beyond a symbolic link to a directory is not in the checkout (git's own reading) and is never "
+                           "read through the link. worktree=read: every differing path was read, and complete= keeps its meaning over "
+                           "the checkout. worktree=partial: some differing path could not be read (permission, over the 2 MB ceiling, a "
+                           "name git had to quote, a directory such as an untracked nested repository or a submodule, whose files are "
+                           "another repository's, or more changed paths than one answer reads), so its HEAD rows stand and may be stale. worktree=unlisted: git "
                            "could not list the changes, so any HEAD row may be stale. Under partial or unlisted complete= is never "
-                           "claimed. Other refs are always their committed trees. " );
+                           "claimed. Other refs are always their committed trees. With the with_history lane, a name HEAD's commit holds "
+                           "but the working tree removed gets fate v=\"uncommitted\" instead of the history oracle's never or removed. " );
     }
 }
 
 // The selector-note elements, first after the root: each says which KIND of zero (or of literal) the reader holds.
-inline void writeWhereisSelectorNotes( std::FILE* out, const WhereResult& res, bool dottedSel, const XmlEscaper& ex )
+inline void writeWhereisSelectorNotes( std::FILE* out, const WhereResult& res, const XmlEscaper& ex )
 {
     // §B11.2 — a zero that is a SPELLING fact, not a repository fact, says so. Emitted first, before the
     // history lane, so it is the first thing after the root on the one shape where it fires: hits="0" AND a
@@ -2673,11 +2767,12 @@ inline void writeWhereisSelectorNotes( std::FILE* out, const WhereResult& res, b
                       ex( res.sym ).c_str(), ex( whereisBareNameOf( res.sym ) ).c_str() );
     }
     // The dotted spelling, on EVERY answer that carries one: a nonzero list is the literal's occurrences (call sites
-    // like `Shape.area(…)`), never the definition, so the note rides beside it too.
-    if( dottedSel )
+    // like `Shape.area(…)`), never the definition, so the note rides beside it too. Only when the caller found that the
+    // INDEX defines the last segment (dottedRetry) — `setup.py` or `os.path` is a literal, not a method (review M3).
+    if( !res.dottedRetry.empty() )
     {
         rw::emitTo( out, "<selector-note r=\"dotted-selector\" spec=\"{}\" retry=\"{}\"/>",
-                      ex( res.sym ).c_str(), ex( whereisDottedNameOf( res.sym ) ).c_str() );
+                      ex( res.sym ).c_str(), ex( res.dottedRetry ).c_str() );
     }
     // H7: the same element, two more reasons — the line seed that was RESOLVED before the scan (so sym= is a
     // name and not the raw @spec), and the near-miss beside a zero the index can explain.
@@ -2686,11 +2781,43 @@ inline void writeWhereisSelectorNotes( std::FILE* out, const WhereResult& res, b
         rw::emitTo( out, "<selector-note r=\"line-seed\" spec=\"{}\" retry=\"{}\"/>",
                       ex( res.seedSpec ).c_str(), ex( res.sym ).c_str() );
     }
-    if( res.hits.empty() && !res.nearMiss.empty() )
+    // Review M7: a zero for a name the WORKING TREE renamed offers the new name (worktreeRenameOf's evidence: a
+    // definition of SYM left a changed file that now defines this one), ahead of — and instead of — a spelling neighbour.
+    if( res.hits.empty() && !res.renamedTo.empty() )
+    {
+        rw::emitTo( out, "<selector-note r=\"renamed\" spec=\"{}\" retry=\"{}\"/>",
+                      ex( res.sym ).c_str(), ex( res.renamedTo ).c_str() );
+    }
+    else if( res.hits.empty() && !res.nearMiss.empty() )
     {
         rw::emitTo( out, "<selector-note r=\"near-miss\" spec=\"{}\" retry=\"{}\"/>",
                       ex( res.sym ).c_str(), ex( res.nearMiss ).c_str() );
     }
+}
+
+// The with_history lane, when it was asked for: what the probe did, then this symbol's own verdict (see the comment
+// at the call site for why an index-confirmed HEAD definition suppresses the verdict). Review M8: on a dirty checkout
+// a zero (on-head="0") may be a name HEAD's COMMITTED tree still holds and only the uncommitted working tree removed.
+// The oracle's "never" / "removed" read a zero as "HEAD does not have it", which is false there, so that case gets
+// its own verdict, v="uncommitted", naming what is true.
+inline void writeWhereisFate( std::FILE* out, const WhereResult& res, const XmlEscaper& ex )
+{
+    if( res.history == nullptr )
+    {
+        return;
+    }
+    gitoracle::writeHistoryProbe( out, *res.history, ex );
+    if( !res.history->ok || ( res.onHead && res.headLabelsFromIndex ) )
+    {
+        return;
+    }
+    if( res.headHolds && !res.onHead )
+    {
+        rw::emitTo( out, "<fate sym=\"{}\" v=\"uncommitted\" note=\"HEAD's commit still holds this name; only the uncommitted "
+                         "working tree removed it\"/>", ex( res.sym ).c_str() );
+        return;
+    }
+    gitoracle::writeNameFate( out, res.sym, res.fate, ex );
 }
 
 // Contract-level defect: this verb said hits="2560" and printed 60, and
@@ -2739,10 +2866,13 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
                        "impact, around, lego and edit_check accept. A file:name spelling is searched as a LITERAL "
                        "string, no tree contains it, and the result is a true but useless hits=\"0\" shaped exactly "
                        "like a name this repo never had. When that is what happened, a selector-note element says so "
-                       "and its retry= is the bare name to re-run with. That element has four reasons, and r= names which: "
+                       "and its retry= is the bare name to re-run with. That element has five reasons, and r= names which: "
                        "qualified-selector (a file:name spelling was searched literally), dotted-selector (a Class.method or "
-                       "Class#method spelling was searched literally, and no tree spells a method's definition that way, so "
-                       "complete= is withheld and retry= is the bare method name, which lists that name in every class), line-seed (an @FILE:LINE selector "
+                       "Class#method spelling, whose last segment the INDEX defines, was searched literally, and no tree spells "
+                       "a method's definition that way, so complete= is withheld and retry= is the bare method name, which lists "
+                       "that name in every class; a dotted literal whose last segment the index does not define, such as a file "
+                       "name, is an ordinary literal search with no note), renamed (the scan found nothing and the working tree "
+                       "renamed the name: a definition of it left a changed file that now defines retry=), line-seed (an @FILE:LINE selector "
                        "was RESOLVED to the definition enclosing that line before the scan, so sym= is that definition's "
                        "name and spec= is what you typed), and near-miss (the scan found nothing and the INDEX holds a name "
                        "one or two edits away — the tree zero is still a measurement, the note only says which zero it is). "
@@ -2781,8 +2911,7 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
     // vocabulary above already covers every partial shape, and complete-equals-zero would be noise.
     // A dotted selector was searched as a literal the question did not mean: exhaustive over that literal, but not
     // an answer to "where is Class.method", so it never claims (its selector-note below says why).
-    const bool dottedSel     = whereisSpecIsDotted( res.sym );
-    const bool completeClaim = res.scanExhaustive && hitPage.begin == 0 && hitPage.end == res.hits.size() && !dottedSel;
+    const bool completeClaim = res.scanExhaustive && hitPage.begin == 0 && hitPage.end == res.hits.size() && res.dottedRetry.empty();
     // H14/M6: refs_scanned="80" under a ref-name filter is a total for the FILTER, not for the repo (the
     // audit measured 80 filtered vs 189 unfiltered) — so the filter is named beside the number it bounds.
     const std::string whFilterAttr = res.filter.empty() ? std::string() : ( " filter=\"" + ex( res.filter ) + "\"" );
@@ -2799,7 +2928,7 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
                   kWorktreeAttr[ std::size_t( res.worktree ) ],
                   completeClaim ? " complete=\"1\"" : "" );
 
-    writeWhereisSelectorNotes( out, res, dottedSel, ex );
+    writeWhereisSelectorNotes( out, res, ex );
 
     // The history lane, when it was asked for: what the probe did, then this symbol's own verdict.
     // §L10: the oracle answers "did any line carrying this name ever leave the tree", and a doc that merely
@@ -2811,14 +2940,7 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
     // two is head_labels=: "index" means the PARSED index confirmed a real definition on HEAD (not just a
     // text hit), which is a claim strong enough to override the line-removal oracle outright. So the fate
     // row is printed unless the index itself already proved the symbol is defined on HEAD.
-    if( res.history != nullptr )
-    {
-        gitoracle::writeHistoryProbe( out, *res.history, ex );
-        if( res.history->ok && !( res.onHead && res.headLabelsFromIndex ) )
-        {
-            gitoracle::writeNameFate( out, res.sym, res.fate, ex );
-        }
-    }
+    writeWhereisFate( out, res, ex );
 
     // The <more/> contract, restated because it was false here: shown + dropped == hits=, ALWAYS. The count
     // must be taken against the CAP, not against a loop variable `shown++ >= cap` has already pushed to

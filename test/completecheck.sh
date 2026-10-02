@@ -559,13 +559,16 @@ TRF="$( "$BIN" "$TR" --whereis=helper --no-cache 2>/dev/null | sed 's/<!--.*-->/
 
 # 18o) the MCP twins keep their -32602 refusal and carry the same answer document in error.data.answer
 if command -v python3 >/dev/null 2>&1; then
-    python3 - "$BIN" "$WT" <<'PY' && ok 'MCP (18o): find_referencing_symbols / impact / path_between refuse -32602 AND carry the answer (found 0, the rename first)' \
+    python3 - "$BIN" "$WT" <<'PY' && ok 'MCP (18o): all five twins (find_referencing_symbols, find_symbol, uses, impact, path_between) refuse -32602 AND carry the answer; batch names the rename' \
                                || no 'MCP (18o): the twins do not carry the not-found answer'
 import json, subprocess, sys
 BIN, WT = sys.argv[1], sys.argv[2]
 calls = [ ( "find_referencing_symbols", { "path": WT, "symbol": "zqOldName" }, '"found":0', '"near":"zqNewName"' ),
+          ( "find_symbol", { "path": WT, "symbol": "zqOldName" }, '"found":0', '"near":"zqNewName"' ),
+          ( "uses", { "path": WT, "symbol": "zqOldName" }, 'found="0"', 'near="zqNewName" near_renamed="1"' ),
           ( "impact", { "path": WT, "symbol": "zqDoomed" }, 'found="0"', 'of="zqDoomed"' ),
-          ( "path_between", { "path": WT, "from": "zqUser", "to": "zqDoomed" }, 'found="0"', 'missing="to"' ) ]
+          ( "path_between", { "path": WT, "from": "zqUser", "to": "zqDoomed" }, 'found="0"', 'missing="to"' ),
+          ( "path_between", { "path": WT, "from": "zqNope1", "to": "zqNope2" }, 'found="0"', 'missing="both"' ) ]
 msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" } ] + [
     { "jsonrpc": "2.0", "id": 10 + i, "method": "tools/call", "params": { "name": n, "arguments": a } } for i, ( n, a, _, _ ) in enumerate( calls ) ]
 p = subprocess.run( [ BIN, "--mcp" ], input = "".join( json.dumps( m ) + "\n" for m in msgs ), capture_output = True, text = True, timeout = 300 )
@@ -583,12 +586,99 @@ for i, ( n, a, want1, want2 ) in enumerate( calls ):
     ans = e.get( "data", {} ).get( "answer", "" )
     if e.get( "code" ) != -32602 or want1 not in ans or want2 not in ans:
         print( "  MCP %s: %s" % ( n, json.dumps( d )[ :300 ] ) ); bad = 1
-rn = byId.get( 10, {} ).get( "error", {} ).get( "message", "" )
-if "renamed in the working tree: did you mean 'zqNewName'" not in rn:
-    print( "  MCP rename clause missing: " + rn ); bad = 1
+for k in ( 10, 11, 12 ):
+    rn = byId.get( k, {} ).get( "error", {} ).get( "message", "" )
+    if "renamed in the working tree: did you mean 'zqNewName'" not in rn:
+        print( "  MCP rename clause missing (id %d): %s" % ( k, rn ) ); bad = 1
+# the batch arm (review M6): each answering sub-verb's err= names the rename first
+bq = [ { "verb": v, "symbol": "zqOldName" } for v in ( "callers", "callees", "impact", "uses" ) ]
+pb = subprocess.run( [ BIN, "--mcp" ], input = json.dumps( msgs[ 0 ] ) + "\n" + json.dumps(
+    { "jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": { "name": "batch", "arguments": { "path": WT, "queries": bq } } } ) + "\n",
+    capture_output = True, text = True, timeout = 300 )
+bt = ""
+for line in pb.stdout.splitlines():
+    try:
+        d = json.loads( line )
+    except ValueError:
+        continue
+    if d.get( "id" ) == 99:
+        bt = d.get( "result", {} ).get( "content", [ {} ] )[ 0 ].get( "text", "" )
+if bt.count( "renamed in the working tree: did you mean &apos;zqNewName&apos;" ) != 4:
+    print( "  MCP batch: not every not-found item names the rename: " + bt[ :400 ] ); bad = 1
 sys.exit( bad )
 PY
 fi
+# ── review round (rv-fresh-067) ────────────────────────────────────────────────────────────────────────────────
+# 18p) M1: near_renamed needs a DEFINITION of the name to have LEFT a changed file. Two negatives that the first cut
+# called renames: an external name still imported and called beside an unrelated new def, and a name only a HEAD
+# comment ever mentioned. Both must fall back to the spelling near-miss with no near_renamed.
+RF="$TMP/renamefp"; mkdir -p "$RF/a" "$RF/b"
+printf 'from lib import parse_config\n\ndef run():\n    return parse_config("x")\n' >"$RF/a/app.py"
+printf '# TODO: retire old_fetch_user once the cache lands\ndef get_user():\n    return 1\n' >"$RF/b/svc.py"
+for d in a b; do ( cd "$RF/$d" && git init -q -b main . && git add -A \
+    && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1; done
+printf 'from lib import parse_config\n\ndef run():\n    return parse_config("x")\n\ndef config_parse_v2():\n    return 2\n' >"$RF/a/app.py"
+printf '# TODO: retire old_fetch_user once the cache lands\ndef get_user():\n    return 1\n\ndef fetch_user_old():\n    return 0\n' >"$RF/b/svc.py"
+for c in 'a parse_config' 'b old_fetch_user'; do
+    set -- $c
+    "$BIN" "$RF/$1" --callers="$2" --no-cache >"$TMP/rf.out" 2>"$TMP/rf.err"
+    { ! grep -q 'near_renamed' "$TMP/rf.out" && ! grep -q 'renamed in the working tree' "$TMP/rf.err"; } \
+        && ok "callers (18p): $2 — still mentioned, never a definition that left — is not offered as a rename" \
+        || { no "callers (18p): $2 was offered as a working-tree rename"; cat "$TMP/rf.err"; }
+done
+
+# 18q) M7: --whereis's own zero names the working tree's rename first (r="renamed"), not the spelling neighbour.
+WR="$( wwhere zqOldName | sed 's/<!--.*-->//' )"
+{ printf '%s' "$WR" | grep -q '<selector-note r="renamed" spec="zqOldName" retry="zqNewName"/>' && ! printf '%s' "$WR" | grep -q 'r="near-miss"'; } \
+    && ok 'whereis (18q): a renamed-away name offers the rename (r="renamed" retry="zqNewName"), not a spelling near-miss' \
+    || { no 'whereis (18q): the renamed-away zero does not name the rename'; printf '%s\n' "$WR"; }
+wwhere zqOldName --legend=full | grep -q 'renamed (the scan found nothing and the working tree' \
+    && ok 'whereis (18q): the full legend defines r="renamed"' || no 'whereis (18q): r="renamed" rides undefined'
+
+# 18r) M8: --with-history on a name only the WORKING TREE removed (HEAD's commit still holds it) is not "never".
+FA="$( "$BIN" "$WT" --whereis=zqDoomed --with-history --no-cache 2>/dev/null | sed 's/<!--.*-->//' )"
+{ printf '%s' "$FA" | grep -q '<fate sym="zqDoomed" v="uncommitted"' && ! printf '%s' "$FA" | grep -q 'v="never"'; } \
+    && ok 'whereis (18r): a name the working tree removed (HEAD still holds it) gets fate v="uncommitted", never "never"' \
+    || { no 'whereis (18r): the fate lane still reads a working-tree removal as a name this repo never had'; printf '%s\n' "$FA" | grep -o '<fate [^>]*>'; }
+"$BIN" "$WT" --whereis=zqNoSuchNameAtAll --with-history --no-cache 2>/dev/null | grep -q 'v="uncommitted"' \
+    && no 'whereis (18r): a name HEAD never held was called an uncommitted removal' \
+    || ok 'whereis (18r): a name HEAD never held keeps the history verdict (no v="uncommitted")'
+
+# 18s) M2: an untracked NESTED repository is a directory the overlay does not read — worktree="partial", no complete=.
+NR="$TMP/nested"; mkdir -p "$NR"; printf 'int outer_fn( void ) { return 0; }\n' >"$NR/a.c"
+( cd "$NR" && git init -q -b main . && git add -A && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed \
+  && mkdir inner && cd inner && git init -q -b main . && printf 'int nested_fn( void ) { return 1; }\n' >n.c && git add -A \
+  && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+NRR="$( "$BIN" "$NR" --whereis=nested_fn --no-cache 2>/dev/null | wroot )"
+{ printf '%s' "$NRR" | grep -q ' worktree="partial"' && ! printf '%s' "$NRR" | grep -q 'complete='; } \
+    && ok 'whereis (18s): an untracked nested repository is not read, so worktree="partial" and no complete=' \
+    || { no 'whereis (18s): an unread nested repository still claims a complete answer'; printf '%s\n' "$NRR"; }
+
+# 18t) S1: a changed path BEYOND a symlinked directory is not in the checkout (git: deleted); it is never read through
+# the link, so a file outside the root never answers.
+SL="$TMP/symparent"; mkdir -p "$SL/a" "$TMP/symout/a"; printf 'int inside_fn( void ) { return 1; }\n' >"$SL/a/b.c"
+( cd "$SL" && git init -q -b main . && git add -A && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+printf 'int outside_fn( void ) { return 2; }\n' >"$TMP/symout/a/b.c"; rm -rf "$SL/a"; ln -s "$TMP/symout/a" "$SL/a"
+SLR="$( "$BIN" "$SL" --whereis=outside_fn --no-cache 2>/dev/null )"
+{ printf '%s' "$SLR" | wroot | grep -q ' hits="0"' && ! printf '%s' "$SLR" | grep -q 'p="a/b.c"'; } \
+    && ok 'whereis (18t): a path beyond a symlinked directory is never read through the link (no row from outside the root)' \
+    || { no 'whereis (18t): the overlay read a file outside the root through a symlinked parent'; printf '%s\n' "$SLR" | sed 's/<!--.*-->//'; }
+
+# 18v) M4: both --path endpoints missing says missing="both", on the CLI and (18o) over MCP.
+"$BIN" "$WT" --path=zqNope1,zqNope2 --no-cache 2>/dev/null | grep -q '<path [^>]*from="zqNope1" to="zqNope2" found="0" missing="both"' \
+    && ok 'path (18v): both endpoints missing answers missing="both"' || no 'path (18v): both endpoints missing names only one'
+
+# 18w) S2: the test_local= legend names the path tiers the code uses (test, bench, fixture), and a bench/ def is marked.
+TB="$TMP/benchtl"; mkdir -p "$TB/src" "$TB/bench"
+printf 'int bench_helper( void ) { return 1; }\n' >"$TB/src/b.c"; printf 'int bench_helper( void ) { return 2; }\n' >"$TB/bench/b.c"
+( cd "$TB" && git init -q -b main . && git add -A && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm seed ) >/dev/null 2>&1
+TBF="$( "$BIN" "$TB" --whereis=bench_helper --no-cache --legend=full 2>/dev/null )"
+{ printf '%s' "$TBF" | grep -q 'p="bench/b.c" l="1" kind="def" test_local="1"' && printf '%s' "$TBF" | grep -q 'under a test, bench or fixture path'; } \
+    && ok 'whereis (18w): a bench/ def is test_local="1" and the legend says test, bench or fixture path' \
+    || no 'whereis (18w): the test_local legend and the code disagree on bench/ and fixture paths'
+TBC="$( "$BIN" "$TB" --whereis=bench_helper --no-cache 2>/dev/null )"
+printf '%s' "$TBC" | grep -q 'test_local=1: a definition in a test scope or under a test/bench/fixture path' \
+    && ok 'whereis (18w): the compact legend says the same' || no 'whereis (18w): the compact test_local reading disagrees with the code'
 # 18k) a Class.method / Class#method selector is searched as a LITERAL, and no tree spells a method's definition
 # that way. It used to answer hits="0" on-head="0" complete="1" with no note — a zero shaped exactly like a name this
 # repo never had (the edit-check lane's finding). The zero now carries a selector-note r="dotted-selector" whose
@@ -608,6 +698,17 @@ done
     || no 'whereis (18k): the offered retry does not find the definition'
 "$BIN" "$TMP/dotted" --whereis=area --no-cache 2>/dev/null | grep -q 'dotted-selector' \
     && no 'whereis (18k): a bare name grew a dotted-selector note' || ok 'whereis (18k): a bare name carries no dotted-selector note'
+
+# 18u) M3: a dotted LITERAL whose last segment the index does not define (a file name, a module path) is an ordinary
+# literal search: no dotted note, and its complete= stands. The method spelling (18k) keeps the note.
+printf 'Run setup.py first; see os.path docs.\n' >"$TMP/dotted/README.txt"
+( cd "$TMP/dotted" && git add -A && git -c user.name=fx -c user.email=fx@example.invalid -c commit.gpgsign=false commit -qm readme ) >/dev/null 2>&1
+for sel in setup.py os.path; do
+    LD="$( "$BIN" "$TMP/dotted" --whereis="$sel" --no-cache 2>/dev/null )"
+    { printf '%s' "$LD" | wroot | grep -q ' hits="1".* complete="1"' && ! printf '%s' "$LD" | grep -q 'dotted-selector"'; } \
+        && ok "whereis (18u): the literal $sel keeps hits=\"1\" complete=\"1\" and carries no dotted note" \
+        || { no "whereis (18u): the literal $sel was treated as a Class.method selector"; printf '%s' "$LD" | wroot; }
+done
 
 command -v xmllint >/dev/null 2>&1 && { printf '%s' "$W1" | xmllint --noout - 2>/dev/null \
     && ok 'whereis (18): the dirty-checkout document is well-formed' || no 'whereis (18): the dirty-checkout document fails xmllint'; }
