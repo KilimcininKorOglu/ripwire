@@ -15,6 +15,13 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — docs: README and METHODOLOGY state how the climb to complete answers is measured
+
+The README's goal section gains the four measures an answer is judged on (complete answers, honest-partial rate,
+false-confidence rate, next-clue usefulness) and the rule that answering comes before size; `docs/METHODOLOGY.md`
+gains §9.2, which fixes the two roles a size limit may have (runaway guard, stair-step target) and the
+capped-versus-uncapped grading rule. Documentation only; no behaviour change.
+
 
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
