@@ -32,6 +32,13 @@ often sent a change back for a second review round: arms that cannot fail, sibli
 stronger than the mechanism, the sanitizer build and full suite at the final commit, and `kParserVer` bumps.
 Docs only; no behavior change.
 
+### Changed — docs: README and METHODOLOGY state how the climb to complete answers is measured
+
+The README's goal section gains the four measures an answer is judged on (complete answers, honest-partial rate,
+false-confidence rate, next-clue usefulness) and the rule that answering comes before size; `docs/METHODOLOGY.md`
+gains §9.2, which fixes the two roles a size limit may have (runaway guard, stair-step target) and the
+capped-versus-uncapped grading rule. Documentation only; no behaviour change.
+
 ### Added — a memory guard on every root: zero-config, silent on normal runs, a disclosed partial answer past its line (#350, layer 3)
 
 ripwire measured none of its own memory, so a large tree (#350: a non-git home directory, 67 GB) could grow it until
