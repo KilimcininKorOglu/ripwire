@@ -2304,12 +2304,55 @@ inline std::size_t identifierRunCount( std::string_view text, std::string_view n
     return runs;
 }
 
+// Where the scanner's current token sits: the previous token and the open-bracket stack, enough to tell a string in
+// annotation or subscript position (a type expression) from any other string. Every token is a view into `text`.
+struct StringTokenPosition
+{
+    std::string_view  text;                                    // the scanned file
+    std::string_view  prev;                                    // the previous token (empty before the first)
+    CodeTokenKind     prevKind = CodeTokenKind::Punctuation;
+    std::vector<char> brackets;                                // the open brackets: 's' = a subscript `[`, 'o' = any other
+
+    // A String token directly after `:` or `->` on the same line (`p: "X"`, `-> "X"`), or directly inside a subscript at
+    // its `[` or a `,` (`Name["X"]`, `Name[str, "X"]`): Python reads it as a type expression.
+    [[nodiscard]] bool isTypeExpression( std::string_view token ) const noexcept
+    {
+        const std::size_t prevEnd    = prev.empty() ? 0 : std::size_t( prev.data() + prev.size() - text.data() );
+        const std::size_t tokenStart = std::size_t( token.data() - text.data() );
+        const bool        sameLine   = !prev.empty() && text.find( '\n', prevEnd ) >= tokenStart;
+        const bool        annotation = sameLine && ( prev == ":" || prev == "->" );
+        const bool        subscript  = !brackets.empty() && brackets.back() == 's' && ( prev == "[" || prev == "," );
+        return annotation || subscript;
+    }
+
+    // Every token passes through once it is classified: a `[` after a name or a `]` opens a subscript, `(` `{` and any other
+    // `[` open an ordinary bracket, a closer pops (an unbalanced closer is ignored), and the token becomes `prev`.
+    void advance( std::string_view token, CodeTokenKind kind )
+    {
+        if( kind == CodeTokenKind::Punctuation )
+        {
+            if( token == "(" || token == "{" )
+            {
+                brackets.push_back( 'o' );
+            }
+            else if( token == "[" )
+            {
+                brackets.push_back( ( prevKind == CodeTokenKind::Identifier || prev == "]" ) ? 's' : 'o' );
+            }
+            else if( ( token == ")" || token == "]" || token == "}" ) && !brackets.empty() )
+            {
+                brackets.pop_back();
+            }
+        }
+        prev     = token;
+        prevKind = kind;
+    }
+};
+
 inline bool identifierTokenCountExceeds( const std::string& text, std::string_view name, std::size_t limit, Lang lang )
 {
-    std::size_t       tokens = 0;
-    std::string_view  prev;                 // the previous token (empty before the first); every token is a view into `text`
-    CodeTokenKind     prevKind = CodeTokenKind::Punctuation;
-    std::vector<char> brackets;             // the open brackets: 's' = a subscript `[`, 'o' = any other
+    std::size_t         tokens = 0;
+    StringTokenPosition at{ .text = text };
     scanCodeTokens( text, 0, text.size(),
                     CodeScanOptions{ .stripHashComments = usesHashLineComments( lang ), .munchMultiByteOperators = true,   // `->` is one token
                                      .singleQuoteStrings = usesSingleQuoteStrings( lang ), .slashComments = !usesHashLineComments( lang ) },
@@ -2319,32 +2362,11 @@ inline bool identifierTokenCountExceeds( const std::string& text, std::string_vi
                         {
                             tokens += ( token == name ) ? 1u : 0u;
                         }
-                        else if( kind == CodeTokenKind::String )
+                        else if( kind == CodeTokenKind::String && at.isTypeExpression( token ) )
                         {
-                            const std::size_t prevEnd    = prev.empty() ? 0 : std::size_t( prev.data() + prev.size() - text.data() );
-                            const std::size_t tokenStart = std::size_t( token.data() - text.data() );
-                            const bool        sameLine   = !prev.empty() && text.find( '\n', prevEnd ) >= tokenStart;
-                            const bool        annotation = sameLine && ( prev == ":" || prev == "->" );
-                            const bool        subscript  = !brackets.empty() && brackets.back() == 's' && ( prev == "[" || prev == "," );
-                            tokens += ( annotation || subscript ) ? identifierRunCount( token, name ) : 0u;
+                            tokens += identifierRunCount( token, name );
                         }
-                        else if( kind == CodeTokenKind::Punctuation )
-                        {
-                            if( token == "(" || token == "{" )
-                            {
-                                brackets.push_back( 'o' );
-                            }
-                            else if( token == "[" )
-                            {
-                                brackets.push_back( ( prevKind == CodeTokenKind::Identifier || prev == "]" ) ? 's' : 'o' );
-                            }
-                            else if( ( token == ")" || token == "]" || token == "}" ) && !brackets.empty() )
-                            {
-                                brackets.pop_back();
-                            }
-                        }
-                        prev     = token;
-                        prevKind = kind;
+                        at.advance( token, kind );
                     } );
     return tokens > limit;
 }
