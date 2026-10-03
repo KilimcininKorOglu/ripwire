@@ -536,6 +536,21 @@ for c in check parse; do
     ifr --callers=$c >"$TMP/if.xml"; R="$( root_tag "$TMP/if.xml" callers )"
     if [ "$( attr "$R" declined_calls )" = 1 ]; then ok "(I) control premise: --callers=$c is declined_calls=\"1\""; else no "(I) control premise ($c): ${R:-none}"; fi
 done
+# The SAME-FILE arm: the interface shares its file with an unrelated class's bodied method of the same name. An overload
+# signature is told from a contract by its OWNER (the class or interface whose span holds it), not by file and name, so
+# Router.match stays a contract here. RED when the overload filter keys on (file, name): declined_iface= was absent.
+IS="$TMP/ifsame"; mkdir -p "$IS/src/helper"
+printf '%s\n' 'export interface Router<T> {' '  match(method: string, path: string): T[];' '}' \
+    'export class Trie { match(method: string, path: string): number[] { return [method.length + path.length]; } }' >"$IS/src/router.ts"
+printf '%s\n' 'export class Accepts { match(a: string, b: string): boolean { return a === b; } }' >"$IS/src/accepts.ts"
+printf '%s\n' "import type { Router } from '../router';" 'export const getRouterName = (r: Router<number>) => {' \
+    "  return r.match('GET', '/');" '};' >"$IS/src/helper/dev.ts"
+for v in --callers=src/router.ts:match --callers=match; do
+    ( cd "$IS" && "$BIN" . --no-cache $v 2>/dev/null ) >"$TMP/is.xml"; R="$( root_tag "$TMP/is.xml" callers )"
+    if [ "$( attr "$R" declined_calls )" != 1 ]; then no "(I) same-file premise ($v): declined_calls is not 1: ${R:-none}"
+    elif [ "$( attr "$R" declined_iface )" = 1 ]; then ok "(I) same-file interface + class ($v): declined_iface=\"1\""
+    else no "(I) same-file interface + class ($v): declined_iface=\"$( attr "$R" declined_iface )\", want \"1\" — the interface signature was taken for an overload"; fi
+done
 # The wording is pinned, both forms: the count matches by NAME (no receiver type is read), a counted call MAY go through
 # the interface, and it is not a subset of declined_calls= (the shared-name arm can exceed it).
 ifr --callers=src/router.ts:match >"$TMP/if.xml"

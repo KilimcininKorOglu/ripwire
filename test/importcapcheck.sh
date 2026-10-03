@@ -447,7 +447,7 @@ fi
 if command -v xmllint >/dev/null 2>&1; then
     if xmllint --noout "$TMP/cold.xml" 2>/dev/null; then ok "xml well-formed"; else no "xml malformed"; fi
 else
-    ok "xml well-formed (xmllint absent — skipped)"
+    skip "xml well-formed (xmllint absent)"
 fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

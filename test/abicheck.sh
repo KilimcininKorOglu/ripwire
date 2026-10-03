@@ -492,6 +492,9 @@ struct WrapSquare
 struct WrapDirective { #pragma pack(1)
     int a;
 };
+struct WrapIf { #if 1
+    int a;
+};
 EOF
 "$BIN" "$WX" --layout=WrapParen  --no-cache 2>/dev/null | grep -q 'k="unparsed-member" d="int b )"' \
     && ok "G1 reach: WrapParen's unbalanced \`int b )\` reaches the attribute-group scan (unparsed-member)" \
@@ -502,31 +505,48 @@ EOF
 "$BIN" "$WX" --layout=WrapDirective --no-cache 2>/dev/null | grep -q '<layout [^>]*found="1"' \
     && ok "G1 reach: WrapDirective's body (a \`#\` with no newline before it) is located and walked" \
     || no "G1 reach: WrapDirective not found — arm 11 may be vacuous (or the run aborted: see the G1 rows below)"
+# found="1" only proves the body was located, and pragma-pack is a FILE-wide caveat (WrapParen carries it too), so the
+# directive scan's reach is pinned on WrapIf: a lone leading `#if` (no `#endif`, which could raise the caveat by itself)
+# is classified only if the `#` at the body's start is recognised as a directive.
+"$BIN" "$WX" --layout=WrapIf --no-cache 2>/dev/null | grep -q '<caveat k="conditional-members"' \
+    && ok "G1 reach: WrapIf's leading \`#if\` (no newline before it) is classified as a directive (conditional-members)" \
+    || no "G1 reach: WrapIf's leading \`#if\` is not classified — the directive scan is not reached, arm 11 may be vacuous (or the run aborted)"
 
 # The same probe editcheckcheck.sh uses: RIPWIRE_ASAN carries -fsanitize=integer alongside address, and UBSan
 # alone has no help= banner to detect it by. A build directory's NAME is never the test.
-SANITIZED=0
+# AddressSanitizer alone does not see the wrap: the scans wrapped AFTER their last valid access, so only
+# -fsanitize=integer (unsigned-integer-overflow) reports it. A GCC sanitizer build drops `integer` (CMakeLists.txt), so
+# the integer instrumentation is checked on its own, from the binary's symbol table: only that group emits
+# __ubsan_handle_implicit_conversion (imported from the runtime on macOS, linked with Clang's static runtime on Linux).
+SANITIZED=0; INTEGER=0
 ASAN_OPTIONS=help=1 "$BIN" --version 2>&1 | grep -q 'AddressSanitizer' && SANITIZED=1
-if [ "$SANITIZED" = 1 ]; then
+command -v nm >/dev/null 2>&1 && nm "$BIN" 2>/dev/null | grep -q '__ubsan_handle_implicit_conversion' && INTEGER=1
+if [ "$SANITIZED" = 1 ] && [ "$INTEGER" = 1 ]; then
     export LSAN_OPTIONS="${LSAN_OPTIONS:-suppressions=$ROOT/lsan_suppressions.txt}"
-    wrap_clean(){   # $1 label, $2 stderr file, $3 rc
-        if [ "$3" -ge 128 ] || grep -q 'runtime error:' "$2"; then
-            no "G1: $1 — rc=$3, $( grep -m1 -o '[^/]*layout\.h:[0-9]*:[0-9]*: runtime error: [^(]*' "$2" || echo 'no runtime-error line' )"
+    wrap_clean(){   # $1 label, $2 stderr file, $3 rc, $4 the rc the command must return
+        if [ "$3" -ne "$4" ] || grep -qE 'runtime error:|ERROR: (Address|Leak)Sanitizer|SUMMARY: [A-Za-z]+Sanitizer' "$2"; then
+            no "G1: $1 — rc=$3 (want $4), $( grep -m1 -oE '[^/]*layout\.h:[0-9]*:[0-9]*: runtime error: [^(]*|ERROR: [A-Za-z]+Sanitizer.*' "$2" || echo 'no sanitizer line' )"
         else
-            ok "G1: $1 — no sanitizer report (rc=$3)"
+            ok "G1: $1 — rc=$3 and no sanitizer report"
         fi
     }
-    for s in WrapParen WrapSquare WrapDirective; do
-        "$BIN" "$WX" --layout="$s" --no-cache >/dev/null 2>"$TMP/wrap.err"; wrap_clean "--layout=$s" "$TMP/wrap.err" $?
+    for s in WrapParen WrapSquare WrapDirective WrapIf; do
+        "$BIN" "$WX" --layout="$s" --no-cache >/dev/null 2>"$TMP/wrap.err"; wrap_clean "--layout=$s" "$TMP/wrap.err" $? 0
     done
     # …and the reported path itself: a branch that introduces the malformed members, compared by --abi.
     WR="$TMP/wraprepo"; mkdir -p "$WR"
-    gw(){ git -C "$WR" "$@" >/dev/null 2>&1; }
+    gw(){ git -c user.email=g@example.invalid -c user.name=g -C "$WR" "$@" >/dev/null 2>&1; }
     gw init -q -b main; gw config commit.gpgsign false
     printf 'struct WrapParen\n{\n    int a;\n};\n' > "$WR/wrap.h"
     gw add wrap.h; gw commit -qm base
     gw checkout -qb feat-wrap; cp "$WX/wrap.h" "$WR/wrap.h"; gw commit -qam "malformed members"; gw checkout -q main
-    "$BIN" "$WR" --stray-content --abi --no-cache >/dev/null 2>"$TMP/wrap.err"; wrap_clean "--stray-content --abi over feat-wrap" "$TMP/wrap.err" $?
+    if [ -z "$( git -C "$WR" rev-parse -q --verify refs/heads/feat-wrap 2>/dev/null )" ] || git -C "$WR" diff --quiet main feat-wrap 2>/dev/null; then
+        no "G1: the --abi fixture repo has no feat-wrap branch carrying the malformed members — the --stray-content --abi row would be vacuous"
+    else
+        "$BIN" "$WR" --stray-content --abi --no-cache >/dev/null 2>"$TMP/wrap.err"; wrap_clean "--stray-content --abi over feat-wrap" "$TMP/wrap.err" $? 0
+    fi
+elif [ "$SANITIZED" = 1 ]; then
+    printf '  SKIP  G1 wrap arm (an AddressSanitizer build without -fsanitize=integer, or no nm to tell: the unsigned wrap is only observable under the integer group — build with clang)\n'
 else
     printf '  SKIP  G1 wrap arm (not a sanitizer build: the unsigned wrap is only observable under -fsanitize=integer — run with asan/ripwire)\n'
 fi

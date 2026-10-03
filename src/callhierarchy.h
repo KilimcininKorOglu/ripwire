@@ -124,38 +124,90 @@ inline std::string crossKindValue( const IngestResult& ing, const std::vector<No
 }
 
 // The TypeScript methods with no body that are a CONTRACT — an interface member (method_signature), an abstract or an
-// ambient (.d.ts) member — as their own symbol ids, minus overload signatures: those sit in the same file as a bodied
-// method of the same name, which implements them, so their receiver is that class and not an interface.
+// ambient (.d.ts) member — as their own symbol ids, minus overload signatures: those sit in the same OWNER (the innermost
+// class or interface whose span holds them, in the same file) as a bodied method of the same name, which implements
+// them, so their receiver is that class and not an interface. The owner is part of the key because TS methods carry no
+// `scope`: keyed by file alone, an `interface Router { match(): void }` beside an unrelated `class Matcher { match() {} }`
+// lost its signature (test/declinecheck.sh (I), the same-file arm).
 inline std::vector<NodeId> tsContractSignatures( const IngestResult& ing )
 {
-    std::vector<std::pair<std::uint32_t, std::string_view>> bodied;   // (file, name) of every bodied TS method
-    std::vector<NodeId>                                     bodyless;
+    struct Span
+    {
+        std::uint32_t fileId;
+        std::uint32_t start;
+        std::uint32_t end;
+        NodeId        id;
+    };
+    std::vector<Span>   owners;   // every TS class/interface/struct span, by file then start
+    std::vector<NodeId> methods;
     for( NodeId id = 0; id < ing.symbols.size(); ++id )
     {
         const Symbol& s = ing.symbols[id];
-        if( s.lang != Lang::TypeScript || s.kind != SymKind::Method )
+        if( s.lang != Lang::TypeScript )
         {
             continue;
         }
+        if( s.kind == SymKind::Method )
+        {
+            methods.push_back( id );
+        }
+        else if( s.kind == SymKind::Class || s.kind == SymKind::Interface || s.kind == SymKind::Struct )
+        {
+            owners.push_back( Span{ s.fileId, s.sigStartByte, s.endByte, id } );
+        }
+    }
+    std::sort( owners.begin(), owners.end(), []( const Span& a, const Span& b ) noexcept
+               { return a.fileId != b.fileId ? a.fileId < b.fileId : a.start < b.start; } );
+    // The innermost owner span holding `s` in its own file; kNoNode for a method no owner span holds.
+    const auto ownerOf = [ & ]( const Symbol& s ) noexcept
+    {
+        const auto first = std::lower_bound( owners.begin(), owners.end(), s.fileId,
+                                             []( const Span& o, std::uint32_t f ) noexcept { return o.fileId < f; } );
+        NodeId        best    = kNoNode;
+        std::uint32_t bestLen = 0xFFFFFFFFu;
+        for( auto it = first; it != owners.end() && it->fileId == s.fileId && it->start <= s.sigStartByte; ++it )
+        {
+            if( s.sigStartByte < it->end && it->end - it->start < bestLen )
+            {
+                best    = it->id;
+                bestLen = it->end - it->start;
+            }
+        }
+        return best;
+    };
+    struct Owned
+    {
+        NodeId           owner;
+        std::uint32_t    fileId;
+        std::string_view name;
+    };
+    const auto byOwnerThenName = []( const Owned& a, const Owned& b ) noexcept
+    {
+        if( a.fileId != b.fileId )
+        {
+            return a.fileId < b.fileId;
+        }
+        return a.owner != b.owner ? a.owner < b.owner : sortutil::svLess( a.name, b.name );
+    };
+    std::vector<Owned>  bodied;   // (file, owner, name) of every bodied TS method
+    std::vector<NodeId> bodyless;
+    for( const NodeId id : methods )
+    {
+        const Symbol& s = ing.symbols[id];
         if( s.sigEndByte == s.endByte )
         {
             bodyless.push_back( id );
         }
         else
         {
-            bodied.emplace_back( s.fileId, s.name );
+            bodied.push_back( Owned{ ownerOf( s ), s.fileId, s.name } );
         }
     }
-    using FileName           = std::pair<std::uint32_t, std::string_view>;
-    const auto byFileThenName = []( const FileName& a, const FileName& b ) noexcept
-    {
-        return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second );
-    };
-    std::sort( bodied.begin(), bodied.end(), byFileThenName );
+    std::sort( bodied.begin(), bodied.end(), byOwnerThenName );
     std::erase_if( bodyless, [ & ]( NodeId id )
     {
         const Symbol& s = ing.symbols[id];
-        return std::binary_search( bodied.begin(), bodied.end(), FileName( s.fileId, s.name ), byFileThenName );
+        return std::binary_search( bodied.begin(), bodied.end(), Owned{ ownerOf( s ), s.fileId, s.name }, byOwnerThenName );
     } );
     return bodyless;
 }

@@ -250,9 +250,13 @@ printf '%s' "$EN_AT" | grep -q 'sym="cmd_split_exec" chain="1"' \
     && ok "(a) --at inside a 'static enum X⏎name(' function chains the function alone" \
     || no "(a) --at chains something around cmd_split_exec: $( printf '%s' "$EN_AT" | grep -o '<at .*' | cut -c1-300 )"
 EN_GREP="$( "$BIN" "$EN" --no-cache --grep="ENUMSIG no current session" 2>/dev/null )"
-printf '%s' "$EN_GREP" | grep -q 'in="cmd_split_exec"' \
-    && ok "(b) a --grep hit in that function names in=\"cmd_split_exec\"" \
-    || no "(b) --grep in= is not the function: $( printf '%s' "$EN_GREP" | grep -o '<hit l=[^>]*>' | head -1 )"
+# Each fixture file's hit is checked on its own (a.c and its C++ copy): one right attribution must not cover the other.
+EN_HITS="$( printf '%s' "$EN_GREP" | tr '>' '\n' | awk '/^<f p=/ { f = $2 } /^<hit / { print f, $0 }' )"
+for f in a.c cpp/b.cpp; do
+    printf '%s\n' "$EN_HITS" | grep -q "^p=\"$f\" <hit l=\"13\" in=\"cmd_split_exec\"" \
+        && ok "(b) the --grep hit in $f names in=\"cmd_split_exec\"" \
+        || no "(b) the --grep hit in $f is not attributed to the function: $( printf '%s\n' "$EN_HITS" | grep "^p=\"$f\"" | head -1 )"
+done
 EN_CALLERS="$( "$BIN" "$EN" --no-cache --callers=helper 2>/dev/null )"
 if printf '%s' "$EN_CALLERS" | grep -q '<s t="fn" n="menu_display"' && ! printf '%s' "$EN_CALLERS" | grep -q 't="struct"'; then
     ok "(c) a call in a function with an 'enum box_lines' parameter is attributed to the function, no struct caller"
@@ -307,15 +311,25 @@ if [ -n "$EN_CR" ] && ! printf '%s' "$EN_CR" | grep -q 'overloads='; then
 else
     no "(f3) the return-type specifier still mints a definition: $EN_CR"
 fi
-printf '%s' "$EN_MAP" | grep -o '<s t="[a-z]*" n="Widget"[^>]*>' | grep -q 'overloads=' \
-    && no "(f4) C++ 'class Widget *make_widget(' still mints a second Widget definition" \
-    || ok "(f4) C++ body-less class in a return type mints no definition"
+EN_W="$( printf '%s' "$EN_MAP" | grep -o '<s t="[a-z]*" n="Widget"[^>]*>' )"
+if [ -z "$EN_W" ]; then
+    no "(f4) premise: the map has no Widget row at all — the real 'class Widget { … }' definition is missing, so (f4) proves nothing"
+elif printf '%s' "$EN_W" | grep -q 'overloads='; then
+    no "(f4) C++ 'class Widget *make_widget(' still mints a second Widget definition"
+else
+    ok "(f4) C++ body-less class in a return type mints no definition (the real Widget row is there)"
+fi
 if command -v git >/dev/null 2>&1; then
     git -C "$EN" init -q . && git -C "$EN" -c user.email=t@t -c user.name=t add -A && git -C "$EN" -c user.email=t@t -c user.name=t commit -qm base
     EN_HOT="$( "$BIN" "$EN" --no-cache --hotspots 2>/dev/null | grep -o '<hotspots [^>]*>' )"
-    printf '%s' "$EN_HOT" | grep -q 'unranked_extent_suspect=' \
-        && no "(f5) --hotspots withholds files as extent-suspect: $EN_HOT" \
-        || ok "(f5) --hotspots ranks every file (no unranked_extent_suspect)"
+    EN_HOT_FILES="$( printf '%s' "$EN_HOT" | grep -oE ' files="[0-9]+"' | grep -oE '[0-9]+' )"
+    if [ -z "$EN_HOT" ] || [ "${EN_HOT_FILES:-0}" -lt 1 ]; then
+        no "(f5) premise: --hotspots answered no <hotspots> root over the fixture's files: ${EN_HOT:-none}"
+    elif printf '%s' "$EN_HOT" | grep -q 'unranked_extent_suspect='; then
+        no "(f5) --hotspots withholds files as extent-suspect: $EN_HOT"
+    else
+        ok "(f5) --hotspots ranks every file (no unranked_extent_suspect; files=$EN_HOT_FILES)"
+    fi
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────

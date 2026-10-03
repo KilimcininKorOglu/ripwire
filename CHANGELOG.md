@@ -576,7 +576,8 @@ more definitions. On a small tree the interface's own answer did not count it: `
 `count="0"` with no `declined_calls=`, because the bodyless signature was not among the declined call's candidates. The callers and impact answers now carry `declined_iface=K` in XML, `--json` and `--format=columnar`, and
 in the MCP `find_referencing_symbols` and `impact` twins. It is absent at 0, and its
 legend clause is printed only when the attribute is. It counts declined TypeScript calls whose called name is also an
-interface or abstract method signature (not an overload signature beside its implementation) and that could have
+interface or abstract method signature (not an overload signature in the same class as its implementation; an
+interface that shares a file with an unrelated class's same-named method keeps its signature) and that could have
 meant the selector's definitions, or a symbol in the impact radius, or that share a signature's name with them. The
 match is by name only: the receiver's type is not read, so a counted call may go through the interface, or may be
 another same-named method such as a string's `match`. Because of the shared-name arm it is not a subset of
