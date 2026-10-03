@@ -879,8 +879,10 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     const std::string probeCut = changedCount > probed
         ? " partners_capped=\"1\" probed=\"" + std::to_string( probed ) + "\" changed_files=\"" + std::to_string( changedCount ) + "\""
         : std::string();
-    rw::emitTo( out, "  [3] co-change — usually edited with these but NOT in your diff ({}) window=\"{}\" commits=\"{}\"{}{}:\n",
-                  partners.size(), coWindow.c_str(), coCommits, probeCut.c_str(),
+    // 0.6.7 shallow tail: the window was mined from THIS root's fetched history; on a depth-limited clone the line carries the
+    // shallow="1" the cochange verb's root carries (the at: line's +shallow suffix names the state, this names the measurement).
+    rw::emitTo( out, "  [3] co-change — usually edited with these but NOT in your diff ({}) window=\"{}\" commits=\"{}\"{}{}{}:\n",
+                  partners.size(), coWindow.c_str(), coCommits, gitstamp::shallowAttr( gitstamp::isShallow( root ) ), probeCut.c_str(),
                   situShowingNote( partnerShown, partners.size(), "files",
                                    situNextInvocation( page.selector, partners.size() ) ).c_str() );
     if( partners.empty() )
@@ -925,6 +927,7 @@ struct SituationFacts
     SituSiblings                                  siblings;      // L-D: same-directory, same-stem neighbours of the changed files — STORED spellings (an unindexed .inl has no fileId)
     std::string                                   coWindow;      // the window label its co-change was mined in ("18mo@HEAD"), empty only if never mined
     std::size_t                                   coCommits = 0; // commits that window actually contained — 0 ⇒ the zero above is not a measurement
+    bool                                          shallow = false; // 0.6.7: the root is a depth-limited clone — coCommits and hotspots' churn count only the fetched commits
     std::vector<std::pair<std::uint32_t, std::uint64_t>> hotspots; // (changed file, cx×churn score) for high-risk changed files (score desc, path asc)
     std::vector<std::string>                      modulesTouched; // distinct TOP-LEVEL directory of each changed file (sorted)
 };
@@ -1008,6 +1011,7 @@ inline SituationFacts computeSituationFacts( const std::string& root, const Inge
     facts.siblings = lexicalSiblings( ing, changedFile );   // L-D: the same list the CLI report's [1] prints
     facts.coWindow = defaultWindowLabel( root, "18mo" );   // F2: the composed zero's window travels WITH the zero
     facts.coCommits = coSets.size();
+    facts.shallow   = gitstamp::isShallow( root );         // 0.6.7: ...and so does its qualification (the one probe)
     HashMap<std::uint32_t, double> partnerDeg;
     std::uint32_t                  probed = 0;
     for( std::uint32_t f = 0; f < F && probed < 40; ++f )
