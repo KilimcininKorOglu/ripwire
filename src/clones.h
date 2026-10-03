@@ -184,15 +184,18 @@ enum class CodeTokenKind : std::uint8_t { Identifier, Keyword, Number, String, P
 // singleQuoteStrings (CodeScanOptions): OFF (every C-family consumer) keeps the `'` branch below — a char literal with a
 // plausible close, else punctuation. ON, a `'` opens a STRING that runs to the next unescaped `'`, exactly as `"` does,
 // because in Python, Ruby and the JS family `'…'` IS a string: with it off, `'Pool warm'` scans as `'` `Pool` `warm` `'`
-// and the words inside a log message count as code. A triple-quoted `'''…'''` (and `"""…"""`, unchanged) scans as three
-// strings — `''`, `'…'`, `''` — so its content is opaque too; a lone quote INSIDE a triple-quoted string closes that
-// string early and the bytes up to the next quote scan as code (a disclosed floor of the one consumer, graph.h
-// identifierTokenCountExceeds, in the direction that keeps an edge). An f-string's `{…}` is string content here.
+// and the words inside a log message count as code. An f-string's `{…}` is string content here (the graph.h consumer reads
+// the fields itself, StringTokenPosition::isFormatString).
+//
+// tripleQuoteStrings (CodeScanOptions): OFF (the default) reads `"""` as `""` then `"` — a quote INSIDE the triple would then
+// close the string early and flip code and string for the rest of the span. ON, a `"""` or `'''` opens one STRING that runs
+// to the matching closing triple, as Python reads it, so an apostrophe or a lone `"` inside a docstring stays string
+// content (commenttokencheck arm Q). The one consumer is graph.h identifierTokenCountExceeds, for Python.
 //
 // slashComments (CodeScanOptions): ON (every C-family consumer, and the default) drops `//`-to-EOL and `/* … */` as
 // comments. OFF keeps them as punctuation, because in Python `//` is floor division: `n = total // 2; kind = Pool` must
 // not lose the rest of its line (commenttokencheck arm P). The one consumer that turns it off is the same graph.h count,
-// for the `#`-comment languages.
+// for Python (PHP has `#` AND `//` comments, so the `#`-comment mask is not the right switch).
 //
 // `sink( std::string_view token, CodeTokenKind kind )` is called once per token, in source order.
 struct CodeScanOptions
@@ -201,6 +204,7 @@ struct CodeScanOptions
     bool munchMultiByteOperators = false;   // longest match from kMultiByteOperators (the --readability shape)
     bool singleQuoteStrings      = false;   // `'` opens a string literal, not a char literal (Python, Ruby, the JS family)
     bool slashComments           = true;    // `//` to EOL and `/* … */` are comments (off: Python's `//` is floor division)
+    bool tripleQuoteStrings      = false;   // `"""…"""` / `'''…'''` is one string to its closing triple (Python)
 };
 
 template<typename Sink>
@@ -211,20 +215,28 @@ inline void scanCodeTokens( const std::string& src, std::size_t a, std::size_t b
     const std::size_t n = std::min<std::size_t>( b, src.size() );
     std::size_t       i = std::min<std::size_t>( a, n );
     const auto        idc = []( unsigned char c ) noexcept { return std::isalnum( c ) != 0 || c == '_'; };
-    // a `"`-style string: from the opening quote to the next unescaped close (or the end of the span), one String token
+    // a `"`-style string: from the opening quote to the next unescaped close (or the end of the span), one String token;
+    // with tripleQuoteStrings, an opening `"""` runs to the next unescaped `"""`
     const auto        quoted = [ & ]( char quote )
     {
-        const std::size_t begin = i;
-        ++i;
-        while( i < n && src[i] != quote )
+        const std::size_t begin  = i;
+        const bool        triple = options.tripleQuoteStrings && i + 2 < n && src[i + 1] == quote && src[i + 2] == quote;
+        const std::size_t width  = triple ? 3 : 1;
+        i += width;
+        while( i < n )
         {
             if( src[i] == '\\' )
             {
-                ++i;
+                i += 2;
+                continue;
+            }
+            if( src[i] == quote && ( !triple || ( i + 2 < n && src[i + 1] == quote && src[i + 2] == quote ) ) )
+            {
+                break;
             }
             ++i;
         }
-        i = std::min( n, i + 1 );
+        i = std::min( n, i + width );
         sink( std::string_view( src.data() + begin, i - begin ), CodeTokenKind::String );
     };
 

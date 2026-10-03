@@ -2279,18 +2279,19 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 // or `"Pool"` string are NOT evidence (test/commenttokencheck.sh A-E: each bound a json dict's `data.get` to Pool.get when
 // the count ran over every identifier byte run in the file) — EXCEPT a string in annotation or subscript position, which
 // Python reads as a type expression: `p: "Pool"` and `x: "Pool" = …` (a `:` then the string on the same line), `-> "Pool"`,
-// `None | "Pool"` (a union member after `|`), and `Optional["Pool"]` / `Dict[str, "Pool"]` (directly inside a `[ … ]` that
-// follows a name or a `]`). Those are scanned
-// for identifier runs as the whole file once was (arm N; builtinbindcheck arm T's `p: "PStr"`). A docstring follows its
-// `:` on the NEXT line, an `__all__` tuple sits in `( … )`, a list literal's `[` follows `=`, and a call argument follows
-// `(`, so each stays prose (arm O). In a `#`-comment language `//` is floor division, not a comment, so the scanner keeps
-// `//` and `/* */` as punctuation there and `n = total // 2; kind = Pool` keeps the rest of its line (arm P). Still errs
-// toward keeping the edge: an unreadable file admits; a dict literal's `"k": "Pool"`, a lambda's `: "Pool"` and a dict
-// lookup's `d["Pool"]` read as annotations or subscripts; a quote inside a triple-quoted string re-opens code scanning
-// until the next quote; an f-string's interpolated expression is string content here (the call edge it makes is
-// tree-sitter's and unaffected, arm K). Floors the other way, disclosed: a string that is a type only by its callee's
-// convention — `cast("Pool", x)`, `TypeVar("T", bound="Pool")` — reads as a call argument and does not count. The gate caches
-// one file's bytes (its calls arrive file by file).
+// `None | "Pool"` (a union member after `|`), and `Optional["Pool"]` / `type["Pool"]` / `Dict[str, "Pool"]` (directly inside
+// a `[ … ]` that follows a name, a keyword or a `]`). Those are scanned for identifier runs as the whole file once was (arm N;
+// builtinbindcheck arm T's `p: "PStr"`), and so are the `{…}` fields of an f-string (`f"{Pool}"`, arm R: Python compiles
+// them as code). A docstring follows its `:` on the NEXT line, an `__all__` tuple sits in `( … )`, a list literal's `[`
+// follows `=`, and a call argument follows `(`, so each stays prose (arm O). The scanner runs with Python's string
+// grammar: `'…'` is a string, `'''…'''` and `"""…"""` run to their closing triple so an apostrophe or a lone `"` inside a
+// docstring stays string content (arm Q), and `//` is floor division, not a comment, so `n = total // 2; kind = Pool`
+// keeps the rest of its line (arm P). Floors toward KEEPING an edge: an unreadable file admits; a dict literal's
+// `"k": "Pool"`, a lambda's `: "Pool"`, a dict lookup's `d["Pool"]` and a list after a keyword (`return ["Pool"]`) read as
+// annotations or subscripts. Floors toward DROPPING one (a true mention this count does not see): a string that is a type
+// only by its callee's convention — `cast("Pool", x)`, `TypeVar("T", bound="Pool")` — reads as a call argument; a PEP 484
+// type comment `x = make()  # type: Pool` is a comment; an annotation whose string starts on the line after its `:` is
+// prose; an f-string's literal text (`f"Pool {x}"`) is prose. The gate caches one file's bytes (its calls arrive file by file).
 inline std::size_t identifierRunCount( std::string_view text, std::string_view name ) noexcept
 {
     std::size_t runs     = 0;
@@ -2303,6 +2304,29 @@ inline std::size_t identifierRunCount( std::string_view text, std::string_view n
         }
         runs    += ( text.substr( runStart, at - runStart ) == name ) ? 1u : 0u;
         runStart = at + 1;
+    }
+    return runs;
+}
+
+// The identifier runs named `name` inside an f-string's `{…}` fields: `{{` is a literal brace, a field ends at the next `}`
+// (a nested `{…}` in a format spec ends it early — that spec's tail is then literal text, the keep direction either way).
+inline std::size_t interpolatedRunCount( std::string_view text, std::string_view name ) noexcept
+{
+    std::size_t runs = 0;
+    for( std::size_t open = text.find( '{' ); open != std::string_view::npos; open = text.find( '{', open ) )
+    {
+        if( open + 1 < text.size() && text[ open + 1 ] == '{' )
+        {
+            open += 2;
+            continue;
+        }
+        const std::size_t close = text.find( '}', open );
+        if( close == std::string_view::npos )
+        {
+            break;
+        }
+        runs += identifierRunCount( text.substr( open + 1, close - open - 1 ), name );
+        open  = close + 1;
     }
     return runs;
 }
@@ -2328,7 +2352,18 @@ struct StringTokenPosition
         return annotation || subscript;
     }
 
-    // Every token passes through once it is classified: a `[` after a name or a `]` opens a subscript, `(` `{` and any other
+    // An `f`-prefixed string (`f"…"`, `rf'…'`, `F"""…"""`): the prefix is the Identifier token glued to the opening quote.
+    [[nodiscard]] bool isFormatString( std::string_view token ) const noexcept
+    {
+        if( prevKind != CodeTokenKind::Identifier || prev.size() > 2 || prev.data() + prev.size() != token.data() )
+        {
+            return false;
+        }
+        return prev.find_first_of( "fF" ) != std::string_view::npos && prev.find_first_not_of( "fFrR" ) == std::string_view::npos;
+    }
+
+    // Every token passes through once it is classified: a `[` after a name, a keyword (`type[`, PEP 585) or a `]` opens a
+    // subscript, `(` `{` and any other
     // `[` open an ordinary bracket, a closer pops (an unbalanced closer is ignored), and the token becomes `prev`.
     void advance( std::string_view token, CodeTokenKind kind )
     {
@@ -2340,7 +2375,7 @@ struct StringTokenPosition
             }
             else if( token == "[" )
             {
-                brackets.push_back( ( prevKind == CodeTokenKind::Identifier || prev == "]" ) ? 's' : 'o' );
+                brackets.push_back( ( prevKind == CodeTokenKind::Identifier || prevKind == CodeTokenKind::Keyword || prev == "]" ) ? 's' : 'o' );
             }
             else if( ( token == ")" || token == "]" || token == "}" ) && !brackets.empty() )
             {
@@ -2358,16 +2393,18 @@ inline bool identifierTokenCountExceeds( const std::string& text, std::string_vi
     StringTokenPosition at{ .text = text };
     scanCodeTokens( text, 0, text.size(),
                     CodeScanOptions{ .stripHashComments = usesHashLineComments( lang ), .munchMultiByteOperators = true,   // `->` is one token
-                                     .singleQuoteStrings = usesSingleQuoteStrings( lang ), .slashComments = !usesHashLineComments( lang ) },
+                                     .singleQuoteStrings = usesSingleQuoteStrings( lang ), .slashComments = lang != Lang::Python,
+                                     .tripleQuoteStrings = lang == Lang::Python },
                     [ & ]( std::string_view token, CodeTokenKind kind )
                     {
                         if( kind == CodeTokenKind::Identifier || kind == CodeTokenKind::Keyword )
                         {
                             tokens += ( token == name ) ? 1u : 0u;
                         }
-                        else if( kind == CodeTokenKind::String && at.isTypeExpression( token ) )
+                        else if( kind == CodeTokenKind::String )
                         {
-                            tokens += identifierRunCount( token, name );
+                            tokens += at.isTypeExpression( token ) ? identifierRunCount( token, name )
+                                    : at.isFormatString( token )   ? interpolatedRunCount( token, name ) : 0u;
                         }
                         at.advance( token, kind );
                     } );

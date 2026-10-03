@@ -27,7 +27,8 @@
 #   (I) NEAR MISS, must keep: `s = 'it"s'` then `kind = Pool` — a `"` inside a `'…'` string opens nothing
 #   (J) CONTROL, must keep: `def f( p: Pool )` in the same file (the annotation shape builtinbindcheck arm T pins)
 #   (N) A STRING IN ANNOTATION OR SUBSCRIPT POSITION IS A TYPE EXPRESSION, must keep: `-> "Pool"`, `Optional["Pool"]`,
-#       `x: "Pool" = …`, `Dict[str, "Pool"]`, `None | "Pool"` — Python forward references are strings, and builtinbindcheck
+#       `x: "Pool" = …`, `Dict[str, "Pool"]`, `None | "Pool"`, `type["Pool"]` (N6: `type` is a scanner keyword, PEP 585 lower-case
+#       generics are the modern spelling) — Python forward references are strings, and builtinbindcheck
 #       arm T's `p: "PStr"` is the same shape (the first cut of this fix scanned every string as prose and lost that edge).
 #       Disclosed floors, NOT gated: `cast("Pool", x)` and `TypeVar("T", bound="Pool")` are types only by their callee's
 #       convention and read as call arguments (declined)
@@ -35,6 +36,12 @@
 #       subscript), `return "Pool"`, a call argument `print("Pool")`
 #   (P) `//` IS FLOOR DIVISION IN PYTHON, must keep: `n = total // 2; kind = Pool` — the C-family `//`-to-EOL comment rule
 #       does not apply to a `#`-comment language, so the rest of the line stays code
+#   (Q) TRIPLE-QUOTED STRINGS RUN TO THEIR CLOSING TRIPLE, must keep: an apostrophe inside `'''…'''` (Q1) or a lone `"` inside
+#       a `"""…"""` docstring (Q2) must not flip code and string for the rest of the file — the previous cut read `'''` as
+#       `''` + `'` and LOST every later code mention (the drop direction the design forbids); Q3 even-quote control keeps;
+#       Q4 a triple-quoted string naming the class is still prose, must decline
+#   (R) F-STRING FIELDS ARE CODE: `f"{Pool}"` keeps (R1, Python compiles the field); the literal text `f"Pool {x}"` (R2) and an
+#       escaped `f"{{Pool}}"` (R3) are prose, must decline
 #   (K) INTERPOLATIONS ARE CODE: Python `f"{run()}"` and JS `${run()}` keep their call edge to run (tree-sitter reads
 #       the interpolation as code; nothing here strips it)
 #   (L) OTHER COMMENT FAMILIES make no call edge: C++ `//` and `/* */`, Lua `--` and `--[[ ]]`, Ruby `#` and
@@ -52,7 +59,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; return 0; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
@@ -81,14 +88,20 @@ pyfix(){
 # the decline verdict: data.get is NOT a caller, self.get (warm) still is, and the decline is counted once
 expect_declined(){   # label dir
     local got; got="$( callers_of "$2" m.py:get )"
-    [ "$got" = "warm|1" ] && ok "$1: data.get declined, warm keeps its edge (names=[warm] declined_calls=1)" \
-                          || no "$1: expected names=[warm] declined_calls=1, got [$got]"
+    if [ "$got" = "warm|1" ]; then
+        ok "$1: data.get declined, warm keeps its edge (names=[warm] declined_calls=1)"
+    else
+        no "$1: expected names=[warm] declined_calls=1, got [$got]"
+    fi
 }
 # the keep verdict: data.get binds to Pool.get (the file names Pool in CODE), nothing declined
 expect_kept(){       # label dir
     local got; got="$( callers_of "$2" m.py:get )"
-    [ "$got" = "load warm|" ] && ok "$1: the code mention keeps data.get bound (names=[load warm], no declined_calls=)" \
-                              || no "$1: expected names=[load warm] and no declined_calls=, got [$got]"
+    if [ "$got" = "load warm|" ]; then
+        ok "$1: the code mention keeps data.get bound (names=[load warm], no declined_calls=)"
+    else
+        no "$1: expected names=[load warm] and no declined_calls=, got [$got]"
+    fi
 }
 
 # ── (A)–(E) prose names the class: no evidence ─────────────────────────────────────────────────────────────────
@@ -205,6 +218,11 @@ def union(p: None | "Pool"):
     return p
 PY
 expect_kept "(N5) None | \"Pool\" union member" "$TMP/py_N5"
+pyfix N6 <<'PY'
+def mk(cls: type["Pool"]):
+    return cls()
+PY
+expect_kept "(N6) type[\"Pool\"] — a keyword as the subscript base" "$TMP/py_N6"
 
 echo "=== (O) a string anywhere else stays prose: a tuple, a list, a return value, a call argument ==="
 pyfix O1 <<'PY'
@@ -234,6 +252,52 @@ def half(total, make):
 PY
 expect_kept "(P) n = total // 2; kind = Pool — the mention after // stays code" "$TMP/py_P"
 
+echo "=== (Q) a triple-quoted string runs to its closing triple: an odd inner quote does not flip the scanner ==="
+pyfix Q1 <<'PY'
+NOTE = '''Don't forget the cache'''
+
+
+def kind_of(make):
+    kind = Pool
+    return make(kind)
+PY
+expect_kept "(Q1) an apostrophe inside '''…''' then a code mention" "$TMP/py_Q1"
+pyfix Q2 <<'PY'
+def rod(make):
+    """The 5" rod."""
+    kind = Pool
+    return make(kind)
+PY
+expect_kept "(Q2) a lone \" inside a \"\"\"docstring\"\"\" then a code mention" "$TMP/py_Q2"
+pyfix Q3 <<'PY'
+def quoted(make):
+    """Says "hi" twice."""
+    kind = Pool
+    return make(kind)
+PY
+expect_kept "(Q3) control: an even number of inner quotes" "$TMP/py_Q3"
+pyfix Q4 <<'PY'
+NOTE = '''Pool's cache is warm'''
+PY
+expect_declined "(Q4) a triple-quoted string naming the class is prose" "$TMP/py_Q4"
+
+echo "=== (R) an f-string's {…} fields are code, its literal text is prose ==="
+pyfix R1 <<'PY'
+def label():
+    return f"{Pool}"
+PY
+expect_kept "(R1) f\"{Pool}\" — the field names the class in code" "$TMP/py_R1"
+pyfix R2 <<'PY'
+def label(x):
+    return f"Pool {x}"
+PY
+expect_declined "(R2) f\"Pool {x}\" — the name is literal text" "$TMP/py_R2"
+pyfix R3 <<'PY'
+def label():
+    return f"{{Pool}}"
+PY
+expect_declined "(R3) f\"{{Pool}}\" — escaped braces are literal text" "$TMP/py_R3"
+
 # ── (K) interpolations are code ────────────────────────────────────────────────────────────────────────────────
 echo "=== (K) a call inside an f-string / template-literal interpolation keeps its edge ==="
 mkdir -p "$TMP/kpy" "$TMP/kjs"
@@ -250,9 +314,9 @@ function run() { return 1; }
 function show() { return `${run()}`; }
 JS
 got="$( callers_of "$TMP/kpy" m.py:run )"
-[ "$got" = "show|" ] && ok "(K) Python f\"{run()}\" keeps the edge show -> run" || no "(K) Python f-string interpolation: expected [show|], got [$got]"
+if [ "$got" = "show|" ]; then ok "(K) Python f\"{run()}\" keeps the edge show -> run"; else no "(K) Python f-string interpolation: expected [show|], got [$got]"; fi
 got="$( callers_of "$TMP/kjs" m.js:run )"
-[ "$got" = "show|" ] && ok "(K) JS \${run()} keeps the edge show -> run" || no "(K) JS template interpolation: expected [show|], got [$got]"
+if [ "$got" = "show|" ]; then ok "(K) JS \${run()} keeps the edge show -> run"; else no "(K) JS template interpolation: expected [show|], got [$got]"; fi
 
 # ── (L) the other comment families make no edge ────────────────────────────────────────────────────────────────
 echo "=== (L) a call spelled only inside a comment is no caller (C++, Lua, Ruby, JavaScript) ==="
@@ -307,16 +371,16 @@ for fam in lcpp:m.cpp llua:m.lua lrb:m.rb ljs:m.js; do
     d="${fam%%:*}"; f="${fam#*:}"
     grep -c 'helper(' "$TMP/$d/$f" | grep -qE '^[3-9]$' || no "(L) presence guard: $f should spell helper( at least three times"
     got="$( callers_of "$TMP/$d" "$f:helper" )"
-    [ "$got" = "real_caller|" ] && ok "(L) $f: callers of helper are exactly [real_caller]" || no "(L) $f: expected [real_caller|], got [$got]"
+    if [ "$got" = "real_caller|" ]; then ok "(L) $f: callers of helper are exactly [real_caller]"; else no "(L) $f: expected [real_caller|], got [$got]"; fi
 done
 
 # ── (M) determinism, well-formedness, stderr ───────────────────────────────────────────────────────────────────
 echo "=== (M) determinism x2, xmllint, no degrade alert ==="
 ( cd "$A" && "$BIN" . --no-cache ) >"$TMP/m1.xml" 2>"$TMP/m1.err"
 ( cd "$A" && "$BIN" . --no-cache ) >"$TMP/m2.xml" 2>/dev/null
-cmp -s "$TMP/m1.xml" "$TMP/m2.xml" && ok "(M) the default map is byte-identical across two runs" || no "(M) two runs differ"
-xmllint --noout "$TMP/m1.xml" 2>/dev/null && ok "(M) the map is well-formed XML" || no "(M) xmllint rejected the map"
-( cd "$A" && "$BIN" . --no-cache --callers=m.py:get ) 2>&1 >/dev/null | grep -qiE 'degrade|ALERT' && no "(M) a degrade alert on stderr" || ok "(M) no degrade alert on stderr"
+if cmp -s "$TMP/m1.xml" "$TMP/m2.xml"; then ok "(M) the default map is byte-identical across two runs"; else no "(M) two runs differ"; fi
+if xmllint --noout "$TMP/m1.xml" 2>/dev/null; then ok "(M) the map is well-formed XML"; else no "(M) xmllint rejected the map"; fi
+if ( cd "$A" && "$BIN" . --no-cache --callers=m.py:get ) 2>&1 >/dev/null | grep -qiE 'degrade|ALERT'; then no "(M) a degrade alert on stderr"; else ok "(M) no degrade alert on stderr"; fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$fail"
